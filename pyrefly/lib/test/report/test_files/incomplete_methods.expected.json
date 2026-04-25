@@ -1,0 +1,101 @@
+{
+  "name": "test",
+  "names": [
+    "test.Complete.method",
+    "test.Incomplete.method_unannotated",
+    "test.Incomplete.method_partial",
+    "test.Incomplete.method_complete",
+    "test.Complete",
+    "test.Incomplete"
+  ],
+  "line_count": 21,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "test.Complete.method",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 8,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Incomplete.method_unannotated",
+      "n_typable": 2,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 2,
+      "location": {
+        "line": 13,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Incomplete.method_partial",
+      "n_typable": 2,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 16,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Incomplete.method_complete",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 19,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Complete",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Incomplete",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 12,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 8,
+  "n_typed": 5,
+  "n_any": 0,
+  "n_untyped": 3,
+  "coverage": 62.5,
+  "strict_coverage": 62.5,
+  "n_functions": 0,
+  "n_methods": 4,
+  "n_function_params": 0,
+  "n_method_params": 4,
+  "n_classes": 2,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

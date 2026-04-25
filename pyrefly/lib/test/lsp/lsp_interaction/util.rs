@@ -11,11 +11,10 @@ use std::path::PathBuf;
 
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
+use pyrefly::module::bundled::BundledStub;
+use pyrefly::module::typeshed::typeshed;
 use pyrefly_util::fs_anyhow;
 use tempfile::TempDir;
-
-use crate::module::bundled::BundledStub;
-use crate::module::typeshed::typeshed;
 
 pub fn get_test_files_root() -> TempDir {
     let mut source_files =

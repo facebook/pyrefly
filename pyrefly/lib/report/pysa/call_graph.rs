@@ -17,9 +17,12 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
+use pyrefly_types::type_var::Restriction;
+use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::OverloadType;
@@ -54,45 +57,44 @@ use ruff_python_ast::StmtWith;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use ruff_text_size::TextSize;
 use serde::Serialize;
 use starlark_map::Hashed;
 use vec1::Vec1;
 
+use crate::alt::call::CallTarget;
 use crate::alt::call::CallTargetLookup;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
 use crate::report::pysa::ast_visitor::AstScopedVisitor;
+use crate::report::pysa::ast_visitor::ExportClassDecorators;
+use crate::report::pysa::ast_visitor::ExportDefaultArguments;
+use crate::report::pysa::ast_visitor::ExportFunctionDecorators;
 use crate::report::pysa::ast_visitor::ScopeExportedFunctionFlags;
 use crate::report::pysa::ast_visitor::Scopes;
 use crate::report::pysa::ast_visitor::visit_module_ast;
-use crate::report::pysa::captured_variable::CapturedVariable;
+use crate::report::pysa::captured_variable::CaptureKind;
 use crate::report::pysa::captured_variable::CapturedVariableRef;
-use crate::report::pysa::captured_variable::WholeProgramCapturedVariables;
+use crate::report::pysa::captured_variable::ModuleCapturedVariables;
+use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_class_field_from_current_class_only;
-use crate::report::pysa::class::get_context_from_class;
 use crate::report::pysa::class::get_super_class_member;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionId;
-use crate::report::pysa::function::FunctionNode;
 use crate::report::pysa::function::FunctionRef;
-use crate::report::pysa::function::WholeProgramFunctionDefinitions;
 use crate::report::pysa::function::should_export_decorated_function;
 use crate::report::pysa::global_variable::GlobalVariableRef;
-use crate::report::pysa::global_variable::WholeProgramGlobalVariables;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
-use crate::report::pysa::module::ModuleKey;
-use crate::report::pysa::override_graph::OverrideGraph;
+use crate::report::pysa::module_index::GRAPHQL_DECORATORS;
+use crate::report::pysa::module_index::GraphQLDecoratorRef;
 use crate::report::pysa::types::ScalarTypeProperties;
-use crate::report::pysa::types::has_superclass;
 use crate::report::pysa::types::string_for_type;
-use crate::state::lsp::FindDefinitionItemWithDocstring;
+use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Hash, PartialOrd, Ord)]
@@ -215,12 +217,12 @@ impl ExpressionIdentifier {
     }
 
     fn regular(location: TextRange, module: &pyrefly_python::module::Module) -> Self {
-        ExpressionIdentifier::Regular(PysaLocation::new(module.display_range(location)))
+        ExpressionIdentifier::Regular(PysaLocation::from_text_range(location, module))
     }
 
     fn expr_name(expr: &ExprName, module: &pyrefly_python::module::Module) -> Self {
         ExpressionIdentifier::Identifier {
-            location: PysaLocation::new(module.display_range(expr.range())),
+            location: PysaLocation::from_text_range(expr.range(), module),
             identifier: expr.id.clone(),
         }
     }
@@ -274,12 +276,8 @@ impl FunctionTrait for FunctionRef {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, PartialOrd, Ord)]
 pub enum Target<Function: FunctionTrait> {
-    Function(Function),     // Either a function or a method
-    AllOverrides(Function), // All overrides of the given method
-    OverrideSubset {
-        base_method: Function,
-        subset: Vec1<Target<Function>>,
-    },
+    Function(Function),  // Either a function or a method
+    Overrides(Function), // All overrides of the given method
     FormatString,
 }
 
@@ -294,14 +292,7 @@ impl<Function: FunctionTrait> Target<Function> {
     {
         match self {
             Target::Function(function) => Target::Function(map(function)),
-            Target::AllOverrides(function) => Target::AllOverrides(map(function)),
-            Target::OverrideSubset {
-                base_method,
-                subset,
-            } => Target::OverrideSubset {
-                base_method: map(base_method),
-                subset: Vec1::mapped(subset, |target| target.map_function(map)),
-            },
+            Target::Overrides(function) => Target::Overrides(map(function)),
             Target::FormatString => Target::FormatString,
         }
     }
@@ -309,49 +300,48 @@ impl<Function: FunctionTrait> Target<Function> {
     fn base_function(&self) -> Option<&Function> {
         match self {
             Target::Function(function) => Some(function),
-            Target::AllOverrides(method) => Some(method),
-            Target::OverrideSubset { base_method, .. } => Some(base_method),
+            Target::Overrides(method) => Some(method),
             Target::FormatString => None,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Hash, PartialOrd, Ord)]
-pub struct CallTarget<Function: FunctionTrait> {
-    pub(crate) target: Target<Function>,
+pub struct PysaCallTarget<Function: FunctionTrait> {
+    pub target: Target<Function>,
     // `TrueWithClassReceiver` or `TrueWithObjectReceiver` if the call has an implicit receiver,
     // such as calling an instance or a class method.
     // For instance, `x.foo(0)` should be treated as `C.foo(x, 0)`. As another example, `C.foo(0)`
     // should be treated as `C.foo(C, 0)`.
     #[serde(skip_serializing_if = "ImplicitReceiver::is_false")]
-    pub(crate) implicit_receiver: ImplicitReceiver,
+    pub implicit_receiver: ImplicitReceiver,
     // True if this is an implicit call to the `__call__` method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) implicit_dunder_call: bool,
+    pub implicit_dunder_call: bool,
     // The class of the receiver object at this call site, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) receiver_class: Option<ClassRef>,
+    pub receiver_class: Option<ClassRef>,
     // True if calling a class method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_class_method: bool,
+    pub is_class_method: bool,
     // True if calling a static method.
     #[serde(skip_serializing_if = "<&bool>::not")]
-    pub(crate) is_static_method: bool,
+    pub is_static_method: bool,
     // The return type of the call expression.
     #[serde(skip_serializing_if = "ScalarTypeProperties::is_none")]
-    pub(crate) return_type: ScalarTypeProperties,
+    pub return_type: ScalarTypeProperties,
 }
 
-impl<Function: FunctionTrait> CallTarget<Function> {
+impl<Function: FunctionTrait> PysaCallTarget<Function> {
     #[cfg(test)]
     fn map_function<OutputFunction: FunctionTrait, MapFunction>(
         self,
         map: &MapFunction,
-    ) -> CallTarget<OutputFunction>
+    ) -> PysaCallTarget<OutputFunction>
     where
         MapFunction: Fn(Function) -> OutputFunction,
     {
-        CallTarget {
+        PysaCallTarget {
             target: self.target.map_function(map),
             implicit_receiver: self.implicit_receiver,
             receiver_class: self.receiver_class,
@@ -393,7 +383,7 @@ impl<Function: FunctionTrait> CallTarget<Function> {
     }
 
     fn format_string_target() -> Self {
-        CallTarget {
+        PysaCallTarget {
             target: Target::FormatString,
             return_type: ScalarTypeProperties::none(),
             implicit_receiver: ImplicitReceiver::False,
@@ -405,79 +395,6 @@ impl<Function: FunctionTrait> CallTarget<Function> {
     }
 }
 
-// Intentionally refer to decorators by names instead of uniquely identifying them. Some special handling
-// (i.e., see the usage of `GRAPHQL_DECORATORS`) are triggered when decorators are matched by names.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GraphQLDecoratorRef {
-    module: &'static str,
-    name: &'static str,
-}
-
-impl GraphQLDecoratorRef {
-    fn matches_definition(&self, definition: &FindDefinitionItemWithDocstring) -> bool {
-        if let Some(display_name) = &definition.display_name {
-            self.module == definition.module.name().as_str() && self.name == *display_name
-        } else {
-            false
-        }
-    }
-
-    fn is_inside_decorators(
-        &self,
-        mut decorators_range: impl Iterator<Item = TextSize>,
-        module_context: &ModuleContext,
-    ) -> bool {
-        decorators_range.any(|decorator_range| {
-            module_context
-                .transaction
-                .find_definition(
-                    &module_context.handle,
-                    decorator_range,
-                    FindPreference::default(),
-                )
-                .iter()
-                .any(|go_to_definition| self.matches_definition(go_to_definition))
-        })
-    }
-}
-
-// Tuples of decorators. For any tuple (x, y), it means if a callable is decorated by x, then find
-// all callables that are decorated by y inside the return class type of the callable.
-static GRAPHQL_DECORATORS: &[(&GraphQLDecoratorRef, &GraphQLDecoratorRef)] = &[
-    (
-        &GraphQLDecoratorRef {
-            module: "graphqlserver.types",
-            name: "graphql_root_field",
-        },
-        &GraphQLDecoratorRef {
-            module: "graphqlserver.types",
-            name: "graphql_field",
-        },
-    ),
-    // For testing only
-    (
-        &GraphQLDecoratorRef {
-            module: "test",
-            name: "decorator_1",
-        },
-        &GraphQLDecoratorRef {
-            module: "test",
-            name: "decorator_2",
-        },
-    ),
-    // For testing only
-    (
-        &GraphQLDecoratorRef {
-            module: "graphql_callees",
-            name: "entrypoint_decorator",
-        },
-        &GraphQLDecoratorRef {
-            module: "graphql_callees",
-            name: "method_decorator",
-        },
-    ),
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum UnresolvedReason {
     // Argument is a lambda.
@@ -485,7 +402,7 @@ pub enum UnresolvedReason {
     // Unexpected pyrefly::CallTarget type.
     UnexpectedPyreflyTarget,
     // Empty pyrefly::CallTarget type.
-    EmptyPyreflyTarget,
+    EmptyPyreflyCallTarget,
     // Could not find the given field on a class or its parents.
     UnknownClassField,
     // The given field can only be found in `object`.
@@ -604,7 +521,7 @@ impl<T> MaybeResolved<Vec1<T>> {
     }
 }
 
-impl MaybeResolved<Vec1<CallTarget<FunctionRef>>> {
+impl MaybeResolved<Vec1<PysaCallTarget<FunctionRef>>> {
     fn into_call_callees(self) -> CallCallees<FunctionRef> {
         match self {
             MaybeResolved::Resolved(call_targets) => CallCallees {
@@ -634,10 +551,10 @@ impl MaybeResolved<Vec1<CallTarget<FunctionRef>>> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HigherOrderParameter<Function: FunctionTrait> {
-    pub(crate) index: u32,
-    pub(crate) call_targets: Vec<CallTarget<Function>>,
+    pub index: u32,
+    pub call_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> HigherOrderParameter<Function> {
@@ -654,7 +571,7 @@ impl<Function: FunctionTrait> HigherOrderParameter<Function> {
             call_targets: self
                 .call_targets
                 .into_iter()
-                .map(|call_target| CallTarget::map_function(call_target, map))
+                .map(|call_target| PysaCallTarget::map_function(call_target, map))
                 .collect(),
             unresolved: self.unresolved,
         }
@@ -675,15 +592,15 @@ impl<Function: FunctionTrait> HigherOrderParameter<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) call_targets: Vec<CallTarget<Function>>,
+    pub call_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) init_targets: Vec<CallTarget<Function>>,
+    pub init_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) new_targets: Vec<CallTarget<Function>>,
+    pub new_targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub(crate) higher_order_parameters: HashMap<u32, HigherOrderParameter<Function>>,
+    pub higher_order_parameters: HashMap<u32, HigherOrderParameter<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> CallCallees<Function> {
@@ -697,7 +614,7 @@ impl<Function: FunctionTrait> CallCallees<Function> {
         }
     }
 
-    fn new(call_targets: Vec1<CallTarget<Function>>) -> Self {
+    fn new(call_targets: Vec1<PysaCallTarget<Function>>) -> Self {
         CallCallees {
             call_targets: call_targets.into_vec(),
             init_targets: vec![],
@@ -725,10 +642,10 @@ impl<Function: FunctionTrait> CallCallees<Function> {
     where
         MapFunction: Fn(Function) -> OutputFunction,
     {
-        let map_call_targets = |targets: Vec<CallTarget<Function>>| {
+        let map_call_targets = |targets: Vec<PysaCallTarget<Function>>| {
             targets
                 .into_iter()
-                .map(|call_target| CallTarget::map_function(call_target, map))
+                .map(|call_target| PysaCallTarget::map_function(call_target, map))
                 .collect()
         };
         CallCallees {
@@ -759,7 +676,7 @@ impl<Function: FunctionTrait> CallCallees<Function> {
         !self.is_empty() || self.is_resolved()
     }
 
-    pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
+    pub fn all_targets(&self) -> impl Iterator<Item = &PysaCallTarget<Function>> {
         self.call_targets
             .iter()
             .chain(self.init_targets.iter())
@@ -802,18 +719,35 @@ impl<Function: FunctionTrait> CallCallees<Function> {
         }
         self.unresolved = self.unresolved.clone().join(other.unresolved);
     }
+
+    // If this is the `if_called` of an attribute access or name access, and it is
+    // empty because the attribute/name isn't a function, normalize the result.
+    fn strip_unresolved_if_called(&mut self) {
+        if self.call_targets.is_empty()
+            && self.init_targets.is_empty()
+            && self.new_targets.is_empty()
+            && self.higher_order_parameters.is_empty()
+            && self.unresolved == Unresolved::True(UnresolvedReason::EmptyPyreflyCallTarget)
+        {
+            self.unresolved = Unresolved::False;
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AttributeAccessCallees<Function: FunctionTrait> {
     /// When the attribute access is called, the callees it may resolve to
-    pub(crate) if_called: CallCallees<Function>,
+    pub if_called: CallCallees<Function>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) property_setters: Vec<CallTarget<Function>>,
+    pub property_setters: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) property_getters: Vec<CallTarget<Function>>,
+    pub property_getters: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) global_targets: Vec<GlobalVariableRef>,
+    pub global_targets: Vec<GlobalVariableRef>,
+    /// True if that there is at least one case (i.e., execution flow) where this is a regular
+    /// attribute access. For instance, if the object has type `Union[A, B]` where only `A` defines a property.
+    #[serde(skip_serializing_if = "<&bool>::not")]
+    pub is_attribute: bool,
 }
 
 impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
@@ -825,10 +759,10 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
     where
         MapFunction: Fn(Function) -> OutputFunction,
     {
-        let map_call_targets = |targets: Vec<CallTarget<Function>>| {
+        let map_call_targets = |targets: Vec<PysaCallTarget<Function>>| {
             targets
                 .into_iter()
-                .map(|call_target| CallTarget::map_function(call_target, map))
+                .map(|call_target| PysaCallTarget::map_function(call_target, map))
                 .collect()
         };
         AttributeAccessCallees {
@@ -836,6 +770,7 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
             property_setters: map_call_targets(self.property_setters),
             property_getters: map_call_targets(self.property_getters),
             global_targets: self.global_targets,
+            is_attribute: self.is_attribute,
         }
     }
 
@@ -846,7 +781,7 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
             && self.global_targets.is_empty()
     }
 
-    pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
+    pub fn all_targets(&self) -> impl Iterator<Item = &PysaCallTarget<Function>> {
         self.if_called
             .all_targets()
             .chain(self.property_setters.iter())
@@ -862,15 +797,25 @@ impl<Function: FunctionTrait> AttributeAccessCallees<Function> {
         self.global_targets.sort();
         self.global_targets.dedup();
     }
+
+    fn strip_unresolved_if_called(&mut self) {
+        self.if_called.strip_unresolved_if_called();
+    }
+
+    fn has_globals_or_properties(&self) -> bool {
+        !self.property_getters.is_empty()
+            || !self.property_setters.is_empty()
+            || !self.global_targets.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IdentifierCallees<Function: FunctionTrait> {
     /// When the attribute access is called, the callees it may resolve to
-    pub(crate) if_called: CallCallees<Function>,
+    pub if_called: CallCallees<Function>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) global_targets: Vec<GlobalVariableRef>,
-    pub(crate) nonlocal_targets: Vec<CapturedVariableRef<Function>>,
+    pub global_targets: Vec<GlobalVariableRef>,
+    pub captured_variables: Vec<CapturedVariableRef<Function>>,
 }
 
 impl<Function: FunctionTrait> IdentifierCallees<Function> {
@@ -885,8 +830,8 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
         IdentifierCallees {
             if_called: self.if_called.map_function(map),
             global_targets: self.global_targets,
-            nonlocal_targets: self
-                .nonlocal_targets
+            captured_variables: self
+                .captured_variables
                 .into_iter()
                 .map(|target| target.map_function(map))
                 .collect::<Vec<_>>(),
@@ -896,10 +841,10 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
     fn is_empty(&self) -> bool {
         self.if_called.is_empty()
             && self.global_targets.is_empty()
-            && self.nonlocal_targets.is_empty()
+            && self.captured_variables.is_empty()
     }
 
-    pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
+    pub fn all_targets(&self) -> impl Iterator<Item = &PysaCallTarget<Function>> {
         self.if_called.all_targets()
     }
 
@@ -907,14 +852,22 @@ impl<Function: FunctionTrait> IdentifierCallees<Function> {
         self.if_called.dedup_and_sort();
         self.global_targets.sort();
         self.global_targets.dedup();
-        self.nonlocal_targets.sort();
-        self.nonlocal_targets.dedup();
+        self.captured_variables.sort();
+        self.captured_variables.dedup();
+    }
+
+    fn strip_unresolved_if_called(&mut self) {
+        self.if_called.strip_unresolved_if_called();
+    }
+
+    fn has_globals_or_captures(&self) -> bool {
+        !self.global_targets.is_empty() || !self.captured_variables.is_empty()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DefineCallees<Function: FunctionTrait> {
-    pub(crate) define_targets: Vec<CallTarget<Function>>,
+    pub define_targets: Vec<PysaCallTarget<Function>>,
 }
 
 impl<Function: FunctionTrait> DefineCallees<Function> {
@@ -930,7 +883,7 @@ impl<Function: FunctionTrait> DefineCallees<Function> {
             define_targets: self
                 .define_targets
                 .into_iter()
-                .map(|call_target| CallTarget::map_function(call_target, map))
+                .map(|call_target| PysaCallTarget::map_function(call_target, map))
                 .collect(),
         }
     }
@@ -940,7 +893,7 @@ impl<Function: FunctionTrait> DefineCallees<Function> {
         self.define_targets.is_empty()
     }
 
-    pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
+    pub fn all_targets(&self) -> impl Iterator<Item = &PysaCallTarget<Function>> {
         self.define_targets.iter()
     }
 
@@ -952,7 +905,7 @@ impl<Function: FunctionTrait> DefineCallees<Function> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FormatStringArtificialCallees<Function: FunctionTrait> {
-    pub(crate) targets: Vec<CallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
 }
 
 impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
@@ -968,7 +921,7 @@ impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
             targets: self
                 .targets
                 .into_iter()
-                .map(|call_target| CallTarget::map_function(call_target, map))
+                .map(|call_target| PysaCallTarget::map_function(call_target, map))
                 .collect(),
         }
     }
@@ -978,7 +931,7 @@ impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
         self.targets.is_empty()
     }
 
-    pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
+    pub fn all_targets(&self) -> impl Iterator<Item = &PysaCallTarget<Function>> {
         self.targets.iter()
     }
 
@@ -991,9 +944,9 @@ impl<Function: FunctionTrait> FormatStringArtificialCallees<Function> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FormatStringStringifyCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) targets: Vec<CallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Unresolved::is_resolved")]
-    pub(crate) unresolved: Unresolved,
+    pub unresolved: Unresolved,
 }
 
 impl<Function: FunctionTrait> FormatStringStringifyCallees<Function> {
@@ -1009,7 +962,7 @@ impl<Function: FunctionTrait> FormatStringStringifyCallees<Function> {
             targets: self
                 .targets
                 .into_iter()
-                .map(|call_target| CallTarget::map_function(call_target, map))
+                .map(|call_target| PysaCallTarget::map_function(call_target, map))
                 .collect(),
             unresolved: self.unresolved,
         }
@@ -1020,7 +973,7 @@ impl<Function: FunctionTrait> FormatStringStringifyCallees<Function> {
         self.targets.is_empty()
     }
 
-    pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
+    pub fn all_targets(&self) -> impl Iterator<Item = &PysaCallTarget<Function>> {
         self.targets.iter()
     }
 
@@ -1039,9 +992,9 @@ pub enum ReturnShimArgumentMapping {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReturnShimCallees<Function: FunctionTrait> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) targets: Vec<CallTarget<Function>>,
+    pub targets: Vec<PysaCallTarget<Function>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) arguments: Vec<ReturnShimArgumentMapping>,
+    pub arguments: Vec<ReturnShimArgumentMapping>,
 }
 
 impl<Function: FunctionTrait> ReturnShimCallees<Function> {
@@ -1057,7 +1010,7 @@ impl<Function: FunctionTrait> ReturnShimCallees<Function> {
             targets: self
                 .targets
                 .into_iter()
-                .map(|call_target| CallTarget::map_function(call_target, map))
+                .map(|call_target| PysaCallTarget::map_function(call_target, map))
                 .collect(),
             arguments: self.arguments,
         }
@@ -1068,7 +1021,7 @@ impl<Function: FunctionTrait> ReturnShimCallees<Function> {
         self.targets.is_empty()
     }
 
-    pub fn all_targets(&self) -> impl Iterator<Item = &CallTarget<Function>> {
+    pub fn all_targets(&self) -> impl Iterator<Item = &PysaCallTarget<Function>> {
         self.targets.iter()
     }
 
@@ -1138,7 +1091,9 @@ impl<Function: FunctionTrait> ExpressionCallees<Function> {
         }
     }
 
-    pub fn all_targets<'a>(&'a self) -> Box<dyn Iterator<Item = &'a CallTarget<Function>> + 'a> {
+    pub fn all_targets<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a PysaCallTarget<Function>> + 'a> {
         match self {
             ExpressionCallees::Call(call_callees) => Box::new(call_callees.all_targets()),
             ExpressionCallees::Identifier(identifier_callees) => {
@@ -1195,6 +1150,10 @@ impl<ExpressionId: ExpressionIdTrait, Function: FunctionTrait> CallGraph<Express
     #[cfg(test)]
     pub fn into_iter(self) -> impl Iterator<Item = (ExpressionId, ExpressionCallees<Function>)> {
         self.0.into_iter()
+    }
+
+    pub fn as_map(&self) -> &HashMap<ExpressionId, ExpressionCallees<Function>> {
+        &self.0
     }
 
     fn dedup_and_sort(&mut self) {
@@ -1310,12 +1269,12 @@ fn strip_none_from_union(type_: &Type) -> Type {
 }
 
 fn has_implicit_receiver(
-    base_definition: Option<&FunctionBaseDefinition>,
+    base_definition: &FunctionBaseDefinition,
     is_receiver_class_def: bool,
 ) -> ImplicitReceiver {
-    let is_classmethod = base_definition.is_some_and(|definition| definition.is_classmethod);
-    let is_staticmethod = base_definition.is_some_and(|definition| definition.is_staticmethod);
-    let is_method = base_definition.is_some_and(|definition| definition.is_method());
+    let is_classmethod = base_definition.is_classmethod;
+    let is_staticmethod = base_definition.is_staticmethod;
+    let is_method = base_definition.is_method();
     if is_staticmethod {
         ImplicitReceiver::False
     } else if is_classmethod {
@@ -1421,6 +1380,7 @@ fn string_conversion_redirection<'a>(
     }
 }
 
+#[derive(Debug)]
 enum DirectCall {
     True,
     False,
@@ -1470,17 +1430,21 @@ impl DirectCall {
         Self::is_super_call(callee).or({
             match callee_type {
                 Some(Type::BoundMethod(box BoundMethod {
-                    obj: Type::ClassDef(_) | Type::Type(_),
-                    ..
-                })) => Self::from_bool(true),
-                Some(Type::BoundMethod(box BoundMethod {
-                    obj: Type::ClassType(_) | Type::SelfType(_),
+                    obj:
+                        Type::ClassType(_)
+                        | Type::SelfType(_)
+                        | Type::Type(box Type::SelfType(_))
+                        | Type::Type(box Type::ClassType(_)),
                     ..
                 })) => {
                     // Dynamic dispatch if calling a method via an attribute lookup
                     // on an instance
                     Self::from_bool(false)
                 }
+                Some(Type::BoundMethod(box BoundMethod {
+                    obj: Type::ClassDef(_) | Type::Type(_),
+                    ..
+                })) => Self::from_bool(true),
                 Some(Type::BoundMethod(_)) => {
                     debug_println!(
                         debug,
@@ -1507,12 +1471,10 @@ impl DirectCall {
 struct CallGraphVisitor<'a> {
     call_graphs: &'a mut CallGraphs<ExpressionIdentifier, FunctionRef>,
     module_context: &'a ModuleContext<'a>,
+    module_answers_context: ModuleAnswersContext,
     module_id: ModuleId,
     module_name: ModuleName,
-    function_base_definitions: &'a WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    override_graph: &'a OverrideGraph,
-    global_variables: &'a WholeProgramGlobalVariables,
-    captured_variables: &'a WholeProgramCapturedVariables,
+    captured_variables: Option<&'a ModuleCapturedVariables<FunctionRef>>,
     current_function: Option<FunctionRef>, // The current function, if it is exported.
     debug: bool,                           // Enable logging for the current function or class body.
     debug_scopes: Vec<bool>,               // The value of the debug flag for each scope.
@@ -1520,9 +1482,40 @@ struct CallGraphVisitor<'a> {
     matching_graphql_decorators: Vec<Option<GraphQLDecoratorRef>>, // The matching graphql method decorator for each scope.
 }
 
+struct ReceiverClassResult {
+    class: Option<ClassRef>,
+    is_class_def: bool,
+}
+
+enum ResolveCallCallees {
+    Identifier(IdentifierCallees<FunctionRef>),
+    AttributeAccess(AttributeAccessCallees<FunctionRef>),
+    Unexpected,
+}
+
+struct ResolveCallResult {
+    callees: ResolveCallCallees,
+    // None if resolve_call() was called with resolve_higher_order_parameters = false.
+    higher_order_parameters: Option<HashMap<u32, HigherOrderParameter<FunctionRef>>>,
+}
+
+impl ResolveCallResult {
+    fn into_call_callees(self) -> CallCallees<FunctionRef> {
+        let mut callees = match self.callees {
+            ResolveCallCallees::Identifier(callees) => callees.if_called,
+            ResolveCallCallees::AttributeAccess(callees) => callees.if_called,
+            ResolveCallCallees::Unexpected => {
+                CallCallees::new_unresolved(UnresolvedReason::UnexpectedCalleeExpression)
+            }
+        };
+        callees.with_higher_order_parameters(self.higher_order_parameters.unwrap_or_default());
+        callees
+    }
+}
+
 impl<'a> CallGraphVisitor<'a> {
     fn pysa_location(&self, location: TextRange) -> PysaLocation {
-        PysaLocation::new(self.module_context.module_info.display_range(location))
+        PysaLocation::from_text_range(location, &self.module_answers_context.module_info)
     }
 
     fn add_callees(
@@ -1540,40 +1533,88 @@ impl<'a> CallGraphVisitor<'a> {
         &self,
         receiver_type: &Type,
         is_class_method: bool,
-    ) -> (Option<ClassRef>, bool) {
+    ) -> ReceiverClassResult {
         let receiver_type = strip_none_from_union(receiver_type);
         match receiver_type {
             Type::ClassType(class_type)
             | Type::SelfType(class_type)
-            | Type::SuperInstance(box (_, SuperObj::Instance(class_type))) => (
-                Some(ClassRef::from_class(
+            | Type::SuperInstance(box (_, SuperObj::Instance(class_type))) => ReceiverClassResult {
+                class: Some(ClassRef::from_class(
                     class_type.class_object(),
-                    self.module_context.module_ids,
+                    self.module_context,
                 )),
-                false, // Whether the receiver is `type(SomeClass)`
-            ),
+                is_class_def: false,
+            },
             Type::ClassDef(class_def) => {
                 // The receiver is the class itself. Technically, the receiver class type should be `type(SomeClass)`.
                 // However, we strip away the `type` part since it is implied by the `is_class_method` flag.
-                (
-                    if is_class_method {
-                        Some(ClassRef::from_class(
-                            &class_def,
-                            self.module_context.module_ids,
-                        ))
+                ReceiverClassResult {
+                    class: if is_class_method {
+                        Some(ClassRef::from_class(&class_def, self.module_context))
                     } else {
                         None
                     },
-                    true,
-                )
+                    is_class_def: true,
+                }
             }
-            _ => (None, false),
+            Type::Type(box Type::SelfType(class_type))
+            | Type::Type(box Type::ClassType(class_type))
+                if is_class_method =>
+            {
+                ReceiverClassResult {
+                    class: Some(ClassRef::from_class(
+                        class_type.class_object(),
+                        self.module_context,
+                    )),
+                    is_class_def: false,
+                }
+            }
+            Type::TypedDict(TypedDict::Anonymous(_)) => ReceiverClassResult {
+                class: Some(ClassRef::from_class(
+                    self.module_answers_context.stdlib.dict_object(),
+                    self.module_context,
+                )),
+                is_class_def: false,
+            },
+            Type::TypedDict(TypedDict::TypedDict(typed_dict)) => ReceiverClassResult {
+                class: Some(ClassRef::from_class(
+                    typed_dict.class_object(),
+                    self.module_context,
+                )),
+                is_class_def: false,
+            },
+            Type::Quantified(quantified) => match quantified.restriction() {
+                Restriction::Bound(bound) => {
+                    // Use the bound of the type var as the base class.
+                    self.receiver_class_from_type(bound, is_class_method)
+                }
+                _ => ReceiverClassResult {
+                    class: None,
+                    is_class_def: false,
+                },
+            },
+            _ => ReceiverClassResult {
+                class: None,
+                is_class_def: false,
+            },
         }
     }
 
-    fn get_base_definition(&self, function_ref: &FunctionRef) -> Option<&FunctionBaseDefinition> {
-        self.function_base_definitions
-            .get(function_ref.module_id, &function_ref.function_id)
+    fn get_base_definition(&self, function_ref: &FunctionRef) -> FunctionBaseDefinition {
+        // The module's PysaSolutions must already be in pysa_cache (populated by an earlier
+        // call to `resolve_pysa_solutions`).
+        self.module_context
+            .resolver
+            .get_cached_solutions(function_ref.module_id)
+            .function_base_definitions
+            .get(&function_ref.function_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "FunctionId missing from function_base_definitions: {:?}",
+                    function_ref.function_id
+                )
+            })
+            .clone()
     }
 
     fn function_ref_from_class_field(
@@ -1582,33 +1623,37 @@ impl<'a> CallGraphVisitor<'a> {
         field_name: &Name,
         exclude_object_methods: bool,
     ) -> Result<FunctionRef, UnresolvedReason> {
-        let get_function_from_field = |class, class_field, context| {
-            let function = FunctionNode::exported_function_from_class_field(
-                class,
-                field_name,
-                class_field,
-                context,
-            )?;
-            Some(function.as_function_ref(context))
-        };
-
-        let context = get_context_from_class(class, self.module_context);
-        let class_field = get_class_field_from_current_class_only(class, field_name, &context);
-        if let Some(class_field) = class_field
-            && let Some(function_ref) = get_function_from_field(class, class_field, &context)
+        // Check if this is a field on the current class.
+        let class_id = ClassId::from_class(class);
+        if let Some(function_ref) = self
+            .module_context
+            .resolver
+            .resolve_pysa_solutions(class.module())
+            .module_index
+            .get_function_ref_for_class_field(class_id, field_name)
         {
-            Result::Ok(function_ref)
-        } else if let Some(with_defining_class) = get_super_class_member(
-            class, field_name, /* start_lookup_cls */ None, &context,
+            return Result::Ok(function_ref);
+        }
+
+        // Fall back to super class member lookup.
+        if let Some(with_defining_class) = get_super_class_member(
+            class,
+            field_name,
+            /* start_lookup_cls */ None,
+            self.module_context,
         ) {
             let parent_class = with_defining_class.defining_class;
-            let object = self.module_context.stdlib.object().class_object();
+            let object = self.module_answers_context.stdlib.object().class_object();
             if exclude_object_methods && parent_class == *object {
                 return Result::Err(UnresolvedReason::ClassFieldOnlyExistInObject);
             }
-            let context = get_context_from_class(&parent_class, self.module_context);
-            if let Some(function_ref) =
-                get_function_from_field(&parent_class, with_defining_class.value, &context)
+            let parent_class_id = ClassId::from_class(&parent_class);
+            if let Some(function_ref) = self
+                .module_context
+                .resolver
+                .resolve_pysa_solutions(parent_class.module())
+                .module_index
+                .get_function_ref_for_class_field(parent_class_id, field_name)
             {
                 Result::Ok(function_ref)
             } else {
@@ -1620,96 +1665,93 @@ impl<'a> CallGraphVisitor<'a> {
     }
 
     // Figure out what target to pick for an indirect call that resolves to implementation_target.
-    // E.g., if the receiver type is A, and A derives from Base, and the target is Base.method, then
-    // targeting the override tree of Base.method is wrong, as it would include all siblings for A.//
-    // Instead, we have the following cases:
-    // a) receiver type matches implementation_target's declaring type -> override implementation_target
-    // b) no implementation_target override entries are subclasses of A -> real implementation_target
-    // c) some override entries are subclasses of A -> search upwards for actual implementation,
-    //    and override all those where the override name is
-    //  1) the override target if it exists in the override shared mem
-    //  2) the real target otherwise
+    // The receiver_class is already part of the PysaCallTarget, so we just need to decide
+    // between Function (no receiver) and Overrides (has receiver).
     fn compute_targets_for_virtual_call(
         &self,
-        callee_type: Option<&Type>,
-        precise_receiver_type: Option<&Type>,
+        receiver_type: Option<&Type>,
         callee: FunctionRef,
     ) -> Target<FunctionRef> {
-        let receiver_type = if precise_receiver_type.is_some() {
-            precise_receiver_type
-        } else {
-            receiver_type_from_callee_type(callee_type)
-        };
         if receiver_type.is_none() {
             return Target::Function(callee);
         }
         let receiver_type = receiver_type.unwrap();
         let callee_definition = self.get_base_definition(&callee);
-        let (receiver_class, _) = self.receiver_class_from_type(
-            receiver_type,
-            callee_definition.is_some_and(|definition| definition.is_classmethod),
-        );
+        let ReceiverClassResult {
+            class: receiver_class,
+            ..
+        } = self.receiver_class_from_type(receiver_type, callee_definition.is_classmethod);
         if receiver_class.is_none() {
             return Target::Function(callee);
         }
-        let receiver_class = receiver_class.unwrap();
+        // Pysa is responsible for filtering the overridden methods
+        // to only those from classes that extend the receiver_class.
+        Target::Overrides(callee)
+    }
 
-        let callee_class = self
-            .function_base_definitions
-            .get(callee.module_id, &callee.function_id)
-            .and_then(|definition| definition.defining_class.clone());
-        let callee_class = callee_class
-            .unwrap_or_else(|| panic!("Expect a callee class for callee `{:#?}`", callee));
+    fn call_targets_from_callable_type(
+        &self,
+        function: &pyrefly_types::callable::Function,
+        callee_type: Option<&Type>,
+        callee_expr: Option<AnyNodeRef>,
+        return_type: ScalarTypeProperties,
+        callee_expr_suffix: Option<&str>,
+        unknown_callee_as_direct_call: bool,
+        exclude_object_methods: bool,
+    ) -> MaybeResolved<Vec1<PysaCallTarget<FunctionRef>>> {
+        self.call_targets_from_callable_metadata(function, return_type, callee_expr_suffix)
+            .map(|target| MaybeResolved::Resolved(Vec1::new(target)))
+            .unwrap_or_else(|| {
+                // Fallback for static methods, which have a defining class to search within.
+                self.call_targets_from_method_name(
+                    &method_name_from_function(function),
+                    callee_type, // For static methods, we find them within the callee type
+                    callee_expr,
+                    callee_type,
+                    return_type,
+                    /* is_bound_method */ false,
+                    callee_expr_suffix,
+                    /* override_implicit_receiver*/ None,
+                    /* override_is_direct_call */ None,
+                    unknown_callee_as_direct_call,
+                    exclude_object_methods,
+                )
+            })
+    }
 
-        let get_actual_target = |callee: FunctionRef| {
-            if self.override_graph.overrides_exist(&callee) {
-                Target::AllOverrides(callee)
-            } else {
-                Target::Function(callee)
+    fn call_targets_from_callable_metadata(
+        &self,
+        function: &pyrefly_types::callable::Function,
+        return_type: ScalarTypeProperties,
+        callee_expr_suffix: Option<&str>,
+    ) -> Option<PysaCallTarget<FunctionRef>> {
+        // Resolve a `CallTarget::Function` directly via its `FuncDefIndex`, bypassing
+        // name-based lookup. This handles module-level function aliases (e.g.,
+        // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
+        // original definition's index.
+        let (module, def_index) = match &function.metadata.kind {
+            FunctionKind::Def(func_id) if func_id.cls.is_none() && func_id.def_index.is_some() => {
+                (&func_id.module, func_id.def_index.unwrap())
             }
+            _ => return None,
         };
-        if callee_class == receiver_class {
-            // case a
-            get_actual_target(callee)
-        } else if let Some(overriding_classes) = self.override_graph.get_overriding_classes(&callee)
-        {
-            // case c
-            let mut callees = overriding_classes
-                .iter()
-                .filter_map(|overriding_class| {
-                    if has_superclass(
-                        &overriding_class.class,
-                        &receiver_class.class,
-                        self.module_context,
-                    ) {
-                        self.function_ref_from_class_field(
-                            &overriding_class.class,
-                            &callee.function_name,
-                            /* exclude_object_methods */ false,
-                        )
-                        .ok()
-                        .map(get_actual_target)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
 
-            if callees.is_empty() {
-                Target::Function(callee)
-            } else if callees.len() == overriding_classes.len() {
-                Target::AllOverrides(callee)
-            } else {
-                callees.sort();
-                Target::OverrideSubset {
-                    base_method: callee,
-                    subset: Vec1::try_from_vec(callees).unwrap(),
-                }
-            }
-        } else {
-            // case b
-            Target::Function(callee)
-        }
+        let function_ref = self
+            .module_context
+            .resolver
+            .resolve_pysa_solutions(module)
+            .module_index
+            .get_function_ref_by_func_def_index(def_index);
+
+        let target = self.call_target_from_function_target(
+            Target::Function(function_ref.clone()),
+            return_type,
+            /* receiver_type */ None,
+            callee_expr_suffix,
+            /* override_implicit_receiver */ None,
+        );
+
+        Some(target)
     }
 
     fn call_target_from_function_target(
@@ -1720,20 +1762,24 @@ impl<'a> CallGraphVisitor<'a> {
         // For example, `f` in call expr `f(1)` or `__call__` in call expr `c.__call__(1)`
         callee_expr_suffix: Option<&str>,
         override_implicit_receiver: Option<ImplicitReceiver>,
-    ) -> CallTarget<FunctionRef> {
+    ) -> PysaCallTarget<FunctionRef> {
         let base_function = function_target.base_function().unwrap();
         let function_definition = self.get_base_definition(base_function);
-        let is_classmethod =
-            function_definition.is_some_and(|definition| definition.is_classmethod);
-        let is_staticmethod =
-            function_definition.is_some_and(|definition| definition.is_staticmethod);
-        let (receiver_class, is_receiver_class_def) = match receiver_type {
+        let is_classmethod = function_definition.is_classmethod;
+        let is_staticmethod = function_definition.is_staticmethod;
+        let ReceiverClassResult {
+            class: receiver_class,
+            is_class_def: is_receiver_class_def,
+        } = match receiver_type {
             Some(receiver_type) => self.receiver_class_from_type(receiver_type, is_classmethod),
-            None => (None, false),
+            None => ReceiverClassResult {
+                class: None,
+                is_class_def: false,
+            },
         };
-        CallTarget {
+        PysaCallTarget {
             implicit_receiver: override_implicit_receiver.unwrap_or(has_implicit_receiver(
-                function_definition,
+                &function_definition,
                 is_receiver_class_def,
             )),
             receiver_class,
@@ -1757,7 +1803,7 @@ impl<'a> CallGraphVisitor<'a> {
         override_implicit_receiver: Option<ImplicitReceiver>,
         override_is_direct_call: Option<bool>,
         unknown_callee_as_direct_call: bool,
-    ) -> CallTarget<FunctionRef> {
+    ) -> PysaCallTarget<FunctionRef> {
         let is_direct_call = match override_is_direct_call {
             Some(override_is_direct_call) => DirectCall::from_bool(override_is_direct_call),
             None => DirectCall::is_direct_call(
@@ -1787,22 +1833,17 @@ impl<'a> CallGraphVisitor<'a> {
                 override_implicit_receiver,
             )
         } else {
-            let target = self.compute_targets_for_virtual_call(
-                callee_type,
-                precise_receiver_type,
-                function_ref,
-            );
+            let target = self.compute_targets_for_virtual_call(receiver_type, function_ref);
             match target {
-                Target::Function(_) | Target::AllOverrides(_) | Target::OverrideSubset { .. } => {
-                    self.call_target_from_function_target(
+                Target::Function(_) | Target::Overrides(_) => self
+                    .call_target_from_function_target(
                         target,
                         return_type,
                         receiver_type,
                         callee_expr_suffix,
                         override_implicit_receiver,
-                    )
-                }
-                Target::FormatString => CallTarget {
+                    ),
+                Target::FormatString => PysaCallTarget {
                     target,
                     implicit_receiver: ImplicitReceiver::False,
                     receiver_class: None,
@@ -1828,7 +1869,7 @@ impl<'a> CallGraphVisitor<'a> {
         override_is_direct_call: Option<bool>,
         unknown_callee_as_direct_call: bool,
         exclude_object_methods: bool,
-    ) -> MaybeResolved<Vec1<CallTarget<FunctionRef>>> {
+    ) -> MaybeResolved<Vec1<PysaCallTarget<FunctionRef>>> {
         let call_targets_from_method_name_with_class = |class| {
             match self.function_ref_from_class_field(class, method, exclude_object_methods) {
                 Result::Ok(function_ref) => {
@@ -1888,8 +1929,18 @@ impl<'a> CallGraphVisitor<'a> {
                 MaybeResolved::Unresolved(UnresolvedReason::UnsupportedFunctionTarget)
             }
             Some(Type::LiteralString(..)) => {
-                let str_class = self.module_context.stdlib.str().class_object();
+                let str_class = self.module_answers_context.stdlib.str().class_object();
                 call_targets_from_method_name_with_class(str_class)
+            }
+            Some(Type::TypedDict(typed_dict)) | Some(Type::PartialTypedDict(typed_dict)) => {
+                match typed_dict {
+                    TypedDict::TypedDict(inner) => {
+                        call_targets_from_method_name_with_class(inner.class_object())
+                    }
+                    TypedDict::Anonymous(..) => call_targets_from_method_name_with_class(
+                        self.module_answers_context.stdlib.dict_object(),
+                    ),
+                }
             }
             _ => MaybeResolved::Unresolved(UnresolvedReason::UnexpectedDefiningClass),
         };
@@ -1914,7 +1965,7 @@ impl<'a> CallGraphVisitor<'a> {
         return_type: ScalarTypeProperties,
         callee_expr_suffix: Option<&str>,
         exclude_object_methods: bool,
-    ) -> MaybeResolved<Vec1<CallTarget<FunctionRef>>> {
+    ) -> MaybeResolved<Vec1<PysaCallTarget<FunctionRef>>> {
         let class_type = find_class_type_for_new_method(&new_method.signature.params);
         self.call_targets_from_method_name(
             &method_name_from_function(new_method),
@@ -1925,7 +1976,10 @@ impl<'a> CallGraphVisitor<'a> {
             /* is_bound_method */ false,
             callee_expr_suffix,
             /* override_implicit_receiver*/ None,
-            /* override_is_direct_call */ None,
+            // override_is_direct_call. Dynamic dispatch only goes up the MRO not down.
+            // Hence any overriding methods cannot be called. For example, `A()` shouldn't
+            // be considered as potentially calling `B.__new__` when B is a subclass of A.
+            Some(true),
             /* unknown_callee_as_direct_call */ true,
             exclude_object_methods,
         )
@@ -1941,7 +1995,7 @@ impl<'a> CallGraphVisitor<'a> {
         callee_expr_suffix: Option<&str>,
         exclude_object_methods: bool,
     ) -> CallCallees<FunctionRef> {
-        let object_class = self.module_context.stdlib.object();
+        let object_class = self.module_answers_context.stdlib.object();
         let object_init_method = || {
             self.call_targets_from_method_name(
                 &dunder::INIT,
@@ -1992,7 +2046,12 @@ impl<'a> CallGraphVisitor<'a> {
                                 /* is_bound_method */ true,
                                 callee_expr_suffix,
                                 /* override_implicit_receiver*/ None,
-                                /* override_is_direct_call */ None,
+                                // override_is_direct_call. Dynamic dispatch only goes up the MRO not down.
+                                // Hence any overriding methods cannot be called. For example, `A()` shouldn't
+                                // be considered as potentially calling `B.__new__` when B is a subclass of A.
+                                // TODO: However this is not true for example in `@classmethod def make(cls): cls()`
+                                // where `cls` can be a subclass.
+                                Some(true),
                                 /* unknown_callee_as_direct_call */ true,
                                 exclude_object_methods,
                             )
@@ -2057,7 +2116,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn resolve_pyrefly_target(
         &self,
-        pyrefly_target: Option<crate::alt::call::CallTargetLookup>,
+        pyrefly_target: Option<CallTargetLookup>,
         callee_expr: Option<AnyNodeRef>,
         callee_type: Option<&Type>,
         return_type: ScalarTypeProperties,
@@ -2066,10 +2125,7 @@ impl<'a> CallGraphVisitor<'a> {
         exclude_object_methods: bool,
     ) -> CallCallees<FunctionRef> {
         match pyrefly_target {
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::BoundMethod(
-                type_,
-                target,
-            ))) => {
+            Some(CallTargetLookup::Ok(box CallTarget::BoundMethod(type_, target))) => {
                 // Calling a method on a class instance.
                 self.call_targets_from_method_name(
                     &method_name_from_function(&target.1),
@@ -2086,11 +2142,7 @@ impl<'a> CallGraphVisitor<'a> {
                 )
                 .into_call_callees()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::BoundMethodOverload(
-                type_,
-                targets,
-                ..,
-            ))) => {
+            Some(CallTargetLookup::Ok(box CallTarget::BoundMethodOverload(type_, targets, ..))) => {
                 targets
                     .map(|target| {
                         self.call_targets_from_method_name(
@@ -2115,29 +2167,18 @@ impl<'a> CallGraphVisitor<'a> {
                     })
                     .unwrap()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Function(function))) => {
-                // Sometimes this means calling a function (e.g., static method) on a class instance. Sometimes
-                // this could be simply calling a module top-level function, which can be handled when the stack
-                // of D85441657 enables uniquely identifying a definition from a type.
-                self.call_targets_from_method_name(
-                    &method_name_from_function(&function.1),
-                    callee_type, // For static methods, we find them within the callee type
-                    callee_expr,
+            Some(CallTargetLookup::Ok(box CallTarget::Function(function))) => self
+                .call_targets_from_callable_type(
+                    &function.1,
                     callee_type,
+                    callee_expr,
                     return_type,
-                    /* is_bound_method */ false,
                     callee_expr_suffix,
-                    /* override_implicit_receiver*/ None,
-                    /* override_is_direct_call */ None,
                     unknown_callee_as_direct_call,
                     exclude_object_methods,
                 )
-                .into_call_callees()
-            }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::FunctionOverload(
-                functions,
-                ..,
-            ))) => {
+                .into_call_callees(),
+            Some(CallTargetLookup::Ok(box CallTarget::FunctionOverload(functions, ..))) => {
                 functions
                     .map(|function| {
                         self.call_targets_from_method_name(
@@ -2162,13 +2203,13 @@ impl<'a> CallGraphVisitor<'a> {
                     })
                     .unwrap()
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Class(class_type, _))) => {
+            Some(CallTargetLookup::Ok(box CallTarget::Class(class_type, _, _))) => {
                 // Constructing a class instance.
                 let (init_method, new_method) = self
                     .module_context
-                    .transaction
-                    .ad_hoc_solve(&self.module_context.handle, |solver| {
-                        let new_method = solver.get_dunder_new(&class_type);
+                    .resolver
+                    .with_solver("call_graph_constructor", |solver| {
+                        let new_method = solver.get_dunder_new(&class_type, false);
                         let overrides_new = new_method.is_some();
                         let init_method = solver.get_dunder_init(
                             &class_type,
@@ -2187,7 +2228,24 @@ impl<'a> CallGraphVisitor<'a> {
                     exclude_object_methods,
                 )
             }
-            Some(CallTargetLookup::Ok(box crate::alt::call::CallTarget::Union(targets)))
+            Some(CallTargetLookup::Ok(box CallTarget::TypedDict(typed_dict_inner))) => {
+                let init_method = self
+                    .module_context
+                    .resolver
+                    .with_solver("call_graph_typed_dict_init", |solver| {
+                        solver.get_typed_dict_dunder_init(&typed_dict_inner)
+                    });
+                self.resolve_constructor_callees(
+                    init_method,
+                    /* new_method */ None,
+                    callee_expr,
+                    callee_type,
+                    return_type,
+                    callee_expr_suffix,
+                    exclude_object_methods,
+                )
+            }
+            Some(CallTargetLookup::Ok(box CallTarget::Union(targets)))
             | Some(CallTargetLookup::Error(targets)) => {
                 if targets.is_empty() {
                     debug_println!(
@@ -2195,7 +2253,7 @@ impl<'a> CallGraphVisitor<'a> {
                         "Empty pyrefly target CallTargetLookup::Ok([]) or Error([]) for `{}`",
                         callee_expr.display_with(self.module_context),
                     );
-                    CallCallees::new_unresolved(UnresolvedReason::EmptyPyreflyTarget)
+                    CallCallees::new_unresolved(UnresolvedReason::EmptyPyreflyCallTarget)
                 } else {
                     targets
                         .into_iter()
@@ -2216,6 +2274,14 @@ impl<'a> CallGraphVisitor<'a> {
                         })
                         .unwrap()
                 }
+            }
+            None => {
+                debug_println!(
+                    self.debug,
+                    "Empty pyrefly target `None` for `{}`",
+                    callee_expr.display_with(self.module_context),
+                );
+                CallCallees::new_unresolved(UnresolvedReason::EmptyPyreflyCallTarget)
             }
             _ => {
                 debug_println!(
@@ -2242,12 +2308,8 @@ impl<'a> CallGraphVisitor<'a> {
         let identifier = Ast::expr_name_identifier(name.clone());
         let go_to_definition = self
             .module_context
-            .transaction
-            .find_definition_for_name_use(
-                &self.module_context.handle,
-                &identifier,
-                FindPreference::default(),
-            );
+            .resolver
+            .find_definition_for_name_use(&identifier, FindPreference::default());
 
         if let Some(go_to_definition) = go_to_definition.as_ref() {
             debug_println!(
@@ -2266,127 +2328,148 @@ impl<'a> CallGraphVisitor<'a> {
         if let Some(function_ref) = go_to_definition
             .as_ref()
             .and_then(|definition| {
-                FunctionNode::exported_function_from_definition_item_with_docstring(
-                    definition,
-                    self.module_context,
-                )
+                let short_identifier = ShortIdentifier::from_text_range(definition.definition_range);
+                self.module_context
+                    .resolver
+                    .resolve_pysa_solutions(&definition.module)
+                    .module_index
+                    .get_function_ref_by_short_identifier(
+                        short_identifier,
+                        /* skip_property_getter */ false,
+                    )
             })
-            .map(|(function, context)| function.as_function_ref(&context))
-        {
             // Skip this path for constructor methods (__init__ and __new__) because they need
             // special handling via resolve_constructor_callees to properly populate init_targets
             // and new_targets. Constructor calls should fall through to the type-based
             // resolution below.
-            let is_constructor_method = function_ref.function_name == dunder::INIT
-                || function_ref.function_name == dunder::NEW;
-
-            if !is_constructor_method {
-                let callee_type = self.module_context.answers.get_type_trace(name.range());
-                let callee_expr = Some(AnyNodeRef::from(name));
-                let callee_expr_suffix = Some(name.id.as_str());
-
-                let callees =
-                    CallCallees::new(Vec1::new(self.call_target_from_static_or_virtual_call(
-                        function_ref,
-                        callee_expr,
-                        callee_type.as_ref(),
-                        /* precise_receiver_type */ None,
-                        return_type,
-                        callee_expr_suffix,
-                        /* override_implicit_receiver*/ None,
-                        /* override_is_direct_call */ None,
-                        /* unknown_callee_as_direct_call */ true,
-                    )));
-
-                return IdentifierCallees {
-                    if_called: callees,
-                    global_targets: vec![],
-                    nonlocal_targets: vec![],
-                };
-            }
-        }
-
-        // Check if this is a global variable.
-        if let Some(global) = go_to_definition.as_ref().and_then(|definition| {
-            let module_id = self
-                .module_context
-                .module_ids
-                .get(ModuleKey::from_module(&definition.module))
-                .unwrap();
-
-            self.global_variables
-                .get_for_module(module_id)?
-                .get(ShortIdentifier::from_text_range(
-                    definition.definition_range,
-                ))
-                .map(|global_var| GlobalVariableRef {
-                    module_id,
-                    module_name: definition.module.name(),
-                    name: global_var.name.clone(),
-                })
-        }) {
-            return IdentifierCallees {
-                if_called: CallCallees::empty(),
-                global_targets: vec![global],
-                nonlocal_targets: vec![],
-            };
-        }
-
-        // Check if this is a captured variable.
-        if let Some(current_function) = self.current_function.as_ref()
-            && let Some(current_module_captured_variables) = self
-                .captured_variables
-                .get_for_module(self.module_context.module_id)
+            && function_ref.function_name != dunder::INIT
+                && function_ref.function_name != dunder::NEW
         {
-            let captured_variable = CapturedVariable {
-                name: name.id().clone(),
+            let callee_type = self
+                .module_answers_context
+                .answers
+                .get_type_trace(name.range());
+            let callee_expr = Some(AnyNodeRef::from(name));
+            let callee_expr_suffix = Some(name.id.as_str());
+
+            let callees =
+                CallCallees::new(Vec1::new(self.call_target_from_static_or_virtual_call(
+                    function_ref,
+                    callee_expr,
+                    callee_type.as_ref(),
+                    /* precise_receiver_type */ None,
+                    return_type,
+                    callee_expr_suffix,
+                    /* override_implicit_receiver*/ None,
+                    /* override_is_direct_call */ None,
+                    /* unknown_callee_as_direct_call */ true,
+                )));
+
+            return IdentifierCallees {
+                if_called: callees,
+                global_targets: vec![],
+                captured_variables: vec![],
             };
-            if let Some(captured) = current_module_captured_variables
+        }
+
+        // Check if this is a global variable or captured variable.
+        let (global_variable, captured_variable) = if let Some(go_to_definition) =
+            go_to_definition.as_ref()
+            && let Some(global) = {
+                let pysa_solutions = self
+                    .module_context
+                    .resolver
+                    .resolve_pysa_solutions(&go_to_definition.module);
+                pysa_solutions
+                    .global_variables
+                    .get(ShortIdentifier::from_text_range(
+                        go_to_definition.definition_range,
+                    ))
+                    .map(|global_var| GlobalVariableRef {
+                        module_id: pysa_solutions.module_id,
+                        module_name: go_to_definition.module.name(),
+                        name: global_var.name.clone(),
+                    })
+            } {
+            (Some(global), None)
+        } else if let Some(current_function) = self.current_function.as_ref()
+            && let Some(captured_variables) = self.captured_variables
+            && let Some(captured_variable) = captured_variables
                 .get(current_function)
-                .and_then(|captured_variables| captured_variables.get(&captured_variable))
-                .cloned()
-                .map(|outer_function| CapturedVariableRef {
-                    outer_function,
-                    name: captured_variable.name,
-                })
-            {
-                return IdentifierCallees {
-                    if_called: CallCallees::empty(),
-                    global_targets: vec![],
-                    nonlocal_targets: vec![captured],
-                };
+                .and_then(|captured_variables| captured_variables.get(name.id()))
+        {
+            match captured_variable {
+                CaptureKind::Local(outer_function) => (
+                    None,
+                    Some(CapturedVariableRef {
+                        outer_function: outer_function.clone(),
+                        name: name.id().clone(),
+                    }),
+                ),
+                CaptureKind::Global
+                    if self
+                        .module_context
+                        .resolver
+                        .current_module_solutions()
+                        .global_variables
+                        .contains(name.id()) =>
+                {
+                    (
+                        Some(GlobalVariableRef {
+                            module_id: self.module_answers_context.module_id,
+                            module_name: self.module_answers_context.module_info.name(),
+                            name: name.id().clone(),
+                        }),
+                        None,
+                    )
+                }
+                _ => (None, None),
             }
+        } else {
+            (None, None)
         };
 
-        let callee_type = self.module_context.answers.get_type_trace(name.range());
-        let callee_expr = Some(AnyNodeRef::from(name));
-        let callee_expr_suffix = Some(name.id.as_str());
-
-        // There is no go-to-definition when for example an `ExprName` is a class definition,
-        // a local variable, or a parameter.
-        let pyrefly_target = self
-            .module_context
-            .transaction
-            .ad_hoc_solve(&self.module_context.handle, |solver| {
-                callee_type
-                    .as_ref()
-                    .map(|type_| solver.as_call_target(type_.clone()))
-            })
-            .flatten();
-        let callees = self.resolve_pyrefly_target(
-            pyrefly_target,
-            callee_expr,
-            callee_type.as_ref(),
+        // Resolve callees using types, if the name is called.
+        let callees = self.resolve_callees_from_expression_type(
+            /* expression */ Some(AnyNodeRef::from(name)),
+            /* expression_type */
+            self.module_answers_context
+                .answers
+                .get_type_trace(name.range())
+                .as_ref(),
             return_type,
-            callee_expr_suffix,
-            /* unknown_callee_as_direct_call */ true,
-            /* exclude_object_methods */ false,
+            /* expression_suffix */ Some(name.id.as_str()),
         );
         IdentifierCallees {
             if_called: callees,
-            global_targets: vec![],
-            nonlocal_targets: vec![],
+            global_targets: global_variable.map_or(vec![], |g| vec![g]),
+            captured_variables: captured_variable.map_or(vec![], |c| vec![c]),
         }
+    }
+
+    fn resolve_callees_from_expression_type(
+        &self,
+        expression: Option<AnyNodeRef>,
+        expression_type: Option<&Type>,
+        return_type: ScalarTypeProperties,
+        expression_suffix: Option<&str>,
+    ) -> CallCallees<FunctionRef> {
+        let pyrefly_target = self
+            .module_context
+            .resolver
+            .with_solver("call_graph_call_target", |solver| {
+                expression_type.map(|type_| solver.as_call_target(type_.clone()))
+            })
+            .flatten();
+        self.resolve_pyrefly_target(
+            pyrefly_target,
+            expression,
+            expression_type,
+            return_type,
+            /* callee_expr_suffix */ expression_suffix,
+            /* unknown_callee_as_direct_call */ true,
+            /* exclude_object_methods */ false,
+        )
     }
 
     fn call_targets_from_magic_dunder_attr(
@@ -2407,8 +2490,8 @@ impl<'a> CallGraphVisitor<'a> {
                 attr_type: Type,
             }
             self.module_context
-                .transaction
-                .ad_hoc_solve(&self.module_context.handle, |solver| {
+                .resolver
+                .with_solver("call_graph_dunder_attr", |solver| {
                     solver
                         .type_of_magic_dunder_attr(
                             base,
@@ -2430,12 +2513,14 @@ impl<'a> CallGraphVisitor<'a> {
                          target,
                          attr_type: callee_type,
                      }| {
-                        let return_type =
-                            if let Some(return_type) = callee_type.callable_return_type() {
-                                ScalarTypeProperties::from_type(&return_type, self.module_context)
-                            } else {
-                                ScalarTypeProperties::none()
-                            };
+                        // TODO(T252263933): Need more precise return types for `__getitem__` in `typed_dict.py`
+                        let return_type = if let Some(return_type) = callee_type
+                            .callable_return_type(self.module_answers_context.answers.heap())
+                        {
+                            ScalarTypeProperties::from_type(&return_type, self.module_context)
+                        } else {
+                            ScalarTypeProperties::none()
+                        };
                         DunderAttrCallees {
                             callees: self.resolve_pyrefly_target(
                                 Some(target),
@@ -2471,32 +2556,6 @@ impl<'a> CallGraphVisitor<'a> {
         }
     }
 
-    // Resolve the attribute access via `__getattr__`
-    fn resolve_magic_dunder_attr(
-        &self,
-        attribute: &Name,
-        receiver_type: Option<&Type>,
-        callee_expr: Option<AnyNodeRef>, // This is `base.attribute`
-        callee_range: TextRange,
-    ) -> AttributeAccessCallees<FunctionRef> {
-        let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
-            /* base */ receiver_type,
-            /* attribute */ Some(attribute),
-            callee_range,
-            callee_expr,
-            /* unknown_callee_as_direct_call */ true,
-            "resolve_magic_dunder_attr",
-            /* exclude_object_methods */ false,
-        );
-        AttributeAccessCallees {
-            if_called: callees,
-            // Property getters and setters are always found via the normal attribute lookup
-            property_setters: vec![],
-            property_getters: vec![],
-            global_targets: vec![],
-        }
-    }
-
     fn resolve_attribute_access(
         &self,
         base: &Expr,
@@ -2511,18 +2570,17 @@ impl<'a> CallGraphVisitor<'a> {
         // The main reason is that it automatically ignores decorators, which is
         // the behavior we want with Pysa. When we try to resolve callees using
         // type information, it gets complicated to ignore decorators.
-        let go_to_definitions = self
-            .module_context
-            .transaction
-            .find_definition_for_attribute(
-                &self.module_context.handle,
-                base.range(),
-                attribute,
-                FindPreference::default(),
-            );
+        let go_to_definitions = self.module_context.resolver.find_definition_for_attribute(
+            base.range(),
+            attribute,
+            FindPreference::default(),
+        );
 
         let callee_expr_suffix = Some(attribute.as_str());
-        let receiver_type = self.module_context.answers.get_type_trace(base.range());
+        let receiver_type = self
+            .module_answers_context
+            .answers
+            .get_type_trace(base.range());
 
         for go_to_definition in go_to_definitions.iter() {
             debug_println!(
@@ -2547,61 +2605,30 @@ impl<'a> CallGraphVisitor<'a> {
         // Check for global variable accesses
         let (global_targets, go_to_definitions): (Vec<GlobalVariableRef>, Vec<_>) =
             go_to_definitions.into_iter().partition_map(|definition| {
-                let module_id = self
+                let pysa_solutions = self
                     .module_context
-                    .module_ids
-                    .get(ModuleKey::from_module(&definition.module))
-                    .unwrap();
-
-                self.global_variables
-                    .get_for_module(module_id)
-                    .and_then(|globals| {
-                        globals.get(ShortIdentifier::from_text_range(
+                    .resolver
+                    .resolve_pysa_solutions(&definition.module);
+                if let Some(global_variable_base) =
+                    pysa_solutions
+                        .global_variables
+                        .get(ShortIdentifier::from_text_range(
                             definition.definition_range,
                         ))
+                {
+                    Either::Left(GlobalVariableRef {
+                        module_id: pysa_solutions.module_id,
+                        module_name: definition.module.name(),
+                        name: global_variable_base.name.clone(),
                     })
-                    .map(|global_var| {
-                        Either::Left(GlobalVariableRef {
-                            module_id,
-                            module_name: definition.module.name(),
-                            name: global_var.name.clone(),
-                        })
-                    })
-                    .unwrap_or(Either::Right(definition))
+                } else {
+                    Either::Right(definition)
+                }
             });
 
-        let functions_from_go_to_def = go_to_definitions
-            .into_iter()
-            .filter_map(|definition| {
-                FunctionNode::exported_function_from_definition_item_with_docstring(
-                    &definition,
-                    self.module_context,
-                )
-            })
-            .map(|(function, context)| function.as_function_ref(&context))
-            .collect::<Vec<_>>();
-
-        if global_targets.is_empty() && functions_from_go_to_def.is_empty() {
-            // Fall back to using the callee type.
-            return self.resolve_magic_dunder_attr(
-                attribute,
-                receiver_type.as_ref(),
-                callee_expr,
-                callee_range,
-            );
-        }
-
-        let (property_callees, non_property_callees): (Vec<FunctionRef>, Vec<FunctionRef>) =
-            functions_from_go_to_def
-                .into_iter()
-                .partition(|function_ref| {
-                    self.get_base_definition(function_ref)
-                        .is_some_and(|definition| {
-                            definition.is_property_getter || definition.is_property_setter
-                        })
-                });
-
-        let in_assignment_lhs = assignment_targets.is_some_and(|assignment_targets| {
+        // Go-to-definition always resolves to the property getters, even when used as a left hand side of an
+        // assignment. Therefore we use heuristics to differentiate setters from getters.
+        let is_assignment_lhs = assignment_targets.is_some_and(|assignment_targets| {
             assignment_targets
                 .iter()
                 .any(|assignment_target| match assignment_target {
@@ -2611,38 +2638,117 @@ impl<'a> CallGraphVisitor<'a> {
                     _ => false,
                 })
         });
-        // Go-to-definition always resolves to the property getters, even when used as a left hand side of an
-        // assignment. Therefore we use heuristics to differentiate setters from getters.
-        let (property_setters, property_getters) = if in_assignment_lhs {
+
+        let (functions_from_go_to_def, mut unused_go_to_definitions): (Vec<_>, Vec<_>) =
+            go_to_definitions.into_iter().partition_map(|definition| {
+                let short_identifier =
+                    ShortIdentifier::from_text_range(definition.definition_range);
+                let function_ref = self
+                    .module_context
+                    .resolver
+                    .resolve_pysa_solutions(&definition.module)
+                    .module_index
+                    .get_function_ref_by_short_identifier(
+                        short_identifier,
+                        /* skip_property_getter */ is_assignment_lhs,
+                    );
+                match function_ref {
+                    Some(function_ref) => Either::Left(function_ref),
+                    None => Either::Right(definition),
+                }
+            });
+
+        let (property_callees, non_property_callees): (Vec<FunctionRef>, Vec<FunctionRef>) =
+            functions_from_go_to_def
+                .into_iter()
+                .partition(|function_ref| {
+                    let definition = self.get_base_definition(function_ref);
+                    definition.is_property_getter || definition.is_property_setter
+                });
+
+        let (property_setters, mut property_getters) = if is_assignment_lhs {
             (property_callees, vec![])
         } else {
             (vec![], property_callees)
         };
 
+        // For a single unused Attribute go-to definition referencing a property
+        // defined via assignment (e.g., `bar = property(get_bar)`), resolve the
+        // property getter using the definition's module and range. This works
+        // for both direct and inherited properties because go-to-definition
+        // already resolves to the defining class's module and field range.
+        if unused_go_to_definitions.len() == 1
+            && matches!(
+                unused_go_to_definitions[0].metadata,
+                DefinitionMetadata::Attribute
+            )
+        {
+            let definition = &unused_go_to_definitions[0];
+            if let Some(getter_ref) = self
+                .module_context
+                .resolver
+                .resolve_pysa_solutions(&definition.module)
+                .module_index
+                .get_property_getter_ref(definition.definition_range)
+                .cloned()
+            {
+                debug_println!(
+                    self.debug,
+                    "Found property getter for attribute at {:?}: {:?}",
+                    definition.definition_range,
+                    getter_ref,
+                );
+                property_getters.push(getter_ref);
+                unused_go_to_definitions.clear();
+            }
+        }
+
+        let has_non_function_definitions = !unused_go_to_definitions.is_empty();
+        let has_property_callees = !property_getters.is_empty() || !property_setters.is_empty();
+
         let unknown_callee_as_direct_call = true;
-        let if_called = CallCallees {
-            call_targets: non_property_callees
-                .into_iter()
-                .map(|function| {
-                    self.call_target_from_static_or_virtual_call(
-                        function,
-                        callee_expr,
-                        callee_type,
-                        receiver_type.as_ref(),
-                        return_type,
-                        callee_expr_suffix,
-                        /* override_implicit_receiver*/ None,
-                        /* override_is_direct_call */ None,
-                        unknown_callee_as_direct_call,
-                    )
-                })
-                .collect::<Vec<_>>(),
-            init_targets: vec![],
-            new_targets: vec![],
-            higher_order_parameters: HashMap::new(),
-            unresolved: Unresolved::False,
+        let if_called = if non_property_callees.is_empty() {
+            // Fall back to using the callee type.
+            let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
+                /* base */ receiver_type.as_ref(),
+                /* attribute */ Some(attribute),
+                callee_range,
+                callee_expr,
+                /* unknown_callee_as_direct_call */ true,
+                "resolve_attribute_access",
+                /* exclude_object_methods */ false,
+            );
+            callees
+        } else {
+            CallCallees {
+                call_targets: non_property_callees
+                    .into_iter()
+                    .map(|function| {
+                        self.call_target_from_static_or_virtual_call(
+                            function,
+                            callee_expr,
+                            callee_type,
+                            receiver_type.as_ref(),
+                            return_type,
+                            callee_expr_suffix,
+                            /* override_implicit_receiver*/ None,
+                            /* override_is_direct_call */ None,
+                            unknown_callee_as_direct_call,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                init_targets: vec![],
+                new_targets: vec![],
+                higher_order_parameters: HashMap::new(),
+                unresolved: Unresolved::False,
+            }
         };
         AttributeAccessCallees {
+            // Don't treat attributes that are functions (those are usually methods) as "regular"
+            // attributes so we don't propagate taint from the base to the attribute.
+            is_attribute: has_non_function_definitions
+                || (if_called.is_empty() && !has_property_callees)
+                || !global_targets.is_empty(),
             if_called,
             property_setters: property_setters
                 .into_iter()
@@ -2722,18 +2828,21 @@ impl<'a> CallGraphVisitor<'a> {
                             "Resolving callees for higher order parameter `{}`",
                             argument.display_with(self.module_context)
                         );
-                        let callees = self.resolve_call(
-                            /* callee */ argument,
-                            /* return_type */
-                            self.get_return_type_for_callee(
-                                self.module_context
-                                    .answers
-                                    .get_type_trace(argument.range())
-                                    .as_ref(),
-                            ),
-                            /* arguments */ None,
-                            /* assignment_targets */ None,
-                        );
+                        let callees = self
+                            .resolve_call(
+                                /* callee */ argument,
+                                /* return_type */
+                                self.get_return_type_for_callee(
+                                    self.module_answers_context
+                                        .answers
+                                        .get_type_trace(argument.range())
+                                        .as_ref(),
+                                ),
+                                /* arguments */ None,
+                                /* assignment_targets */ None,
+                                /* resolve_higher_order_parameters */ false,
+                            )
+                            .into_call_callees();
                         let call_targets = callees.call_targets;
                         if call_targets.is_empty() {
                             None
@@ -2760,10 +2869,15 @@ impl<'a> CallGraphVisitor<'a> {
         return_type: ScalarTypeProperties,
         arguments: Option<&ruff_python_ast::Arguments>,
         assignment_targets: Option<&[Expr]>,
-    ) -> CallCallees<FunctionRef> {
-        let higher_order_parameters = self.resolve_higher_order_parameters(arguments);
+        resolve_higher_order_parameters: bool,
+    ) -> ResolveCallResult {
+        let higher_order_parameters = if resolve_higher_order_parameters {
+            Some(self.resolve_higher_order_parameters(arguments))
+        } else {
+            None
+        };
 
-        let mut callees = match callee {
+        let callees = match callee {
             Expr::Name(name) => {
                 let callees = self.resolve_name(name, arguments, return_type);
                 debug_println!(
@@ -2773,12 +2887,12 @@ impl<'a> CallGraphVisitor<'a> {
                     arguments.display_with(self.module_context),
                     callees
                 );
-                callees.if_called
+                ResolveCallCallees::Identifier(callees)
             }
             Expr::Attribute(attribute) => {
                 let callee_expr = Some(AnyNodeRef::from(attribute));
                 let callee_type = self
-                    .module_context
+                    .module_answers_context
                     .answers
                     .get_type_trace(attribute.range());
                 let callees = self.resolve_attribute_access(
@@ -2796,19 +2910,21 @@ impl<'a> CallGraphVisitor<'a> {
                     callee.display_with(self.module_context),
                     callees
                 );
-                callees.if_called
+                ResolveCallCallees::AttributeAccess(callees)
             }
-            _ => CallCallees::new_unresolved(UnresolvedReason::UnexpectedCalleeExpression),
+            _ => ResolveCallCallees::Unexpected,
         };
-        callees.with_higher_order_parameters(higher_order_parameters);
-        callees
+        ResolveCallResult {
+            callees,
+            higher_order_parameters,
+        }
     }
 
     // Use this only when we are not analyzing a call expression (e.g., `foo` in `x = foo`), because
     // for a call expression, we could simply query its type (e.g., query the type of `c(1)`).
     fn get_return_type_for_callee(&self, callee_type: Option<&Type>) -> ScalarTypeProperties {
         callee_type
-            .and_then(|ty| ty.callable_return_type())
+            .and_then(|ty| ty.callable_return_type(self.module_answers_context.answers.heap()))
             .map(|return_type| ScalarTypeProperties::from_type(&return_type, self.module_context))
             .unwrap_or(ScalarTypeProperties::none())
     }
@@ -2846,7 +2962,10 @@ impl<'a> CallGraphVisitor<'a> {
         return_type: ScalarTypeProperties,
         origin_kind: OriginKind,
     ) {
-        let argument_type = self.module_context.answers.get_type_trace(argument.range());
+        let argument_type = self
+            .module_answers_context
+            .answers
+            .get_type_trace(argument.range());
         let callees = self.call_targets_from_method_name(
             method_name,
             argument_type.as_ref(),
@@ -2871,8 +2990,16 @@ impl<'a> CallGraphVisitor<'a> {
     }
 
     fn resolve_and_register_str(&mut self, call: &ExprCall, argument: &Expr) {
-        let argument_type = self.module_context.answers.get_type_trace(argument.range());
-        let object_type = self.module_context.stdlib.object().clone().to_type();
+        let argument_type = self
+            .module_answers_context
+            .answers
+            .get_type_trace(argument.range());
+        let object_type = self
+            .module_answers_context
+            .stdlib
+            .object()
+            .clone()
+            .to_type();
         let callees = if let Some(argument_type) = argument_type {
             self.resolve_stringify_call(argument_type, dunder::STR, argument.range(), &object_type)
         } else {
@@ -2889,17 +3016,45 @@ impl<'a> CallGraphVisitor<'a> {
         &mut self,
         call: &ExprCall,
         return_type: ScalarTypeProperties,
-        expression_identifier: ExpressionIdentifier,
         assignment_targets: Option<&[Expr]>,
     ) {
         let callee = &call.func;
-        let callees = ExpressionCallees::Call(self.resolve_call(
+        let resolved = self.resolve_call(
             callee,
             return_type,
             Some(&call.arguments),
             assignment_targets,
-        ));
-        self.add_callees(expression_identifier, callees);
+            /* resolve_higher_order_parameters */ true,
+        );
+
+        // If necessary, register callees for the nested attribute or name access.
+        match (&resolved.callees, &*call.func) {
+            (ResolveCallCallees::Identifier(callees), Expr::Name(name))
+                if callees.has_globals_or_captures() =>
+            {
+                self.add_callees(
+                    ExpressionIdentifier::expr_name(name, &self.module_answers_context.module_info),
+                    ExpressionCallees::Identifier(callees.clone()),
+                )
+            }
+            (ResolveCallCallees::AttributeAccess(callees), Expr::Attribute(attribute))
+                if callees.has_globals_or_properties() =>
+            {
+                self.add_callees(
+                    ExpressionIdentifier::regular(
+                        attribute.range(),
+                        &self.module_answers_context.module_info,
+                    ),
+                    ExpressionCallees::AttributeAccess(callees.clone()),
+                )
+            }
+            _ => (),
+        }
+
+        self.add_callees(
+            ExpressionIdentifier::regular(call.range(), &self.module_answers_context.module_info),
+            ExpressionCallees::Call(resolved.into_call_callees()),
+        );
 
         // Add extra callees for specific functions.
         // The pattern matching here must match exactly with different pattern
@@ -3001,7 +3156,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn resolve_and_register_compare(&mut self, compare: &ExprCompare) {
         let left_comparator_type = self
-            .module_context
+            .module_answers_context
             .answers
             .get_type_trace(compare.comparators.first().unwrap().range());
 
@@ -3047,7 +3202,7 @@ impl<'a> CallGraphVisitor<'a> {
             attr_type: iter_callee_type,
         } = self.call_targets_from_magic_dunder_attr(
             /* base */
-            self.module_context
+            self.module_answers_context
                 .answers
                 .get_type_trace(iter_range)
                 .as_ref(),
@@ -3066,7 +3221,10 @@ impl<'a> CallGraphVisitor<'a> {
         } = self.call_targets_from_magic_dunder_attr(
             /* base */
             iter_callee_type
-                .and_then(|iter_callee_type| iter_callee_type.callable_return_type())
+                .and_then(|iter_callee_type| {
+                    iter_callee_type
+                        .callable_return_type(self.module_answers_context.answers.heap())
+                })
                 .as_ref(),
             /* attribute */ Some(&next_callee_name),
             iter_range,
@@ -3169,7 +3327,10 @@ impl<'a> CallGraphVisitor<'a> {
             ),
         };
         let value_range = subscript.value.range();
-        let value_type = self.module_context.answers.get_type_trace(value_range);
+        let value_type = self
+            .module_answers_context
+            .answers
+            .get_type_trace(value_range);
         let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
             /* base */ value_type.as_ref(),
             /* attribute */ Some(&callee_name),
@@ -3299,18 +3460,26 @@ impl<'a> CallGraphVisitor<'a> {
         self.add_callees(
             ExpressionIdentifier::FormatStringArtificial(self.pysa_location(fstring.range())),
             ExpressionCallees::FormatStringArtificial(FormatStringArtificialCallees {
-                targets: vec![CallTarget::format_string_target()],
+                targets: vec![PysaCallTarget::format_string_target()],
             }),
         );
 
-        let object_type = self.module_context.stdlib.object().clone().to_type();
+        let object_type = self
+            .module_answers_context
+            .stdlib
+            .object()
+            .clone()
+            .to_type();
         for interpolation in fstring
             .value
             .elements()
             .filter_map(|element| element.as_interpolation())
         {
             let expression_range = interpolation.expression.range();
-            let callee_class = self.module_context.answers.get_type_trace(expression_range);
+            let callee_class = self
+                .module_answers_context
+                .answers
+                .get_type_trace(expression_range);
             let callees = if let Some(callee_class) = callee_class {
                 self.resolve_interpolation(
                     interpolation,
@@ -3338,7 +3507,7 @@ impl<'a> CallGraphVisitor<'a> {
         let lhs_range = bin_op.left.range();
         let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
             /* base */
-            self.module_context
+            self.module_answers_context
                 .answers
                 .get_type_trace(lhs_range)
                 .as_ref(),
@@ -3358,9 +3527,15 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn resolve_and_register_augmented_assign(&mut self, aug_assign: &StmtAugAssign) {
         let lhs_range = aug_assign.target.range();
-        let lhs_type = self.module_context.answers.get_type_trace(lhs_range);
+        let lhs_type = self
+            .module_answers_context
+            .answers
+            .get_type_trace(lhs_range);
         let rhs_range = aug_assign.value.range();
-        let rhs_type = self.module_context.answers.get_type_trace(rhs_range);
+        let rhs_type = self
+            .module_answers_context
+            .answers
+            .get_type_trace(rhs_range);
 
         let callees = self.distribute_over_optional_union(lhs_type.as_ref(), |lhs_type| {
             self.distribute_over_optional_union(rhs_type.as_ref(), |rhs_type| {
@@ -3408,9 +3583,9 @@ impl<'a> CallGraphVisitor<'a> {
                 let class_object = class_type.class_object();
                 let mut targs = class_type.targs().iter_paired().map(|(_, targ)| targ);
                 if let Some(targ) = targs.next()
-                    && (class_object == self.module_context.stdlib.list_object()
-                        || class_object == self.module_context.stdlib.set_object()
-                        || class_type == self.module_context.stdlib.sequence(targ.clone()))
+                    && (class_object == self.module_answers_context.stdlib.list_object()
+                        || class_object == self.module_answers_context.stdlib.set_object()
+                        || class_type == self.module_answers_context.stdlib.sequence(targ.clone()))
                 {
                     match targ {
                         Type::ClassType(class_type) => Some((
@@ -3431,10 +3606,10 @@ impl<'a> CallGraphVisitor<'a> {
             }
             _ => None,
         };
-        if let Some(graphql_decorator) = self.matching_graphql_decorators.last().unwrap()
+        if let Some(Some(graphql_decorator)) = self.matching_graphql_decorators.last()
             && let Some(return_expression_type) =
                 return_stmt.value.as_ref().and_then(|return_expression| {
-                    self.module_context
+                    self.module_answers_context
                         .answers
                         .get_type_trace(return_expression.range())
                 })
@@ -3442,57 +3617,44 @@ impl<'a> CallGraphVisitor<'a> {
             && let Some((return_inner_class, argument_mapping)) =
                 extract_inner_class_and_argument_mapping(return_expression_type)
         {
-            let class_context = get_context_from_class(&return_inner_class, self.module_context);
-            let has_graphql_decorator = |function_node: &FunctionNode| match function_node {
-                FunctionNode::DecoratedFunction(decorated_function) => {
-                    let decorators_range = decorated_function.undecorated.decorators.iter().map(
-                        |(_, decorator_range)| {
-                            // `start()` does not work with go-to-definitions since the start position always refers to `@`
-                            decorator_range.end()
-                        },
-                    );
-                    graphql_decorator.is_inside_decorators(decorators_range, &class_context)
-                }
-                _ => false,
-            };
-            let callees: Vec<CallTarget<FunctionRef>> = return_inner_class
-                .fields()
-                .filter_map(|field_name| {
-                    if let Some(class_field) = get_class_field_from_current_class_only(
-                        &return_inner_class,
-                        field_name,
-                        &class_context,
-                    ) && let Some(function_node) =
-                        FunctionNode::exported_function_from_class_field(
-                            &return_inner_class,
-                            field_name,
-                            class_field,
-                            &class_context,
-                        )
-                        && has_graphql_decorator(&function_node)
-                    {
-                        Some(self.call_target_from_static_or_virtual_call(
-                            function_node.as_function_ref(&class_context),
-                            /* callee_expr */ None,
-                            /* callee_type */ None,
-                            /* precise_receiver_type */ None,
-                            /* return_type */
-                            ScalarTypeProperties::none(),
-                            /* callee_expr_suffix */ None,
-                            /* override_implicit_receiver */ None,
-                            /* override_is_direct_call */ None,
-                            /* unknown_callee_as_direct_call */ true,
-                        ))
-                    } else {
-                        None
-                    }
+            debug_println!(
+                self.debug,
+                "Found function with graphql decorator `{:#?}` and a return expression with (inner) class `{}`",
+                graphql_decorator,
+                return_inner_class
+            );
+            let return_class_id = ClassId::from_class(&return_inner_class);
+            let callees: Vec<PysaCallTarget<FunctionRef>> = self
+                .module_context
+                .resolver
+                .resolve_pysa_solutions(return_inner_class.module())
+                .module_index
+                .get_graphql_decorated_class_fields(return_class_id, |decorator| {
+                    decorator == graphql_decorator
+                })
+                .into_iter()
+                .map(|function_ref| {
+                    self.call_target_from_static_or_virtual_call(
+                        function_ref,
+                        /* callee_expr */ None,
+                        /* callee_type */ None,
+                        /* precise_receiver_type */ None,
+                        /* return_type */
+                        ScalarTypeProperties::none(),
+                        /* callee_expr_suffix */ None,
+                        // override_implicit_receiver. Since we rely on `argument_mapping` to match
+                        // argument positions, this should not interfere.
+                        Some(ImplicitReceiver::False),
+                        /* override_is_direct_call */ None,
+                        /* unknown_callee_as_direct_call */ true,
+                    )
                 })
                 .collect();
             if !callees.is_empty() {
                 self.add_callees(
                     ExpressionIdentifier::regular(
                         return_stmt.range(),
-                        &self.module_context.module_info,
+                        &self.module_answers_context.module_info,
                     ),
                     ExpressionCallees::Return(ReturnShimCallees {
                         targets: callees,
@@ -3504,14 +3666,14 @@ impl<'a> CallGraphVisitor<'a> {
     }
 
     fn resolve_and_register_slice(&mut self, slice: &ExprSlice) {
-        let slice_class = self.module_context.stdlib.slice_class_object();
+        let slice_class = self.module_answers_context.stdlib.slice_class_object();
         let slice_class_type =
             pyrefly_types::class::ClassType::new(slice_class.dupe(), Default::default());
         let (init_method, new_method) = self
             .module_context
-            .transaction
-            .ad_hoc_solve(&self.module_context.handle, |solver| {
-                let new_method = solver.get_dunder_new(&slice_class_type);
+            .resolver
+            .with_solver("call_graph_slice_constructor", |solver| {
+                let new_method = solver.get_dunder_new(&slice_class_type, false);
                 let overrides_new = new_method.is_some();
                 let init_method = solver
                     .get_dunder_init(&slice_class_type, /* get_object_init */ !overrides_new);
@@ -3546,7 +3708,11 @@ impl<'a> CallGraphVisitor<'a> {
                 Expr::Call(callee) if expr.range() == callee.func.range() => true,
                 _ => false,
             });
-        let expr_type = || self.module_context.answers.get_type_trace(expr.range());
+        let expr_type = || {
+            self.module_answers_context
+                .answers
+                .get_type_trace(expr.range())
+        };
         match expr {
             Expr::Call(call) => {
                 debug_println!(
@@ -3562,7 +3728,6 @@ impl<'a> CallGraphVisitor<'a> {
                 self.resolve_and_register_call(
                     call,
                     return_type_from_expr,
-                    ExpressionIdentifier::regular(expr.range(), &self.module_context.module_info),
                     assignment_targets(current_statement),
                 );
             }
@@ -3572,14 +3737,24 @@ impl<'a> CallGraphVisitor<'a> {
                     "Resolving callees for name `{}`",
                     expr.display_with(self.module_context)
                 );
-                let callees = self.resolve_name(
+                let mut callees = self.resolve_name(
                     name,
                     /* call_arguments */ None,
                     self.get_return_type_for_callee(expr_type().as_ref()), // This is the return type when `expr` is called
                 );
+                callees.strip_unresolved_if_called();
+                debug_println!(
+                    self.debug,
+                    "Resolved name `{}` into `{:#?}`",
+                    expr.display_with(self.module_context),
+                    callees
+                );
                 if !callees.is_empty() {
                     self.add_callees(
-                        ExpressionIdentifier::expr_name(name, &self.module_context.module_info),
+                        ExpressionIdentifier::expr_name(
+                            name,
+                            &self.module_answers_context.module_info,
+                        ),
                         ExpressionCallees::Identifier(callees),
                     );
                 }
@@ -3591,7 +3766,7 @@ impl<'a> CallGraphVisitor<'a> {
                     expr.display_with(self.module_context)
                 );
                 let callee_expr = Some(AnyNodeRef::from(attribute));
-                let callees = self.resolve_attribute_access(
+                let mut callees = self.resolve_attribute_access(
                     &attribute.value,
                     attribute.attr.id(),
                     callee_expr,
@@ -3601,11 +3776,18 @@ impl<'a> CallGraphVisitor<'a> {
                     self.get_return_type_for_callee(expr_type().as_ref()), // This is the return type when `expr` is called
                     assignment_targets(current_statement),
                 );
+                callees.strip_unresolved_if_called();
+                debug_println!(
+                    self.debug,
+                    "Resolved attribute `{}` into `{:#?}`",
+                    expr.display_with(self.module_context),
+                    callees
+                );
                 if !callees.is_empty() {
                     self.add_callees(
                         ExpressionIdentifier::regular(
                             expr.range(),
-                            &self.module_context.module_info,
+                            &self.module_answers_context.module_info,
                         ),
                         ExpressionCallees::AttributeAccess(callees),
                     );
@@ -3720,26 +3902,29 @@ impl<'a> CallGraphVisitor<'a> {
         }
         let key = KeyDecoratedFunction(ShortIdentifier::new(&function_def.name));
         let callees = self
-            .module_context
+            .module_answers_context
             .bindings
             .key_to_idx_hashed_opt(Hashed::new(&key))
             .and_then(|idx| {
                 let decorated_function = DecoratedFunction::from_bindings_answers(
                     idx,
-                    &self.module_context.bindings,
-                    &self.module_context.answers,
+                    &self.module_answers_context.bindings,
+                    &self.module_answers_context.answers,
                 );
-                if should_export_decorated_function(&decorated_function, self.module_context) {
+                if should_export_decorated_function(
+                    &decorated_function,
+                    &self.module_answers_context,
+                ) {
                     let return_type = decorated_function
                         .ty
-                        .callable_return_type()
+                        .callable_return_type(self.module_answers_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });
                     let target = self.call_target_from_function_target(
                         Target::Function(FunctionRef::from_decorated_function(
                             &decorated_function,
-                            self.module_context,
+                            &self.module_answers_context,
                         )),
                         return_type,
                         /* receiver_type */ None,
@@ -3757,7 +3942,7 @@ impl<'a> CallGraphVisitor<'a> {
             self.add_callees(
                 ExpressionIdentifier::regular(
                     function_def.range(),
-                    &self.module_context.module_info,
+                    &self.module_answers_context.module_info,
                 ),
                 callees,
             );
@@ -3774,7 +3959,7 @@ impl<'a> CallGraphVisitor<'a> {
             };
             let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
                 /* base */
-                self.module_context
+                self.module_answers_context
                     .answers
                     .get_type_trace(context_expr_range)
                     .as_ref(),
@@ -3823,16 +4008,19 @@ impl<'a> CallGraphVisitor<'a> {
                 decorator.display_with(self.module_context)
             );
             let callee_type = self
-                .module_context
+                .module_answers_context
                 .answers
                 .get_type_trace(decorator.expression.range());
             let return_type = self.get_return_type_for_callee(callee_type.as_ref());
-            let callees = self.resolve_call(
-                /* callee */ &decorator.expression,
-                return_type,
-                /* arguments */ None,
-                /* assignment_targets */ None,
-            );
+            let callees = self
+                .resolve_call(
+                    /* callee */ &decorator.expression,
+                    return_type,
+                    /* arguments */ None,
+                    /* assignment_targets */ None,
+                    /* resolve_higher_order_parameters */ true,
+                )
+                .into_call_callees();
             self.call_graphs.add_callees(
                 decorated_target.clone(),
                 ExpressionIdentifier::ArtificialCall(Origin {
@@ -3846,7 +4034,10 @@ impl<'a> CallGraphVisitor<'a> {
                 Expr::Name(name) => {
                     self.call_graphs.remove_callees(
                         decorated_target.clone(),
-                        ExpressionIdentifier::expr_name(name, &self.module_context.module_info),
+                        ExpressionIdentifier::expr_name(
+                            name,
+                            &self.module_answers_context.module_info,
+                        ),
                     );
                 }
                 Expr::Attribute(_) => {
@@ -3854,7 +4045,7 @@ impl<'a> CallGraphVisitor<'a> {
                         decorated_target.clone(),
                         ExpressionIdentifier::regular(
                             decorator.expression.range(),
-                            &self.module_context.module_info,
+                            &self.module_answers_context.module_info,
                         ),
                     );
                 }
@@ -3885,10 +4076,9 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
             &ScopeExportedFunctionFlags {
                 include_top_level: true,
                 include_class_top_level: true,
-                include_function_decorators:
-                    super::ast_visitor::ExportFunctionDecorators::InDecoratedTarget,
-                include_class_decorators: super::ast_visitor::ExportClassDecorators::InParentScope,
-                include_default_arguments: super::ast_visitor::ExportDefaultArguments::InFunction,
+                include_function_decorators: ExportFunctionDecorators::InDecoratedTarget,
+                include_class_decorators: ExportClassDecorators::InParentScope,
+                include_default_arguments: ExportDefaultArguments::InFunction,
             },
         );
         if let Some(current_function) = &self.current_function {
@@ -3908,13 +4098,13 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
                 .decorator_list
                 .iter()
                 .map(|decorator| match &decorator.expression {
-                    Expr::Name(_) | Expr::Attribute(_) => {
-                        self.module_context.transaction.find_definition(
-                            &self.module_context.handle,
+                    Expr::Name(_) | Expr::Attribute(_) => self
+                        .module_context
+                        .resolver
+                        .find_definition(
                             decorator.expression.end(),
                             FindPreference::default(),
-                        )
-                    }
+                        ),
                     _ => vec![],
                 })
                 .flat_map(|v| v.into_iter())
@@ -3923,6 +4113,12 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
                         .iter()
                         .find_map(|(callable_decorator, method_decorator)| {
                             if callable_decorator.matches_definition(&go_to_definition) {
+                                debug_println!(
+                                    self.debug,
+                                    "Function has graphql decorator `{:#?}`. We will look for decorator `{:#?}` on the return class",
+                                    callable_decorator,
+                                    method_decorator
+                                );
                                 Some(*method_decorator)
                             } else {
                                 None
@@ -3947,11 +4143,9 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
                     &ScopeExportedFunctionFlags {
                         include_top_level: false,
                         include_class_top_level: false,
-                        include_function_decorators:
-                            super::ast_visitor::ExportFunctionDecorators::Ignore,
-                        include_class_decorators: super::ast_visitor::ExportClassDecorators::Ignore,
-                        include_default_arguments:
-                            super::ast_visitor::ExportDefaultArguments::Ignore,
+                        include_function_decorators: ExportFunctionDecorators::Ignore,
+                        include_class_decorators: ExportClassDecorators::Ignore,
+                        include_default_arguments: ExportDefaultArguments::Ignore,
                     },
                 )
                 .and_then(|function_ref| function_ref.get_decorated_target());
@@ -4009,52 +4203,53 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
 
 fn resolve_call(
     call: &ExprCall,
-    function_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     module_context: &ModuleContext,
-    override_graph: &OverrideGraph,
-) -> Vec<CallTarget<FunctionRef>> {
+) -> Vec<PysaCallTarget<FunctionRef>> {
     let mut call_graphs = CallGraphs::new();
     let visitor = CallGraphVisitor {
         call_graphs: &mut call_graphs,
         module_context,
-        module_id: module_context.module_id,
-        module_name: module_context.module_info.name(),
-        function_base_definitions: function_definitions,
+        module_answers_context: module_context.answers_context.dupe(),
+        module_id: module_context.answers_context.module_id,
+        module_name: module_context.answers_context.module_info.name(),
         current_function: None,
         debug: false,
         debug_scopes: Vec::new(),
-        override_graph,
-        global_variables: &WholeProgramGlobalVariables::new(),
-        captured_variables: &WholeProgramCapturedVariables::new(),
-        error_collector: ErrorCollector::new(module_context.module_info.dupe(), ErrorStyle::Never),
+        captured_variables: None,
+        error_collector: ErrorCollector::new(
+            module_context.answers_context.module_info.dupe(),
+            ErrorStyle::Never,
+        ),
         matching_graphql_decorators: Vec::new(),
     };
-    let callees = visitor.resolve_call(
-        /* callee */ &call.func,
-        /* return_type */
-        module_context
-            .answers
-            .get_type_trace(call.range())
-            .map_or(ScalarTypeProperties::none(), |type_| {
-                ScalarTypeProperties::from_type(&type_, module_context)
-            }),
-        /* arguments */ Some(&call.arguments),
-        /* assignment_targets */ None,
-    );
+    let callees = visitor
+        .resolve_call(
+            /* callee */ &call.func,
+            /* return_type */
+            module_context
+                .answers_context
+                .answers
+                .get_type_trace(call.range())
+                .map_or(ScalarTypeProperties::none(), |type_| {
+                    ScalarTypeProperties::from_type(&type_, module_context)
+                }),
+            /* arguments */ Some(&call.arguments),
+            /* assignment_targets */ None,
+            /* resolve_higher_order_parameters */ false,
+        )
+        .into_call_callees();
     callees.all_targets().cloned().collect()
 }
 
 fn resolve_expression(
     expression: &Expr,
-    function_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     module_context: &ModuleContext,
-    override_graph: &OverrideGraph,
     parent_expression: Option<&Expr>,
-) -> Vec<CallTarget<FunctionRef>> {
+) -> Vec<PysaCallTarget<FunctionRef>> {
     // This needs to be provided. Otherwise the callees won't be registered into `call_graphs`.
     let current_function = FunctionRef {
-        module_id: module_context.module_id,
-        module_name: module_context.module_info.name(),
+        module_id: module_context.answers_context.module_id,
+        module_name: module_context.answers_context.module_info.name(),
         function_id: FunctionId::ModuleTopLevel,
         function_name: Name::new("artificial_function"),
     };
@@ -4062,16 +4257,17 @@ fn resolve_expression(
     let mut visitor = CallGraphVisitor {
         call_graphs: &mut call_graphs,
         module_context,
-        module_id: module_context.module_id,
-        module_name: module_context.module_info.name(),
-        function_base_definitions: function_definitions,
+        module_answers_context: module_context.answers_context.dupe(),
+        module_id: module_context.answers_context.module_id,
+        module_name: module_context.answers_context.module_info.name(),
         current_function: Some(current_function.clone()),
         debug: false,
         debug_scopes: Vec::new(),
-        override_graph,
-        global_variables: &WholeProgramGlobalVariables::new(),
-        captured_variables: &WholeProgramCapturedVariables::new(),
-        error_collector: ErrorCollector::new(module_context.module_info.dupe(), ErrorStyle::Never),
+        captured_variables: None,
+        error_collector: ErrorCollector::new(
+            module_context.answers_context.module_info.dupe(),
+            ErrorStyle::Never,
+        ),
         matching_graphql_decorators: Vec::new(),
     };
     visitor.resolve_and_register_expression(
@@ -4080,8 +4276,13 @@ fn resolve_expression(
         /* current_statement */ None,
     );
     let expression_identifier = match expression {
-        Expr::Name(name) => ExpressionIdentifier::expr_name(name, &module_context.module_info),
-        _ => ExpressionIdentifier::regular(expression.range(), &module_context.module_info),
+        Expr::Name(name) => {
+            ExpressionIdentifier::expr_name(name, &module_context.answers_context.module_info)
+        }
+        _ => ExpressionIdentifier::regular(
+            expression.range(),
+            &module_context.answers_context.module_info,
+        ),
     };
     call_graphs
         .0
@@ -4096,21 +4297,12 @@ fn resolve_expression(
 // Requires `context` to be the module context of the decorators.
 pub fn resolve_decorator_callees(
     decorators: &[Decorator],
-    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
     context: &ModuleContext,
 ) -> HashMap<PysaLocation, Vec<Target<FunctionRef>>> {
     let mut decorator_callees = HashMap::new();
 
-    // We do not care about overrides here
-    let override_graph = OverrideGraph::new();
-
     let is_object_new_or_init_target = |target: &Target<FunctionRef>| match target {
-        Target::Function(function_ref)
-        | Target::AllOverrides(function_ref)
-        | Target::OverrideSubset {
-            base_method: function_ref,
-            ..
-        } => {
+        Target::Function(function_ref) | Target::Overrides(function_ref) => {
             function_ref.module_name == ModuleName::builtins()
                 && (function_ref.function_name == dunder::INIT
                     || function_ref.function_name == dunder::NEW)
@@ -4122,8 +4314,7 @@ pub fn resolve_decorator_callees(
         let (range, callees) = match &decorator.expression {
             Expr::Call(call) => {
                 // Decorator factor, e.g `@foo(1)`. We export the callee of `foo`.
-                let callees =
-                    resolve_call(call, function_base_definitions, context, &override_graph);
+                let callees = resolve_call(call, context);
                 (
                     (*call.func).range(),
                     callees
@@ -4134,13 +4325,7 @@ pub fn resolve_decorator_callees(
                 )
             }
             expr => {
-                let callees = resolve_expression(
-                    expr,
-                    function_base_definitions,
-                    context,
-                    &override_graph,
-                    /* parent_expression */ None,
-                );
+                let callees = resolve_expression(expr, context, /* parent_expression */ None);
                 (
                     expr.range(),
                     callees
@@ -4153,7 +4338,8 @@ pub fn resolve_decorator_callees(
         };
 
         if !callees.is_empty() {
-            let location = PysaLocation::new(context.module_info.display_range(range));
+            let location =
+                PysaLocation::from_text_range(range, &context.answers_context.module_info);
             assert!(
                 decorator_callees.insert(location, callees).is_none(),
                 "Found multiple decorators at the same location"
@@ -4166,26 +4352,24 @@ pub fn resolve_decorator_callees(
 
 pub fn export_call_graphs(
     context: &ModuleContext,
-    function_base_definitions: &WholeProgramFunctionDefinitions<FunctionBaseDefinition>,
-    override_graph: &OverrideGraph,
-    global_variables: &WholeProgramGlobalVariables,
-    captured_variables: &WholeProgramCapturedVariables,
+    captured_variables: &ModuleCapturedVariables<FunctionRef>,
 ) -> CallGraphs<ExpressionIdentifier, FunctionRef> {
     let mut call_graphs = CallGraphs::new();
 
     let mut visitor = CallGraphVisitor {
         call_graphs: &mut call_graphs,
         module_context: context,
-        module_id: context.module_id,
-        module_name: context.module_info.name(),
-        function_base_definitions,
+        module_answers_context: context.answers_context.dupe(),
+        module_id: context.answers_context.module_id,
+        module_name: context.answers_context.module_info.name(),
         current_function: None,
         debug: false,
         debug_scopes: Vec::new(),
-        override_graph,
-        global_variables,
-        captured_variables,
-        error_collector: ErrorCollector::new(context.module_info.dupe(), ErrorStyle::Never),
+        captured_variables: Some(captured_variables),
+        error_collector: ErrorCollector::new(
+            context.answers_context.module_info.dupe(),
+            ErrorStyle::Never,
+        ),
         matching_graphql_decorators: Vec::new(),
     };
 

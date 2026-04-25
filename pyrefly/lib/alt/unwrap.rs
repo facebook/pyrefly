@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::slice;
+
 use ruff_python_ast::name::Name;
 
 use crate::alt::answers::LookupAnswer;
@@ -21,29 +23,10 @@ use crate::types::types::Var;
 // match an expression against a hint, but fall back to the inferred type
 // without any errors if the hint is incompatible.
 // Soft type hints are used for `e1 or e1` expressions.
-pub struct Hint<'a>(Type, Option<&'a ErrorCollector>);
-
 #[derive(Clone, Copy, Debug)]
-pub struct HintRef<'a, 'b>(&'b Type, Option<&'a ErrorCollector>);
+pub struct HintRefOld<'a, 'b>(&'b Type, Option<&'a ErrorCollector>);
 
-impl<'a> Hint<'a> {
-    pub fn as_ref<'b>(&'a self) -> HintRef<'a, 'b>
-    where
-        'a: 'b,
-    {
-        HintRef(&self.0, self.1)
-    }
-
-    pub fn ty(&self) -> &Type {
-        &self.0
-    }
-
-    pub fn to_type(self) -> Type {
-        self.0
-    }
-}
-
-impl<'a, 'b> HintRef<'a, 'b> {
+impl<'a, 'b> HintRefOld<'a, 'b> {
     pub fn new(hint: &'b Type, errors: Option<&'a ErrorCollector>) -> Self {
         Self(hint, errors)
     }
@@ -61,12 +44,38 @@ impl<'a, 'b> HintRef<'a, 'b> {
         self.1
     }
 
-    pub fn map_ty(&self, f: impl FnOnce(&Type) -> Type) -> Hint<'a> {
-        Hint(f(self.0), self.1)
+    pub fn with_ty_opt(&self, ty: Option<&'b Type>) -> Option<Self> {
+        ty.map(|ty| Self(ty, self.1))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HintRef<'a, 'b>(&'b [Type], Option<&'a ErrorCollector>);
+
+impl<'a, 'b> HintRef<'a, 'b> {
+    /// Construct a "soft" type hint that doesn't report an error when the hint is incompatible.
+    pub fn soft(hint: &'b Type) -> Self {
+        Self(Self::split(hint), None)
     }
 
-    pub fn map_ty_opt(&self, f: impl FnOnce(&Type) -> Option<Type>) -> Option<Hint<'a>> {
-        f(self.0).map(|ty| Hint(ty, self.1))
+    /// Temporary helper to aid with incremental migration from HintRefOld to HintRef.
+    pub fn from_old(hint: HintRefOld<'a, 'b>) -> Self {
+        Self(Self::split(hint.0), hint.1)
+    }
+
+    fn split(t: &'b Type) -> &'b [Type] {
+        match t {
+            Type::Union(u) => u.members.as_slice(),
+            _ => slice::from_ref(t),
+        }
+    }
+
+    pub fn types(&self) -> &'b [Type] {
+        self.0
+    }
+
+    pub fn errors(&self) -> Option<&ErrorCollector> {
+        self.1
     }
 }
 
@@ -79,8 +88,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// check we just ran. If it was not, return `None`.
     fn resolve_var_opt(&self, ty: &Type, var: Var) -> Option<Type> {
         let res = self.resolve_var(ty, var);
-        // TODO: Really want to check if the Var is constrained in any way.
-        // No way to do that currently, but this is close.
         if matches!(res, Type::Var(..)) {
             None
         } else {
@@ -113,24 +120,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///   the first entry in a union.
     fn resolve_var(&self, ty: &Type, var: Var) -> Type {
         match ty {
-            Type::Any(style) => Type::Any(*style),
-            Type::Never(style) => Type::Never(*style),
-            _ => self.solver().expand_vars(var.to_type()),
+            Type::Any(style) => self.heap.mk_any(*style),
+            Type::Never(style) => self.heap.mk_never_style(*style),
+            _ => self.solver().expand_unwrap(var),
         }
     }
 
     pub fn behaves_like_any(&self, ty: &Type) -> bool {
-        ty.is_any() || (!ty.is_never() && self.is_subset_eq(ty, &Type::never()))
+        ty.is_any() || (!ty.is_never() && self.is_subset_eq(ty, &self.heap.mk_never()))
     }
 
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_mapping(&self, ty: &Type) -> Option<(Type, Type)> {
         let key = self.fresh_var();
         let value = self.fresh_var();
-        let dict_type = self
-            .stdlib
-            .mapping(key.to_type(), value.to_type())
-            .to_type();
+        let dict_type = self.heap.mk_class_type(
+            self.stdlib
+                .mapping(key.to_type(self.heap), value.to_type(self.heap)),
+        );
         if self.is_subset_eq(ty, &dict_type) {
             Some((self.resolve_var(ty, key), self.resolve_var(ty, value)))
         } else {
@@ -141,7 +148,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_awaitable(&self, ty: &Type) -> Option<Type> {
         let var = self.fresh_var();
-        let awaitable_ty = self.stdlib.awaitable(var.to_type()).to_type();
+        let awaitable_ty = self
+            .heap
+            .mk_class_type(self.stdlib.awaitable(var.to_type(self.heap)));
         if self.is_subset_eq(ty, &awaitable_ty) {
             Some(self.resolve_var(ty, var))
         } else {
@@ -154,10 +163,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let var1 = self.fresh_var();
         let var2 = self.fresh_var();
         let var3 = self.fresh_var();
-        let coroutine_ty = self
-            .stdlib
-            .coroutine(var1.to_type(), var2.to_type(), var3.to_type())
-            .to_type();
+        let coroutine_ty = self.heap.mk_class_type(self.stdlib.coroutine(
+            var1.to_type(self.heap),
+            var2.to_type(self.heap),
+            var3.to_type(self.heap),
+        ));
         self.is_subset_eq(ty, &coroutine_ty)
     }
 
@@ -190,9 +200,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => {}
         }
 
-        // Check if the type is a subtype of Sequence[T] for some T
-        let var = self.fresh_var();
-        let sequence_ty = self.stdlib.sequence(var.to_type()).to_type();
+        // Check if the type is a subtype of Sequence
+        let sequence_ty = self
+            .heap
+            .mk_class_type(self.stdlib.sequence(self.heap.mk_any_implicit()));
         self.is_subset_eq(ty, &sequence_ty)
     }
 
@@ -201,10 +212,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let yield_ty = self.fresh_var();
         let send_ty = self.fresh_var();
         let return_ty = self.fresh_var();
-        let coroutine_ty = self
-            .stdlib
-            .coroutine(yield_ty.to_type(), send_ty.to_type(), return_ty.to_type())
-            .to_type();
+        let coroutine_ty = self.heap.mk_class_type(self.stdlib.coroutine(
+            yield_ty.to_type(self.heap),
+            send_ty.to_type(self.heap),
+            return_ty.to_type(self.heap),
+        ));
         if self.is_subset_eq(ty, &coroutine_ty) {
             let yield_ty: Type = self.resolve_var(ty, yield_ty);
             let send_ty = self.resolve_var(ty, send_ty);
@@ -220,10 +232,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let yield_ty = self.fresh_var();
         let send_ty = self.fresh_var();
         let return_ty = self.fresh_var();
-        let generator_ty = self
-            .stdlib
-            .generator(yield_ty.to_type(), send_ty.to_type(), return_ty.to_type())
-            .to_type();
+        let generator_ty = self.heap.mk_class_type(self.stdlib.generator(
+            yield_ty.to_type(self.heap),
+            send_ty.to_type(self.heap),
+            return_ty.to_type(self.heap),
+        ));
         if self.is_subset_eq(ty, &generator_ty) {
             let yield_ty: Type = self.resolve_var(ty, yield_ty);
             let send_ty = self.resolve_var(ty, send_ty);
@@ -237,7 +250,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_iterable(&self, ty: &Type) -> Option<Type> {
         let iter_ty = self.fresh_var();
-        let iterable_ty = self.stdlib.iterable(iter_ty.to_type()).to_type();
+        let iterable_ty = self
+            .heap
+            .mk_class_type(self.stdlib.iterable(iter_ty.to_type(self.heap)));
         if self.is_subset_eq(ty, &iterable_ty) {
             Some(self.resolve_var(ty, iter_ty))
         } else {
@@ -248,7 +263,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_async_iterable(&self, ty: &Type) -> Option<Type> {
         let iter_ty = self.fresh_var();
-        let iterable_ty = self.stdlib.async_iterable(iter_ty.to_type()).to_type();
+        let iterable_ty = self
+            .heap
+            .mk_class_type(self.stdlib.async_iterable(iter_ty.to_type(self.heap)));
         if self.is_subset_eq(ty, &iterable_ty) {
             Some(self.resolve_var(ty, iter_ty))
         } else {
@@ -256,130 +273,149 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
-    pub fn unwrap_async_iterator(&self, ty: &Type) -> Option<Type> {
-        let var = self.fresh_var();
-        let iterator_ty = self.stdlib.async_iterator(var.to_type()).to_type();
-        if self.is_subset_eq(ty, &iterator_ty) {
-            Some(self.resolve_var(ty, var))
-        } else {
-            None
-        }
-    }
-
-    pub fn decompose_dict<'b>(
-        &self,
-        hint: HintRef<'b, '_>,
-    ) -> (Option<Hint<'b>>, Option<Hint<'b>>) {
+    pub fn decompose_dict(&self, hint: &Type) -> (Option<Type>, Option<Type>) {
         let key = self.fresh_var();
         let value = self.fresh_var();
-        let dict_type = self.stdlib.dict(key.to_type(), value.to_type()).to_type();
-        if self.is_subset_eq(&dict_type, hint.ty()) {
-            let key = hint.map_ty_opt(|ty| self.resolve_var_opt(ty, key));
-            let value = hint.map_ty_opt(|ty| self.resolve_var_opt(ty, value));
+        let dict_type = self.heap.mk_class_type(
+            self.stdlib
+                .dict(key.to_type(self.heap), value.to_type(self.heap)),
+        );
+        if self.is_subset_eq(&dict_type, hint) {
+            let key = self.resolve_var_opt(hint, key);
+            let value = self.resolve_var_opt(hint, value);
             (key, value)
         } else {
             (None, None)
         }
     }
 
-    pub fn decompose_set<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
+    pub fn decompose_set(&self, hint: &Type) -> Option<Type> {
         let elem = self.fresh_var();
-        let set_type = self.stdlib.set(elem.to_type()).to_type();
-        if self.is_subset_eq(&set_type, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
+        let set_type = self
+            .heap
+            .mk_class_type(self.stdlib.set(elem.to_type(self.heap)));
+        if self.is_subset_eq(&set_type, hint) {
+            self.resolve_var_opt(hint, elem)
         } else {
             None
         }
     }
 
-    pub fn decompose_list<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
+    pub fn decompose_list(&self, hint: &Type) -> Option<Type> {
         let elem = self.fresh_var();
-        let list_type = self.stdlib.list(elem.to_type()).to_type();
-        if self.is_subset_eq(&list_type, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
+        let list_type = self
+            .heap
+            .mk_class_type(self.stdlib.list(elem.to_type(self.heap)));
+        if self.is_subset_eq(&list_type, hint) {
+            self.resolve_var_opt(hint, elem)
         } else {
             None
         }
     }
 
-    pub fn decompose_tuple<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
+    pub fn decompose_tuple(&self, hint: &Type) -> Option<Type> {
         let elem = self.fresh_var();
-        let tuple_type = self.stdlib.tuple(elem.to_type()).to_type();
-        if self.is_subset_eq(&tuple_type, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, elem))
+        let tuple_type = self
+            .heap
+            .mk_class_type(self.stdlib.tuple(elem.to_type(self.heap)));
+        if self.is_subset_eq(&tuple_type, hint) {
+            self.resolve_var_opt(hint, elem)
         } else {
             None
         }
     }
 
-    pub fn decompose_lambda<'b>(
-        &self,
-        hint: HintRef<'b, '_>,
-        param_vars: &[(&Name, Var)],
-    ) -> Option<Hint<'b>> {
+    pub fn decompose_lambda(&self, hint: &Type, param_vars: &[(&Name, Var)]) -> Option<Type> {
         let return_ty = self.fresh_var();
         let params = param_vars
             .iter()
-            .map(|(name, var)| Param::Pos((*name).clone(), var.to_type(), Required::Required))
+            .map(|(name, var)| {
+                Param::Pos((*name).clone(), var.to_type(self.heap), Required::Required)
+            })
             .collect::<Vec<_>>();
-        let callable_ty = Type::callable(params, return_ty.to_type());
+        let callable_ty = self
+            .heap
+            .mk_callable_from_vec(params, return_ty.to_type(self.heap));
 
-        if self.is_subset_eq(&callable_ty, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, return_ty))
+        if self.is_subset_eq(&callable_ty, hint) {
+            self.resolve_var_opt(hint, return_ty)
         } else {
             None
         }
     }
 
-    pub fn decompose_generator_yield<'b>(&self, hint: HintRef<'b, '_>) -> Option<Hint<'b>> {
+    pub fn decompose_generator_yield(&self, hint: &Type) -> Option<Type> {
         let yield_ty = self.fresh_var();
-        let generator_ty = self
-            .stdlib
-            .generator(
-                yield_ty.to_type(),
-                self.fresh_var().to_type(),
-                self.fresh_var().to_type(),
-            )
-            .to_type();
-        if self.is_subset_eq(&generator_ty, hint.ty()) {
-            hint.map_ty_opt(|ty| self.resolve_var_opt(ty, yield_ty))
+        let generator_ty = self.heap.mk_class_type(self.stdlib.generator(
+            yield_ty.to_type(self.heap),
+            self.fresh_var().to_type(self.heap),
+            self.fresh_var().to_type(self.heap),
+        ));
+        if self.is_subset_eq(&generator_ty, hint) {
+            self.resolve_var_opt(hint, yield_ty)
         } else {
             None
         }
     }
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
-        let yield_ty = self.fresh_var();
-        let send_ty = self.fresh_var();
-        let return_ty = self.fresh_var();
-        let generator_ty = self
-            .stdlib
-            .generator(yield_ty.to_type(), send_ty.to_type(), return_ty.to_type())
-            .to_type();
-        if self.is_subset_eq(&generator_ty, ty) {
-            let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
-            let send_ty = self.resolve_var_opt(ty, send_ty).unwrap_or(Type::None);
-            let return_ty = self.resolve_var_opt(ty, return_ty).unwrap_or(Type::None);
-            Some((yield_ty, send_ty, return_ty))
-        } else {
-            None
+        match ty {
+            Type::Union(u) => {
+                let mut yield_tys = Vec::new();
+                let mut send_tys = Vec::new();
+                let mut return_tys = Vec::new();
+                for member in &u.members {
+                    let (y, s, r) = self.decompose_generator(member)?;
+                    yield_tys.push(y);
+                    send_tys.push(s);
+                    return_tys.push(r);
+                }
+                Some((
+                    self.unions(yield_tys),
+                    self.unions(send_tys),
+                    self.unions(return_tys),
+                ))
+            }
+            _ => {
+                let yield_ty = self.fresh_var();
+                let send_ty = self.fresh_var();
+                let return_ty = self.fresh_var();
+                let generator_ty = self.heap.mk_class_type(self.stdlib.generator(
+                    yield_ty.to_type(self.heap),
+                    send_ty.to_type(self.heap),
+                    return_ty.to_type(self.heap),
+                ));
+                if self.is_subset_eq(&generator_ty, ty) {
+                    let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
+                    let send_ty = self
+                        .resolve_var_opt(ty, send_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    let return_ty = self
+                        .resolve_var_opt(ty, return_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    Some((yield_ty, send_ty, return_ty))
+                } else {
+                    None
+                }
+            }
         }
     }
 
     pub fn decompose_async_generator(&self, ty: &Type) -> Option<(Type, Type)> {
         let yield_ty = self.fresh_var();
         let send_ty = self.fresh_var();
-        let async_generator_ty = self
-            .stdlib
-            .async_generator(yield_ty.to_type(), send_ty.to_type())
-            .to_type();
+        let async_generator_ty = self.heap.mk_class_type(
+            self.stdlib
+                .async_generator(yield_ty.to_type(self.heap), send_ty.to_type(self.heap)),
+        );
         if self.is_subset_eq(&async_generator_ty, ty) {
             let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
-            let send_ty = self.resolve_var_opt(ty, send_ty).unwrap_or(Type::None);
+            let send_ty = self
+                .resolve_var_opt(ty, send_ty)
+                .unwrap_or_else(|| self.heap.mk_none());
             Some((yield_ty, send_ty))
         } else if ty.is_any() {
-            Some((Type::any_explicit(), Type::any_explicit()))
+            Some((self.heap.mk_any_explicit(), self.heap.mk_any_explicit()))
         } else {
             None
         }
@@ -392,7 +428,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Tuple::Unbounded(element) => self.stdlib.tuple(*element),
             Tuple::Concrete(elements) => {
                 if elements.is_empty() {
-                    self.stdlib.tuple(Type::any_implicit())
+                    self.stdlib.tuple(self.heap.mk_any_implicit())
                 } else {
                     self.stdlib.tuple(self.unions(elements))
                 }
@@ -404,11 +440,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         elements.push(*unbounded_middle);
                     }
                     Type::Quantified(q) if q.is_type_var_tuple() => {
-                        elements.push(Type::ElementOfTypeVarTuple(q))
+                        elements.push(self.heap.mk_element_of_type_var_tuple((*q).clone()))
                     }
                     _ => {
                         // We can't figure out the middle, fall back to `object`
-                        elements.push(self.stdlib.object().clone().to_type())
+                        elements.push(self.heap.mk_class_type(self.stdlib.object().clone()))
                     }
                 }
                 elements.extend(suffix);

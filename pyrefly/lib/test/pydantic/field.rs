@@ -117,7 +117,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value is of type `Literal['A']` but the field is annotated with `int` # E: Pydantic `lt` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value has type `Literal['A']`, which is not assignable to field type `int` # E: Pydantic `lt` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,
@@ -129,7 +129,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(ge="B") # E: Pydantic `ge` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(ge="B") # E: Pydantic `ge` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,
@@ -305,5 +305,26 @@ house = House(
     city="House City",
     zipcode="House Zipcode",
 )
+    "#,
+);
+
+pydantic_testcase!(
+    test_model_fields_with_bounded_typevar,
+    r#"
+from pydantic import BaseModel
+
+class MyModel(BaseModel):
+    field: int
+
+class A[T: BaseModel]:
+    def __init__(self, model_type: type[T]) -> None:
+        self._model_type = model_type
+
+    def print_model_fields(self) -> None:
+        for field in self._model_type.model_fields:
+            print(field)
+
+a = A(MyModel)
+a.print_model_fields()
     "#,
 );

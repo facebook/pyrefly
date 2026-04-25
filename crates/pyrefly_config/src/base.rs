@@ -25,6 +25,42 @@ pub enum UntypedDefBehavior {
     SkipAndInferReturnAny,
 }
 
+/// Controls when Pyrefly infers return types for functions without explicit return annotations.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
+#[derive(ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum InferReturnTypes {
+    /// Never infer return types; unannotated returns are treated as `Any`.
+    Never,
+    /// Infer return types only for functions with at least one parameter or return annotation.
+    Annotated,
+    /// Infer return types for all checked functions, including completely unannotated ones.
+    #[default]
+    Checked,
+}
+
+/// How to handle when recursion depth limit is exceeded.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
+#[derive(ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecursionOverflowHandler {
+    /// Return a placeholder type and emit an internal error. Safe for IDE use.
+    #[default]
+    BreakWithPlaceholder,
+    /// Dump debug info to stderr and panic. For debugging stack overflow issues.
+    PanicWithDebugInfo,
+}
+
+/// Internal configuration struct combining depth limit and handler.
+/// Not serialized directly - constructed from flat config fields.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct RecursionLimitConfig {
+    /// Maximum recursion depth before triggering overflow protection.
+    pub limit: u32,
+    /// How to handle when the depth limit is exceeded.
+    pub handler: RecursionOverflowHandler,
+}
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ConfigBase {
@@ -56,6 +92,7 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "crate::util::none_or_empty")]
     pub(crate) ignore_missing_imports: Option<Vec<ModuleWildcard>>,
 
+    /// Deprecated: use `check-unannotated-defs` and `infer-return-types` instead.
     /// How should we handle analyzing and inferring the function signature if it's untyped?
     #[serde(
         default,
@@ -65,6 +102,20 @@ pub struct ConfigBase {
         alias = "untyped_def_behavior"
     )]
     pub untyped_def_behavior: Option<UntypedDefBehavior>,
+
+    /// Whether to type check the bodies of unannotated function definitions.
+    /// Defaults to true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_unannotated_defs: Option<bool>,
+
+    /// Controls when Pyrefly infers return types for functions without explicit return annotations.
+    /// - `never`: unannotated returns are always treated as `Any`.
+    /// - `annotated`: infer return types only for functions with at least one annotation.
+    /// - `checked`: infer return types for all checked functions (default).
+    ///   Only applies to functions whose bodies are checked; unannotated functions
+    ///   are only eligible when `check-unannotated-defs` is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infer_return_types: Option<InferReturnTypes>,
 
     /// Whether to disable type errors in language server. By default errors will be shown in IDEs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +136,34 @@ pub struct ConfigBase {
     /// By default this is enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
+
+    /// (Experimental) Enable tensor shape type inference.
+    /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tensor_shapes: Option<bool>,
+
+    /// Maximum recursion depth before triggering overflow protection.
+    /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursion_depth_limit: Option<u32>,
+
+    /// How to handle when recursion depth limit is exceeded.
+    /// Only used when `recursion-depth-limit` is set to a non-zero value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursion_overflow_handler: Option<RecursionOverflowHandler>,
+
+    /// Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.
+    /// When false (the default), callables with `*args: Any, **kwargs: Any` are treated as
+    /// compatible with any signature (similar to `...` behavior).
+    /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_callable_subtyping: Option<bool>,
+
+    /// Whether to use spec-compliant overload evaluation semantics.
+    /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
+    /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_compliant_overloads: Option<bool>,
 
     /// Any unknown config items
     #[serde(default, flatten)]
@@ -112,6 +191,26 @@ impl ConfigBase {
         }
     }
 
+    /// Resolve the deprecated `untyped_def_behavior` field into the two new fields
+    /// (`check_unannotated_defs` and `infer_return_types`).
+    /// New fields take precedence; the old field only fills in unset values.
+    pub fn resolve_legacy_untyped_def_behavior(&mut self) {
+        let behavior = self.untyped_def_behavior.unwrap_or_default();
+        if self.check_unannotated_defs.is_none() {
+            self.check_unannotated_defs = Some(!matches!(
+                behavior,
+                UntypedDefBehavior::SkipAndInferReturnAny
+            ));
+        }
+        if self.infer_return_types.is_none() {
+            self.infer_return_types = Some(match behavior {
+                UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
+                UntypedDefBehavior::CheckAndInferReturnAny
+                | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
+            });
+        }
+    }
+
     pub fn get_errors(base: &Self) -> Option<&ErrorDisplayConfig> {
         base.errors.as_ref()
     }
@@ -124,8 +223,12 @@ impl ConfigBase {
         base.ignore_missing_imports.as_deref()
     }
 
-    pub fn get_untyped_def_behavior(base: &Self) -> Option<UntypedDefBehavior> {
-        base.untyped_def_behavior
+    pub fn get_check_unannotated_defs(base: &Self) -> Option<bool> {
+        base.check_unannotated_defs
+    }
+
+    pub fn get_infer_return_types(base: &Self) -> Option<InferReturnTypes> {
+        base.infer_return_types
     }
 
     pub fn get_disable_type_errors_in_ide(base: &Self) -> Option<bool> {
@@ -140,7 +243,36 @@ impl ConfigBase {
         base.infer_with_first_use
     }
 
+    pub fn get_tensor_shapes(base: &Self) -> Option<bool> {
+        base.tensor_shapes
+    }
+
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
+    }
+
+    /// Get the recursion limit configuration, if enabled.
+    /// Returns None if recursion_depth_limit is not set or is 0.
+    pub fn get_recursion_limit_config(base: &Self) -> Option<RecursionLimitConfig> {
+        base.recursion_depth_limit.and_then(|limit| {
+            if limit == 0 {
+                None
+            } else {
+                Some(RecursionLimitConfig {
+                    limit,
+                    handler: base
+                        .recursion_overflow_handler
+                        .unwrap_or(RecursionOverflowHandler::BreakWithPlaceholder),
+                })
+            }
+        })
+    }
+
+    pub fn get_strict_callable_subtyping(base: &Self) -> Option<bool> {
+        base.strict_callable_subtyping
+    }
+
+    pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
+        base.spec_compliant_overloads
     }
 }

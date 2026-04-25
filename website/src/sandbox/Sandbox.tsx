@@ -38,7 +38,6 @@ import {
 import { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
-import { DEFAULT_UTILS_PROGRAM } from './DefaultUtilsProgram';
 import { usePythonWorker } from './usePythonWorker';
 
 // Import type for Pyrefly State
@@ -87,7 +86,10 @@ interface SandboxProps {
 
 // Minimum heights for editor and results panes (in pixels)
 const MIN_EDITOR_HEIGHT = 100;
-const MIN_RESULTS_HEIGHT = 60;
+// Results panel needs enough height to show the tab bar and remain draggable
+const MIN_RESULTS_HEIGHT = 120;
+// Height of the resize handle between editor and results
+const RESIZE_HANDLE_HEIGHT = 6;
 
 export default function Sandbox({
     sampleFilename,
@@ -381,7 +383,9 @@ export default function Sandbox({
                 if (newContainerHeight > 0 && editorHeight !== null) {
                     // Clamp the editor height to stay within valid bounds
                     const maxEditorHeight =
-                        newContainerHeight - MIN_RESULTS_HEIGHT;
+                        newContainerHeight -
+                        MIN_RESULTS_HEIGHT -
+                        RESIZE_HANDLE_HEIGHT;
                     const clampedHeight = Math.max(
                         MIN_EDITOR_HEIGHT,
                         Math.min(editorHeight, maxEditorHeight)
@@ -412,8 +416,9 @@ export default function Sandbox({
             const mouseY = e.clientY;
             const newEditorHeight = mouseY - containerTop;
 
-            // Enforce minimum heights
-            const maxEditorHeight = containerHeight - MIN_RESULTS_HEIGHT;
+            // Enforce minimum heights (accounting for resize handle between editor and results)
+            const maxEditorHeight =
+                containerHeight - MIN_RESULTS_HEIGHT - RESIZE_HANDLE_HEIGHT;
             const clampedEditorHeight = Math.max(
                 MIN_EDITOR_HEIGHT,
                 Math.min(newEditorHeight, maxEditorHeight)
@@ -566,19 +571,68 @@ export default function Sandbox({
                     createNewFile(sampleFilename, codeSample);
                     setActiveFileName(sampleFilename);
                 } else {
-                    // For sandbox mode, create the default files
-                    createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
-                    createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
-                    // Add a default pyrefly.toml so users can immediately tweak configuration
-                    createNewFile(
-                        'pyrefly.toml',
-                        defaultPyreflyToml(initialVersion)
-                    );
-                    setActiveFileName('sandbox.py');
+                    // Try restoring from localStorage before falling back to defaults
+                    const localProject = getProjectFromLocalStorage();
+                    if (localProject) {
+                        monaco.editor
+                            .getModels()
+                            .forEach((model) => model.dispose());
+                        setModels(new Map());
+                        Object.entries(localProject.files).forEach(
+                            ([fileName, content]) => {
+                                createNewFile(fileName, content);
+                            }
+                        );
+                        if (!localProject.files['pyrefly.toml']) {
+                            createNewFile(
+                                'pyrefly.toml',
+                                defaultPyreflyToml(initialVersion)
+                            );
+                        }
+                        if (
+                            localProject.activeFile &&
+                            localProject.files[localProject.activeFile]
+                        ) {
+                            setActiveFileName(localProject.activeFile);
+                        }
+                    } else {
+                        // For sandbox mode, create the default files
+                        createNewFile('sandbox.py', DEFAULT_SANDBOX_PROGRAM);
+                        // Add a default pyrefly.toml so users can immediately tweak configuration
+                        createNewFile(
+                            'pyrefly.toml',
+                            defaultPyreflyToml(initialVersion)
+                        );
+                        setActiveFileName('sandbox.py');
+                    }
                 }
             }
         }
     }, [createNewFile, models.size, isCodeSnippet, sampleFilename, codeSample]);
+
+    // Persist editor state to localStorage on every change (sandbox mode only).
+    // Uses a model content change listener so saves happen on each keystroke,
+    // independent of whether the WASM typechecker has loaded.
+    useEffect(() => {
+        if (isCodeSnippet || models.size === 0) return;
+
+        const save = () => {
+            const allFiles: Record<string, string> = {};
+            models.forEach((m, filename) => {
+                allFiles[filename] = m.getValue();
+            });
+            saveToLocalStorage(allFiles, activeFileName);
+        };
+
+        // Save once immediately (handles file add/delete/rename/switch)
+        save();
+
+        // Also save on every content edit within any model
+        const disposables = Array.from(models.values()).map((m) =>
+            m.onDidChangeContent(save)
+        );
+        return () => disposables.forEach((d) => d.dispose());
+    }, [isCodeSnippet, models, activeFileName]);
 
     // Initialize WebAssembly only when the component is in the viewport
     useEffect(() => {
@@ -1000,6 +1054,30 @@ function getProjectFromURL(): ProjectState | null {
     return null;
 }
 
+const LOCAL_STORAGE_KEY = 'pyrefly-sandbox';
+
+function saveToLocalStorage(
+    allFiles: Record<string, string>,
+    activeFile: string
+): void {
+    try {
+        const projectState: ProjectState = { files: allFiles, activeFile };
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(projectState));
+    } catch {
+        // localStorage may be full or unavailable; silently ignore.
+    }
+}
+
+function getProjectFromLocalStorage(): ProjectState | null {
+    if (typeof window === 'undefined') return null;
+    try {
+        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+        return saved ? JSON.parse(saved) : null;
+    } catch {
+        return null;
+    }
+}
+
 function getVersionFromURL(): string | null {
     if (typeof window === 'undefined') return null;
     const params = new URLSearchParams(window.location.search);
@@ -1031,6 +1109,9 @@ function defaultPyreflyToml(pythonVersion: string) {
         '# Pyrefly sandbox configuration.',
         '# See https://pyrefly.org/en/docs/configuration/ for available configuration options.',
         `python-version = "${pythonVersion}"`,
+        '[errors]',
+        "unimported-directive = 'ignore'",
+        "not-required-key-access = 'warn'",
         '',
     ].join('\n');
 }
@@ -1185,7 +1266,7 @@ function getMonacoButtons(
                 createNewFile,
                 setActiveFileName
             ),
-            getGitHubIssuesButton(model, pythonVersion),
+            getGitHubIssuesButton(models, activeFileName, pythonVersion),
         ];
     }
 
@@ -1229,14 +1310,23 @@ function getShareUrlButton(
 }
 
 function getGitHubIssuesButton(
-    model: editor.ITextModel | null,
+    models: Map<string, editor.ITextModel>,
+    activeFileName: string,
     pythonVersion: string
 ): React.ReactElement {
     return (
         <MonacoEditorButton
             id="github-issues-button"
             onClick={() => {
+                // Update URL with current state before generating issue link
+                const allFiles: Record<string, string> = {};
+                models.forEach((model, filename) => {
+                    allFiles[filename] = model.getValue();
+                });
+                updateURL(allFiles, activeFileName);
+
                 const sandboxURL = window.location.href;
+                const model = models.get(activeFileName);
                 const code = model ? model.getValue() : '';
 
                 const title = 'Bug Report';
@@ -1365,7 +1455,6 @@ function getResetButton(
             id="reset-button"
             onClick={async () => {
                 if (!isCodeSnippet) {
-                    createNewFile('utils.py', DEFAULT_UTILS_PROGRAM);
                     setActiveFileName('sandbox.py');
                     forceRecheck();
                 }
@@ -1441,6 +1530,9 @@ const styles = stylex.create({
         display: 'flex',
         flexDirection: 'column',
         flex: 1,
+        height: '100vh', // Fixed viewport height to prevent container from growing infinitely
+        maxHeight: '100vh',
+        overflow: 'hidden',
     },
     sandboxPadding: {
         paddingHorizontal: '10px',
@@ -1615,6 +1707,7 @@ const styles = stylex.create({
         flexDirection: 'column',
         flex: 1,
         minHeight: 0, // Allow flex children to shrink below content size
+        overflow: 'hidden', // Prevent content from pushing container beyond viewport
     },
     // Draggable resize handle between editor and results
     resizeHandle: {

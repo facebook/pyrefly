@@ -16,17 +16,22 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFunctionDef;
-use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
-use super::extract_function::LocalRefactorCodeAction;
 use super::extract_shared::decorator_matches_name;
+use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::member_name_from_stmt;
+use super::extract_shared::needs_pass_after_removal;
+use super::extract_shared::prepare_insertion_text;
+use super::extract_shared::reindent_statement;
 use super::extract_shared::selection_anchor;
+use super::extract_shared::statement_removal_range;
+use super::extract_shared::statement_removal_range_from_range;
+use super::types::LocalRefactorCodeAction;
 use crate::state::ide::insert_import_edit;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::Transaction;
@@ -664,83 +669,4 @@ fn sibling_module_targets(
         targets.sort_by(|a, b| a.0.module().as_str().cmp(b.0.module().as_str()));
         Some(targets)
     }
-}
-
-fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
-    statement_removal_range_from_range(source, stmt.range())
-}
-
-fn statement_removal_range_from_range(source: &str, range: TextRange) -> Option<TextRange> {
-    let (_, line_start) = line_indent_and_start(source, range.start())?;
-    let line_end = line_end_position(source, range.end());
-    Some(TextRange::new(line_start, line_end))
-}
-
-fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) -> bool {
-    let mut non_docstring = body.iter().filter(|stmt| !is_docstring_stmt(stmt));
-    let only_stmt = non_docstring.next();
-    non_docstring.next().is_none() && only_stmt.is_some_and(|stmt| stmt.range() == removed_range)
-}
-
-fn line_end_position(source: &str, position: TextSize) -> TextSize {
-    let idx = position.to_usize().min(source.len());
-    if let Some(offset) = source[idx..].find('\n') {
-        TextSize::try_from(idx + offset + 1).unwrap_or(position)
-    } else {
-        TextSize::try_from(source.len()).unwrap_or(position)
-    }
-}
-
-fn reindent_statement(
-    source: &str,
-    range: TextRange,
-    from_indent: &str,
-    to_indent: &str,
-) -> String {
-    let start = range.start().to_usize().min(source.len());
-    let end = range.end().to_usize().min(source.len());
-    let raw = if start < end { &source[start..end] } else { "" };
-    let mut text = reindent_block(raw, from_indent, to_indent);
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
-}
-
-fn reindent_block(text: &str, from_indent: &str, to_indent: &str) -> String {
-    let mut result = String::new();
-    for line in text.split_inclusive('\n') {
-        let (line_body, line_end) = match line.strip_suffix('\n') {
-            Some(body) => (body, "\n"),
-            None => (line, ""),
-        };
-        if line_body.trim().is_empty() {
-            result.push_str(line_body);
-            result.push_str(line_end);
-            continue;
-        }
-        if !from_indent.is_empty() && line_body.starts_with(from_indent) {
-            result.push_str(to_indent);
-            result.push_str(&line_body[from_indent.len()..]);
-        } else if from_indent.is_empty() {
-            result.push_str(to_indent);
-            result.push_str(line_body);
-        } else {
-            let trimmed = line_body.trim_start_matches([' ', '\t']);
-            result.push_str(to_indent);
-            result.push_str(trimmed);
-        }
-        result.push_str(line_end);
-    }
-    result
-}
-
-fn prepare_insertion_text(source: &str, position: TextSize, member_text: &str) -> String {
-    let mut text = String::new();
-    let idx = position.to_usize().min(source.len());
-    if idx > 0 && source.as_bytes().get(idx - 1) != Some(&b'\n') {
-        text.push('\n');
-    }
-    text.push_str(member_text);
-    text
 }

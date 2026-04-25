@@ -110,21 +110,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         lower_expr: &Option<Box<Expr>>,
         upper_expr: &Option<Box<Expr>>,
     ) -> Option<Type> {
+        let len = elts.len() as i64;
         let lower_literal = self.parse_slice_literal(lower_expr).ok()?.unwrap_or(0);
-        let upper_literal = self
-            .parse_slice_literal(upper_expr)
-            .ok()?
-            .unwrap_or(elts.len() as i64);
-        if lower_literal >= 0 && upper_literal >= 0 && upper_literal <= elts.len() as i64 {
-            if lower_literal >= upper_literal {
-                Some(Type::concrete_tuple(Vec::new()))
-            } else {
-                Some(Type::concrete_tuple(
-                    elts[lower_literal as usize..upper_literal as usize].to_vec(),
-                ))
-            }
+        let upper_literal = self.parse_slice_literal(upper_expr).ok()?.unwrap_or(len);
+
+        // Normalize negative indices (e.g., -1 becomes len-1)
+        let lower = if lower_literal < 0 {
+            len + lower_literal
         } else {
-            None
+            lower_literal
+        };
+        let upper = if upper_literal < 0 {
+            len + upper_literal
+        } else {
+            upper_literal
+        };
+
+        // Return None for out-of-bounds indices. This includes cases like
+        // x[-5:] or x[:10] on a 3-element tuple. Returning None falls back
+        // to dynamic/Unknown behavior, which is appropriate when we can't
+        // precisely determine the result type.
+        if lower < 0 || lower > len || upper < 0 || upper > len {
+            return None;
+        }
+
+        if lower >= upper {
+            Some(self.heap.mk_concrete_tuple(Vec::new()))
+        } else {
+            Some(
+                self.heap
+                    .mk_concrete_tuple(elts[lower as usize..upper as usize].to_vec()),
+            )
         }
     }
 
@@ -171,17 +187,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let lower_usize = lower as usize;
                 let upper_usize = upper as usize;
                 if lower_usize >= upper_usize {
-                    return Some(Type::concrete_tuple(Vec::new()));
+                    return Some(self.heap.mk_concrete_tuple(Vec::new()));
                 }
                 if upper_usize <= prefix.len() {
                     // Slice is entirely within prefix
-                    Some(Type::concrete_tuple(
-                        prefix[lower_usize..upper_usize].to_vec(),
-                    ))
+                    Some(
+                        self.heap
+                            .mk_concrete_tuple(prefix[lower_usize..upper_usize].to_vec()),
+                    )
                 } else if lower_usize <= prefix.len() {
                     // Slice starts in/immediately after prefix and extends beyond
                     let prefix_tail = prefix[lower_usize..].to_vec();
-                    Some(Type::Tuple(Tuple::unpacked(
+                    Some(self.heap.mk_tuple(Tuple::unpacked(
                         prefix_tail,
                         middle.clone(),
                         suffix.to_vec(),
@@ -199,7 +216,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let prefix_tail = prefix[lower_usize.min(prefix.len())..].to_vec();
                     let suffix_head = suffix[..suffix.len() - neg_upper].to_vec();
                     if lower_usize <= prefix.len() {
-                        Some(Type::Tuple(Tuple::unpacked(
+                        Some(self.heap.mk_tuple(Tuple::unpacked(
                             prefix_tail,
                             middle.clone(),
                             suffix_head,
@@ -216,7 +233,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let neg_upper = (-upper) as usize;
                 if neg_upper <= suffix.len() {
                     let suffix_head = suffix[..suffix.len() - neg_upper].to_vec();
-                    Some(Type::Tuple(Tuple::unpacked(
+                    Some(self.heap.mk_tuple(Tuple::unpacked(
                         prefix.to_vec(),
                         middle.clone(),
                         suffix_head,
@@ -229,7 +246,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (lower, None) if lower >= 0 && (lower as usize) <= prefix.len() => {
                 let lower_usize = lower as usize;
                 let prefix_tail = prefix[lower_usize..].to_vec();
-                Some(Type::Tuple(Tuple::unpacked(
+                Some(self.heap.mk_tuple(Tuple::unpacked(
                     prefix_tail,
                     middle.clone(),
                     suffix.to_vec(),
@@ -480,7 +497,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 } else {
                     self.call_method_or_error(
-                        &self.stdlib.bytes().clone().to_type(),
+                        &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                         &dunder::GETITEM,
                         range,
                         &[CallArg::expr(index_expr)],
@@ -491,7 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             _ => self.call_method_or_error(
-                &self.stdlib.bytes().clone().to_type(),
+                &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                 &dunder::GETITEM,
                 range,
                 &[CallArg::expr(index_expr)],

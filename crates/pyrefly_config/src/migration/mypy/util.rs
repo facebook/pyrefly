@@ -165,6 +165,7 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
             "type-arg" | "no-untyped-def" => add(severity, ErrorKind::ImplicitAny),
             "metaclass" => add(severity, ErrorKind::InvalidInheritance),
             "override" => add(severity, ErrorKind::BadOverride),
+            "mutable-override" => add(severity, ErrorKind::BadOverrideMutableAttribute),
             "return" | "return-value" => add(severity, ErrorKind::BadReturn),
             "type-var" => add(severity, ErrorKind::BadSpecialization),
             "import" | "import-not-found" => add(severity, ErrorKind::MissingImport),
@@ -180,6 +181,7 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
                 add(severity, ErrorKind::RedundantCondition)
             }
             "deprecated" => add(severity, ErrorKind::Deprecated),
+            "name-match" => add(severity, ErrorKind::NameMismatch),
             _ => {}
         }
     }

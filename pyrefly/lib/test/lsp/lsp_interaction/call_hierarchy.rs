@@ -12,13 +12,13 @@ use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::request::CallHierarchyIncomingCalls;
 use lsp_types::request::CallHierarchyOutgoingCalls;
 use lsp_types::request::CallHierarchyPrepare;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Request;
 use serde_json::json;
 
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 /// Tests that prepareCallHierarchy returns a valid CallHierarchyItem for a function definition
 #[test]
@@ -160,7 +160,7 @@ fn test_prepare_call_hierarchy_on_call_site() {
     interaction.shutdown().unwrap();
 }
 
-/// todo(jvansch): Update this test once incoming call hierarchy is implemented
+/// Tests that incomingCalls returns all callers of a function across files
 #[test]
 fn test_incoming_call_hierarchy_basic() {
     let root = get_test_files_root();

@@ -25,7 +25,7 @@ $ echo "x: str = 12" > $TMPDIR/glob1.py && \
 ## --search-path takes precedence over default typeshed
 
 ```scrut
-$ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files false 2>&1 | grep -v "overrides"
+$ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
  INFO * errors* (glob)
 [0]
 ```
@@ -40,8 +40,11 @@ $ mkdir $TMPDIR/ignores && echo "*" > $TMPDIR/ignores/.gitignore && \
 > touch $TMPDIR/ignores/pyrefly.toml && \
 > $PYREFLY check --python-version 3.13.0 -c $TMPDIR/ignores/pyrefly.toml --output-format=min-text
  INFO Checking project configured at * (glob)
-Pattern * is matched by `project-excludes` or ignore file. (glob)
+ WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
 `project-excludes`: [*], ignore files [*/.gitignore, */.ignore, */.git/info/exclude] (glob)
+ WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
+`project-excludes`: * (glob)
+No Python files matched patterns `*` (glob)
 [1]
 ```
 

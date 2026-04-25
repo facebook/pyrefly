@@ -65,6 +65,83 @@ assert_type(f(True), Literal['test', 1])
 );
 
 testcase!(
+    test_recursive_return_truncation,
+    r#"
+from typing import Any, assert_type
+
+def f():
+    return g()
+
+def g():
+    return [f()]
+
+assert_type(f(), list[list[list[Any]]])
+assert_type(g(), list[list[list[Any]]])
+"#,
+);
+
+testcase!(
+    test_recursive_return_inner_union_truncation,
+    r#"
+from typing import reveal_type
+
+def condition() -> bool: ...
+
+def f():
+    if condition():
+        return [g()]
+    elif condition():
+        return [h()]
+    elif condition():
+        return [i()]
+    else:
+        return [j()]
+
+def g():
+    if condition():
+        return {"x": f()}
+    elif condition():
+        return [f()]
+    elif condition():
+        return (f(),)
+    else:
+        return (f(), f())
+
+def h():
+    if condition():
+        return {"y": f()}
+    elif condition():
+        return [f()]
+    elif condition():
+        return (f(),)
+    else:
+        return (f(), f(), f())
+
+def i():
+    if condition():
+        return {"z": f()}
+    elif condition():
+        return [f()]
+    elif condition():
+        return (f(),)
+    else:
+        return (f(), f(), f(), f())
+
+def j():
+    if condition():
+        return {"w": f()}
+    elif condition():
+        return [f()]
+    elif condition():
+        return (f(),)
+    else:
+        return (f(), f(), f(), f(), f())
+
+reveal_type(f())  # E: revealed type: list[Unknown]
+"#,
+);
+
+testcase!(
     test_return_some_return,
     r#"
 from typing import assert_type
@@ -160,6 +237,63 @@ def f(b: bool) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2868
+testcase!(
+    test_return_while_else,
+    r#"
+def find_match(items: list[int], target: int) -> int:
+    i = 0
+    while i < len(items):
+        if items[i] == target:
+            return i
+        i += 1
+    else:
+        return -1
+"#,
+);
+
+testcase!(
+    test_return_while_break_else,
+    r#"
+def f(x: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    while x:
+        break
+    else:
+        return 1
+"#,
+);
+
+testcase!(
+    test_return_while_else_no_return,
+    r#"
+def f(x: bool) -> int:  # E: Function declared to return `int`, but one or more paths are missing an explicit `return`
+    while x:
+        return 1
+    else:
+        pass
+"#,
+);
+
+testcase!(
+    test_return_while_true_no_break,
+    r#"
+def f() -> int:
+    while True:
+        return 1
+"#,
+);
+
+testcase!(
+    test_return_while_false_break_else,
+    r#"
+def f() -> int:
+    while False:
+        break
+    else:
+        return 1
+"#,
+);
+
 testcase!(
     test_return_then_dead_code,
     r#"
@@ -227,6 +361,21 @@ def f(b: bool) -> int:
     else:
         fail()
         return 4
+"#,
+);
+
+testcase!(
+    test_return_never_unreachable,
+    r#"
+from typing import NoReturn
+
+def stop() -> NoReturn:
+    raise RuntimeError("stop")
+
+def f(x: int) -> int:
+    if x > 0:
+        return x
+    stop()
 "#,
 );
 
@@ -353,7 +502,7 @@ testcase!(
     r#"
 def test():
     return 1
-    yield 2 # E: This `yield` expression is unreachable
+    yield 2
 "#,
 );
 
@@ -416,6 +565,298 @@ testcase!(
     r#"
 def test():
     return 1
-    yield from [2, 3] # E: This `yield from` expression is unreachable
+    yield from [2, 3]
+"#,
+);
+
+testcase!(
+    test_no_missing_return_for_stubs,
+    r#"
+from typing import Protocol, overload
+from abc import abstractmethod
+
+class P(Protocol):
+    def f1(self) -> int:
+        """a"""
+    def f2(self) -> int:
+        """a"""
+        ...
+    def f3(self) -> int:
+        """a"""
+        pass
+    def f4(self) -> int:
+        """a"""
+        return NotImplemented
+    def f5(self) -> int:
+        """a"""
+        raise NotImplementedError()
+    def f6(self) -> int:
+        ...
+    def f7(self) -> int:
+        pass
+    def f8(self) -> int:
+        return NotImplemented
+    def f9(self) -> int:
+        raise NotImplementedError()
+
+class C:
+    def f1(self) -> int:  # E:
+        """a"""
+    def f2(self) -> int:
+        """a"""
+        ...  # OK - other type checkers do not permit this outside of stub files
+    def f3(self) -> int:  # E:
+        """a"""
+        pass
+    def f4(self) -> int:
+        """a"""
+        return NotImplemented  # OK
+    def f5(self) -> int:
+        """a"""
+        raise NotImplementedError()  # OK
+    def f6(self) -> int:
+        ...  # OK - other type checkers do not permit this outside of stub files
+    def f7(self) -> int:  # E:
+        pass
+    def f8(self) -> int:
+        return NotImplemented  # OK
+    def f9(self) -> int:
+        raise NotImplementedError()  # OK
+
+class AbstractC:
+    @abstractmethod
+    def f1(self) -> int:
+        """a"""
+    @abstractmethod
+    def f2(self) -> int:
+        """a"""
+        ...
+    @abstractmethod
+    def f3(self) -> int:
+        """a"""
+        pass
+    @abstractmethod
+    def f4(self) -> int:
+        """a"""
+        return NotImplemented
+    @abstractmethod
+    def f5(self) -> int:
+        """a"""
+        raise NotImplementedError()
+    @abstractmethod
+    def f6(self) -> int:
+        ...
+    @abstractmethod
+    def f7(self) -> int:
+        pass
+    @abstractmethod
+    def f8(self) -> int:
+        return NotImplemented
+    @abstractmethod
+    def f9(self) -> int:
+        raise NotImplementedError()
+
+class OverloadC:
+    @overload
+    def f(self) -> int:
+        """a"""
+    @overload
+    def f(self) -> int:
+        """a"""
+        ...
+    @overload
+    def f(self) -> int:
+        """a"""
+        pass
+    @overload
+    def f(self) -> int:
+        """a"""
+        return NotImplemented
+    @overload
+    def f(self) -> int:
+        """a"""
+        raise NotImplementedError()
+    @overload
+    def f(self) -> int:
+        ...
+    @overload
+    def f(self) -> int:
+        pass
+    @overload
+    def f(self) -> int:
+        return NotImplemented
+    @overload
+    def f(self) -> int:
+        raise NotImplementedError()
+    def f(self) -> int:
+        return 0
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2141
+// List concatenation with contextual return type hint should work
+testcase!(
+    test_return_list_concat_contextual_hint,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> None: ...
+
+class A(Base):
+    def foo(self, x: int) -> None:
+        print(x)
+
+class B(Base):
+    def foo(self, x: int) -> None:
+        pass
+
+# This should type-check without error: the return type hint list[Base]
+# provides context for inferring [A()] + [B()] as list[Base].
+def return_object(name: str) -> list[Base]:
+    return [A()] + [B()]
+
+# Non-list-returning variant still works (for comparison)
+def return_object_non_list(name: str) -> Base:
+    o = None
+    if name == "a":
+        o = A()
+    else:
+        o = B()
+    return o
+"#,
+);
+
+testcase!(
+    test_infer_none_for_pruned_if_last_statement,
+    r#"
+from typing import assert_type
+
+def foo():
+    print(42)
+    if False:
+        print(1)
+
+assert_type(foo(), None)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1518
+testcase!(
+    test_exhaustive_enum_logic,
+    r#"
+from enum import Enum
+
+class Foo(Enum):
+    A = 0
+    B = 1
+
+def also_confuses(which: Foo) -> str:
+    match which:
+        case Foo.A:
+            answer = 'good'
+        case Foo.B:
+            answer = 'bad'
+    return answer.upper()
+
+def confuses(which: Foo) -> str:
+    if which == Foo.A:
+        answer = 'good'
+    elif which == Foo.B:
+        answer = 'bad'
+    return answer.upper()
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1518
+testcase!(
+    test_nested_branches_if_elif_return_type,
+    r#"
+def f(value: int | str | float) -> str:
+    if isinstance(value, (int, float)):
+        if isinstance(value, int):
+            return f"integer: {value}"
+        elif isinstance(value, float):
+            return f"float: {value}"
+    else:
+        return f"string: {value}"
+"#,
+);
+
+testcase!(
+    test_nested_branches_if_elif_uninitialized_local,
+    r#"
+def uninitialized_local_logic(value: int | str | float) -> str:
+    if isinstance(value, (int, float)):
+        if isinstance(value, int):
+            result = f"integer: {value}"
+        elif isinstance(value, float):
+            result = f"float: {value}"
+    else:
+        result = f"string: {value}"
+    return result
+"#,
+);
+
+testcase!(
+    test_nested_branches_pattern_return_type,
+    r#"
+def f(value: int | str | float) -> str:
+    match value:
+        case int() | float():
+            match value:
+                case int():
+                    return f"integer: {value}"
+                case float():
+                    return f"float: {value}"
+        case str():
+            return f"string: {value}"
+"#,
+);
+
+testcase!(
+    test_nested_branches_pattern_uninitialized_local,
+    r#"
+def f(value: int | str | float) -> str:
+    match value:
+        case int() | float():
+            match value:
+                case int():
+                    result = f"integer: {value}"
+                case float():
+                    result = f"float: {value}"
+        case str():
+            result = f"string: {value}"
+    return result
+"#,
+);
+
+testcase!(
+    test_pruned_if_last_statement_no_bad_override,
+    r#"
+class A:
+    def foo(self):
+        print(42)
+        if False:
+            print(1)
+
+class B(A):
+    def foo(self):
+        print(3)
+"#,
+);
+
+testcase!(
+    test_return_list_dict_items_union_return_type,
+    r#"
+from typing import Sequence
+
+def _process_null_values(
+    null_values: dict[str, str],
+) -> Sequence[str] | list[tuple[str, str]]:
+    if isinstance(null_values, dict):
+        return list(null_values.items())
+    return ['a', 'b']
 "#,
 );

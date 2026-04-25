@@ -1,0 +1,127 @@
+{
+  "name": "test",
+  "names": [
+    "test.x",
+    "test.y",
+    "test.z",
+    "test.w",
+    "test.v",
+    "test.container_any",
+    "test.pure_any",
+    "test.concrete"
+  ],
+  "line_count": 31,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.x",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 10,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.y",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 11,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.z",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 12,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.w",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 1,
+      "n_untyped": 0,
+      "location": {
+        "line": 15,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.v",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 18,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.container_any",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 21,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.pure_any",
+      "n_typable": 2,
+      "n_typed": 0,
+      "n_any": 2,
+      "n_untyped": 0,
+      "location": {
+        "line": 25,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.concrete",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 29,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 11,
+  "n_typed": 8,
+  "n_any": 3,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 72.72727272727273,
+  "n_functions": 3,
+  "n_methods": 0,
+  "n_function_params": 3,
+  "n_method_params": 0,
+  "n_classes": 0,
+  "n_attrs": 5,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}
