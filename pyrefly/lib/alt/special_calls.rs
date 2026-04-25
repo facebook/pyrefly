@@ -60,7 +60,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TypeFormContext::FunctionArgument,
                 errors,
             ));
-            if !self.is_equivalent(&a, &b) {
+            let matches_metaclass_instance = match (&a, &b) {
+                (Type::ClassDef(got), Type::ClassType(want)) => {
+                    !want.is_builtin("type") && self.type_order().has_metaclass(got, want)
+                }
+                (Type::Type(box Type::ClassType(got)), Type::ClassType(want)) => {
+                    !want.is_builtin("type")
+                        && self.type_order().has_metaclass(got.class_object(), want)
+                }
+                _ => false,
+            };
+            if matches_metaclass_instance || !self.is_equivalent(&a, &b) {
                 self.error(
                     errors,
                     range,
