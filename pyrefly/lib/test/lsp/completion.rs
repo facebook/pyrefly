@@ -351,6 +351,68 @@ cfg: Config = {"": 1}
 }
 
 #[test]
+fn dict_value_completion_from_discriminated_typed_dict_union_literal() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    foo_value: int
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    bar_value: str
+
+type FooBar = Foo | Bar
+
+item: FooBar = {
+    "kind": "|",
+#            ^
+}
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains("- (Value) 'bar': Literal['bar']"),
+        "{report}"
+    );
+    assert!(
+        report.contains("- (Value) 'foo': Literal['foo']"),
+        "{report}"
+    );
+}
+
+#[test]
+fn dict_key_completion_from_discriminated_typed_dict_union_literal() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    foo_value: int
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    bar_value: str
+
+type FooBar = Foo | Bar
+
+item: FooBar = {
+    "kind": "foo",
+    "": 0,
+#    ^
+}
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["foo_value".to_owned()]);
+}
+
+#[test]
 fn dot_complete_with_deprecated_method() {
     let code = r#"
 from warnings import deprecated
