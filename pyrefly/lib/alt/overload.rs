@@ -825,6 +825,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
+        let checkpoint = self.solver().checkpoint();
         let call_errors = self.error_collector();
         let (res, specialization_errors, expected_types) = self.callable_infer(
             callable.1.signature.clone(),
@@ -843,6 +844,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             hint,
             overload_ctor_targs.as_mut(),
         );
+        if !call_errors.is_empty() {
+            self.solver().restore_checkpoint(checkpoint);
+        }
 
         CalledOverload {
             func: callable,

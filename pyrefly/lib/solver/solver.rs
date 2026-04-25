@@ -198,7 +198,7 @@ impl QuantifiedHandle {
 /// Note that RefCell means we need to be careful about how we access
 /// variables. Access is "mutable xor shared" like ordinary references,
 /// except with runtime instead of static enforcement.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Variables(SmallMap<Var, RefCell<VariableNode>>);
 
 /// A union-find node. We store the parent pointer in a Cell so that we
@@ -359,6 +359,12 @@ pub struct Solver {
     pub spec_compliant_overloads: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct SolverCheckpoint {
+    variables: Variables,
+    instantiation_errors: SmallMap<Var, TypeVarSpecializationError>,
+}
+
 impl Display for Solver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (x, y) in self.variables.lock().iter() {
@@ -415,6 +421,18 @@ impl Solver {
     /// Store a protocol conformance result.
     pub fn store_protocol_cache(&self, got: Type, want: Type, result: Result<(), SubsetError>) {
         self.protocol_cache.lock().insert((got, want), result);
+    }
+
+    pub(crate) fn checkpoint(&self) -> SolverCheckpoint {
+        SolverCheckpoint {
+            variables: self.variables.lock().clone(),
+            instantiation_errors: self.instantiation_errors.read().clone(),
+        }
+    }
+
+    pub(crate) fn restore_checkpoint(&self, checkpoint: SolverCheckpoint) {
+        *self.variables.lock() = checkpoint.variables;
+        *self.instantiation_errors.write() = checkpoint.instantiation_errors;
     }
 
     /// Force all non-recursive Vars in `vars`.
