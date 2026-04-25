@@ -1394,9 +1394,12 @@ def test0() -> None:
     if True is not False:  # unnecessary-comparison: always True
         pass
 
-def test1(x: object) -> None:
+class User: ...
+class Admin(User): ...
+
+def test1(user: User) -> None:
     # Comparing an instance to a class is always False
-    if x is int:  # unnecessary-comparison: did you mean isinstance(x, int)?
+    if user is Admin:  # unnecessary-comparison: did you mean isinstance(user, Admin)?
         pass
 ```
 
