@@ -248,6 +248,17 @@ def func(c: T) -> C:
 );
 
 testcase!(
+    test_bounded_typevar_type_attribute_access,
+    r#"
+from typing import TypeVar, assert_type
+T = TypeVar('T', bound=type)
+def get_class_name(cls: T) -> str:
+    assert_type(cls.__name__, str)
+    return cls.__name__
+ "#,
+);
+
+testcase!(
     test_instantiate_default_typevar,
     r#"
 from typing import assert_type, reveal_type, Callable, Self
@@ -256,7 +267,7 @@ class C[T = int]:
         return self
     attr: T
 reveal_type(C.meth)  # E: [T = int](self: C[T], /) -> C[T]
-assert_type(C.attr, int)  # E: assert_type(Any, int) failed  # E: Generic attribute `attr` of class `C` is not visible on the class
+assert_type(C.attr, int)  # E: assert_type(Unknown, int) failed  # E: Generic attribute `attr` of class `C` is not visible on the class
  "#,
 );
 
@@ -519,16 +530,81 @@ assert_type(g("bar"), Literal["bar"])
 );
 
 testcase!(
-    bug = "This should succeed with no errors",
-    test_add_with_constraints,
+    test_constraint_promotion_bool_to_int,
     r#"
-def add[T: (int, str)](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported between `T` and `T` # E: `+` is not supported between `T` and `T`
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# bool is a subtype of int, so T should resolve to int (the constraint), not bool.
+assert_type(f(True), int)
+assert_type(f(False), int)
     "#,
 );
 
 testcase!(
-    bug = "Unexpected error in add3",
+    test_constraint_promotion_literal_int,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal[42] is a subtype of int, so T should resolve to int.
+assert_type(f(42), int)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_literal_str,
+    r#"
+from typing import assert_type
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# Literal["hi"] is a subtype of str, so T should resolve to str.
+assert_type(f("hi"), str)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_subclass,
+    r#"
+from typing import assert_type
+
+class B: ...
+class C(B): ...
+class D(C): ...
+
+def f[T: (B, C)](x: T) -> T: ...
+
+# D is a subtype of C (and B), so T should resolve to C (the narrowest constraint).
+assert_type(f(D()), C)
+# B matches B exactly.
+assert_type(f(B()), B)
+    "#,
+);
+
+testcase!(
+    test_constraint_promotion_no_match,
+    r#"
+class X: ...
+
+def f[T: (int, str)](x: T) -> T: ...
+
+# X is not assignable to int or str, so this should error.
+f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_add_with_constraints,
+    r#"
+def add[T: (int, str)](x: T, y: T) -> T:
+    return x + y
+    "#,
+);
+
+testcase!(
     test_add_with_upper_bound,
     r#"
 # This is not allowed because it's legal to pass something like `add1(0, "1")` to this function.
@@ -541,36 +617,33 @@ def add2[T: int](x: T, y: T) -> int:
 
 # This is also ok.
 def add3[T: int | float](x: T, y: T) -> int | float:
-    return x + y # E: `+` is not supported
+    return x + y
     "#,
 );
 
 testcase!(
-    bug = "Spurious '`+` is not supported' error",
     test_add_with_upper_bound_and_bad_return_type,
     r#"
 # mypy and pyright both reject both of these, so we do, too.
 def add1[T: int](x: T, y: T) -> T:
     return x + y # E: Returned type `int` is not assignable to declared return type `T`
 def add2[T: int | float](x: T, y: T) -> T:
-    return x + y # E: `+` is not supported # E: Returned type `float | int` is not assignable to declared return type `T`
+    return x + y # E: Returned type `float | int` is not assignable to declared return type `T`
     "#,
 );
 
 testcase!(
-    bug = "This should succeed with no errors. Pyrefly pins the types too early due to https://github.com/facebook/pyrefly/issues/105",
     test_multiple_args_upper_bound,
     r#"
 from typing import assert_type
 
 def f[T: int | str](x: T, y: T): ...
-f(0, "1") # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+f(0, "1")
 
 class A[T]:
     def __init__(self, x: T, y: T): ...
-# Note: pyright says the type is A[int | str]; mypy says A[object].
-# Either is okay, but A[int] is definitely wrong and we shouldn't emit the not assignable error.
-assert_type(A(0, "1"), A[int | str]) # E: assert_type(A[int], A[int | str]) # E: `Literal['1']` is not assignable to parameter `y` with type `int`
+# Note: pyright says the type is A[int | str]; mypy says A[object]. Either is ok.
+assert_type(A(0, "1"), A[int | str])
     "#,
 );
 
@@ -910,7 +983,7 @@ class TD(TypedDict, Generic[_NBit1, _NBit2]):
 
 class A:
     x: ClassVar[TD[Any, Any]]
-    y: ClassVar[TD[_NBit1, Any]]  # E: `ClassVar` arguments may not contain any type variables
+    y: ClassVar[TD[_NBit1, Any]]  # E: Type variable `_NBit1` is not in scope  # E: `ClassVar` arguments may not contain any type variables
     "#,
 );
 
@@ -969,12 +1042,31 @@ def go() -> None:
 );
 
 testcase!(
+    test_nested_call_of_overloaded_function_preserves_bound,
+    r#"
+from typing import Any, overload
+
+@overload
+def unbounded[T, U](a: T, b: U) -> T: ...
+@overload
+def unbounded(**kwargs) -> Any: ...
+def unbounded(*args, **kwargs) -> Any: ...
+
+def bounded_str[T: str](x: T) -> T:
+    return x
+
+def go() -> None:
+    bounded_str(unbounded(1, 2))  # E: `int` is not assignable to upper bound `str` of type variable `T`
+    "#,
+);
+
+testcase!(
     bug = "Asserted type is wrong",
     test_typevar_default_is_typevar_in_function,
     r#"
 from typing import assert_type
 def f[T1, T2 = T1](x: T1, y: T2 | None = None) -> tuple[T1, T2]: ...
-assert_type(f(1), tuple[int, int])  # E: assert_type(tuple[int, Any], tuple[int, int])
+assert_type(f(1), tuple[int, int])  # E: assert_type(tuple[int, Unknown], tuple[int, int])
     "#,
 );
 
@@ -1042,7 +1134,8 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug = "conformance: Should error on unbound TypeVars in various scopes",
+    bug =
+        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias
@@ -1054,12 +1147,12 @@ S = TypeVar("S")
 # Unbound TypeVar S used in generic function body
 def fun_3(x: T) -> list[T]:
     y: list[T] = []  # OK
-    z: list[S] = []  # should error: S not in scope
+    z: list[S] = []  # E: Type variable `S` is not in scope
     return y
 
 # Unbound TypeVar S in class body (not in method)
 class Bar(Generic[T]):
-    an_attr: list[S] = []  # should error: S not in scope
+    an_attr: list[S] = []  # E: Type variable `S` is not in scope
 
 # Nested class using outer class's TypeVar
 class Outer(Generic[T]):
@@ -1071,8 +1164,118 @@ class Outer(Generic[T]):
     alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
 
 # Unbound TypeVars at global scope
-global_var1: T  # should error
-global_var2: list[T] = []  # should error
+global_var1: T  # E: Type variable `T` is not in scope
+global_var2: list[T] = []  # E: Type variable `T` is not in scope
 list[T]()  # should error
 "#,
+);
+
+testcase!(
+    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
+    test_nested_class_independent_typevar_adoption,
+    r#"
+from typing import Generic, Type, TypeVar
+
+_Deserialized = TypeVar("_Deserialized")
+_Serialized = TypeVar("_Serialized")
+
+class CustomCoercer(Generic[_Deserialized, _Serialized]):
+    # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
+    class CoercerMapping(
+        dict[
+            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
+            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
+        ]
+    ):
+        def __getitem__(
+            self,
+            key: type[_Deserialized],
+        ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
+"#,
+);
+
+testcase!(
+    test_constraint_promotion_anystr_passthrough,
+    r#"
+from typing import AnyStr, assert_type
+
+def f(x: AnyStr) -> AnyStr: ...
+def g(x: AnyStr) -> AnyStr:
+    # Passing an abstract AnyStr (which is itself constrained to str | bytes)
+    # to another function that also expects AnyStr should succeed without error.
+    return f(x)
+
+# Concrete calls still promote correctly.
+assert_type(f("hi"), str)
+assert_type(f(b"hi"), bytes)
+    "#,
+);
+
+testcase!(
+    test_anystr_none_passthrough_classmethod,
+    r#"
+from typing import AnyStr
+
+class A:
+    @classmethod
+    def create(cls, x: AnyStr | None): ...
+
+def test(x: AnyStr | None):
+    A.create(x)
+    "#,
+);
+
+testcase!(
+    test_do_not_match_multiple_constraints,
+    r#"
+def f[T: (int, str)](x: T, y: T): ...
+f(0, "wrong")  # E: `Literal['wrong']` is not assignable to parameter `y` with type `int`
+    "#,
+);
+
+testcase!(
+    bug = "TODO(https://github.com/facebook/pyrefly/issues/105): error message should also flag `Literal['oops']`",
+    test_multiple_bad_specialization,
+    r#"
+def f[T: int](x: T, y: T): ...
+f("oops", None)  # E: `None` is not assignable to upper bound `int`
+    "#,
+);
+
+testcase!(
+    test_bound_violation,
+    r#"
+from typing import Iterable, Iterator, TypeVar
+class Series: ...
+class DataFrame:
+    def __iter__(self) -> Iterator[Series]: ...
+FrameType = TypeVar("FrameType", bound="DataFrame")
+def main(left: DataFrame, right: DataFrame) -> None:
+    def func(*a: Iterable[FrameType]) -> None:
+        return None
+    func(left, right)  # E: `Series` is not assignable to upper bound `DataFrame`
+    "#,
+);
+
+testcase!(
+    test_bound_violation_in_union_member,
+    r#"
+from typing import Iterable, Iterator, TypeVar
+class Series: ...
+class DataFrame:
+    def __iter__(self) -> Iterator[Series]: ...
+FrameType = TypeVar("FrameType", bound="DataFrame")
+def main(left: DataFrame, right: DataFrame) -> None:
+
+    def func1(*a: FrameType | Iterable[FrameType]) -> None:
+        return None
+    # `DataFrame` is not assignable to `Iterable[FrameType]` because `Series` violates the upper
+    # bound `DataFrame` of `FrameType`. However, this call should still succeed because we can
+    # match `FrameType` instead.
+    func1(left, right)
+
+    def func2(*a: Iterable[FrameType] | None) -> None:
+        return None
+    func2(left, right)  # E: `Series` is not assignable to upper bound `DataFrame`
+    "#,
 );

@@ -124,7 +124,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
             base = self
                 .heap
-                .mk_type_form(self.heap.mk_special_form(SpecialForm::Tuple));
+                .mk_type_of(self.heap.mk_special_form(SpecialForm::Tuple));
         }
         let mut has_strict = false;
         let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
@@ -151,7 +151,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let tys = arguments_untype(slice, &mut has_strict);
                 self.specialize_forall_in_base_class(*forall, tys, range, errors)
             }
-            Type::ClassDef(cls) => self.heap.mk_type_form(self.specialize_in_base_class(
+            Type::ClassDef(cls) => self.heap.mk_type_of(self.specialize_in_base_class(
                 &cls,
                 arguments_untype(slice, &mut has_strict),
                 range,
@@ -205,9 +205,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_type_alias_with_pydantic_strict_metadata(&self, ty: &Type) -> bool {
-        matches!(ty, Type::TypeAlias(ta) if self.get_type_alias(ta).annotated_metadata()
-            .iter()
-            .any(|metadata| self.is_pydantic_strict_metadata(metadata)))
+        if let Type::TypeAlias(ta) = ty {
+            let alias = self.get_type_alias(ta);
+            if let Type::Annotated(_, metadata) = alias.as_type() {
+                return metadata
+                    .iter()
+                    .any(|metadata| self.is_pydantic_strict_metadata(metadata));
+            }
+        }
+        false
     }
 
     /// Get the untyped form (in other words, the instance type, after applying
@@ -268,6 +274,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let ct = self.promote_nontypeddict_silently_to_classtype(cls);
                         (self.heap.mk_class_type(ct), x.range())
                     })
+                }
+                BaseClass::TypeOf(inner_expr, _) => {
+                    let (ty, _) = self.base_class_expr_infer(inner_expr, &fake_error_collector);
+                    match self.untype_opt(ty.clone(), inner_expr.range(), &fake_error_collector) {
+                        Some(Type::ClassType(c)) => {
+                            // X is a class. type(X) = metaclass of X.
+                            let class_obj = c.class_object();
+                            let metadata = self.get_metadata_for_class(class_obj);
+                            let metaclass_ct = metadata.metaclass(self.stdlib);
+                            Some((self.heap.mk_class_type(metaclass_ct.clone()), x.range()))
+                        }
+                        None => {
+                            // X is an instance. type(X) = its class.
+                            match &ty {
+                                Type::ClassType(_) => Some((ty, x.range())),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
                 }
                 BaseClass::InvalidExpr(..) | BaseClass::TypedDict(..) | BaseClass::Generic(..) => {
                     None

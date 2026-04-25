@@ -7,15 +7,15 @@
 
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_provide_type_unopened_file() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().join("basic"));
+    interaction.set_root(root.path().join("provide_type"));
     interaction
         .initialize(InitializeSettings {
             configuration: Some(None),
@@ -27,7 +27,7 @@ fn test_provide_type_unopened_file() {
     // can work with files that haven't been explicitly opened
     interaction
         .client
-        .provide_type("bar.py", 7, 5)
+        .provide_type("bar.py", 9, 5)
         .expect_response(json!({
             "contents": [{
                 "kind": "plaintext",
@@ -43,7 +43,7 @@ fn test_provide_type_unopened_file() {
 fn test_provide_type_unopened_file_with_dependencies() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().join("basic"));
+    interaction.set_root(root.path().join("provide_type"));
     interaction
         .initialize(InitializeSettings {
             configuration: Some(None),
@@ -59,63 +59,7 @@ fn test_provide_type_unopened_file_with_dependencies() {
         .expect_response(json!({
             "contents": [{
                 "kind": "plaintext",
-                "value": "type[bar.Bar]".to_owned()
-            }]
-        }))
-        .unwrap();
-
-    interaction.shutdown().unwrap();
-}
-
-#[test]
-fn test_provide_type_basic() {
-    let root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().join("basic"));
-    interaction
-        .initialize(InitializeSettings {
-            configuration: Some(None),
-            ..Default::default()
-        })
-        .unwrap();
-
-    interaction.client.did_open("bar.py");
-
-    interaction
-        .client
-        .provide_type("bar.py", 7, 5)
-        .expect_response(json!({
-            "contents": [{
-                "kind": "plaintext",
-                "value": "typing.Literal[3]",
-            }]
-        }))
-        .unwrap();
-
-    interaction.shutdown().unwrap();
-}
-
-#[test]
-fn test_provide_type() {
-    let root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
-    interaction.set_root(root.path().join("basic"));
-    interaction
-        .initialize(InitializeSettings {
-            configuration: Some(None),
-            ..Default::default()
-        })
-        .unwrap();
-
-    interaction.client.did_open("foo.py");
-
-    interaction
-        .client
-        .provide_type("foo.py", 6, 16)
-        .expect_response(json!({
-            "contents": [{
-                "kind": "plaintext",
-                "value": "type[bar.Bar]".to_owned()
+                "value": "builtins.type[bar.Bar]".to_owned()
             }]
         }))
         .unwrap();
@@ -142,7 +86,7 @@ fn test_provide_type_from_pyi_file() {
         .expect_response(json!({
             "contents": [{
                 "kind": "plaintext",
-                "value": "(\n    self: types_stub.MyClass,\n    value: builtins.int\n) -> None"
+                "value": "(self: types_stub.MyClass, value: builtins.int) -> None"
             }]
         }))
         .unwrap();
@@ -181,7 +125,7 @@ fn test_provide_type_directly_from_pyi_file() {
         .expect_response(json!({
             "contents": [{
                 "kind": "plaintext",
-                "value": "type[types_stub.MyClass]"
+                "value": "builtins.type[types_stub.MyClass]"
             }]
         }))
         .unwrap();
@@ -199,4 +143,157 @@ fn test_provide_type_directly_from_pyi_file() {
         .unwrap();
 
     interaction.shutdown().unwrap();
+}
+
+fn do_test(line: u32, col: u32, expected: &'static str) {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("provide_type"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("bar.py");
+
+    interaction
+        .client
+        .provide_type("bar.py", line, col)
+        .expect_response(json!({
+            "contents": [{
+                "kind": "plaintext",
+                "value": expected,
+            }]
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_provide_type() {
+    do_test(8, 9, "builtins.type[bar.Bar]");
+}
+
+#[test]
+fn test_provide_type_basic() {
+    do_test(9, 5, "typing.Literal[3]");
+}
+
+#[test]
+fn test_provide_type_nested_class() {
+    do_test(11, 13, "builtins.type[bar.Bar.Baz]");
+}
+
+#[test]
+fn test_provide_type_function_fully_qualified() {
+    do_test(18, 9, "def bar.Bar.Baz.f(self: bar.Bar.Baz) -> None");
+}
+
+#[test]
+fn test_provide_type_variable() {
+    do_test(23, 4, "T@bar.f_generic1");
+}
+
+#[test]
+fn test_provide_generic_signature() {
+    do_test(27, 4, "(T@bar.f_generic2) -> T@bar.f_generic2");
+}
+
+#[test]
+fn test_provide_generic_signature_with_declaration() {
+    do_test(30, 0, "[T: builtins.int = builtins.bool](t: T) -> T");
+}
+
+#[test]
+fn test_self() {
+    do_test(13, 14, "typing.Self@bar.Bar.Baz");
+}
+
+#[test]
+fn test_builtin_method_type() {
+    do_test(
+        38,
+        8,
+        "def builtins.int.bit_length(self: builtins.int) -> builtins.int",
+    );
+}
+
+#[test]
+fn test_builtin_function_type() {
+    do_test(
+        39,
+        0,
+        "def builtins.any(iterable: typing.Iterable[builtins.object], /) -> builtins.bool",
+    );
+}
+
+#[test]
+fn test_function_type_with_constraints() {
+    do_test(
+        42,
+        8,
+        "def bar.f_constraints[T: (builtins.bool, builtins.str) = builtins.bool](t: T) -> T",
+    );
+}
+
+#[test]
+fn test_bound_method() {
+    do_test(19, 10, "def bar.Bar.Baz.f() -> None");
+}
+
+#[test]
+fn test_super() {
+    do_test(47, 10, "builtins.super[builtins.object, bar.S]");
+}
+
+#[test]
+fn test_new_type() {
+    // NOTE: This is a bit of a hack, because it's not actually a `builtins.type`,
+    //  but the client should realize that when they look up the qname
+    do_test(50, 1, "builtins.type[bar.N]");
+}
+
+#[test]
+fn test_overload() {
+    do_test(
+        61,
+        0,
+        "Overload[def bar.overloaded_func(x: None) -> None, def bar.overloaded_func(x: builtins.int) -> None]",
+    );
+}
+
+#[test]
+fn test_generic_mixed_scopes() {
+    do_test(
+        69,
+        14,
+        "def bar.A.f1.B.f2[F2](self: typing.Self@bar.A.f1.B, x: F1@bar.A.f1, y: F2, a: T@bar.A, b: T2@bar.A.f1.B) -> None",
+    );
+}
+
+#[test]
+fn test_tuple() {
+    do_test(
+        72,
+        0,
+        "builtins.tuple[typing.Literal[1], typing.Literal[2]]",
+    );
+}
+
+#[test]
+fn test_tuple_item() {
+    do_test(72, 11, "typing.Literal[2]");
+}
+
+#[test]
+fn test_type_alias() {
+    do_test(77, 6, "def bar.alias() -> bar.TA");
+}
+
+#[test]
+fn test_pos() {
+    do_test(86, 0, "typing.Literal[False]");
 }

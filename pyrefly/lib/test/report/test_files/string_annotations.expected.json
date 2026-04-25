@@ -1,0 +1,62 @@
+{
+  "name": "test",
+  "names": [
+    "test.x",
+    "test.y",
+    "test.func_str_ann"
+  ],
+  "line_count": 19,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.x",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 9,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.y",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 18,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.func_str_ann",
+      "n_typable": 3,
+      "n_typed": 3,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 5,
+  "n_typed": 5,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 1,
+  "n_methods": 0,
+  "n_function_params": 2,
+  "n_method_params": 0,
+  "n_classes": 0,
+  "n_attrs": 2,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

@@ -19,9 +19,11 @@ description = "A fast type checker and language server for Python with powerful 
 dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.8"
+license = {file = "LICENSE"}
 keywords = ["typechecker", "typechecking"]
 classifiers = [
   "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",

@@ -22,9 +22,9 @@ use lsp_types::request::WorkspaceConfiguration;
 use pyrefly_util::fs_anyhow::write;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_did_change_configuration() {
@@ -457,7 +457,7 @@ fn test_disable_language_services() {
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]))
+        .expect_response(json!(null))
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");
@@ -506,7 +506,7 @@ fn test_disable_language_services_default_workspace() {
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]))
+        .expect_response(json!(null))
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");
@@ -533,14 +533,16 @@ fn test_disable_specific_language_services_via_analysis_config() {
     interaction
         .client
         .hover("foo.py", 6, 17)
-        .expect_response(json!({
-            "contents": {
-                "kind":"markdown",
-                "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
-                    + Url::from_file_path(this_test_root.join("bar.py")).unwrap().as_str()
-                    + "#L7,7)"
-            }
-        }))
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| {
+                text.contains("(class) Bar: def Bar() -> Bar: ...")
+                    && text.contains(
+                        Url::from_file_path(this_test_root.join("bar.py"))
+                            .unwrap()
+                            .as_str(),
+                    )
+            })
+        })
         .unwrap();
 
     // Test definition works initially
@@ -582,7 +584,7 @@ fn test_disable_specific_language_services_via_analysis_config() {
     interaction
         .client
         .hover("foo.py", 6, 17)
-        .expect_response(json!({"contents": []}))
+        .expect_response(json!(null))
         .expect("Failed to receive expected response");
 
     // But definition should still work
@@ -667,14 +669,16 @@ fn test_disable_type_errors_language_services_still_work() {
     interaction
         .client
         .hover("foo.py", 6, 17)
-        .expect_response(json!({
-            "contents": {
-                "kind":"markdown",
-                "value":"```python\n(class) Bar: type[Bar]\n```\n\nGo to [Bar](".to_owned()
-                    + Url::from_file_path(root_path.join("bar.py")).unwrap().as_str()
-                    + "#L7,7)"
-            }
-        }))
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| {
+                text.contains("(class) Bar: def Bar() -> Bar: ...")
+                    && text.contains(
+                        Url::from_file_path(root_path.join("bar.py"))
+                            .unwrap()
+                            .as_str(),
+                    )
+            })
+        })
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");
@@ -844,7 +848,7 @@ fn test_parse_pylance_configs() {
             {
                 "pyrefly": {"displayTypeErrors": "force-off"},
                 "analysis": {
-                    "diagnosticMode": "workspace",
+                    "diagnosticMode": "openFilesOnly",
                     "importFormat": "relative",
                     "inlayHints": {
                         "callArgumentNames": "on",
@@ -1078,7 +1082,7 @@ fn test_initialization_options_respected() {
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]))
+        .expect_response(json!(null))
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");
@@ -1110,7 +1114,7 @@ fn test_initialization_options_without_workspace_folders() {
     interaction
         .client
         .definition("foo.py", 6, 16)
-        .expect_response(json!([]))
+        .expect_response(json!(null))
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");

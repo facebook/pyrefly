@@ -124,6 +124,11 @@ let docsSidebar = [
                 id: 'report',
                 label: 'Measuring Type Coverage',
             },
+            {
+                type: 'doc' as const,
+                id: 'stubgen',
+                label: 'Generating Stub Files',
+            },
         ],
     },
     {

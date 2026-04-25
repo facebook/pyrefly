@@ -9,6 +9,7 @@
 mod auto_generated_fields;
 mod config;
 mod enums;
+mod factory_boy;
 mod fields;
 mod foreign_key;
 mod many_to_many;

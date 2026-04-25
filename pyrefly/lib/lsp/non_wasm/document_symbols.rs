@@ -17,18 +17,35 @@ use ruff_text_size::Ranged;
 use crate::state::state::Transaction;
 
 impl<'a> Transaction<'a> {
+    /// Return document symbols for the file behind `handle`.
+    /// When `limit_cell_idx` is `Some`, only symbols whose range falls within that
+    /// notebook cell are returned (mirroring semantic-token cell filtering).
     #[allow(deprecated)] // The `deprecated` field
-    pub fn symbols(&self, handle: &Handle) -> Option<Vec<DocumentSymbol>> {
+    pub fn symbols(
+        &self,
+        handle: &Handle,
+        limit_cell_idx: Option<usize>,
+    ) -> Option<Vec<DocumentSymbol>> {
         let ast = self.get_ast(handle)?;
         let module_info = self.get_module_info(handle)?;
 
         let mut result = Vec::new();
 
-        // Extract comment sections
-        let sections = CommentSection::extract_from_module(&module_info);
+        // Extract comment sections (only relevant for non-notebook files)
+        let sections = if limit_cell_idx.is_none() {
+            CommentSection::extract_from_module(&module_info)
+        } else {
+            Vec::new()
+        };
 
         // Build symbols with comment sections and AST symbols integrated
-        build_symbols_with_sections(&ast.body, &sections, &mut result, &module_info);
+        build_symbols_with_sections(
+            &ast.body,
+            &sections,
+            &mut result,
+            &module_info,
+            limit_cell_idx,
+        );
 
         Some(result)
     }
@@ -37,12 +54,15 @@ impl<'a> Transaction<'a> {
 /// Build document symbols integrating comment sections and AST symbols.
 /// AST symbols (functions, classes, variables) are added as children of the
 /// comment section that precedes them.
+/// When `limit_cell_idx` is `Some`, only top-level statements belonging to that
+/// notebook cell are included.
 #[allow(deprecated)] // The `deprecated` field
 fn build_symbols_with_sections(
     stmts: &[Stmt],
     sections: &[CommentSection],
     result: &mut Vec<DocumentSymbol>,
     module_info: &Module,
+    limit_cell_idx: Option<usize>,
 ) {
     use ruff_text_size::Ranged;
 
@@ -52,6 +72,12 @@ fn build_symbols_with_sections(
     let mut section_idx = 0;
 
     for stmt in stmts {
+        // Skip statements that belong to a different notebook cell
+        if limit_cell_idx.is_some()
+            && module_info.to_cell_for_lsp(stmt.range().start()) != limit_cell_idx
+        {
+            continue;
+        }
         let stmt_line = module_info.to_lsp_range(stmt.range()).start.line;
 
         // Process any comment sections that come before this statement
@@ -220,6 +246,9 @@ fn recurse_stmt_adding_symbols<'a>(
         Stmt::Assign(stmt_assign) => {
             for target in &stmt_assign.targets {
                 if let Expr::Name(name) = target {
+                    if name.id.is_empty() {
+                        continue;
+                    }
                     // todo(jvansch): Try to reuse DefinitionMetadata here.
                     symbols.push(DocumentSymbol {
                         name: name.id.to_string(),
@@ -235,7 +264,9 @@ fn recurse_stmt_adding_symbols<'a>(
             }
         }
         Stmt::AnnAssign(stmt_ann_assign) => {
-            if let Expr::Name(name) = &*stmt_ann_assign.target {
+            if let Expr::Name(name) = &*stmt_ann_assign.target
+                && !name.id.is_empty()
+            {
                 symbols.push(DocumentSymbol {
                     name: name.id.to_string(),
                     detail: Some(
