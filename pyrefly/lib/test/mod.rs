@@ -77,6 +77,7 @@ mod type_var_tuple;
 mod typed_dict;
 mod typeform;
 mod typing_self;
+mod unittest_mock_patch;
 mod unnecessary_comparison;
 mod unnecessary_type_conversion;
 mod untyped_def_behaviors;
