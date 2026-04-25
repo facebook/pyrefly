@@ -2113,6 +2113,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn quantified_bound_class(&self, base: AttributeBase1) -> Option<ClassType> {
         match base {
             AttributeBase1::ClassInstance(cls) => Some(cls),
+            // Bounds like `type[C]` become class-object bases; keep their underlying class
+            // instead of falling back to `object`.
+            AttributeBase1::ClassObject(class) => Some(class.class_type().clone()),
             // Handle `type[Any]`, which happens for TypeVars w/ `bound=type`
             AttributeBase1::TypeAny(_) => Some(self.stdlib.builtins_type().clone()),
             _ => None,

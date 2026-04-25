@@ -259,6 +259,24 @@ def get_class_name(cls: T) -> str:
 );
 
 testcase!(
+    test_bounded_typevar_specific_type_attribute_access,
+    r#"
+from typing import TypeVar, assert_type
+
+class ShellComplete:
+    name: str = "base"
+
+T = TypeVar("T", bound=type[ShellComplete])
+
+def add_completion_class(cls: T, label: str | None = None) -> T:
+    if label is None:
+        assert_type(cls.name, str)
+        label = cls.name
+    return cls
+ "#,
+);
+
+testcase!(
     test_instantiate_default_typevar,
     r#"
 from typing import assert_type, reveal_type, Callable, Self
