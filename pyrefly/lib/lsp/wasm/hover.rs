@@ -554,13 +554,7 @@ pub fn get_hover(
     }
 
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
-    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
-        metadata,
-        definition_range: definition_location,
-        module,
-        docstring_range,
-        display_name,
-    }) = transaction
+    let hover_definitions = transaction
         .find_definition(
             handle,
             position,
@@ -570,7 +564,14 @@ pub fn get_hover(
             },
         )
         .map(Vec1::into_vec)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
+        metadata,
+        definition_range: definition_location,
+        module,
+        docstring_range,
+        display_name,
+    }) = hover_definitions
         // TODO: handle more than 1 definition
         .into_iter()
         .next()
