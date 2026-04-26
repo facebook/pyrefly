@@ -3954,6 +3954,43 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_find_module_preserves_symlinked_search_root_path() {
+        use std::fs::create_dir;
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path().join("root");
+        let alias = tempdir.path().join("alias");
+        create_dir(&root).unwrap();
+        TestPath::setup_test_directory(
+            &root,
+            vec![TestPath::file_with_contents(
+                "test_module.py",
+                "def hello(name):\n    pass\n",
+            )],
+        );
+        symlink(&root, &alias).unwrap();
+        let module_path = alias.join("test_module.py");
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("test_module"),
+                [alias].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                &DirEntryCache::new(true),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(module_path))
+        );
+    }
+
     fn get_config(source: ConfigSource) -> ConfigFile {
         let mut interpreters = Interpreters::default();
         interpreters.skip_interpreter_query = true;
