@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs::read_link;
 use std::iter;
 use std::path::Path;
 use std::path::PathBuf;
@@ -77,13 +78,29 @@ enum FindResult {
     CompiledModule(PathBuf),
 }
 
-fn canonicalize_found_path(path: PathBuf) -> PathBuf {
-    path.canonicalize().unwrap_or(path)
+fn symlink_target(path: &Path) -> Option<PathBuf> {
+    if !path
+        .symlink_metadata()
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let target = read_link(path).ok()?;
+    if target.is_absolute() {
+        Some(target)
+    } else {
+        Some(path.parent().unwrap_or_else(|| Path::new("")).join(target))
+    }
+}
+
+fn resolve_symlink_path(path: PathBuf) -> PathBuf {
+    symlink_target(&path).unwrap_or(path)
 }
 
 impl FindResult {
     fn single_file(path: PathBuf, ext: &str) -> Self {
-        let path = canonicalize_found_path(path);
+        let path = resolve_symlink_path(path);
         if ext == "pyi" {
             Self::SingleFilePyiModule(path)
         } else {
@@ -92,18 +109,22 @@ impl FindResult {
     }
 
     fn regular_package(init_path: PathBuf, next_root: PathBuf) -> Self {
-        Self::RegularPackage(
-            canonicalize_found_path(init_path),
-            canonicalize_found_path(next_root),
-        )
+        if let Some(next_root) = symlink_target(&next_root) {
+            let init_name = init_path
+                .file_name()
+                .expect("regular package init path should have a file name");
+            Self::RegularPackage(next_root.join(init_name), next_root)
+        } else {
+            Self::RegularPackage(resolve_symlink_path(init_path), next_root)
+        }
     }
 
     fn namespace_package(path: PathBuf) -> Self {
-        Self::NamespacePackage(Vec1::new(canonicalize_found_path(path)))
+        Self::NamespacePackage(Vec1::new(resolve_symlink_path(path)))
     }
 
     fn compiled_module(path: PathBuf) -> Self {
-        Self::CompiledModule(canonicalize_found_path(path))
+        Self::CompiledModule(resolve_symlink_path(path))
     }
 
     fn style(&self) -> Option<ModuleStyle> {
@@ -300,6 +321,7 @@ fn find_one_part_prefix<'a>(
                     if name.starts_with(prefix.as_str()) {
                         // Check if it's a regular package
                         if path.is_dir() {
+                            let mut found_regular_package = false;
                             for candidate_init_suffix in ["__init__.pyi", "__init__.py"] {
                                 let init_path = path.join(candidate_init_suffix);
                                 if init_path.exists() {
@@ -307,14 +329,12 @@ fn find_one_part_prefix<'a>(
                                         FindResult::regular_package(init_path, path.clone()),
                                         ModuleName::from_str(name),
                                     ));
+                                    found_regular_package = true;
                                     break;
                                 }
                             }
 
-                            if !results.iter().any(|r| match r {
-                                (FindResult::RegularPackage(_, p), _) => p == &path,
-                                _ => false,
-                            }) {
+                            if !found_regular_package {
                                 namespace_roots
                                     .entry(ModuleName::from_str(name))
                                     .or_default()
@@ -348,7 +368,7 @@ fn find_one_part_prefix<'a>(
             let namespace_roots = Vec1::try_from_vec(
                 namespace_roots
                     .into_iter()
-                    .map(canonicalize_found_path)
+                    .map(resolve_symlink_path)
                     .collect(),
             )
             .expect("canonicalizing a non-empty namespace package should stay non-empty");
@@ -2509,6 +2529,42 @@ mod tests {
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(target))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_module_preserves_symlinked_search_root_path() {
+        use std::fs::create_dir;
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path().join("root");
+        let alias = tempdir.path().join("alias");
+        create_dir(&root).unwrap();
+        TestPath::setup_test_directory(
+            &root,
+            vec![TestPath::file_with_contents(
+                "test_module.py",
+                "def hello(name):\n    pass\n",
+            )],
+        );
+        symlink(&root, &alias).unwrap();
+        let module_path = alias.join("test_module.py");
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("test_module"),
+                [alias].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(module_path))
         );
     }
 
