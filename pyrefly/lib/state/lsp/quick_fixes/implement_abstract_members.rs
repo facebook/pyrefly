@@ -58,21 +58,27 @@ pub(crate) fn implement_abstract_members_code_actions(
     let class_idx = bindings.key_to_idx_hashed_opt(starlark_map::Hashed::new(&key))?;
 
     let members = transaction
-        .ad_hoc_solve(handle, |solver| {
-            let class = solver.get_idx(class_idx).0.clone()?;
-            let abstract_members = solver.get_abstract_members_for_class(&class);
-            let mut infos = Vec::new();
-            for name in abstract_members.unimplemented_abstract_methods() {
-                let member = solver.get_class_member_with_defining_class(&class, name)?;
-                infos.push(AbstractMemberInfo {
-                    name: name.clone(),
-                    ty: member.value.ty(),
-                    defining_module: member.defining_class.module().dupe(),
-                    docstring_range: member.defining_class.field_docstring_range(name),
-                });
-            }
-            Some(infos)
-        })
+        .ad_hoc_solve(
+            handle,
+            "implement_abstract_members",
+            |solver| -> Option<Vec<AbstractMemberInfo>> {
+                let class = solver.get_idx(class_idx).0.clone()?;
+                let abstract_members = solver.get_abstract_members_for_class(&class);
+                let mut infos = Vec::new();
+                for name in abstract_members.unimplemented_abstract_methods() {
+                    let member = solver.get_class_member_with_defining_class(&class, name)?;
+                    infos.push(AbstractMemberInfo {
+                        name: name.clone(),
+                        ty: member.value.ty(),
+                        defining_module: member.defining_class.module().dupe(),
+                        docstring_range: solver
+                            .get_class_fields(&member.defining_class)
+                            .and_then(|fields| fields.field_docstring_range(name)),
+                    });
+                }
+                Some(infos)
+            },
+        )
         .flatten()?;
 
     if members.is_empty() {
