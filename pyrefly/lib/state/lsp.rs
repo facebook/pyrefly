@@ -268,10 +268,6 @@ pub(crate) fn completion_data_handle_path(handle: &Handle) -> Option<String> {
     Some(handle.path().as_path().to_string_lossy().into_owned())
 }
 
-pub(crate) fn completion_data_doc_range(range: Option<TextRange>) -> Option<TextRange> {
-    range
-}
-
 fn filesystem_docstring(range: TextRange, path: &str) -> Option<lsp_types::Documentation> {
     let contents = fs::read_to_string(path).ok()?;
     let start = range.start().to_usize();
