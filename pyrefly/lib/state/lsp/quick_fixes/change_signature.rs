@@ -26,6 +26,7 @@ use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::MethodInfo;
 use super::extract_shared::code_at_range;
@@ -33,6 +34,7 @@ use super::extract_shared::first_parameter_name;
 use super::extract_shared::function_has_decorator;
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::lsp::Transaction;
 
 #[derive(Clone, Debug)]
@@ -264,6 +266,8 @@ fn parameter_is_referenced_in_body(
     collector.ranges.into_iter().any(|range| {
         transaction
             .find_definition(handle, range.start(), FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             .any(|definition| {
                 definition.module.path() == module_path
@@ -363,8 +367,9 @@ fn build_callsite_edits(
             function_ctx.function_def.name.range.start(),
             FindPreference::default(),
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
-        .flat_map(|defs| defs.into_iter())
         .find(|def| {
             def.module.path() == module_info.path()
                 && def
@@ -382,7 +387,7 @@ fn build_callsite_edits(
             definition.metadata.clone(),
             definition.definition_range,
             &definition.module,
-            true,
+            ReferenceOptions::textual_only(true),
         ) else {
             continue;
         };
