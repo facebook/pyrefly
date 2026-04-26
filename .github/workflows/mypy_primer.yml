@@ -6,6 +6,7 @@ on:
     paths:
     - 'pyrefly/lib/**'
     - 'pyrefly/third_party/**'
+    - '.github/workflows/mypy_primer.yml'
 
 permissions:
   contents: read
@@ -20,9 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        shard-index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard-index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
       fail-fast: false
-    timeout-minutes: 120
+    timeout-minutes: 150
+    env:
+      PYREFLY_SCRIPTS_DIR: ${{ github.workspace }}/pyrefly_to_test/scripts
     steps:
       - uses: actions/checkout@v6
         with:
@@ -38,7 +41,7 @@ jobs:
           pip install git+https://github.com/hauntsaninja/mypy_primer.git
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-09-14
+          toolchain: nightly-2026-01-18
           components: clippy, rustfmt
       - name: Run mypy_primer
         shell: bash
@@ -54,14 +57,43 @@ jobs:
 
           echo ''
           cd ..
+
+          BASE_DIR=$(pwd)/primer_base
+          mkdir -p $BASE_DIR
+
+          # Build pyrefly for "new" commit and install wrapper
+          NEW_DIR=$BASE_DIR/pyrefly_new
+          mkdir -p $NEW_DIR
+          cd pyrefly_to_test && git checkout $GITHUB_SHA
+          CARGO_TARGET_DIR=$NEW_DIR/target cargo build --release --manifest-path pyrefly/Cargo.toml
+          BINARY_DIR=$NEW_DIR/target/release
+          mv $BINARY_DIR/pyrefly $BINARY_DIR/pyrefly-real
+          cp scripts/pyrefly_primer_wrapper.sh $BINARY_DIR/pyrefly
+          chmod +x $BINARY_DIR/pyrefly
+
+          # Build pyrefly for "old" commit and install wrapper
+          OLD_DIR=$BASE_DIR/pyrefly_old
+          mkdir -p $OLD_DIR
+          git checkout base_commit
+          CARGO_TARGET_DIR=$OLD_DIR/target cargo build --release --manifest-path pyrefly/Cargo.toml
+          BINARY_DIR=$OLD_DIR/target/release
+          mv $BINARY_DIR/pyrefly $BINARY_DIR/pyrefly-real
+          # Use the wrapper from the new commit (old commit may not have it)
+          git checkout $GITHUB_SHA -- scripts/pyrefly_primer_wrapper.sh
+          cp scripts/pyrefly_primer_wrapper.sh $BINARY_DIR/pyrefly
+          chmod +x $BINARY_DIR/pyrefly
+
+          cd ..
           # fail action if exit code isn't zero or one
           (
-            mypy_primer \
+            MYPY_PRIMER_NO_REBUILD=1 mypy_primer \
             --repo pyrefly_to_test \
+            --base-dir $BASE_DIR \
+            --cargo-profile release \
             --new $GITHUB_SHA --old base_commit \
-            --num-shards 10 --shard-index ${{ matrix.shard-index }} \
+            --num-shards 15 --shard-index ${{ matrix.shard-index }} \
             --debug \
-            --project-selector '^(?!.*(pytest-dev/pytest|scikit-learn/scikit-learn|pydata/xarray|google/jax|trailofbits/manticore|mitmproxy/mitmproxy|apache/spark|spack/spack|sympy/sympy|PyCQA/flake8-pyi|internetarchive/openlibrary|pypa/pip|home-assistant/core|ibis-project/ibis|arviz-devs/arviz|Gobot1234/steam\.py|canonical/cloud-init))' \
+            --project-selector '^(?!.*(python/cpython|sympy/sympy))' \
             --type-checker pyrefly \
             --output concise \
             | tee diff_${{ matrix.shard-index }}.txt

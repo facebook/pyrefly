@@ -120,6 +120,15 @@ match p:
 );
 
 testcase!(
+    test_keyword_assignment_reports_parse_error,
+    r#"
+async = 1  # E: Parse error: Expected `def`, `with` or `for` to follow `async`, found `=`
+# From https://github.com/facebook/pyrefly/issues/2047
+async = lambda: None   # E: Parse error: Expected `def`, `with` or `for` to follow `async`, found `=`
+"#,
+);
+
+testcase!(
     test_duplicate_type_parameter_function,
     r#"
 def f[T, T](x: T) -> T:  # E: duplicate type parameter
@@ -179,7 +188,7 @@ __debug__ = False
 testcase!(
     test_invalid_expression_in_match,
     r#"
-x = 1
+x: int = 1
 match x:
     case 1 + 1:  # E: Parse error: Expected an imaginary number in complex literal pattern
         pass

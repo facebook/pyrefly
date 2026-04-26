@@ -1,0 +1,54 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+name: "Pyrefly Type Check"
+description: "Install and run the Pyrefly type checker with inline PR annotations"
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  version:
+    description: "Pyrefly version to install (e.g., '0.60.0'). Defaults to latest."
+    required: false
+    default: ""
+  args:
+    description: "Extra arguments passed to `pyrefly check`."
+    required: false
+    default: ""
+  python-version:
+    description: "Python version for actions/setup-python."
+    required: false
+    default: "3.x"
+  working-directory:
+    description: "Directory to run the type check in."
+    required: false
+    default: "."
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Pyrefly
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$VERSION" ]; then
+          pip install "pyrefly==$VERSION"
+        else
+          pip install pyrefly
+        fi
+
+    - name: Run Pyrefly
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        EXTRA_ARGS: ${{ inputs.args }}
+      run: pyrefly check --output-format=github $EXTRA_ARGS

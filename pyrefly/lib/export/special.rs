@@ -52,7 +52,6 @@ pub enum SpecialExport {
     Generic,
     Protocol,
     PydanticConfigDict,
-    PydanticField,
     HasAttr,
     GetAttr,
     Callable,
@@ -62,7 +61,6 @@ pub enum SpecialExport {
     TypingList,
     BuiltinsTuple,
     TypingTuple,
-    PytestNoReturn,
     BuiltinsInt,
     BuiltinsStr,
     BuiltinsBytes,
@@ -72,6 +70,9 @@ pub enum SpecialExport {
     BuiltinsFloat,
     Deprecated,
     SqlAlchemyMappedColumn,
+    Final,
+    TypingMapping,
+    TypeForm,
 }
 
 impl SpecialExport {
@@ -114,7 +115,6 @@ impl SpecialExport {
             "override" => Some(Self::Override),
             "abstractmethod" => Some(Self::AbstractMethod),
             "ConfigDict" => Some(Self::PydanticConfigDict),
-            "Field" => Some(Self::PydanticField),
             "hasattr" => Some(Self::HasAttr),
             "getattr" => Some(Self::GetAttr),
             "TypeAliasType" => Some(Self::TypeAliasType),
@@ -125,7 +125,6 @@ impl SpecialExport {
             "List" => Some(Self::TypingList),
             "tuple" => Some(Self::BuiltinsTuple),
             "Tuple" => Some(Self::TypingTuple),
-            "fail" | "xfail" | "skip" => Some(Self::PytestNoReturn),
             "int" => Some(Self::BuiltinsInt),
             "str" => Some(Self::BuiltinsStr),
             "bytes" => Some(Self::BuiltinsBytes),
@@ -135,16 +134,20 @@ impl SpecialExport {
             "float" => Some(Self::BuiltinsFloat),
             "deprecated" => Some(Self::Deprecated),
             "mapped_column" => Some(Self::SqlAlchemyMappedColumn),
+            "Final" => Some(Self::Final),
+            "Mapping" => Some(Self::TypingMapping),
+            "TypeForm" => Some(Self::TypeForm),
             _ => None,
         }
     }
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
+            Self::TypeVar | Self::TypeVarTuple => {
+                matches!(m.as_str(), "typing" | "typing_extensions" | "torch_shapes")
+            }
             Self::TypeAlias
-            | Self::TypeVar
             | Self::ParamSpec
-            | Self::TypeVarTuple
             | Self::Annotated
             | Self::Literal
             | Self::TypedDict
@@ -164,7 +167,10 @@ impl SpecialExport {
             | Self::TypingType
             | Self::TypingDict
             | Self::TypingList
-            | Self::TypingTuple => {
+            | Self::TypingTuple
+            | Self::Final
+            | Self::TypingMapping
+            | Self::TypeForm => {
                 matches!(m.as_str(), "typing" | "typing_extensions")
             }
             Self::CollectionsNamedTuple => matches!(m.as_str(), "collections"),
@@ -194,12 +200,11 @@ impl SpecialExport {
             Self::Exit => matches!(m.as_str(), "sys" | "builtins"),
             Self::OsExit => matches!(m.as_str(), "os"),
             Self::AbstractMethod | Self::AbstractClassMethod => matches!(m.as_str(), "abc"),
-            Self::PydanticConfigDict | Self::PydanticField => matches!(m.as_str(), "pydantic"),
+            Self::PydanticConfigDict => matches!(m.as_str(), "pydantic"),
             Self::Callable => matches!(
                 m.as_str(),
                 "typing" | "typing_extensions" | "collections.abc"
             ),
-            Self::PytestNoReturn => matches!(m.as_str(), "pytest"),
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
             Self::SqlAlchemyMappedColumn => {
                 matches!(

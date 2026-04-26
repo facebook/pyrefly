@@ -33,6 +33,7 @@ use serde::de;
 use serde::de::Visitor;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
+use tracing::warn;
 
 use crate::absolutize::Absolutize as _;
 use crate::fs_anyhow;
@@ -527,6 +528,19 @@ impl Globs {
 
         let mut result = SmallSet::new();
         for pattern in &self.0 {
+            // Skip include patterns that are themselves excluded (e.g. the
+            // default `**/*.ipynb` include when the user sets
+            // `project-excludes = ["**/*.ipynb"]`). Warn so the user knows
+            // this pattern is not being used, but don't abort discovery.
+            if filter.is_excluded(pattern.as_path()) {
+                warn!(
+                    "Skipping include pattern `{}` because it is matched by \
+                     `project-excludes` or an ignore file.\n{}",
+                    pattern.as_str(),
+                    filter,
+                );
+                continue;
+            }
             let remaining_limit = if let Some(limit) = limit {
                 if limit > result.len() {
                     Some(limit - result.len())
@@ -586,6 +600,22 @@ pub struct GlobFilter {
     ignores: Vec<Gitignore>,
     ignore_paths: Vec<PathBuf>,
     errors: Vec<anyhow::Error>,
+    hidden_dir_filter: HiddenDirFilter,
+}
+
+/// Controls whether paths with hidden directory components (names starting
+/// with `.`, excluding `.` and `..`) are excluded during file filtering.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum HiddenDirFilter {
+    /// No filtering of hidden directories.
+    Disabled,
+    /// Exclude paths containing any hidden directory component.
+    All,
+    /// Exclude paths with hidden directory components relative to any of the
+    /// given roots. Hidden ancestors above each root are allowed, so that
+    /// projects living under hidden directories (e.g.
+    /// `~/.codex/worktrees/XXX/project/`) are not falsely excluded.
+    RelativeTo(Vec<PathBuf>),
 }
 
 impl Display for GlobFilter {
@@ -602,7 +632,9 @@ impl Display for GlobFilter {
 
 impl PartialEq for GlobFilter {
     fn eq(&self, other: &Self) -> bool {
-        self.excludes == other.excludes && self.ignore_paths == other.ignore_paths
+        self.excludes == other.excludes
+            && self.ignore_paths == other.ignore_paths
+            && self.hidden_dir_filter == other.hidden_dir_filter
     }
 }
 
@@ -612,6 +644,7 @@ impl Hash for GlobFilter {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.excludes.hash(state);
         self.ignore_paths.hash(state);
+        self.hidden_dir_filter.hash(state);
     }
 }
 
@@ -619,7 +652,13 @@ impl GlobFilter {
     /// Create a new `GlobFilter` with the given `Globs` as highest-priority excludes.
     /// If `ignore_file_search_start` is provided, it is where the upward search for
     /// ignore files will originate from. Typically, this should be your project root.
-    pub fn new(excludes: Globs, ignorefile_search_start: Option<&Path>) -> Self {
+    /// `hidden_dir_filter` controls whether paths with hidden directory components
+    /// (starting with `.`) are excluded.
+    pub fn new(
+        excludes: Globs,
+        ignorefile_search_start: Option<&Path>,
+        hidden_dir_filter: HiddenDirFilter,
+    ) -> Self {
         let (ignores, errors, ignore_paths) = if let Some(root) = ignorefile_search_start {
             Self::ignore_files(root)
         } else {
@@ -631,6 +670,7 @@ impl GlobFilter {
             ignores,
             ignore_paths,
             errors,
+            hidden_dir_filter,
         }
     }
 
@@ -640,6 +680,7 @@ impl GlobFilter {
             ignores: vec![],
             ignore_paths: vec![],
             errors: vec![],
+            hidden_dir_filter: HiddenDirFilter::Disabled,
         }
     }
 
@@ -665,11 +706,56 @@ impl GlobFilter {
         (ignores, errors, ignore_paths)
     }
 
+    /// Returns true if the path contains a hidden directory component (starting
+    /// with `.`, excluding `.` and `..`). When `root` is provided, only
+    /// components relative to `root` are checked so that hidden ancestors above
+    /// the project root are allowed.
+    fn has_hidden_dir_component(path: &Path, root: Option<&Path>) -> bool {
+        let relative = match root {
+            Some(root) => path.strip_prefix(root).unwrap_or(path),
+            None => path,
+        };
+        // Check every component except the filename (we only care about dirs).
+        let components: Vec<_> = relative.components().collect();
+        let dir_components = if components.is_empty() {
+            &components[..]
+        } else {
+            &components[..components.len() - 1]
+        };
+        dir_components.iter().any(|c| {
+            if let Component::Normal(s) = c {
+                s.as_encoded_bytes().first() == Some(&b'.')
+            } else {
+                false
+            }
+        })
+    }
+
     // Does this path match (either positively or negatively), the `excludes` or ignore
     // files found.
     pub fn is_excluded(&self, path: &Path) -> bool {
         if self.excludes.matches(path) {
             return true;
+        }
+
+        match &self.hidden_dir_filter {
+            HiddenDirFilter::Disabled => {}
+            HiddenDirFilter::All => {
+                if Self::has_hidden_dir_component(path, None) {
+                    return true;
+                }
+            }
+            HiddenDirFilter::RelativeTo(roots) => {
+                // Find the most specific root that is a prefix of this path.
+                // If none match, fall back to checking all components.
+                let root = roots
+                    .iter()
+                    .filter(|r| path.starts_with(r))
+                    .max_by_key(|r| r.as_os_str().len());
+                if Self::has_hidden_dir_component(path, root.map(|r| r.as_path())) {
+                    return true;
+                }
+            }
         }
 
         for ignore in &self.ignores {
@@ -701,11 +787,17 @@ impl FilteredGlobs {
     /// Build a new `FilteredGlobs` from the given `includes` and `excludes`.
     /// If an `ignorefile_search_start` is provided, it is the path from which we will
     /// perform an upward search for applicable ignore files, which will be used when
-    /// filtering out files from our glob search.
-    pub fn new(includes: Globs, excludes: Globs, ignorefile_search_start: Option<&Path>) -> Self {
+    /// filtering out files from our glob search. `hidden_dir_filter` controls whether
+    /// paths with hidden directory components are excluded.
+    pub fn new(
+        includes: Globs,
+        excludes: Globs,
+        ignorefile_search_start: Option<&Path>,
+        hidden_dir_filter: HiddenDirFilter,
+    ) -> Self {
         Self {
             includes,
-            filter: GlobFilter::new(excludes, ignorefile_search_start),
+            filter: GlobFilter::new(excludes, ignorefile_search_start, hidden_dir_filter),
         }
     }
 }
@@ -1301,7 +1393,8 @@ mod tests {
                 &pattern,
                 &GlobFilter::new(
                     Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap(),
-                    None
+                    None,
+                    HiddenDirFilter::Disabled,
                 ),
             )
             .unwrap(),
@@ -1313,7 +1406,8 @@ mod tests {
                 .files(
                     &GlobFilter::new(
                         Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap(),
-                        None
+                        None,
+                        HiddenDirFilter::Disabled,
                     ),
                     None
                 )
@@ -1326,7 +1420,8 @@ mod tests {
                 .filtered_files(
                     &GlobFilter::new(
                         Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap(),
-                        None
+                        None,
+                        HiddenDirFilter::Disabled,
                     ),
                     None
                 )
@@ -1337,7 +1432,8 @@ mod tests {
                 &pattern,
                 &GlobFilter::new(
                     Globs::new(vec![root.join("a/c.py").to_string_lossy().to_string()]).unwrap(),
-                    None
+                    None,
+                    HiddenDirFilter::Disabled,
                 )
             )
             .unwrap(),
@@ -1348,7 +1444,8 @@ mod tests {
                 &pattern,
                 &GlobFilter::new(
                     Globs::new(vec![root.join("a").to_string_lossy().to_string()]).unwrap(),
-                    None
+                    None,
+                    HiddenDirFilter::Disabled,
                 )
             )
             .unwrap(),
@@ -1359,11 +1456,81 @@ mod tests {
                 &pattern,
                 &GlobFilter::new(
                     Globs::new(vec![root.join("a/b*").to_string_lossy().to_string()]).unwrap(),
-                    None
+                    None,
+                    HiddenDirFilter::Disabled,
                 ),
             )
             .unwrap(),
             vec![root.join("a/c.py")],
+        );
+    }
+
+    /// Tests that hidden directory ancestors above the project root do not
+    /// cause files inside the project to be excluded.
+    #[test]
+    fn test_hidden_dir_ancestor_does_not_exclude_project() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let base = tempdir.path();
+
+        // Simulate a project inside a hidden ancestor directory:
+        //   base/.hidden_ancestor/project/src/foo.py
+        //   base/.hidden_ancestor/project/.venv/lib.py
+        TestPath::setup_test_directory(
+            base,
+            vec![TestPath::dir(
+                ".hidden_ancestor",
+                vec![TestPath::dir(
+                    "project",
+                    vec![
+                        TestPath::dir("src", vec![TestPath::file("foo.py")]),
+                        TestPath::dir(".venv", vec![TestPath::file("lib.py")]),
+                    ],
+                )],
+            )],
+        );
+
+        let project_root = base.join(".hidden_ancestor/project");
+        let filter = GlobFilter::new(
+            Globs::empty(),
+            Some(&project_root),
+            HiddenDirFilter::RelativeTo(vec![project_root.clone()]),
+        );
+
+        // A file inside the project should NOT be excluded, even though
+        // .hidden_ancestor is a hidden dir in the absolute path.
+        assert!(
+            !filter.is_excluded(&project_root.join("src/foo.py")),
+            "file inside project with hidden ancestor should not be excluded"
+        );
+
+        // A file inside a hidden dir *within* the project should still be excluded.
+        assert!(
+            filter.is_excluded(&project_root.join(".venv/lib.py")),
+            "file inside hidden dir within project should be excluded"
+        );
+    }
+
+    /// Tests hidden-dir filtering with `HiddenDirFilter::All` (checks all components).
+    #[test]
+    fn test_skip_hidden_dirs_no_root() {
+        let filter = GlobFilter::new(Globs::empty(), None, HiddenDirFilter::All);
+
+        assert!(
+            filter.is_excluded(Path::new("/home/user/.venv/lib.py")),
+            "hidden dir component should be excluded"
+        );
+        assert!(
+            !filter.is_excluded(Path::new("/home/user/project/lib.py")),
+            "path with no hidden dirs should not be excluded"
+        );
+        // `.` and `..` are Component::CurDir/ParentDir, not Component::Normal
+        assert!(
+            !filter.is_excluded(Path::new("/home/user/./lib.py")),
+            "current-dir component should not trigger exclusion"
+        );
+        assert!(
+            !filter.is_excluded(Path::new("/home/user/../lib.py")),
+            "parent-dir component should not trigger exclusion"
         );
     }
 
@@ -1402,7 +1569,11 @@ mod tests {
                 ),
             ],
         );
-        let filter = GlobFilter::new(Globs::empty(), Some(&root.join("project")));
+        let filter = GlobFilter::new(
+            Globs::empty(),
+            Some(&root.join("project")),
+            HiddenDirFilter::Disabled,
+        );
 
         assert_eq!(
             filter.ignore_paths,
@@ -1453,6 +1624,7 @@ mod tests {
         let filter = GlobFilter::new(
             Globs::new_with_root(&project_root, vec!["exclude_glob/**".to_owned()]).unwrap(),
             Some(&project_root),
+            HiddenDirFilter::Disabled,
         );
 
         // do non-excluded files get excluded
@@ -1486,7 +1658,11 @@ mod tests {
             )],
         );
         let project_root = root.join("project");
-        let filter = GlobFilter::new(Globs::empty(), Some(&project_root));
+        let filter = GlobFilter::new(
+            Globs::empty(),
+            Some(&project_root),
+            HiddenDirFilter::Disabled,
+        );
         assert!(!filter.is_excluded(&root.join("my_file.py")));
     }
 
@@ -1598,6 +1774,60 @@ mod tests {
         assert!(!files.contains(&root.join("myscript")));
         assert!(!files.contains(&root.join("another_script")));
         assert!(files.contains(&root.join("regular.py")));
+    }
+
+    /// Regression test: setting `project-excludes = ["**/*.ipynb"]` should not
+    /// prevent `.py` files from being discovered. The default project-includes
+    /// contains both `**/*.py*` and `**/*.ipynb`. When the exclude pattern
+    /// `**/*.ipynb` matches the include pattern `**/*.ipynb`, that include is
+    /// skipped, but the remaining `**/*.py*` include should still find .py files.
+    #[test]
+    fn test_project_excludes_ipynb_does_not_break_py_discovery() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("main.py"),
+                TestPath::file("helper.py"),
+                TestPath::file("notebook.ipynb"),
+                TestPath::dir(
+                    "subdir",
+                    vec![
+                        TestPath::file("module.py"),
+                        TestPath::file("analysis.ipynb"),
+                    ],
+                ),
+            ],
+        );
+
+        // Reproduce the real config scenario: default project-includes has both
+        // `**/*.py*` and `**/*.ipynb`, and the user sets project-excludes to
+        // `["**/*.ipynb"]`.
+        let includes =
+            Globs::new_with_root(root, vec!["**/*.py*".to_owned(), "**/*.ipynb".to_owned()])
+                .unwrap();
+        let excludes = Globs::new_with_root(root, vec!["**/*.ipynb".to_owned()]).unwrap();
+        let filtered = FilteredGlobs::new(includes, excludes, None, HiddenDirFilter::Disabled);
+
+        let mut files = filtered.files().expect(
+            "file discovery should succeed: the excluded **/*.ipynb include \
+             pattern should be skipped, not abort the entire search",
+        );
+        files.sort();
+        let files: Vec<&Path> = files
+            .iter()
+            .map(|p| p.strip_prefix(root).unwrap())
+            .collect();
+        // Only .py files should be returned; .ipynb files are excluded.
+        assert_eq!(
+            files,
+            vec![
+                Path::new("helper.py"),
+                Path::new("main.py"),
+                Path::new("subdir/module.py"),
+            ],
+        );
     }
 
     #[cfg(not(fbcode_build))]

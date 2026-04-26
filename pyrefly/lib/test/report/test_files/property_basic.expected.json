@@ -1,0 +1,166 @@
+{
+  "name": "test",
+  "names": [
+    "test.Getter.x",
+    "test.GetterUntyped.x",
+    "test.GetterSetter.x",
+    "test.GetterSetterDeleter.x",
+    "test.MultipleProperties.a",
+    "test.MultipleProperties.b",
+    "test.Getter",
+    "test.GetterSetter",
+    "test.GetterSetterDeleter",
+    "test.GetterUntyped",
+    "test.MultipleProperties"
+  ],
+  "line_count": 54,
+  "symbol_reports": [
+    {
+      "kind": "property",
+      "name": "test.Getter.x",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 11,
+        "column": 5
+      }
+    },
+    {
+      "kind": "property",
+      "name": "test.GetterUntyped.x",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 17,
+        "column": 5
+      }
+    },
+    {
+      "kind": "property",
+      "name": "test.GetterSetter.x",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 23,
+        "column": 5
+      }
+    },
+    {
+      "kind": "property",
+      "name": "test.GetterSetterDeleter.x",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 33,
+        "column": 5
+      }
+    },
+    {
+      "kind": "property",
+      "name": "test.MultipleProperties.a",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 47,
+        "column": 5
+      }
+    },
+    {
+      "kind": "property",
+      "name": "test.MultipleProperties.b",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 51,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Getter",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 10,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.GetterSetter",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 22,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.GetterSetterDeleter",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 32,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.GetterUntyped",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 16,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.MultipleProperties",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 46,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 8,
+  "n_typed": 7,
+  "n_any": 0,
+  "n_untyped": 1,
+  "coverage": 87.5,
+  "strict_coverage": 87.5,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 5,
+  "n_attrs": 0,
+  "n_properties": 6,
+  "n_type_ignores": 0
+}

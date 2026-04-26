@@ -13,6 +13,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 use dupe::Dupe;
+use lock_free_hashtable::sharded;
 use lock_free_hashtable::sharded::ShardedLockFreeRawTable;
 
 use crate::with_hash::WithHash;
@@ -51,7 +52,7 @@ impl<K, V> LockedMap<K, V> {
     }
 }
 
-impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
+impl<K: Eq + Hash + 'static, V: 'static> LockedMap<K, V> {
     fn equals(a: &(WithHash<K>, V), b: &(WithHash<K>, V)) -> bool {
         a.0.key() == b.0.key()
     }
@@ -81,13 +82,14 @@ impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
     /// If the value is not present, create it using the provided function.
     /// Note that the provided function may be called even if we don't create a new entry,
     /// if someone else is simultaneously inserting a value for the same key.
-    pub fn ensure(&self, key: &K, value: impl FnOnce() -> V) -> &V
+    /// The resulting bool represents whether the value was inserted by this call.
+    pub fn ensure(&self, key: &K, value: impl FnOnce() -> V) -> (&V, bool)
     where
         K: Dupe,
     {
         let hash = WithHash::new(key).hash();
         if let Some(v) = self.map.lookup(hash, |x| x.0.key() == key) {
-            return &v.1;
+            return (&v.1, false);
         }
         let res = self.map.insert(
             hash,
@@ -95,7 +97,7 @@ impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
             Self::equals,
             Self::hash,
         );
-        &res.0.1
+        (&res.0.1, res.1.is_none())
     }
 
     pub fn iter_unordered(&self) -> impl Iterator<Item = (&K, &V)> {
@@ -108,6 +110,32 @@ impl<K: Eq + Hash + 'static, V: Dupe + 'static> LockedMap<K, V> {
 
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.map.iter().map(|x| &x.1)
+    }
+}
+
+impl<K: Eq + Hash + 'static, V: 'static> IntoIterator for LockedMap<K, V> {
+    type Item = (K, V);
+    type IntoIter = IntoIter<K, V>;
+
+    fn into_iter(self) -> IntoIter<K, V> {
+        IntoIter {
+            iter: self.map.into_iter(),
+        }
+    }
+}
+
+/// Consuming iterator over entries in a `LockedMap`.
+pub struct IntoIter<K, V> {
+    iter: sharded::IntoIter<Box<(WithHash<K>, V)>, 64>,
+}
+
+impl<K: 'static, V: 'static> Iterator for IntoIter<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.iter.next()?;
+        let (with_hash, value) = *entry;
+        Some((with_hash.into_key(), value))
     }
 }
 

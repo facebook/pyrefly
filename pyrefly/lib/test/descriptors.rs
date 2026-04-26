@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -53,8 +54,8 @@ class C:
     def foo(cls) -> int:
         return 42
 def f(c: C):
-    reveal_type(C.foo)  # E: revealed type: BoundMethod[type[C], (cls: type[C]) -> int]
-    reveal_type(c.foo)  # E: revealed type: BoundMethod[type[C], (cls: type[C]) -> int]
+    reveal_type(C.foo)  # E: revealed type: (cls: type[C]) -> int
+    reveal_type(c.foo)  # E: revealed type: (cls: type[C]) -> int
     "#,
 );
 
@@ -176,6 +177,40 @@ def f(c: C) -> None:
     "#,
 );
 
+testcase!(
+    test_property_decorated_with_lru_cache,
+    r#"
+import functools
+
+class Foo:
+    @property
+    @functools.lru_cache
+    def foo(self) -> dict[str, str]:
+        return {"a": "b"}
+
+def main() -> None:
+    Foo.foo.get("a")
+    Foo().foo.get("a")
+    "#,
+);
+
+testcase!(
+    bug = "cached_property's __name__ should not exist and attrname should be a str",
+    test_cached_property_attrname,
+    r#"
+from functools import cached_property
+from typing import reveal_type
+
+class C:
+    @cached_property
+    def foo(self) -> int:
+        return 42
+
+reveal_type(C.foo.__name__)  # E: revealed type: str
+reveal_type(C.foo.attrname)  # E: revealed type: Any
+    "#,
+);
+
 // Make sure we don't crash.
 testcase!(
     test_staticmethod_class,
@@ -196,8 +231,115 @@ class C:
     d = D()
 assert_type(C.d, int)
 assert_type(C().d, int)
-C.d = 42  # E: Attribute `d` of class `C` is a descriptor, which may not be overwritten
+C.d = 42  # E: `Literal[42]` is not assignable to attribute `d` with type `D`
 C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `__set__` and cannot be set
+    "#,
+);
+
+testcase!(
+    test_descriptor_dunder_call,
+    r#"
+from typing import assert_type
+class SomeCallable:
+    def __call__(self, x: int) -> str:
+        return "a"
+class Descriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> SomeCallable:
+        return SomeCallable()
+class B:
+    __call__: Descriptor = Descriptor()
+b_instance = B()
+assert_type(b_instance(1), str)
+    "#,
+);
+
+// Test that a descriptor-based __call__ returning the same class doesn't cause
+// infinite recursion when called through a type variable bound. The circular
+// __call__ resolution is a type error because it would cause infinite recursion at runtime.
+testcase!(
+    test_descriptor_dunder_call_self_referencing_via_typevar,
+    r#"
+from typing import TypeVar
+class SelfDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> "SelfCallable":
+        return SelfCallable()
+class SelfCallable:
+    __call__: SelfDescriptor = SelfDescriptor()
+T = TypeVar("T", bound=SelfCallable)
+def f(x: T) -> None:
+    x()  # E: `__call__` on `T` resolves back to the same type, creating infinite recursion at runtime
+    "#,
+);
+
+// Test that instance-only attributes with descriptor types are not treated as descriptors.
+// Descriptor protocol only applies to class-body initialized attributes; both annotation-only
+// and method-initialized attributes should allow assignment.
+testcase!(
+    test_instance_only_attribute_does_not_have_descriptor_semantics,
+    r#"
+from typing import assert_type
+
+class Device:
+    def __get__(self, obj, classobj) -> int: ...
+
+class AnnotationOnly:
+    device: Device
+
+class MethodInitialized:
+    device: Device
+    def __init__(self) -> None:
+        self.device = Device()
+
+def f(a: AnnotationOnly, m: MethodInitialized) -> None:
+    # Writes should be allowed (not treated as read-only descriptor)
+    a.device = Device()  # OK: annotation-only, not a descriptor
+    m.device = Device()  # OK: method-initialized, not a descriptor
+    # Reads should return Device, not int (descriptor __get__ not invoked)
+    assert_type(a.device, Device)
+    assert_type(m.device, Device)
+    "#,
+);
+
+// Test that ClassVar annotations with descriptor types have descriptor semantics
+// even without initialization, since ClassVar implies class-level attribute.
+testcase!(
+    test_classvar_descriptor_without_initialization,
+    r#"
+from typing import ClassVar, assert_type
+
+class ReadOnlyDescriptor:
+    def __get__(self, obj, classobj) -> int: ...
+
+# ClassVar implies class-level attribute, so descriptor semantics apply.
+# Reading C.value invokes __get__ and returns int.
+class C:
+    value: ClassVar[ReadOnlyDescriptor]
+
+def f() -> None:
+    assert_type(C.value, int)
+    "#,
+);
+
+// Test that annotation-only fields in child classes inherit parent descriptor behavior
+// when the annotation type is compatible with the parent's descriptor type.
+testcase!(
+    test_annotation_only_child_inherits_parent_descriptor,
+    r#"
+from typing import assert_type
+
+class ReadOnlyDescriptor:
+    def __get__(self, obj, classobj) -> int: ...
+
+class Parent:
+    value: ReadOnlyDescriptor = ReadOnlyDescriptor()  # actual descriptor
+
+# Child inherits parent's descriptor behavior since annotation type matches.
+# Reading c.value invokes __get__ and returns int.
+class Child(Parent):
+    value: ReadOnlyDescriptor
+
+def f(c: Child) -> None:
+    assert_type(c.value, int)
     "#,
 );
 
@@ -211,7 +353,7 @@ class C:
     d = D()
 assert_type(C.d, D)
 assert_type(C().d, D)
-C.d = 42  # E: Attribute `d` of class `C` is a descriptor, which may not be overwritten
+C.d = 42  # E: `Literal[42]` is not assignable to attribute `d` with type `D`
 C().d = 42
     "#,
 );
@@ -227,7 +369,7 @@ class C:
     d = D()
 assert_type(C.d, int)
 assert_type(C().d, int)
-C.d = "42"  # E: Attribute `d` of class `C` is a descriptor, which may not be overwritten
+C.d = "42"  # E: `Literal['42']` is not assignable to attribute `d` with type `D`
 C().d = "42"
     "#,
 );
@@ -280,7 +422,7 @@ class C:
         return 42
 assert_type(C.cp, int)
 assert_type(C().cp, int)
-C.cp = 42  # E: Attribute `cp` of class `C` is a descriptor, which may not be overwritten
+C.cp = 42  # E: `Literal[42]` is not assignable to attribute `cp` with type `classproperty[C, int]`
 C().cp = 42  # E:  Attribute `cp` of class `C` is a read-only descriptor with no `__set__` and cannot be set
     "#,
 );
@@ -395,5 +537,161 @@ class A:
         self.d = "ok"
     def g(self) -> int:
         return self.d
+    "#,
+);
+
+testcase!(
+    test_set_descriptor_on_class,
+    r#"
+from typing import overload
+
+class D:
+    @overload
+    def __get__(self, obj: None, classobj: type) -> "D": ...
+    @overload
+    def __get__(self, obj: object, classobj: type) -> int: ...
+    def __get__(self, obj: object | None, classobj: type) -> "D | int":
+        if obj is None:
+            return self
+        return 42
+
+    def __set__(self, obj: object, value: int) -> None: ...
+
+class C:
+    d: D = D()
+
+    @classmethod
+    def reset(cls) -> None:
+        # Setting a descriptor on a class object (not an instance) should be
+        # allowed because __set__ only intercepts instance assignments. Class
+        # assignments bypass the descriptor protocol and write directly to
+        # the class __dict__.
+        cls.d = D()
+
+# Static context: setting descriptor on class should also be allowed
+C.d = D()
+
+# Wrong type should still error as a type mismatch
+C.d = "wrong"  # E: `Literal['wrong']` is not assignable to attribute `d` with type `D`
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1792
+testcase!(
+    test_descriptor_in_dataclass_transform,
+    r#"
+from typing import Any, dataclass_transform
+
+class Mapped[T]:
+    def __get__(self, obj, classobj) -> T: ...
+    def __set__(self, obj, value: T) -> None: ...
+
+def mapped_column(*args: Any, **kw: Any) -> Any: ...
+
+@dataclass_transform(
+    field_specifiers=(mapped_column,),
+)
+class DCTransformDeclarative(type):
+    """metaclass that includes @dataclass_transforms"""
+
+class MappedAsDataclass(metaclass=DCTransformDeclarative):
+    pass
+
+class DatasetMetadata(MappedAsDataclass):
+    id: Mapped[str] = mapped_column(init=False)
+
+DatasetMetadata()
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1803
+testcase!(
+    test_set_instance_attribute,
+    r#"
+from typing import assert_type
+
+class MyDescriptor:
+    def __get__(self, instance, owner=None):
+        return 42
+
+class A:
+    def __init__(self):
+        self.a = MyDescriptor()
+
+assert_type(A().a, MyDescriptor)
+    "#,
+);
+
+fn sqlalchemy_mapped_env() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add(
+        "sqlalchemy.orm.base",
+        r#"
+class Mapped[T]:
+    def __get__(self, instance, owner) -> T: ...
+    def __set__(self, instance, value: T) -> None: ...
+    def __delete__(self, instance) -> None: ...
+    "#,
+    );
+    env.add_with_path(
+        "sqlalchemy.orm.decl_api",
+        "sqlalchemy/orm/decl_api.py",
+        "class DeclarativeBase: ...",
+    );
+    env.add_with_path(
+        "sqlalchemy.orm",
+        "sqlalchemy/orm/__init__.py",
+        r#"
+from .base import Mapped as Mapped
+from .decl_api import DeclarativeBase as DeclarativeBase
+    "#,
+    );
+    env.add_with_path("sqlalchemy", "sqlalchemy/__init__.py", "");
+    env
+}
+
+testcase!(
+    test_sqlalchemy_mapped_is_always_descriptor,
+    sqlalchemy_mapped_env(),
+    r#"
+from sqlalchemy.orm import DeclarativeBase, Mapped
+class Base(DeclarativeBase):
+    pass
+class User(Base):
+    name: Mapped[str]
+    def __init__(self, name: str):
+        self.name = name
+    "#,
+);
+
+testcase!(
+    test_overloaded_descriptor_get_with_bounded_typevar,
+    r#"
+from typing import Callable, overload
+
+class MyDescriptor[_ModelT, _RT]:
+    def __init__(self, fget: Callable[[type[_ModelT]], _RT], /) -> None:
+        self.fget = fget
+
+    @overload
+    def __get__(self, instance: None, objtype: type[_ModelT]) -> _RT: ...
+    @overload
+    def __get__(self, instance: _ModelT, objtype: type[_ModelT]) -> _RT: ...
+    def __get__(self, instance: _ModelT | None, objtype: type[_ModelT]) -> _RT:
+        return self.fget.__get__(instance, objtype)()
+
+class A:
+    @MyDescriptor
+    @classmethod
+    def x(cls) -> dict[str, int]:
+        return {"x": 0}
+
+class B[T: A]:
+    def __init__(self, a: type[T]):
+        self.a = a
+
+    def f(self):
+        for k in self.a.x:
+            print(k)
     "#,
 );

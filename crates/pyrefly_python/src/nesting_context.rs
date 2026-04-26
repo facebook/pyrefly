@@ -13,8 +13,10 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::intersperse_iter;
+use ruff_text_size::Ranged;
 
 use crate::module::Module;
+use crate::module_name::ModuleName;
 use crate::short_identifier::ShortIdentifier;
 
 /// Represents the syntactical nesting context of a given class or function.
@@ -66,6 +68,49 @@ impl NestingContext {
             NestingContextInner::Toplevel => None,
             NestingContextInner::Class(_, parent) => Some(parent),
             NestingContextInner::Function(_, parent) => Some(parent),
+        }
+    }
+
+    /// Build a fully-qualified owner string for type parameter disambiguation,
+    /// e.g. `"module.Outer.Inner.name"`. Includes all ancestor classes and functions.
+    /// Returns `None` for builtins (where disambiguation is unnecessary).
+    pub fn owner_path(&self, module: &Module, name: &str) -> Option<ruff_python_ast::name::Name> {
+        let module_name = module.name();
+        if module_name == ModuleName::builtins() {
+            return None;
+        }
+        let ancestors = module.display(self).to_string();
+        let owner_str = if ancestors.is_empty() {
+            format!("{module_name}.{name}")
+        } else {
+            format!("{module_name}.{ancestors}.{name}")
+        };
+        Some(ruff_python_ast::name::Name::new(owner_str))
+    }
+
+    /// Build a dotted path of only the enclosing *function* ancestors (skipping classes),
+    /// e.g. `"f1.f2"` for a function nested inside `f1` which is nested inside `f2`.
+    /// Returns `None` if there are no enclosing functions.
+    pub fn ancestor_function_path(&self, module: &Module) -> Option<ruff_python_ast::name::Name> {
+        let mut parts: Vec<&str> = Vec::new();
+        let mut ctx = self;
+        loop {
+            match ctx.0.as_ref() {
+                NestingContextInner::Toplevel => break,
+                NestingContextInner::Function(id, parent) => {
+                    parts.push(module.code_at(id.range()));
+                    ctx = parent;
+                }
+                NestingContextInner::Class(_, parent) => {
+                    ctx = parent;
+                }
+            }
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            parts.reverse();
+            Some(ruff_python_ast::name::Name::new(parts.join(".")))
         }
     }
 }

@@ -10,9 +10,9 @@ use lsp_types::Url;
 use lsp_types::request::DocumentSymbolRequest;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_document_symbols_underscore_prefix() {
@@ -101,11 +101,20 @@ fn test_document_symbols_normal_file() {
                 .iter()
                 .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::FUNCTION);
 
-            let has_class = symbols
+            let class_symbol = symbols
                 .iter()
-                .any(|s| s.name == "NormalClass" && s.kind == lsp_types::SymbolKind::CLASS);
+                .find(|s| s.name == "NormalClass" && s.kind == lsp_types::SymbolKind::CLASS);
 
-            has_function && has_class
+            let has_class_and_method = match class_symbol {
+                Some(c) => c.children.as_ref().is_some_and(|children| {
+                    children.iter().any(|s| {
+                        s.name == "normal_method" && s.kind == lsp_types::SymbolKind::METHOD
+                    })
+                }),
+                None => false,
+            };
+
+            has_function && has_class_and_method
         })
         .unwrap();
 

@@ -48,15 +48,23 @@ struct Args {
 async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(get_args_expanded(args_os())?);
     args.common.init(false);
-    Ok(args
+    let thread_count = args.common.thread_count();
+    let (status, _) = args
         .command
-        .run(crate_version!(), &NoTelemetry)
-        .await?
-        .to_exit_code())
+        .run(crate_version!(), &NoTelemetry, None, thread_count)
+        .await?;
+    Ok(status.to_exit_code())
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // Enable stack overflow backtraces for debugging.
+    // This is unsafe and only intended for debug builds.
+    #[cfg(not(windows))]
+    #[cfg(feature = "debug-stack-overflow")]
+    unsafe {
+        backtrace_on_stack_overflow::enable();
+    }
     exit_on_panic();
     let res = run().await;
     match res {

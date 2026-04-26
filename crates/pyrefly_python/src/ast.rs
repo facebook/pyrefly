@@ -212,11 +212,27 @@ impl Ast {
         Identifier::new(x.id, x.range)
     }
 
+    /// Returns true if this is a synthesized empty name from parser error recovery.
+    ///
+    /// The parser uses empty identifiers when recovering from syntax errors.
+    /// Treat any empty identifier as synthesized, even if we still know the range, so
+    /// downstream stages don't try to bind it.
+    pub fn is_synthesized_empty_name(x: &ExprName) -> bool {
+        x.id.as_str().is_empty()
+    }
+
+    /// Same as `is_synthesized_empty_name` but for `Identifier` instead of `ExprName`.
+    pub fn is_synthesized_empty_identifier(x: &Identifier) -> bool {
+        x.id.as_str().is_empty()
+    }
+
     /// Calls a function on all of the names bound by this lvalue expression.
     pub fn expr_lvalue<'a>(x: &'a Expr, f: &mut impl FnMut(&'a ExprName)) {
         match x {
             Expr::Name(x) => {
-                f(x);
+                if !Self::is_synthesized_empty_name(x) {
+                    f(x);
+                }
             }
             Expr::Tuple(x) => {
                 for x in &x.elts {
@@ -343,7 +359,62 @@ impl Ast {
         found
     }
 
+    /// Check if a body of statements syntactically contains `yield` or `yield from`
+    /// at the current function scope level. Does not descend into nested function
+    /// definitions, class definitions, or lambdas, since yields in those scopes
+    /// belong to those scopes, not the enclosing one.
+    ///
+    /// This is used to detect generators even when the yield is inside a
+    /// statically-dead branch like `if False:`, where the binding phase skips
+    /// traversal but Python still treats the function as a generator.
+    pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
+        use ruff_python_ast::visitor;
+        use ruff_python_ast::visitor::Visitor;
+
+        struct YieldFinder {
+            found: bool,
+        }
+
+        impl<'a> Visitor<'a> for YieldFinder {
+            fn visit_stmt(&mut self, stmt: &'a Stmt) {
+                if self.found {
+                    return;
+                }
+                match stmt {
+                    // Nested function/class definitions create new scopes.
+                    Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+                    _ => visitor::walk_stmt(self, stmt),
+                }
+            }
+
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                if self.found {
+                    return;
+                }
+                match expr {
+                    Expr::Yield(_) | Expr::YieldFrom(_) => self.found = true,
+                    // Lambda creates a new scope.
+                    Expr::Lambda(_) => {}
+                    _ => visitor::walk_expr(self, expr),
+                }
+            }
+        }
+
+        let mut finder = YieldFinder { found: false };
+        for stmt in stmts {
+            finder.visit_stmt(stmt);
+            if finder.found {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn is_mangled_attr(name: &Name) -> bool {
         name.starts_with("__") && !name.ends_with("__")
+    }
+
+    pub fn is_list_literal_or_comprehension(expr: &Expr) -> bool {
+        matches!(expr, Expr::List(_) | Expr::ListComp(_))
     }
 }

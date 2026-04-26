@@ -1,0 +1,75 @@
+{
+  "name": "test",
+  "names": [
+    "test.outer",
+    "test.top_level",
+    "test.TopLevel.method",
+    "test.TopLevel"
+  ],
+  "line_count": 26,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "test.outer",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.top_level",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 19,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.TopLevel.method",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 24,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.TopLevel",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 23,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 4,
+  "n_typed": 4,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 2,
+  "n_methods": 1,
+  "n_function_params": 1,
+  "n_method_params": 0,
+  "n_classes": 1,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

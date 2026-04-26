@@ -615,8 +615,8 @@
           },
           "spans": [
             {
-              "length": 3,
-              "start": 54
+              "length": 1,
+              "start": 55
             }
           ],
           "target": {
@@ -634,8 +634,8 @@
           },
           "spans": [
             {
-              "length": 3,
-              "start": 59
+              "length": 1,
+              "start": 60
             },
             {
               "length": 5,
@@ -657,8 +657,27 @@
           },
           "spans": [
             {
-              "length": 3,
-              "start": 77
+              "length": 1,
+              "start": 60
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "exports_all.U"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "exports_all.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 78
             }
           ],
           "target": {
@@ -701,8 +720,120 @@
           "xrefs": [
             {
               "source": {
-                "length": 3,
-                "start": 54
+                "length": 1,
+                "start": 55
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "exports_all.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "exports_all.x"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 60
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "exports_all.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "exports_all.U"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 60
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 78
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "exports_all.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "exports_all.y"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 19
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Union"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 5
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "exports_all.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 55
               },
               "target": {
                 "id": 0,
@@ -711,8 +842,18 @@
             },
             {
               "source": {
-                "length": 3,
-                "start": 59
+                "length": 1,
+                "start": 60
+              },
+              "target": {
+                "id": 0,
+                "key": "exports_all.U"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 60
               },
               "target": {
                 "id": 0,
@@ -721,8 +862,8 @@
             },
             {
               "source": {
-                "length": 3,
-                "start": 77
+                "length": 1,
+                "start": 78
               },
               "target": {
                 "id": 0,
@@ -893,6 +1034,22 @@
         "id": 0,
         "key": {
           "id": 0,
+          "key": "typing"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "typing"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
           "key": "typing.Union"
         },
         "value": {
@@ -932,6 +1089,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
   }
 ]

@@ -12,8 +12,12 @@ use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
 use crate::lsp::wasm::hover::get_hover;
+use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::TestEnv;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
+use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     match get_hover(&state.transaction(), handle, position, true) {
@@ -85,6 +89,29 @@ from lib import foo_renamed
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_module_function_shows_function() {
+    let lib = r#"
+def foo() -> None: ...
+"#;
+    let code = r#"
+import lib
+
+lib.foo()
+#    ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("(function) foo"),
+        "Expected function label, got: {report}"
+    );
+    assert!(
+        !report.contains("(method) foo"),
+        "Did not expect method label, got: {report}"
     );
 }
 
@@ -204,6 +231,120 @@ a: int = "test"  # type: ignore
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn hover_shows_type_sources_for_narrow_and_first_use() {
+    let code = r#"
+def f(x: int | None) -> None:
+    if x is None:
+        return
+    y = []
+    y.append(1)
+    x
+#   ^
+    y
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+7 |     x
+        ^
+```python
+(parameter) x: int
+```
+---
+**Type source**
+- Narrowed by condition at 3:13: `x is not None`
+
+
+9 |     y
+        ^
+```python
+(variable) y: list[int]
+```
+---
+**Type source**
+- Inferred from first use at 6:5: `y.append(1)`
+"#
+        .trim(),
+        report.trim(),
+    );
+    let report_with_links = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report_with_links.contains("Go to ["),
+        "Expected hover to include go-to links, got: {report_with_links}"
+    );
+    assert!(
+        report_with_links.contains("](file://"),
+        "Expected hover links to use file URLs, got: {report_with_links}"
+    );
+    assert!(
+        report_with_links.contains("builtins.pyi"),
+        "Expected hover links to include builtins.pyi, got: {report_with_links}"
+    );
+}
+
+#[test]
+fn hover_type_source_compound_narrow() {
+    let code = r#"
+def f(x: int | str | None) -> None:
+    if isinstance(x, int) and x > 0:
+        x
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("**Type source**"),
+        "Expected type source section in hover, got: {report}"
+    );
+    assert!(
+        report.contains("isinstance(x, int)"),
+        "Expected isinstance narrow in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_type_source_no_source_at_first_use_site() {
+    // When hovering at the first-use site itself, we should not show
+    // "Inferred from first use" pointing back to the same location.
+    let code = r#"
+def f() -> None:
+    y = []
+    y.append(1)
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        !report.contains("Inferred from first use"),
+        "Should not show first-use source when hovering at the first-use site, got: {report}"
     );
 }
 
@@ -411,6 +552,27 @@ lhs @ rhs
     self: Matrix,
     other: Matrix
 ) -> Matrix: ...
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_over_tuple_element_literal_uses_element_type() {
+    let code = r#"
+tup = (1, +2)
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | tup = (1, +2)
+           ^
+```python
+Literal[1]
 ```
 "#
         .trim(),
@@ -652,4 +814,645 @@ greeter.attr
         report.contains("variable") || report.contains("parameter") || report.contains("Greeter")
     );
     assert!(!report.contains("__call__"));
+}
+
+#[test]
+fn hover_on_import_same_name_alias_first_token_test() {
+    let lib = r#"
+def func() -> None: ...
+"#;
+    let code = r#"
+from lib import func as func
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                     ^
+```python
+(function) func: def func() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_same_name_alias_second_token_test() {
+    let lib = r#"
+def func() -> None: ...
+"#;
+    let code = r#"
+from lib import func as func
+#                        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import func as func
+                             ^
+```python
+(function) func: def func() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_different_name_alias_first_token_test() {
+    let lib = r#"
+def bar() -> None: ...
+"#;
+    let code = r#"
+from lib import bar as baz
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import bar as baz
+                     ^
+```python
+(function) bar: def bar() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_import_different_name_alias_second_token_test() {
+    let lib = r#"
+def bar() -> None: ...
+"#;
+    let code = r#"
+from lib import bar as baz
+#                       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import bar as baz
+                            ^
+```python
+(function) bar: def bar() -> None: ...
+```
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_imported_class_shows_constructor_signature_and_docstring() {
+    let lib = r#"
+class Person:
+    """Test docstring"""
+    def __init__(self, name: str, age: int) -> None: ...
+"#;
+    let code = r#"
+from lib import Person
+#                ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from lib import Person
+                     ^
+```python
+(class) Person: def __init__(
+    name: str,
+    age: int
+) -> Person: ...
+```
+---
+Test docstring
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_class_in_type_annotation_shows_constructor() {
+    let code = r#"
+class Foo:
+    """Foo docstring"""
+    def __init__(self, x: int) -> None: ...
+
+y: Foo
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 | y: Foo
+       ^
+```python
+(class) Foo: def __init__(x: int) -> Foo: ...
+```
+---
+Foo docstring
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_imported_pyi_class_shows_constructor_signature() {
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path(
+        "lib",
+        "lib.pyi",
+        r#"
+class Widget:
+    """Widget docstring"""
+    def __init__(self, width: int, height: int) -> None: ...
+"#,
+    );
+    let main_code = r#"
+from lib import Widget
+#                ^
+"#;
+    test_env.add("main", main_code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let main_handle = handle("main");
+    let positions = extract_cursors_for_test(main_code);
+    let position = positions[0];
+    let report = get_test_report(&state, &main_handle, position);
+    assert_eq!(
+        r#"
+```python
+(class) Widget: def __init__(
+    width: int,
+    height: int
+) -> Widget: ...
+```
+---
+Widget docstring"#
+            .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_first_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(module) mymod:"),
+        "Expected hover to show 'mymod', got: {report}"
+    );
+    assert!(
+        !report.contains("(module) mymod.submod:"),
+        "Hover should not show 'mymod.submod' when hovering over 'mymod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_middle_component_of_multi_part_import() {
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod", mymod_submod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(module) mymod.submod:"),
+        "Expected hover to show 'mymod.submod', got: {report}"
+    );
+    assert!(
+        !report.contains("(module) mymod.submod.deep:"),
+        "Hover should not show 'mymod.submod.deep' when hovering over 'submod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_first_component_when_intermediate_module_missing() {
+    // Only mymod.submod exists, not mymod itself
+    let mymod_submod_init = r#"# mymod/submod/__init__.py
+class Foo: ...
+"#;
+    let code = r#"
+import mymod.submod
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("mymod.submod", mymod_submod_init)],
+        get_test_report,
+    );
+    // When clicking on 'mymod' in 'mymod.submod', hover shows the full identifier
+    // 'mymod.submod' even though mymod itself doesn't exist
+    assert!(
+        report.contains("mymod.submod: Module[mymod]"),
+        "Expected hover to show full module name 'mymod.submod', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_middle_component_when_intermediate_module_missing() {
+    // Only mymod and mymod.submod.deep exist, not mymod.submod
+    let mymod_init = r#"# mymod/__init__.py
+def version() -> str: ...
+"#;
+    let mymod_submod_deep_init = r#"# mymod/submod/deep/__init__.py
+class Bar: ...
+"#;
+    let code = r#"
+from mymod.submod.deep import Bar
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("mymod", mymod_init),
+            ("mymod.submod.deep", mymod_submod_deep_init),
+        ],
+        get_test_report,
+    );
+    // When clicking on 'submod' in 'mymod.submod.deep', hover shows the full identifier
+    // 'mymod.submod.deep' even though mymod.submod itself doesn't exist
+    assert!(
+        report.contains("mymod.submod.deep: Module[mymod]"),
+        "Expected hover to show full module name 'mymod.submod.deep', got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_constructor() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(
+            "def __init__(\n    self: Person,\n    name: str,\n    age: int\n) -> Person"
+        ),
+        "Expected constructor hover to show complete signature with -> Person, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_operator_shows_contains_dunder() {
+    let code = r#"
+class Container:
+    def __contains__(self, item: int) -> bool: ...
+
+c = Container()
+1 in c
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The hover should show the __contains__ method signature
+    assert!(
+        report.contains("self: Container") && report.contains("item: int"),
+        "Expected hover to show __contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_constructor_with_arguments() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str, age: int) -> None: ...
+
+Person("Alice", 25)
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> Person"),
+        "Expected constructor hover to show -> Person, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_namedtuple_constructor_shows_field_signature() {
+    let code = r#"
+from typing import NamedTuple
+
+class Test(NamedTuple):
+    a: str
+    b: int
+
+Test()
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        |state, handle, position| match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        },
+    );
+    assert_eq!(
+        r#"
+# main.py
+8 | Test()
+     ^
+```python
+(method) __init__: def __init__(
+    _cls: type[Test],
+    a: str,
+    b: int
+) -> Test: ...
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_in_for_loop() {
+    let code = r#"
+for x in [1, 2, 3]:
+#     ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The hover should show the iteration keyword with iterable type
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "Expected hover to show iteration keyword info, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_direct_init_call_shows_none() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+p = Person.__new__(Person)
+Person.__init__(p, "Alice")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> None"),
+        "Expected direct __init__ call to show -> None, got: {report}"
+    );
+    assert!(
+        !report.contains("-> Person") || report.contains("__init__"),
+        "Direct __init__ call should show -> None, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_in_list_comprehension() {
+    let code = r#"
+result = [x for x in [1, 2, 3] if x in [1]]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The first 'in' is iteration, expect iteration keyword hover info
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "Expected hover for iteration 'in' in comprehension, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_method_call_unchanged() {
+    let code = r#"
+class Foo:
+    def method(self) -> str: ...
+
+foo = Foo()
+foo.method()
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("-> str"),
+        "Expected method hover to show -> str, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_argument_shows_argument_type() {
+    let code = r#"
+class Person:
+    def __init__(self, name: str) -> None: ...
+
+Person("Alice")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    // Hovering over a string literal shows its literal type
+    assert!(
+        report.contains("Literal['Alice']") || report.contains("str"),
+        "Expected argument hover to show literal type or str, got: {report}"
+    );
+    // The argument hover should not show the constructor signature
+    assert!(
+        !report.contains("__init__") || !report.contains("name: str"),
+        "Argument hover should show argument type, not constructor, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_generic_constructor() {
+    let code = r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None: ...
+
+Box[str]("hello")
+#^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Box[str]"),
+        "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_keyword_for_membership_in_comprehension() {
+    let code = r#"
+result = [x for x in [1, 2, 3] if x in [1]]
+#                                   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // The second 'in' is membership test - should show __contains__ signature
+    assert!(
+        report.contains("__contains__"),
+        "Expected hover for membership 'in' to show __contains__, got: {report}"
+    );
+}
+
+/// Test for the exact example from issue #1926: [x for x in x if x in [1]]
+/// This verifies both uses of `in` show appropriate contextual hover.
+#[test]
+fn hover_over_in_keyword_issue_1926_example() {
+    // First `in` - iteration syntax (for clause)
+    let code_iteration = r#"
+x = [1, 2, 3]
+result = [x for x in x if x in [1]]
+#                 ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code_iteration)], get_test_report);
+    assert!(
+        report.contains("(keyword) in") && report.contains("Iteration over"),
+        "First 'in' should show iteration hover, got: {report}"
+    );
+
+    // Second `in` - membership testing operator
+    let code_membership = r#"
+x = [1, 2, 3]
+result = [x for x in x if x in [1]]
+#                           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code_membership)], get_test_report);
+    // For membership test, we expect to see __contains__ method
+    assert!(
+        report.contains("__contains__"),
+        "Second 'in' should show __contains__ hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_shows_float_default_value() {
+    let code = r#"
+def f(y: int = 2, x: float = 3.14) -> None:
+    pass
+
+f(y=1, x=1.0)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("x: float = 3.14"),
+        "Expected hover to show float default value '3.14', got: {report}"
+    );
+    assert!(
+        report.contains("y: int = 2"),
+        "Expected hover to show int default value '2', got: {report}"
+    );
+}
+
+#[test]
+fn hover_shows_negative_float_default_value() {
+    let code = r#"
+def f(x: float = -1.5) -> None:
+    pass
+
+f(x=1.0)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("x: float = -1.5"),
+        "Expected hover to show negative float default '-1.5', got: {report}"
+    );
+}
+
+/// When `check_unannotated_defs = false`, hover should still work inside
+/// unannotated function bodies because they are analyzed for IDE features.
+#[test]
+fn hover_works_in_unannotated_function_with_skip_check() {
+    let code = r#"
+def unannotated():
+    x = 42
+#   ^
+    return x
+"#;
+    let mut test_env = TestEnv::new_skip_check_no_infer();
+    test_env.add("main", code);
+    let (state, handle_fn) = test_env.to_state();
+    let handle = handle_fn("main");
+    let cursors = extract_cursors_for_test(code);
+    assert_eq!(cursors.len(), 1);
+    let result = get_hover(&state.transaction(), &handle, cursors[0], true);
+    match result {
+        Some(Hover {
+            contents: HoverContents::Markup(markup),
+            ..
+        }) => {
+            assert!(
+                markup.value.contains("x"),
+                "Expected hover to show variable `x`, got: {}",
+                markup.value
+            );
+        }
+        _ => panic!("Expected hover result for variable inside unannotated function body"),
+    }
 }

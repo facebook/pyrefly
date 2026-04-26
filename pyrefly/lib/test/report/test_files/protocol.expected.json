@@ -1,0 +1,62 @@
+{
+  "name": "test",
+  "names": [
+    "test.Drawable.draw",
+    "test.Drawable.resize",
+    "test.Drawable"
+  ],
+  "line_count": 16,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "test.Drawable.draw",
+      "n_typable": 3,
+      "n_typed": 3,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Drawable.resize",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 15,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Drawable",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 12,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 5,
+  "n_typed": 5,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 2,
+  "n_function_params": 0,
+  "n_method_params": 3,
+  "n_classes": 1,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

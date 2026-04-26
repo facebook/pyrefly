@@ -1,0 +1,83 @@
+name: Label new issues
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label-new-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add labels based on issue content and author
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const title = issue.title.toLowerCase();
+            const body = (issue.body || '').toLowerCase();
+            const text = title + ' ' + body;
+            const author = issue.user.login;
+            const labels = [];
+
+            // Crash-related issues
+            if (text.includes('panic') || text.includes('crash') || text.includes('stack overflow')) {
+              labels.push('crash');
+            }
+
+            // Google team members
+            const googleMembers = ['hurryabit', 'QEDady', 'jakevdp', 'superbobry', 'h-joo'];
+            if (googleMembers.includes(author)) {
+              labels.push('google');
+            }
+
+            // Quansight
+            const quansightMembers = ['MarcoGorelli', 'jorenham'];
+            if (quansightMembers.includes(author)) {
+              labels.push('quansight');
+            }
+
+            // False positive reports
+            if (text.includes('false-positive') || text.includes('false positive')) {
+              labels.push('typechecking');
+            }
+
+            // Framework/library mentions
+            if (text.includes('pydantic') || text.includes('basemodel')) {
+              labels.push('pydantic');
+            }
+            if (text.includes('django')) {
+              labels.push('django');
+            }
+            if (text.includes('jupyter') || text.includes('ipynb') || text.includes('marimo')) {
+              labels.push('notebook');
+            }
+            if (text.includes('sqlalchemy')) {
+              labels.push('sqlalchemy');
+            }
+
+            // Language server issues
+            if (text.includes('inlay hint') || text.includes('hover') || text.includes('editor') || text.includes('lspconfig') || text.includes('completion') || text.includes('highlight') || text.includes('semantic')) {
+              labels.push('language-server');
+            }
+
+            if (labels.length > 0) {
+              for (const label of labels) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    labels: [label]
+                  });
+                  console.log(`Added label '${label}' to issue #${issue.number}`);
+                } catch (error) {
+                  console.log(`Failed to add label '${label}' to issue #${issue.number}: ${error.message}`);
+                }
+              }
+            } else {
+              console.log(`No labels to add for issue #${issue.number}: ${issue.title}`);
+            }

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
@@ -12,17 +13,22 @@ use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context as _;
 use dupe::Dupe as _;
 use itertools::Itertools as _;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_python::module_path::ModulePathBuf;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_util::fs_anyhow;
+use pyrefly_util::interned_path::InternedPath;
 use serde::Deserialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tempfile::NamedTempFile;
+use tracing::error;
+use tracing::info;
 use vec1::Vec1;
 #[allow(unused_imports)]
 use vec1::vec1;
@@ -38,11 +44,11 @@ pub mod custom;
 pub(crate) enum Include {
     #[allow(unused)]
     Target(Target),
-    Path(ModulePathBuf),
+    Path(InternedPath),
 }
 
 impl Include {
-    pub fn path(path: ModulePathBuf) -> Self {
+    pub fn path(path: InternedPath) -> Self {
         Self::Path(path)
     }
 
@@ -54,52 +60,147 @@ impl Include {
     }
 }
 
+/// Classifies a buck2 process exit code into a human-readable reason.
+///
+/// Based on the buck2 exit code documentation:
+/// <https://buck2.build/docs/users/commands_extra/exit_codes/>
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuckExitReason {
+    Success,
+    UnknownFailure,
+    InfraError,
+    UserError,
+    DaemonIsBusy,
+    DaemonPreempted,
+    Timeout,
+    ConnectError,
+    FatalOom,
+    TestError,
+    TestNothing,
+    /// The process was killed by a signal. The signal number is `exit_code - 128`.
+    SignalInterruption(i32),
+    /// An exit code not covered by the buck2 documentation.
+    Other(i32),
+}
+
+impl BuckExitReason {
+    pub fn from_exit_code(code: i32) -> Self {
+        match code {
+            0 => Self::Success,
+            1 => Self::UnknownFailure,
+            2 => Self::InfraError,
+            3 => Self::UserError,
+            4 => Self::DaemonIsBusy,
+            5 => Self::DaemonPreempted,
+            6 => Self::Timeout,
+            11 => Self::ConnectError,
+            12 => Self::FatalOom,
+            32 => Self::TestError,
+            64 => Self::TestNothing,
+            129..=192 => Self::SignalInterruption(code - 128),
+            other => Self::Other(other),
+        }
+    }
+}
+
+impl fmt::Display for BuckExitReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Success => write!(f, "success"),
+            Self::UnknownFailure => write!(f, "unknown_failure"),
+            Self::InfraError => write!(f, "infra_error"),
+            Self::UserError => write!(f, "user_error"),
+            Self::DaemonIsBusy => write!(f, "daemon_is_busy"),
+            Self::DaemonPreempted => write!(f, "daemon_preempted"),
+            Self::Timeout => write!(f, "timeout"),
+            Self::ConnectError => write!(f, "connect_error"),
+            Self::FatalOom => write!(f, "fatal_oom"),
+            Self::TestError => write!(f, "test_error"),
+            Self::TestNothing => write!(f, "test_nothing"),
+            Self::SignalInterruption(signal) => write!(f, "signal_{signal}"),
+            Self::Other(code) => write!(f, "other_{code}"),
+        }
+    }
+}
+
+pub struct QueryResult {
+    pub db: anyhow::Result<TargetManifestDatabase>,
+    pub build_id: Option<String>,
+    pub build_duration: Option<Duration>,
+    pub parse_duration: Option<Duration>,
+    pub stdout_size: Option<usize>,
+    pub exit_reason: Option<BuckExitReason>,
+}
+
 pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
-    fn query_source_db(
-        &self,
-        files: &SmallSet<Include>,
-        cwd: &Path,
-    ) -> anyhow::Result<TargetManifestDatabase> {
+    /// Query the sourcedb for the set of files provided, running from the CWD.
+    /// Returns the parsed source database or any errors that occurred, and an
+    /// optional string representing a unique ID from the build system,
+    /// if available and applicable.
+    fn query_source_db(&self, files: &SmallSet<Include>, cwd: &Path) -> QueryResult {
         if files.is_empty() {
-            return Ok(TargetManifestDatabase {
-                db: SmallMap::new(),
-                root: cwd.to_path_buf(),
-            });
+            return QueryResult {
+                db: Ok(TargetManifestDatabase {
+                    db: SmallMap::new(),
+                    root: cwd.to_path_buf(),
+                    extra_filetypes: SmallSet::new(),
+                }),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+                exit_reason: None,
+            };
         }
 
-        let mut argfile =
-            NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
-                "Failed to create temporary argfile for querying source DB".to_owned()
-            })?;
-        let mut argfile_args = OsString::from("--");
-        files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
-            argfile_args.push("\n");
-            argfile_args.push(arg);
-        });
+        let build_id_file = NamedTempFile::with_prefix("pyrefly_build_id_")
+            .inspect_err(|e| error!("Failed to create build ID tempfile: {e:#?}"))
+            .ok();
 
-        argfile
-            .as_file_mut()
-            .write_all(argfile_args.as_encoded_bytes())
-            .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
+        let mut build_duration = None;
+        let mut parse_duration = None;
+        let mut stdout_size = None;
+        let mut exit_reason = None;
 
-        let mut cmd = self.construct_command();
-        cmd.arg(format!("@{}", argfile.path().display()));
-        cmd.current_dir(cwd);
-
-        let result = cmd.output()?;
-        if !result.status.success() {
-            let stdout = String::from_utf8(result.stdout)
-                .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
-            let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
-                "<Failed to parse stderr from Buck source DB query>".to_owned()
+        let db = (|| {
+            let mut argfile =
+                NamedTempFile::with_prefix("pyrefly_build_query_").with_context(|| {
+                    "Failed to create temporary argfile for querying source DB".to_owned()
+                })?;
+            let mut argfile_args = OsString::from("--");
+            files.iter().flat_map(Include::to_cli_arg).for_each(|arg| {
+                argfile_args.push("\n");
+                argfile_args.push(arg);
             });
 
-            return Err(anyhow::anyhow!(
-                "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
-            ));
-        }
+            argfile
+                .as_file_mut()
+                .write_all(argfile_args.as_encoded_bytes())
+                .with_context(|| "Could not write to argfile when querying source DB".to_owned())?;
 
-        match serde_json::from_slice(&result.stdout)
+            let build_start = Instant::now();
+            let mut cmd = self.construct_command(build_id_file.as_ref().map(|b| b.path()));
+            cmd.arg(format!("@{}", argfile.path().display()));
+            cmd.current_dir(cwd);
+
+            let result = cmd.output()?;
+            let parse_start = Instant::now();
+            build_duration = Some(parse_start - build_start);
+            exit_reason = result.status.code().map(BuckExitReason::from_exit_code);
+            if !result.status.success() {
+                let stdout = String::from_utf8(result.stdout)
+                    .unwrap_or_else(|_| "<Failed to parse stdout from source DB query>".to_owned());
+                let stderr = String::from_utf8(result.stderr).unwrap_or_else(|_| {
+                    "<Failed to parse stderr from Buck source DB query>".to_owned()
+                });
+
+                return Err(anyhow::anyhow!(
+                    "Source DB query failed...\nSTDOUT: {stdout}\nSTDERR: {stderr}"
+                ));
+            }
+            stdout_size = Some(result.stdout.len());
+
+            let parse_result = match serde_json::from_slice(&result.stdout)
                 .with_context(|| {
                     format!(
                         "Failed to construct valid `TargetManifestDatabase` from querier result. Command run: {} {}",
@@ -107,47 +208,76 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                         cmd.get_args().map(|a| a.to_string_lossy()).join(" "),
                     )
                 }) {
-            Err(e) => {
-                let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
-                    return Err(e);
-                };
-                let Ok(content) = String::from_utf8(result.stdout) else {
-                    return Err(e);
-                };
-                let lines = content.lines().collect::<Vec<_>>();
-                let error_line = downcast.line();
-                let start = std::cmp::max(0, error_line - 30);
-                let end = std::cmp::min(lines.len() - 1, error_line + 20);
-                let cont = std::cmp::min(error_line + 1, end);
+                    Err(e) => {
+                        let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
+                            return Err(e);
+                        };
+                        let Ok(content) = String::from_utf8(result.stdout) else {
+                            return Err(e);
+                        };
+                        let lines = content.lines().collect::<Vec<_>>();
+                        let error_line = downcast.line();
+                        let start = std::cmp::max(0, error_line - 30);
+                        let end = std::cmp::min(lines.len() - 1, error_line + 20);
+                        let cont = std::cmp::min(error_line + 1, end);
 
-                let e = e.context(
-                    format!(
-                        "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
-                        lines[start..=error_line].iter().join("\n"),
-                        lines[cont..=end].iter().join("\n"),
-                    )
-                );
+                        let e = e.context(
+                            format!(
+                                "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
+                                lines[start..=error_line].iter().join("\n"),
+                                lines[cont..=end].iter().join("\n"),
+                            )
+                        );
 
-                Err(e)
-            },
-            ok => ok,
+                        Err(e)
+                    },
+                    ok => ok,
+            };
+            parse_duration = Some(parse_start.elapsed());
+            parse_result
+        })();
+
+        let build_id = (|| {
+            let build_id_file = build_id_file?;
+            let build_id_path = build_id_file.path();
+            let build_id = fs_anyhow::read_to_string(build_id_path)
+                .inspect_err(|e| error!("Failed to read build ID from file {e:#?}"))
+                .ok()?;
+            if build_id.is_empty() {
+                None
+            } else {
+                Some(build_id)
+            }
+        })();
+
+        if let Some(build_id) = &build_id {
+            info!("Source DB build ID: {build_id}");
+        }
+
+        QueryResult {
+            db,
+            build_id,
+            build_duration,
+            parse_duration,
+            stdout_size,
+            exit_reason,
         }
     }
 
-    fn construct_command(&self) -> Command;
+    fn construct_command(&self, build_id_file: Option<&Path>) -> Command;
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct PythonLibraryManifest {
     pub deps: SmallSet<Target>,
-    pub srcs: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
+    pub srcs: SmallMap<ModuleName, Vec1<InternedPath>>,
     #[serde(default)]
     pub relative_to: Option<PathBuf>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
-    pub packages: SmallMap<ModuleName, Vec1<ModulePathBuf>>,
+    pub packages: SmallMap<ModuleName, Vec1<InternedPath>>,
 }
 
 impl PythonLibraryManifest {
@@ -169,29 +299,30 @@ impl PythonLibraryManifest {
         if let Some(relative_to) = &mut self.relative_to {
             *relative_to = root.join(&relative_to);
         }
-        let relative_to = self.relative_to.as_deref().unwrap_or(root);
+
+        // VSCode resolves symlinks, so we also need to so our lookups
+        // will match what VSCode (and our language server) give us.
+        let relative_to = self
+            .relative_to
+            .as_deref()
+            .map(|p| p.canonicalize().map(Cow::Owned).unwrap_or(Cow::Borrowed(p)))
+            .unwrap_or(Cow::Borrowed(root));
+        let rewrite_paths = |paths: &mut Vec1<InternedPath>| {
+            paths.iter_mut().for_each(|p| {
+                let mut file = relative_to.join(&**p);
+                if !p.starts_with(&self.buildfile_path) && self.relative_to.is_none() {
+                    // do the same as above, but cover the case where `relative_to` isn't relevant
+                    file = file.canonicalize().unwrap_or(file);
+                }
+                *p = InternedPath::new(file)
+            })
+        };
         self.srcs.iter_mut().for_each(|(_, paths)| {
-            paths.iter_mut().for_each(|p| {
-                let resolved = relative_to.join(&**p);
-                // canonicalize it, since VSCode will do it for us anyway and
-                // then path lookups won't work
-                // TODO(connernilsen): do we need to store canonicalized files and
-                // buck-provided files?
-                let file = resolved.canonicalize().unwrap_or(resolved);
-                *p = ModulePathBuf::new(file)
-            })
+            rewrite_paths(paths);
         });
-        self.packages.iter_mut().for_each(|(_, paths)| {
-            paths.iter_mut().for_each(|p| {
-                let resolved = relative_to.join(&**p);
-                // canonicalize it, since VSCode will do it for us anyway and
-                // then path lookups won't work
-                // TODO(connernilsen): do we need to store canonicalized files and
-                // buck-provided files?
-                let file = resolved.canonicalize().unwrap_or(resolved);
-                *p = ModulePathBuf::new(file)
-            })
-        });
+        self.packages
+            .iter_mut()
+            .for_each(|(_, paths)| rewrite_paths(paths));
         self.buildfile_path = root.join(&self.buildfile_path);
     }
 
@@ -207,7 +338,7 @@ impl PythonLibraryManifest {
     ///
     /// See: <https://github.com/facebook/buck2/blob/main/prelude/python/tools/wheel.py>
     fn fill_implicit_packages(&mut self) {
-        let mut packages: SmallMap<ModuleName, Vec1<ModulePathBuf>> = SmallMap::new();
+        let mut packages: SmallMap<ModuleName, Vec1<InternedPath>> = SmallMap::new();
 
         for (module_name, paths) in &self.srcs {
             let first_path = paths.first();
@@ -234,7 +365,7 @@ impl PythonLibraryManifest {
                 path.pop();
                 packages
                     .entry(parent)
-                    .or_insert_with(|| vec1![ModulePathBuf::from_path(&path)]);
+                    .or_insert_with(|| vec1![InternedPath::from_path(&path)]);
                 name = parent;
             }
         }
@@ -254,10 +385,16 @@ pub(crate) enum TargetManifest {
 pub(crate) struct TargetManifestDatabase {
     db: SmallMap<Target, TargetManifest>,
     pub root: PathBuf,
+    /// Non-Python file suffixes discovered by the BXL script (e.g. ["thrift"]).
+    /// Used to watch for changes to files with these extensions.
+    #[serde(default)]
+    pub extra_filetypes: SmallSet<String>,
 }
 
 impl TargetManifestDatabase {
-    pub fn produce_map(mut self) -> SmallMap<Target, PythonLibraryManifest> {
+    /// Consumes the raw database and produces a resolved map of targets to manifests,
+    /// along with a list of any non-Python file types discovered by the BXL script.
+    pub fn produce_map(mut self) -> (SmallMap<Target, PythonLibraryManifest>, SmallSet<String>) {
         let mut result = SmallMap::new();
         let aliases: SmallMap<Target, Target> = self
             .db
@@ -287,7 +424,7 @@ impl TargetManifestDatabase {
                 }
             }
         }
-        result
+        (result, self.extra_filetypes)
     }
 }
 
@@ -302,7 +439,11 @@ mod tests {
 
     impl TargetManifestDatabase {
         pub fn new(db: SmallMap<Target, TargetManifest>, root: PathBuf) -> Self {
-            TargetManifestDatabase { db, root }
+            TargetManifestDatabase {
+                db,
+                root,
+                extra_filetypes: SmallSet::new(),
+            }
         }
 
         /// This is a simplified sourcedb taken from the BXL output run on pyre/client/log/log.py.
@@ -474,7 +615,7 @@ mod tests {
                         (
                             "external_package.non_python_file",
                             &[
-                            "/path/to/another/repository/package/external_package/non_python_file.thrift",
+                            "/path/to/another/repository/package/external_package/non_python_file.so",
                             ],
                         ),
                         ],
@@ -520,12 +661,12 @@ mod tests {
     fn map_srcs(
         srcs: &[(&str, &[&str])],
         prefix_paths: Option<&str>,
-    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+    ) -> SmallMap<ModuleName, Vec1<InternedPath>> {
         let prefix = prefix_paths.map(Path::new);
         let map_path = |p| {
             prefix.map_or_else(
-                || ModulePathBuf::from_path(Path::new(p)),
-                |prefix| ModulePathBuf::new(prefix.join(p)),
+                || InternedPath::from_path(Path::new(p)),
+                |prefix| InternedPath::new(prefix.join(p)),
             )
         };
         srcs.iter()
@@ -547,12 +688,12 @@ mod tests {
     fn map_implicit_packages(
         inits: &[(&str, &[&str])],
         prefix_paths: Option<&str>,
-    ) -> SmallMap<ModuleName, Vec1<ModulePathBuf>> {
+    ) -> SmallMap<ModuleName, Vec1<InternedPath>> {
         let prefix = prefix_paths.map(Path::new);
         let map_path = |p| {
             prefix.map_or_else(
-                || ModulePathBuf::from_path(Path::new(p)),
-                |prefix| ModulePathBuf::new(prefix.join(p)),
+                || InternedPath::from_path(Path::new(p)),
+                |prefix| InternedPath::new(prefix.join(p)),
             )
         };
         inits
@@ -732,7 +873,7 @@ mod tests {
               "/path/to/another/repository/package/external_package/main.py"
           ],
           "external_package.non_python_file": [
-              "/path/to/another/repository/package/external_package/non_python_file.thrift"
+              "/path/to/another/repository/package/external_package/non_python_file.so"
           ]
       }, 
       "deps": [],
@@ -977,7 +1118,7 @@ mod tests {
                 ),
                 (
                     "external_package.non_python_file", &[
-                        "/path/to/another/repository/package/external_package/non_python_file.thrift",
+                        "/path/to/another/repository/package/external_package/non_python_file.so",
                     ],
                 ),
                 ],
@@ -1027,7 +1168,7 @@ mod tests {
             ),
         };
         assert_eq!(
-            TargetManifestDatabase::get_test_database().produce_map(),
+            TargetManifestDatabase::get_test_database().produce_map().0,
             expected
         );
     }
@@ -1037,7 +1178,7 @@ mod tests {
         // Test that fill_implicit_packages correctly synthesizes packages for all targets.
         // This tests explicit __init__ files are preserved and parent packages are synthesized.
         let db = TargetManifestDatabase::get_test_database();
-        let result = db.produce_map();
+        let (result, _) = db.produce_map();
 
         // Test colorama:py-stubs - explicit __init__.pyi
         let colorama_stubs = result
@@ -1233,7 +1374,7 @@ mod tests {
             PathBuf::from("/repo"),
         );
 
-        let result = db.produce_map();
+        let result = db.produce_map().0;
         let manifest = result
             .get(&Target::from_string("//thrift:types".to_owned()))
             .unwrap();

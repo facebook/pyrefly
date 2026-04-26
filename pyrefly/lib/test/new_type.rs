@@ -131,7 +131,7 @@ testcase!(
     r#"
 from typing import Any, NewType
 Foo = NewType("Foo", int)
-x: type = Foo  # E: `type[Foo]` is not assignable to `type`
+x: type = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
 y: type[Any] = Foo  # E: `type[Foo]` is not assignable to `type[Any]`
     "#,
 );
@@ -145,10 +145,10 @@ Thing = NewType("Thing", int)
 ThingType = type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
 OtherThingType = Type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
 
-mapping: dict[int, ThingType] = {1: Thing}  # E: `dict[int, type[Thing]]` is not assignable to `dict[int, type[Unknown]]`
+mapping: dict[int, ThingType] = {1: Thing}  # E: `dict[int, type[Thing]]` is not assignable to `dict[int, type[Any]]`
 
 def func(x: ThingType) -> None: ...
-func(Thing)  # E: Argument `type[Thing]` is not assignable to parameter `x` with type `type[Unknown]` in function `func`
+func(Thing)  # E: Argument `type[Thing]` is not assignable to parameter `x` with type `type[Any]` in function `func`
     "#,
 );
 
@@ -160,6 +160,70 @@ Foo = NewType("Foo", int)
 Foo.__getattribute__
 Foo.__repr__
 Foo.mro()  # E: Object of class `object` has no attribute `mro`
+    "#,
+);
+
+testcase!(
+    test_newtype_none_is_nominal,
+    r#"
+from typing import NewType
+from types import NoneType
+
+NewNoneType = NewType("NewNoneType", NoneType)
+NewNone = NewNoneType(None)
+NewNoneType("oops")  # E: `Literal['oops']` is not assignable to parameter `_x` with type `NoneType`
+
+def test(x: int | NewNoneType) -> None:
+    pass
+
+test(None)  # E: `None` is not assignable to parameter `x` with type `NewNoneType | int`
+test(NewNone)
+test(1)
+    "#,
+);
+
+testcase!(
+    test_newtype_type_none_is_nominal,
+    r#"
+from typing import NewType
+
+# Note: `type[None]` is not the same as `types.NoneType`!
+# `type[None]` is treated like a base type of `builtins.type`.
+NewNoneType = NewType("NewNoneType", type[None])
+NewNone = NewNoneType(type(None))
+NewNoneType(None)  # E: `None` is not assignable to parameter `_x` with type `type`
+
+def test(x: int | NewNoneType) -> None:
+    pass
+
+test(None)  # E: Argument `None` is not assignable to parameter `x` with type `NewNoneType | int`
+test(NewNone)
+test(1)
+    "#,
+);
+
+testcase!(
+    test_newtype_none_alias_is_invalid,
+    r#"
+from typing import NewType
+Alias = None
+X = NewType("X", Alias)  # E: Second argument to NewType is invalid
+    "#,
+);
+
+testcase!(
+    test_newtype_final_base,
+    r#"
+from typing import NewType, final
+
+@final
+class FinalClass:
+    pass
+
+# NewType doesn't create a real subclass, so using a final class as the
+# base type is valid.
+X = NewType("X", FinalClass)
+x: X = X(FinalClass())
     "#,
 );
 

@@ -1,0 +1,152 @@
+name: Primer Comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      projects:
+        description: 'Comma-separated project names to run (empty = all). See scripts/projects.py for valid names.'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 6 * * *'
+
+permissions: {}
+
+jobs:
+  primer:
+    name: Primer shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-18
+
+      - name: Install type checkers
+        run: pip install pyright mypy
+
+      - name: Build pyrefly
+        run: |
+          cargo build --release --manifest-path pyrefly/Cargo.toml
+          echo "Built pyrefly binary at $(pwd)/target/release/pyrefly"
+          ./target/release/pyrefly --version
+
+      - name: Run primer shard ${{ matrix.shard }}/4
+        working-directory: scripts
+        env:
+          INPUT_PROJECTS: ${{ inputs.projects }}
+        run: |
+          echo "=== Starting primer shard ${{ matrix.shard }}/4 ==="
+          PROJECT_FLAG=""
+          if [ -n "$INPUT_PROJECTS" ]; then
+            PROJECT_FLAG="-k $(echo "$INPUT_PROJECTS" | tr ',' ' ')"
+          fi
+          python3 compare_typecheckers.py \
+            --pyrefly ../target/release/pyrefly \
+            --cache-dir /tmp/primer_cache \
+            --output-json /tmp/primer_shard_${{ matrix.shard }}.json \
+            --shard-index ${{ matrix.shard }} \
+            --num-shards 4 \
+            $PROJECT_FLAG \
+            2>&1 | tee /tmp/primer_log_${{ matrix.shard }}.txt
+          echo "=== Shard ${{ matrix.shard }} complete ==="
+          echo "Output size: $(du -h /tmp/primer_shard_${{ matrix.shard }}.json | cut -f1)"
+
+      - name: Upload shard results
+        uses: actions/upload-artifact@v6
+        with:
+          name: primer-shard-${{ matrix.shard }}
+          path: |
+            /tmp/primer_shard_${{ matrix.shard }}.json
+            /tmp/primer_log_${{ matrix.shard }}.txt
+          retention-days: 7
+
+  merge:
+    name: Merge and summarize
+    runs-on: ubuntu-latest
+    needs: [primer]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/merge_primer_shards.py
+            scripts/primer_history.py
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Download all shards
+        uses: actions/download-artifact@v6
+        with:
+          pattern: primer-shard-*
+          path: /tmp/shards
+
+      - name: Merge shards
+        run: |
+          python3 scripts/merge_primer_shards.py \
+            /tmp/shards/primer-shard-0/primer_shard_0.json \
+            /tmp/shards/primer-shard-1/primer_shard_1.json \
+            /tmp/shards/primer-shard-2/primer_shard_2.json \
+            /tmp/shards/primer-shard-3/primer_shard_3.json \
+            -o /tmp/primer_errors.json
+          echo "Merged size: $(du -h /tmp/primer_errors.json | cut -f1)"
+
+      - name: Download previous history
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: primer_comparison.yml
+          name: primer-history
+          path: /tmp/prev
+          if_no_artifact_found: warn
+          search_artifacts: true
+        continue-on-error: true
+
+      - name: Build history and summary
+        run: |
+          PREV_FLAG=""
+          if [ -f /tmp/prev/primer_history.json ]; then
+            PREV_FLAG="--previous /tmp/prev/primer_history.json"
+            echo "Found previous history"
+          else
+            echo "No previous history found, starting fresh"
+          fi
+          python3 scripts/primer_history.py \
+            --current /tmp/primer_errors.json \
+            $PREV_FLAG \
+            --output-history /tmp/primer_history.json \
+            --output-markdown /tmp/primer_summary.md \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        uses: actions/upload-artifact@v6
+        with:
+          name: primer-results
+          path: /tmp/primer_errors.json
+          retention-days: 7
+
+      - name: Upload history
+        uses: actions/upload-artifact@v6
+        with:
+          name: primer-history
+          path: /tmp/primer_history.json
+          retention-days: 7

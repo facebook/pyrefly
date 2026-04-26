@@ -24,6 +24,60 @@ assert_type(Data, type[Data])
 );
 
 testcase!(
+    test_enum_dataclass_rejected,
+    r#"
+from dataclasses import dataclass
+import dataclasses
+from enum import Enum
+
+class Good(Enum):
+    RED = 1
+
+@dataclass
+class Bad1(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad1`
+    RED = 1
+
+@dataclasses.dataclass
+class Bad2(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad2`
+    RED = 1
+
+@dataclass()
+class Bad3(Enum):  # E: Cannot apply `@dataclass` to Enum `Bad3`
+    RED = 1
+    "#,
+);
+
+testcase!(
+    test_kw_only_sentinel_deep_inheritance,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class A:
+    _: KW_ONLY
+    a: int = 0
+
+@dataclass
+class B(A):
+    b: int = 1
+
+@dataclass
+class C(B):
+    _: KW_ONLY
+    c: int = 2
+
+@dataclass
+class D(C):
+    d: int = 3
+
+D()
+D(4)
+D(4, 5)
+D(4, 5, 6) # E: Expected 2 positional arguments, got 3 in function `D.__init__`
+    "#,
+);
+
+testcase!(
     test_fields,
     r#"
 from typing import assert_type
@@ -630,7 +684,7 @@ testcase!(
     test_bad_keyword,
     r#"
 from dataclasses import dataclass
-@dataclass(flibbertigibbet=True)  # E: No matching overload found
+@dataclass(flibbertigibbet=True)  # E: Unexpected keyword argument `flibbertigibbet`
 class C:
     pass
     "#,
@@ -747,6 +801,33 @@ class D(C):
     x = 0
 D()  # OK
 D(x=1)  # E: Unexpected keyword argument `x`
+    "#,
+);
+
+testcase!(
+    test_bare_classvar,
+    r#"
+from typing import ClassVar
+import dataclasses
+@dataclasses.dataclass
+class C:
+    replace: ClassVar = dataclasses.replace
+C()
+    "#,
+);
+
+testcase!(
+    test_frozen_classvar_class_assignment,
+    r#"
+import dataclasses
+from typing import ClassVar
+
+@dataclasses.dataclass(frozen=True)
+class C:
+    x: ClassVar[bool] = True
+
+    def set_x(self) -> None:
+        self.__class__.x = False
     "#,
 );
 
@@ -1455,7 +1536,7 @@ class Bad1:
     x: int
     y: InitVar[str]
     z: InitVar[bytes]
-    def __post_init__(self, y: bytes, z: str): ...  # E: `__post_init__` type `BoundMethod[Bad1, (self: Bad1, y: bytes, z: str) -> None]` is not assignable to expected type `(y: str, z: bytes) -> object` generated from the dataclass's `InitVar` fields
+    def __post_init__(self, y: bytes, z: str): ...  # E: `__post_init__` type `(self: Bad1, y: bytes, z: str) -> None` is not assignable to expected type `(y: str, z: bytes) -> object` generated from the dataclass's `InitVar` fields
 @dataclass
 class Bad2:
     x: int
@@ -1475,7 +1556,7 @@ class Desc:
     def __set__(self, obj, value: str) -> None: ...
 @dataclass
 class C:
-    x: Desc = Desc()
+    x: Desc = Desc()  # E: Cannot set field `x` to data descriptor `Desc` with inconsistent types
 c = C('')
 assert_type(c.x, int)
 c.x = 'cat'
@@ -1495,6 +1576,25 @@ class C1:
 class C2(C1):
     c: float
 C2('', 0.2, b=3)
+    "#,
+);
+
+testcase!(
+    test_kw_only_sentinel_inheritance,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+
+@dataclass
+class Foo:
+    _: KW_ONLY
+    option: int | None = None
+
+@dataclass
+class Bar(Foo):
+    arg: str
+
+Bar("arg")
+Bar(arg="arg")
     "#,
 );
 
@@ -1568,4 +1668,212 @@ class C:
     x: int = field(default_factory=42) # E:
 C()
     "#,
+);
+
+testcase!(
+    test_non_data_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type, Self
+
+# Non-data descriptors (only __get__, no __set__) in dataclasses are unsound:
+# The dataclass __init__ writes to the instance dict, shadowing the class-level
+# descriptor. This means the static type (from __get__) doesn't match the runtime
+# type (the raw descriptor object in the instance dict).
+class DescA:
+    def __get__(self, obj, cls) -> int: ...
+    # No __set__ - non-data descriptor
+
+# If the result of `__get__` is `Self`, then the shadowing described above doesn't cause
+# any static typing issues. Because this pattern does sometimes occur (e.g. Pytorch Device is a
+# Self-returning descriptor), we allow it.
+class DescB:
+    def __get__(self, obj, cls) -> Self: ...
+    # No __set__ - non-data descriptor, but __get__ returns Self
+
+@dataclass
+class C:
+    x: DescA = DescA()  # E: Cannot set field `x` to non-data descriptor `DescA`\n  Hint: add a `__set__` method to make `DescA` a data descriptor
+    y: DescB = DescB()
+
+# Regardless of any errors, any descriptors assigned in the class body do have default values.
+c = C()
+    "#,
+);
+
+testcase!(
+    test_data_descriptor_in_dataclass,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+# Data descriptors (have __set__) in dataclasses may work correctly because
+# assignments go through the descriptor protocol rather than shadowing.
+class DescA:
+    def __get__(self, obj, cls) -> int: ...
+    def __set__(self, obj, value: int) -> None: ...
+
+# But if the `__get__` type does not match `__set__` then the default is
+# incorrectly typed.
+class DescB:
+    def __get__(self, obj, cls) -> int: ...
+    def __set__(self, obj, value: str) -> None: ...
+
+@dataclass
+class C:
+    x: DescA = DescA()
+    y: DescB = DescB()  # E: Cannot set field `y` to data descriptor `DescB` with inconsistent types\n  Return type `int` of `DescB.__get__` is not assignable to value type `str` of `DescB.__set__`
+
+# The field has a default, and accepts the `__set__` type if provided.
+c = C()
+c = C(x=42, y='42')
+
+# Reading should return the __get__ return type
+assert_type(c.x, int)
+assert_type(c.y, int)
+    "#,
+);
+
+testcase!(
+    bug = "conformance: Dataclass with generic non-data descriptor should work correctly",
+    test_dataclass_generic_descriptor_conformance,
+    r#"
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar, assert_type, overload
+
+T = TypeVar("T")
+
+class Desc2(Generic[T]):
+    @overload
+    def __get__(self, instance: None, owner: Any) -> list[T]: ...
+    @overload
+    def __get__(self, instance: object, owner: Any) -> T: ...
+    def __get__(self, instance: object | None, owner: Any) -> list[T] | T: ...
+
+@dataclass
+class DC2:
+    x: Desc2[int]
+    y: Desc2[str]
+    z: Desc2[str] = Desc2()  # E: Cannot set field `z` to non-data descriptor `Desc2`
+
+# pyrefly incorrectly returns Desc2[T] instead of list[T] for class attribute access
+assert_type(DC2.x, list[int])  # E: assert_type(Desc2[int], list[int]) failed
+assert_type(DC2.y, list[str])  # E: assert_type(Desc2[str], list[str]) failed
+
+dc2 = DC2(Desc2(), Desc2(), Desc2())
+# pyrefly incorrectly returns Desc2[T] instead of T for instance attribute access
+assert_type(dc2.x, int)  # E: assert_type(Desc2[int], int) failed
+assert_type(dc2.y, str)  # E: assert_type(Desc2[str], str) failed
+"#,
+);
+
+testcase!(
+    test_dataclass_slots_undeclared_attr_conformance,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class DC2:
+    x: int
+
+    def __init__(self):
+        self.x = 3
+        # should error: y is not in slots
+        self.y = 3  # E: not declared in `__slots__`
+
+@dataclass(slots=False)
+class DC3:
+    x: int
+    __slots__ = ("x",)
+
+    def __init__(self):
+        self.x = 3
+        # should error: y is not in slots
+        self.y = 3  # E: not declared in `__slots__`
+"#,
+);
+
+testcase!(
+    test_dataclass_protocol_dataclass_fields,
+    r#"
+from dataclasses import dataclass, Field
+from typing import Any, ClassVar, Protocol
+
+class P(Protocol):
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+
+@dataclass
+class C(P):
+    x: int
+
+C(42)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2923
+testcase!(
+    bug = "Should reject @dataclass applied to NamedTuple subclass",
+    test_dataclass_on_named_tuple,
+    r#"
+from dataclasses import dataclass
+from typing import NamedTuple
+
+class Coord(NamedTuple):
+    x: int
+    y: int
+
+dataclass(Coord)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    bug = "Should reject @dataclass applied to Protocol subclass",
+    test_dataclass_on_protocol,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+class Printable(Protocol):
+    def display(self) -> str: ...
+
+dataclass(Printable)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_decorator_on_protocol,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass
+class MyProto(Protocol):  # E: `@dataclass` cannot be applied to Protocol
+    x: int
+    def display(self) -> str: ...
+
+@dataclass
+class DC:
+    x: int
+
+class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all other bases must be protocols
+    y: int
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2920
+testcase!(
+    bug = "Should reject overriding __setattr__ and __delattr__ in frozen dataclass",
+    test_frozen_dataclass_override_setattr_delattr,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Immutable:
+    value: int
+
+    def __setattr__(self, name: str, val: object) -> None: ...
+    def __delattr__(self, name: str) -> None: ...
+"#,
 );
