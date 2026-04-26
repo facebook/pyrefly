@@ -19,6 +19,7 @@ use crate::types::callable::Required;
 use crate::types::class::ClassType;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
+use crate::types::types::Union;
 use crate::types::types::Var;
 
 /// Maximum size for a union hint to a function call. Hints wider than this are ignored.
