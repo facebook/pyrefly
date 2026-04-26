@@ -17,6 +17,7 @@ use crate::types::callable::Required;
 use crate::types::class::ClassType;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
+use crate::types::types::Union;
 use crate::types::types::Var;
 
 // The error collector is None for a "soft" type hint, where we try to
