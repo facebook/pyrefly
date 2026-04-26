@@ -31,7 +31,8 @@ use yansi::Painted;
     Eq,
     Hash,
     Deserialize,
-    Serialize
+    Serialize,
+    ValueEnum
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -100,6 +101,8 @@ pub enum ErrorKind {
     BadClassDefinition,
     /// Attempting to use a type that cannot be used as a contextmanager in a `with` statement.
     BadContextManager,
+    /// An entry in user-defined `__all__` does not exist in the module.
+    BadDunderAll,
     /// A function definition has some typing-related error.
     /// e.g. putting a non-default argument after a default argument.
     BadFunctionDefinition,
@@ -116,8 +119,18 @@ pub enum ErrorKind {
     BadMatch,
     /// A subclass field or method incorrectly overrides a field/method of a parent class.
     BadOverride,
+    /// A subclass field overrides a mutable attribute of a parent class with an incompatible type.
+    /// Mutable (read-write) attributes require invariant types, unlike read-only attributes or
+    /// methods which allow covariant overrides.
+    /// This is a sub-kind of [BadOverride]: suppressing `bad-override` also suppresses this error.
+    BadOverrideMutableAttribute,
     /// A subclass method incorrectly changes the name of a positional parameter while overriding
     /// a method of a parent class.
+    /// This is a sub-kind of [BadOverride]: suppressing `bad-override` also suppresses this error.
+    BadOverrideParamName,
+    /// DEPRECATED: use [BadOverrideParamName] (`bad-override-param-name`) instead.
+    /// Kept so that existing `# pyrefly: ignore[bad-param-name-override]` comments and
+    /// config entries continue to work. This variant is never emitted by the type checker.
     BadParamNameOverride,
     /// Invalid exception or cause in `raise` statement.
     BadRaise,
@@ -138,6 +151,8 @@ pub enum ErrorKind {
     BadUnpacking,
     /// Calling a function marked with `@deprecated`
     Deprecated,
+    /// Division, floor division, or modulo by a literal zero value.
+    DivisionByZero,
     /// Raised when a class implicitly becomes abstract by defining abstract members without
     /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
     ImplicitAbstractClass,
@@ -153,6 +168,9 @@ pub enum ErrorKind {
     InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
     InconsistentOverload,
+    /// An inconsistency between a function parameter's type in an overload signature and its
+    /// default value in the implementation.
+    InconsistentOverloadDefault,
     /// Internal Pyrefly error.
     InternalError,
     /// Attempting to write an annotation that is invalid for some reason.
@@ -172,6 +190,8 @@ pub enum ErrorKind {
     InvalidOverload,
     /// An error related to ParamSpec definition or usage.
     InvalidParamSpec,
+    /// An error caused by an invalid match pattern.
+    InvalidPattern,
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
@@ -187,6 +207,8 @@ pub enum ErrorKind {
     InvalidTypeVar,
     /// An error caused by incorrect usage or definition of a TypeVarTuple.
     InvalidTypeVarTuple,
+    /// An error caused by a type variable being used in a position incompatible with its declared variance,
+    InvalidVariance,
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
@@ -199,14 +221,23 @@ pub enum ErrorKind {
     MissingImport,
     /// Accessing an attribute that does not exist on a module.
     MissingModuleAttribute,
+    /// A method overrides a parent class method but does not have the `@override` decorator.
+    MissingOverrideDecorator,
     /// The source code for an imported package is missing.
     MissingSource,
     /// We are using bundled stubs for a package but the source code is missing.
     MissingSourceForStubs,
+    /// The first string argument to a functional type definition does not match the bound name.
+    NameMismatch,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
+    /// The SCC fixpoint iteration did not converge within the maximum number of
+    /// iterations. The inferred type may be incorrect; adding annotations can help.
+    NonConvergentRecursion,
+    /// Matching on an enum without covering all possible cases.
+    NonExhaustiveMatch,
     /// Attempting to use something that isn't a type where a type is expected.
     /// This is a very general error and should be used sparingly.
     NotAType,
@@ -216,6 +247,8 @@ pub enum ErrorKind {
     NotCallable,
     /// Attempting to use a non-iterable value as an iterable.
     NotIterable,
+    /// Accessing a `NotRequired` TypedDict key without first proving it exists.
+    NotRequiredKeyAccess,
     /// Unpacking an open TypedDict that may contain a bad key via inheritance.
     OpenUnpacking,
     /// An error related to parsing or syntax.
@@ -236,6 +269,8 @@ pub enum ErrorKind {
     UnannotatedAttribute,
     /// A function parameter is missing a type annotation.
     UnannotatedParameter,
+    /// A protocol member is assigned a value in the class body without an explicit type annotation.
+    UnannotatedProtocolMember,
     /// A function is missing a return type annotation.
     UnannotatedReturn,
     /// Attempting to use a name that may be unbound or uninitialized
@@ -244,11 +279,25 @@ pub enum ErrorKind {
     UnexpectedKeyword,
     /// An error caused by passing a positional argument for a keyword-only parameter.
     UnexpectedPositionalArgument,
+    /// Attempting to use a type checker directive without importing it from `typing`.
+    UnimportedDirective,
     /// Attempting to use a name that is not defined.
     UnknownName,
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
+    /// Warning when calling a builtin type constructor (str, int, float, bool, bytes) on a value that is already of that type.
+    UnnecessaryTypeConversion,
+    /// A return or yield that can never be reached.
+    /// This occurs when a return/yield follows a statement that always exits,
+    /// such as return, raise, break, or continue.
+    Unreachable,
+    /// `__all__` is defined but cannot be statically analyzed.
+    UnresolvableDunderAll,
+    /// Protocols decorated with `@runtime_checkable` can be used in `isinstance` checks
+    /// The runtime only checks that an attribute with that name is present, so the
+    /// type checker must warn if the types are not compatible.
+    UnsafeOverlap,
     /// Attempting to use a feature that is not yet supported.
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
@@ -259,6 +308,11 @@ pub enum ErrorKind {
     UntypedImport,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
+    /// A suppression comment is unused (no error to suppress, or specific codes are unused)
+    UnusedIgnore,
+    /// The inferred variance of a type variable does not match its declared variance.
+    /// For example, a type variable used only in covariant positions in a protocol should be declared covariant.
+    VarianceMismatch,
 }
 
 impl std::str::FromStr for ErrorKind {
@@ -293,25 +347,74 @@ impl ErrorKind {
             .as_str()
     }
 
+    /// Returns the parent error kind, if this is a sub-kind of another error.
+    /// Suppressing the parent kind also suppresses this kind.
+    pub fn parent_kind(self) -> Option<ErrorKind> {
+        match self {
+            ErrorKind::BadOverrideMutableAttribute | ErrorKind::BadOverrideParamName => {
+                Some(ErrorKind::BadOverride)
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the deprecated alias for this error kind, if any.
+    /// The deprecated name is still accepted in suppressions and config.
+    pub fn deprecated_alias(self) -> Option<ErrorKind> {
+        match self {
+            ErrorKind::BadOverrideParamName => Some(ErrorKind::BadParamNameOverride),
+            _ => None,
+        }
+    }
+
+    /// Returns all names that should match when checking suppressions.
+    /// Includes this kind's name, any parent kind's name, and any deprecated alias.
+    pub fn suppression_names(self) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.to_name())
+            .chain(self.parent_kind().map(|p| p.to_name()))
+            .chain(self.deprecated_alias().map(|d| d.to_name()))
+    }
+
     pub fn default_severity(self) -> Severity {
         // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
-            ErrorKind::RevealType => Severity::Info,
             ErrorKind::Deprecated => Severity::Warn,
-            ErrorKind::RedundantCast => Severity::Warn,
-            ErrorKind::UnnecessaryComparison => Severity::Warn,
-            // TODO(rechen): re-enable this once we figure out how to make it less noisy.
-            ErrorKind::UntypedImport => Severity::Ignore,
-            ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
+            ErrorKind::ImplicitImport => Severity::Warn,
+            ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::InvalidDecorator => Severity::Warn,
+            ErrorKind::MissingOverrideDecorator => Severity::Ignore,
+            ErrorKind::MissingSource => Severity::Ignore,
+            ErrorKind::NameMismatch => Severity::Warn,
+            ErrorKind::NonExhaustiveMatch => Severity::Warn,
+            ErrorKind::NonConvergentRecursion => Severity::Warn,
+            ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
+            ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::RedundantCast => Severity::Warn,
+            ErrorKind::RedundantCondition => Severity::Warn,
+            ErrorKind::RevealType => Severity::Info,
+            ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
-            ErrorKind::UnannotatedAttribute => Severity::Ignore,
-            ErrorKind::MissingSource => Severity::Ignore,
-            ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::UnnecessaryComparison => Severity::Warn,
+            ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
+            ErrorKind::Unreachable => Severity::Warn,
+            ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UntypedImport => Severity::Warn,
+            ErrorKind::UnusedIgnore => Severity::Ignore,
+            ErrorKind::VarianceMismatch => Severity::Warn,
             _ => Severity::Error,
         }
+    }
+
+    /// Returns true if this error kind is a type checker directive rather than
+    /// a real diagnostic. Directives bypass suppression, baseline exclusion,
+    /// and min-severity filtering, but can still be disabled via explicit
+    /// per-kind severity overrides (e.g. `--ignore reveal-type`).
+    pub fn is_directive(self) -> bool {
+        matches!(self, ErrorKind::RevealType)
     }
 
     /// Returns the public documentation URL for this error kind.
@@ -331,6 +434,7 @@ mod tests {
     use pulldown_cmark::HeadingLevel;
     use pulldown_cmark::Parser;
     use pulldown_cmark::Tag;
+    use pulldown_cmark::TagEnd;
 
     use super::*;
     #[test]
@@ -353,14 +457,17 @@ mod tests {
         let mut last_error_kind = None;
         for event in Parser::new(&doc_contents) {
             match event {
-                Event::End(Tag::Heading(HeadingLevel::H1, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H1)) => {
                     // Don't start checking for error kinds until we get past the document title
                     start = true;
                 }
-                Event::Start(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::Start(Tag::Heading {
+                    level: HeadingLevel::H2,
+                    ..
+                }) => {
                     in_header = true;
                 }
-                Event::End(Tag::Heading(HeadingLevel::H2, ..)) => {
+                Event::End(TagEnd::Heading(HeadingLevel::H2)) => {
                     in_header = false;
                 }
                 Event::Text(doc_error_kind) if start && in_header => {

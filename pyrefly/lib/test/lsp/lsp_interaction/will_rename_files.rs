@@ -6,12 +6,12 @@
  */
 
 use lsp_types::Url;
+use pyrefly::commands::lsp::IndexingMode;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
@@ -200,9 +200,13 @@ fn test_will_rename_files_changes_everything_when_indexed() {
     let various_imports_path = root
         .path()
         .join("tests_requiring_config/various_imports.py");
+    let notebook_refs_path = root
+        .path()
+        .join("tests_requiring_config/notebook_refs.ipynb");
 
     // Send will_rename_files request to rename bar.py to baz.py
-    // Expect a response with edits to update imports in foo.py, with_synthetic_bindings.py, and various_imports.py using "changes" format
+    // Expect a response with edits to update imports in foo.py, with_synthetic_bindings.py,
+    // various_imports.py, and the indexed notebook using "changes" format
     interaction
         .client
         .will_rename_files(bar, "tests_requiring_config/baz.py")
@@ -221,6 +225,15 @@ fn test_will_rename_files_changes_everything_when_indexed() {
                         "range": {
                             "start": {"line": 6, "character": 5},
                             "end": {"line": 6, "character": 8}
+                        }
+                    }
+                ],
+                Url::from_file_path(&notebook_refs_path).unwrap().to_string(): [
+                    {
+                        "newText": "baz",
+                        "range": {
+                            "start": {"line": 0, "character": 5},
+                            "end": {"line": 0, "character": 8}
                         }
                     }
                 ],
@@ -372,6 +385,9 @@ fn test_will_rename_files_document_changes() {
     interaction.client.did_open(bar);
 
     let foo_path = root.path().join("tests_requiring_config/foo.py");
+    let notebook_refs_path = root
+        .path()
+        .join("tests_requiring_config/notebook_refs.ipynb");
     let with_synthetic_bindings_path = root
         .path()
         .join("tests_requiring_config/with_synthetic_bindings.py");
@@ -380,7 +396,8 @@ fn test_will_rename_files_document_changes() {
         .join("tests_requiring_config/various_imports.py");
 
     // Send will_rename_files request to rename bar.py to baz.py
-    // Expect a response with edits to update imports in foo.py, various_imports.py, and with_synthetic_bindings.py using "documentChanges" format
+    // Expect a response with edits to update imports in foo.py, notebook_refs.ipynb,
+    // various_imports.py, and with_synthetic_bindings.py using "documentChanges" format
     // Files are returned in alphabetical order by URI
     interaction
         .client
@@ -405,6 +422,21 @@ fn test_will_rename_files_document_changes() {
                             "range": {
                                 "start": {"line": 6, "character": 5},
                                 "end": {"line": 6, "character": 8}
+                            }
+                        }
+                    ]
+                },
+                {
+                    "textDocument": {
+                        "uri": Url::from_file_path(&notebook_refs_path).unwrap().to_string(),
+                        "version": null
+                    },
+                    "edits": [
+                        {
+                            "newText": "baz",
+                            "range": {
+                                "start": {"line": 0, "character": 5},
+                                "end": {"line": 0, "character": 8}
                             }
                         }
                     ]

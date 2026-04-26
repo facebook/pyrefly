@@ -95,9 +95,9 @@ class Y2(Y): pass
 class S2(S): pass
 
 def foo(b: bool) -> Generator[Y2, S, R]:
-    s1 = yield Y() # E: Type of yielded value `Y` is not assignable to declared return type `Y2`
+    s1 = yield Y() # E: Yielded type `Y` is not assignable to declared yield type `Y2`
     s2 = yield Y2()
-    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y2`
+    s3 = yield None # E: Yielded type `None` is not assignable to declared yield type `Y2`
 
     assert_type(s1, S)
     assert_type(s2, S)
@@ -111,7 +111,7 @@ def foo(b: bool) -> Generator[Y2, S, R]:
 def bar() -> Generator[Y, S2, None]:
     s1 = yield Y()
     s2 = yield Y2()
-    s3 = yield None # E: Type of yielded value `None` is not assignable to declared return type `Y`
+    s3 = yield None # E: Yielded type `None` is not assignable to declared yield type `Y`
 
     r = yield from foo(True) # OK
 
@@ -121,11 +121,11 @@ def bar() -> Generator[Y, S2, None]:
     assert_type(r, R)
 
 def baz() -> Generator[Y2, S2, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y2, S2, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2]`, which is not assignable to declared return type `Generator[Y2, S2, Unknown]`
     assert_type(s, None)
 
 def qux() -> Generator[Y, S, None]:
-    s = yield from bar() # E: Cannot yield from a generator of type `Generator[Y, S2, None]` because it does not match the declared return type `Generator[Y, S, Unknown]`
+    s = yield from bar() # E: Cannot yield from `Generator[Y, S2]`, which is not assignable to declared return type `Generator[Y, S, Unknown]`
     assert_type(s, None)
 "#,
 );
@@ -405,8 +405,60 @@ async def test() -> None:
         assert_type(x, int)
     async for y in [1, 2, 3]:  # E: Type `list[int]` is not an async iterable
         pass
-    for z in gen():  # E: Type `AsyncGenerator[int, None]` is not iterable
+    for z in gen():  # E: Type `AsyncGenerator[int]` is not iterable
         pass
+"#,
+);
+
+testcase!(
+    test_async_generator_yield_in_if_false,
+    r#"
+from collections.abc import AsyncGenerator
+from typing import assert_type
+
+class BaseBlock:
+    async def run(self, data: dict[str, str]) -> AsyncGenerator[tuple[str, str], None]:
+        if False:
+            yield ("name", "value")
+        raise NotImplementedError
+
+    async def run_once(self, data: dict[str, str]) -> str:
+        async for name, value in self.run(data):
+            if name == "output":
+                return value
+        raise ValueError("No output produced")
+
+assert_type(BaseBlock().run({}), AsyncGenerator[tuple[str, str], None])
+"#,
+);
+
+testcase!(
+    test_sync_generator_yield_in_if_false,
+    r#"
+from typing import Generator, assert_type
+
+def gen() -> Generator[int, None, None]:
+    if False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+for x in gen():
+    assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_async_generator_yield_in_if_false_simple,
+    r#"
+from typing import AsyncGenerator, assert_type
+
+async def gen() -> AsyncGenerator[int, None]:
+    if False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), AsyncGenerator[int, None])
 "#,
 );
 
@@ -461,16 +513,66 @@ async def main() -> None:
 );
 
 testcase!(
-    bug = "We don't understand yield in lambda, and misattribute the yield to the surrounding function",
     test_lambda_yield,
     r#"
 from typing import assert_type
 def f(x: int):
-    callback = lambda: (yield x)  # E: Invalid `yield` outside of a function
+    callback = lambda: (yield x)
     l = [i for i in callback()]
-    assert_type(l, list[int])  # E: assert_type(list[Any], list[int])
+    assert_type(l, list[int])
     return l
-assert_type(f(1), list[int])  # E: assert_type(list[Any], list[int])
+assert_type(f(1), list[int])
+"#,
+);
+
+testcase!(
+    test_lambda_yield_from,
+    r#"
+from typing import assert_type
+def f():
+    callback = lambda: (yield from [1, 2, 3])
+    l = [i for i in callback()]
+    assert_type(l, list[int])
+    return l
+assert_type(f(), list[int])
+"#,
+);
+
+testcase!(
+    test_lambda_yield_and_yield_from,
+    r#"
+from typing import assert_type
+def f():
+    callback = lambda: ((yield "a"), (yield from ["b", "c"]))
+    l = [i for i in callback()]
+    assert_type(l, list[str])
+"#,
+);
+
+testcase!(
+    test_nested_lambda_yield,
+    r#"
+from typing import Any, Literal, assert_type, Generator
+def f():
+    # The yield belongs to the inner lambda, not the outer one.
+    outer = lambda: (lambda: (yield 1))
+    inner = outer()
+    # The return type (third param) is Any because the lambda body IS the yield
+    # expression, which evaluates to the send type. The send type cannot generally
+    # be inferred without annotations, so Any is the best we can do.
+    assert_type(inner(), Generator[Literal[1], Any, Any])
+"#,
+);
+
+testcase!(
+    test_lambda_yield_in_subexpression,
+    r#"
+from typing import Any, Literal, assert_type, Generator
+def f():
+    # When yield is inside a subexpression rather than being the entire body,
+    # the return type is the subexpression type, not the send type.
+    callback = lambda: [(yield 1)]
+    assert_type(callback(), Generator[Literal[1], Any, list[Any]])
 "#,
 );
 
@@ -497,4 +599,34 @@ def f(start, iterable: Iterable[_T], step) ->  Iterator[_T]:
             next_i += step
 
     "#,
+);
+
+testcase!(
+    test_yield_union_of_iterators,
+    r#"
+from collections.abc import Iterator
+def f() -> Iterator[str] | Iterator[int]: ...
+
+def g():
+  yield from f()
+"#,
+);
+
+testcase!(
+    test_yield_from_with_union_return_annotation,
+    r#"
+from typing import Any, Iterator, reveal_type
+
+def foo() -> list[tuple[Any, ...]]:
+    ...
+
+def bar1() -> Iterator[tuple[Any, ...]] | Iterator[dict[str, Any]]:
+    yield from foo()
+
+def bar2() -> Iterator[tuple[Any, ...]]:
+    yield from foo()
+
+reveal_type(bar1)  # E: revealed type: () -> Iterator[dict[str, Any]] | Iterator[tuple[Any, ...]]
+reveal_type(bar2)  # E: revealed type: () -> Iterator[tuple[Any, ...]]
+"#,
 );

@@ -3,6 +3,13 @@ title: Experimental Pydantic Support
 description: Pyrefly experimental support for Pydantic.
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 # Experimental Pydantic Support
 
 Pyrefly includes **experimental support** for [Pydantic](https://pydantic.dev/), a popular Python library for data validation and parsing. This feature aims to provide improved static type checking and IDE integration for Pydantic models.
@@ -21,23 +28,52 @@ Pydantic is a Python library designed for data validation and parsing using Pyth
 
 ---
 
+## How Pyrefly Supports Pydantic
+
+- Understands Pydantic constructs like `BaseModel`, `Field`, `ConfigDict`, and model-level config options.
+- Performs static analysis that mirrors Pydantic's runtime validation logic, minimizing false positives in your IDE.
+- Provides immediate feedback (e.g. red squiggles or type errors) when the code would fail under Pydantic's actual behavior.
+- Does **not** require a plugin or manual config — support is builtin and automatic.
+
+---
+
 ## Validation Modes
 
-Pydantic supports two validation modes for Pydantic models:
+Pydantic models can use two validation modes:
 
-- **Lax (Default)**: Values are automatically converted when possible. For example, the string `"123"` will be interpreted as an integer.
+- **Lax (Default)**: Values are automatically coerced when possible. For example, a string like `"123"` can be coerced to an integer.
 - **Strict**: Coercion is disabled, and only exactly matching types are accepted.
 
 Pyrefly reads your model config to determine the validation mode, so it can strike a balance between providing useful typing and IDE support while maintaining Pydantic's flexibility.
 
----
+### How Lax Mode Works in Pyrefly
 
-## How Pyrefly Supports Pydantic
+In lax mode (the default), Pyrefly uses **named union types** to represent the acceptable input types for each field. These named unions keep type signatures concise and readable while closely reflecting Pydantic's runtime coercion behavior.
 
-- Understands Pydantic constructs like `BaseModel`, `Field`, `ConfigDict`, and model-level config options.
-- Performs static analysis that mirrors Pydantic’s runtime validation logic, minimizing false positives in your IDE.
-- Provides immediate feedback (e.g. red squiggles or type errors) when the code would fail under Pydantic's actual behavior.
-- Does **not** require a plugin or manual config — support is builtin and automatic.
+For example, when you define a field with type `int` in lax mode, Pyrefly represents it as `LaxInt`, which is equivalent to `int | bool | float | str | bytes | Decimal` (based on [Pydantic's conversion table](https://docs.pydantic.dev/latest/concepts/conversion_table/)):
+
+```python
+from pydantic import BaseModel
+from typing import reveal_type
+from decimal import Decimal
+
+class Model(BaseModel):
+    x: int = 0
+
+reveal_type(Model.__init__)  # revealed type is (self: Model, *, x: LaxInt = ..., **Unknown) -> None
+
+# int field accepts: int, bool, float, str, bytes, Decimal
+Model(x=1)
+Model(x=True)
+Model(x=1.0)
+Model(x='123')
+Model(x=b'123')
+Model(x=Decimal('123'))
+```
+
+> **Note:** Pyrefly applies named unions (like `LaxInt`) to atomic types and recursively to nested types. Container types are converted to more general types to handle variance: for example, `list[int]` becomes `Iterable[LaxInt]`. When you use union types (e.g., `int | bool`), each member is expanded individually and then flattened into a regular union.
+
+For a complete reference of all type conversions in lax mode, see the [Lax Mode Type Conversions](../pydantic-lax-conversions) page.
 
 ---
 
@@ -86,12 +122,12 @@ m.x = 10  # Error: Cannot set field `x` because the model is frozen
 ```python
 from pydantic import BaseModel, Field
 
-# Non-strict mode: runtime coercion allowed
+# Lax mode (default): runtime coercion allowed
 class User(BaseModel):
     name: str
     age: int
 
-# This passes at runtime and in Pyrefly.
+# This passes at runtime and in Pyrefly because age accepts strings in lax mode
 y = User(name="Alice", age="30")
 
 # Strict mode: enforce exact types, no coercion
@@ -101,7 +137,7 @@ class User2(BaseModel):
 
 # This triggers type errors in Pyrefly and red squiggles in the IDE,
 # and will also fail at runtime due to type mismatch.
-z = User2(name="Alice", age="30")
+z = User2(name="Alice", age="30")  # Error: age expects int, not str
 ```
 
 ### Handling Extra Fields in Pydantic Models
@@ -129,14 +165,16 @@ ModelForbid(x=1, y=2)
 
 ### Handling field constraints
 
+Pyrefly provides limited support for range constraints on fields.
 ```python
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-   x: int = Field(gt=0, lt=10)
+    x: int = Field(gt=0, lt=10)
 
-Model(x=5)  # OK
-Model(x="5")  # will not raise a type error because of runtime coercion
+Model(x=5)   # OK
+Model(x=0)   # Error: Argument value `Literal[0]` violates Pydantic `gt` constraint for field `x`
+Model(x=15)  # Error: Argument value `Literal[15]` violates Pydantic `lt` constraint for field `x`
 ```
 
 ### Root Models
@@ -151,8 +189,8 @@ class StrictIntRootModel(RootModel[StrictInt]):
    pass
 
 m1 = IntRootModel(123)  # OK
-m2 = IntRootModel("123") # OK because of runtime coercion
-m3 = StrictIntRootModel("123")  # will raise a type error because of StrictInt
+m2 = IntRootModel("123") # OK - lax mode allows string-to-int coercion
+m3 = StrictIntRootModel("123")  # Error: StrictInt doesn't allow coercion
 ```
 
 ### Alias validation

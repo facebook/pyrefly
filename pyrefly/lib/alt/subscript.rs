@@ -76,7 +76,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let idx_type = self.expr_infer(index, errors);
         match &idx_type {
-            Type::Literal(lit) if let Some(idx) = lit.as_index_i64() => match tuple {
+            Type::Literal(lit) if let Some(idx) = lit.value.as_index_i64() => match tuple {
                 Tuple::Concrete(elts) => {
                     self.infer_concrete_index(elts, idx, index.range(), errors)
                 }
@@ -96,7 +96,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(expr) = expr {
             let literal_type = self.expr_infer(expr, &self.error_swallower());
             match &literal_type {
-                Type::Literal(lit) => Ok(lit.as_index_i64()),
+                Type::Literal(lit) => Ok(lit.value.as_index_i64()),
                 _ => Err(()),
             }
         } else {
@@ -110,21 +110,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         lower_expr: &Option<Box<Expr>>,
         upper_expr: &Option<Box<Expr>>,
     ) -> Option<Type> {
+        let len = elts.len() as i64;
         let lower_literal = self.parse_slice_literal(lower_expr).ok()?.unwrap_or(0);
-        let upper_literal = self
-            .parse_slice_literal(upper_expr)
-            .ok()?
-            .unwrap_or(elts.len() as i64);
-        if lower_literal >= 0 && upper_literal >= 0 && upper_literal <= elts.len() as i64 {
-            if lower_literal >= upper_literal {
-                Some(Type::concrete_tuple(Vec::new()))
-            } else {
-                Some(Type::concrete_tuple(
-                    elts[lower_literal as usize..upper_literal as usize].to_vec(),
-                ))
-            }
+        let upper_literal = self.parse_slice_literal(upper_expr).ok()?.unwrap_or(len);
+
+        // Normalize negative indices (e.g., -1 becomes len-1)
+        let lower = if lower_literal < 0 {
+            len + lower_literal
         } else {
-            None
+            lower_literal
+        };
+        let upper = if upper_literal < 0 {
+            len + upper_literal
+        } else {
+            upper_literal
+        };
+
+        // Return None for out-of-bounds indices. This includes cases like
+        // x[-5:] or x[:10] on a 3-element tuple. Returning None falls back
+        // to dynamic/Unknown behavior, which is appropriate when we can't
+        // precisely determine the result type.
+        if lower < 0 || lower > len || upper < 0 || upper > len {
+            return None;
+        }
+
+        if lower >= upper {
+            Some(self.heap.mk_concrete_tuple(Vec::new()))
+        } else {
+            Some(
+                self.heap
+                    .mk_concrete_tuple(elts[lower as usize..upper as usize].to_vec()),
+            )
         }
     }
 
@@ -171,17 +187,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let lower_usize = lower as usize;
                 let upper_usize = upper as usize;
                 if lower_usize >= upper_usize {
-                    return Some(Type::concrete_tuple(Vec::new()));
+                    return Some(self.heap.mk_concrete_tuple(Vec::new()));
                 }
                 if upper_usize <= prefix.len() {
                     // Slice is entirely within prefix
-                    Some(Type::concrete_tuple(
-                        prefix[lower_usize..upper_usize].to_vec(),
-                    ))
+                    Some(
+                        self.heap
+                            .mk_concrete_tuple(prefix[lower_usize..upper_usize].to_vec()),
+                    )
                 } else if lower_usize <= prefix.len() {
                     // Slice starts in/immediately after prefix and extends beyond
                     let prefix_tail = prefix[lower_usize..].to_vec();
-                    Some(Type::Tuple(Tuple::unpacked(
+                    Some(self.heap.mk_tuple(Tuple::unpacked(
                         prefix_tail,
                         middle.clone(),
                         suffix.to_vec(),
@@ -199,7 +216,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let prefix_tail = prefix[lower_usize.min(prefix.len())..].to_vec();
                     let suffix_head = suffix[..suffix.len() - neg_upper].to_vec();
                     if lower_usize <= prefix.len() {
-                        Some(Type::Tuple(Tuple::unpacked(
+                        Some(self.heap.mk_tuple(Tuple::unpacked(
                             prefix_tail,
                             middle.clone(),
                             suffix_head,
@@ -216,7 +233,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let neg_upper = (-upper) as usize;
                 if neg_upper <= suffix.len() {
                     let suffix_head = suffix[..suffix.len() - neg_upper].to_vec();
-                    Some(Type::Tuple(Tuple::unpacked(
+                    Some(self.heap.mk_tuple(Tuple::unpacked(
                         prefix.to_vec(),
                         middle.clone(),
                         suffix_head,
@@ -229,7 +246,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (lower, None) if lower >= 0 && (lower as usize) <= prefix.len() => {
                 let lower_usize = lower as usize;
                 let prefix_tail = prefix[lower_usize..].to_vec();
-                Some(Type::Tuple(Tuple::unpacked(
+                Some(self.heap.mk_tuple(Tuple::unpacked(
                     prefix_tail,
                     middle.clone(),
                     suffix.to_vec(),
@@ -285,7 +302,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let literal_index = |expr: &Expr| -> Option<i64> {
             match self.expr_infer(expr, errors) {
-                Type::Literal(ref lit) => lit.as_index_i64(),
+                Type::Literal(ref lit) => lit.value.as_index_i64(),
                 _ => None,
             }
         };
@@ -392,7 +409,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
 
             if slice_length <= 0 {
-                return Type::Literal(Lit::Str("".into()));
+                return Lit::Str("".into()).to_implicit_type();
             }
 
             if slice_length as usize as i64 != slice_length {
@@ -415,18 +432,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
             }
 
-            Type::Literal(Lit::Str(result.into()))
+            Lit::Str(result.into()).to_implicit_type()
         } else {
             let idx_ty = self.expr_infer(index_expr, errors);
             if let Type::Literal(lit) = idx_ty
-                && let Some(idx) = lit.as_index_i64()
+                && let Some(idx) = lit.value.as_index_i64()
             {
                 let normalized = if idx < 0 { len + idx } else { idx };
                 if normalized >= 0 && normalized < len {
                     let ch = chars[normalized as usize];
                     let mut buf = String::new();
                     buf.push(ch);
-                    return Type::Literal(Lit::Str(buf.into()));
+                    return Lit::Str(buf.into()).to_implicit_type();
                 } else {
                     return self.error(
                         errors,
@@ -454,11 +471,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let index_ty = self.expr_infer(index_expr, errors);
         match &index_ty {
             Type::Literal(lit) => {
-                if let Some(idx) = lit.as_index_i64() {
+                if let Some(idx) = lit.value.as_index_i64() {
                     if idx >= 0
                         && let Some(byte) = idx.to_usize().and_then(|idx| bytes.get(idx))
                     {
-                        Type::Literal(Lit::Int(LitInt::new((*byte).into())))
+                        LitInt::new((*byte).into()).to_implicit_type()
                     } else if idx < 0
                         && let Some(byte) = idx
                             .checked_neg()
@@ -466,7 +483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .and_then(|idx| bytes.len().checked_sub(idx))
                             .and_then(|idx| bytes.get(idx))
                     {
-                        Type::Literal(Lit::Int(LitInt::new((*byte).into())))
+                        LitInt::new((*byte).into()).to_implicit_type()
                     } else {
                         self.error(
                             errors,
@@ -480,7 +497,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 } else {
                     self.call_method_or_error(
-                        &self.stdlib.bytes().clone().to_type(),
+                        &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                         &dunder::GETITEM,
                         range,
                         &[CallArg::expr(index_expr)],
@@ -491,7 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             _ => self.call_method_or_error(
-                &self.stdlib.bytes().clone().to_type(),
+                &self.heap.mk_class_type(self.stdlib.bytes().clone()),
                 &dunder::GETITEM,
                 range,
                 &[CallArg::expr(index_expr)],

@@ -1,0 +1,3 @@
+actionsproject (https://github.com/example/actionsproject)
++ ::error file=src/main.py,line=10,col=5,endLine=10,endColumn=20,title=Pyrefly bad-return::Returned `int` but expected `str`
+- ::error file=src/main.py,line=15,col=1,endLine=15,endColumn=30,title=Pyrefly missing-attribute::Object of class `Foo` has no attribute `bar`

@@ -1,0 +1,75 @@
+{
+  "name": "test",
+  "names": [
+    "test.RegularClass.name",
+    "test.regular_function",
+    "test.RegularClass.__init__",
+    "test.RegularClass"
+  ],
+  "line_count": 30,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.RegularClass.name",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 29,
+        "column": 14
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.regular_function",
+      "n_typable": 3,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 23,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.RegularClass.__init__",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 28,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.RegularClass",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 27,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 5,
+  "n_typed": 3,
+  "n_any": 0,
+  "n_untyped": 2,
+  "coverage": 60.0,
+  "strict_coverage": 60.0,
+  "n_functions": 1,
+  "n_methods": 1,
+  "n_function_params": 2,
+  "n_method_params": 1,
+  "n_classes": 1,
+  "n_attrs": 1,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

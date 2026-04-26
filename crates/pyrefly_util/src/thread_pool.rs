@@ -10,19 +10,17 @@
 use std::env;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
-use std::sync::LazyLock;
 
 use human_bytes::human_bytes;
 use tracing::debug;
 use tracing::info;
 
 use crate::display::number_thousands;
-use crate::lock::Mutex;
 
 /// The stack size for all created threads.
 ///
 /// Can be overridden by setting the `PYREFLY_STACK_SIZE` environment variable (in bytes).
-const DEFAULT_STACK_SIZE: usize = 5 * 1024 * 1024;
+const DEFAULT_STACK_SIZE: usize = 10 * 1024 * 1024;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ThreadCount {
@@ -30,6 +28,9 @@ pub enum ThreadCount {
     AllThreads,
     NumThreads(NonZeroUsize),
 }
+
+/// Thread count used by tests. Enough threads to see parallelism bugs, but not too many to debug through.
+pub const TEST_THREAD_COUNT: ThreadCount = ThreadCount::NumThreads(NonZeroUsize::new(3).unwrap());
 
 impl FromStr for ThreadCount {
     type Err = String;
@@ -47,13 +48,6 @@ impl FromStr for ThreadCount {
     }
 }
 
-static THREADS: LazyLock<Mutex<ThreadCount>> = LazyLock::new(|| Mutex::new(ThreadCount::default()));
-
-/// Set up the global thread pool.
-pub fn init_thread_pool(threads: ThreadCount) {
-    *THREADS.lock() = threads;
-}
-
 /// A WASM compatible thread-pool.
 pub struct ThreadPool(
     // Will be None on WASM
@@ -61,7 +55,7 @@ pub struct ThreadPool(
 );
 
 impl ThreadPool {
-    fn stack_size() -> usize {
+    pub fn stack_size() -> usize {
         match env::var("PYREFLY_STACK_SIZE") {
             Ok(s) => {
                 let res = s
@@ -77,7 +71,7 @@ impl ThreadPool {
         }
     }
 
-    pub fn with_thread_count(count: ThreadCount) -> Self {
+    pub fn new(count: ThreadCount) -> Self {
         if cfg!(target_arch = "wasm32") {
             // ThreadPool doesn't work on WASM
             return Self(None);
@@ -85,8 +79,16 @@ impl ThreadPool {
 
         let stack_size = Self::stack_size();
         let mut builder = rayon::ThreadPoolBuilder::new().stack_size(stack_size);
-        if let ThreadCount::NumThreads(threads) = count {
-            builder = builder.num_threads(threads.get());
+        match count {
+            ThreadCount::NumThreads(threads) => {
+                builder = builder.num_threads(threads.get());
+            }
+            ThreadCount::AllThreads => {
+                let max_threads = std::thread::available_parallelism()
+                    .map(|n| n.get().min(64))
+                    .unwrap_or(1);
+                builder = builder.num_threads(max_threads);
+            }
         }
         let pool = builder.build().expect("To be able to build a thread pool");
         // Only print the message once
@@ -98,10 +100,8 @@ impl ThreadPool {
         Self(Some(pool))
     }
 
-    pub fn new() -> Self {
-        Self::with_thread_count(*THREADS.lock())
-    }
-
+    /// Spawns `f` on the thread pool, or runs it directly if running single-threaded.
+    /// Note that this will block the entire thread pool until the work is complete.
     pub fn spawn_many(&self, f: impl Fn() + Sync) {
         match &self.0 {
             None => f(),

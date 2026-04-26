@@ -4,6 +4,13 @@ title: Migrating from Pyright
 description: How to switch your type checker configuration from Pyright to Pyrefly
 ---
 
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
 ## Running Pyrefly
 
 Like pyright, pyrefly can be given a list of files to check:
@@ -108,9 +115,45 @@ To allow `pyright: ignore` comments to be used by Pyrefly.
 This table shows the mapping between pyright's [type check diagnostics settings](https://microsoft.github.io/pyright/#/configuration?id=type-check-diagnostics-settings)
 and pyrefly's [error kinds](error-kinds.mdx).
 
-This table will be expanded as more diagnostics are supported.
+:::info
+When no configuration file is present, Pyrefly shows the following diagnostics as **warnings** in the IDE, matching pyright's default behavior:
+- `reportInvalidTypeForm` → [`invalid-annotation`](error-kinds.mdx#invalid-annotation)
+- `reportMissingImports` → [`missing-import`](error-kinds.mdx#missing-import)
+- `reportUndefinedVariable` → [`unknown-name`](error-kinds.mdx#unknown-name)
+
+This means users migrating from pyright will see familiar diagnostics even before creating a Pyrefly config file.
+:::
 
 | Pyright | Pyrefly |
 | ------- | ------- |
+| reportAbstractUsage | bad-instantiation |
+| reportArgumentType | bad-argument-type |
+| reportAssertTypeFailure | assert-type |
+| reportAssignmentType | bad-assignment |
+| reportAttributeAccessIssue | missing-attribute |
+| reportDeprecated | deprecated |
+| reportIncompatibleMethodOverride | bad-override |
+| reportIncompatibleVariableOverride | bad-override |
+| reportInconsistentOverload | inconsistent-overload |
+| reportIndexIssue | bad-index |
+| reportInvalidTypeArguments | bad-specialization |
+| reportInvalidTypeForm | invalid-annotation |
+| reportInvalidTypeVarUse | invalid-type-var |
 | reportMissingImports | missing-import |
-| reportMissingModuleSource | missing-import |
+| reportMissingModuleSource | missing-source |
+| reportMissingParameterType | unannotated-parameter |
+| reportMissingTypeStubs | untyped-import |
+| reportNoOverloadImplementation | invalid-overload |
+| reportOperatorIssue | unsupported-operation |
+| reportPossiblyUnboundVariable | unbound-name |
+| reportPrivateUsage | no-access |
+| reportReturnType | bad-return |
+| reportUnboundVariable | unbound-name |
+| reportUndefinedVariable | unknown-name |
+| reportUninitializedInstanceVariable | implicitly-defined-attribute |
+| reportUnknownArgumentType | implicit-any |
+| reportUnknownMemberType | implicit-any |
+| reportUnknownParameterType | unannotated-parameter |
+| reportUnknownVariableType | implicit-any |
+| reportUnnecessaryCast | redundant-cast |
+| reportUnusedCoroutine | unused-coroutine |

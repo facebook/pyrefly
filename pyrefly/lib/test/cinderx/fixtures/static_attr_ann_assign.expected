@@ -1,0 +1,4 @@
+  10:4-5: __static__.int64
+  10:7-12: typing.Type[__static__.int64]
+  10:15-17: Literal[42] -> builtins.int
+    contextual: __static__.int64

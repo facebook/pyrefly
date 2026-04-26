@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use lsp_types::FileChangeType;
 use notify::EventKind;
 
+use crate::stdlib::is_python_stdlib_file;
+
 #[derive(Debug, Clone, Default)]
 pub struct CategorizedEvents {
     pub created: Vec<PathBuf>,
@@ -55,6 +57,14 @@ impl CategorizedEvents {
         res
     }
 
+    /// Merge another set of categorized events into this one.
+    pub fn extend(&mut self, other: CategorizedEvents) {
+        self.created.extend(other.created);
+        self.modified.extend(other.modified);
+        self.removed.extend(other.removed);
+        self.unknown.extend(other.unknown);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.created.is_empty()
             && self.modified.is_empty()
@@ -73,5 +83,6 @@ impl CategorizedEvents {
     pub fn should_ignore(path: &Path) -> bool {
         path.components()
             .any(|c| matches!(c, Component::Normal(name) if name == "__pycache__"))
+            || is_python_stdlib_file(path)
     }
 }

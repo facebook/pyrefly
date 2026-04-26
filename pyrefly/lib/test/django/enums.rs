@@ -119,7 +119,7 @@ django_testcase!(
     test_overwrite_value,
     r#"
 from django.db.models import Choices
-from typing import Any, assert_type
+from typing import Any, Literal, assert_type
 
 class A(Choices):
     X = 1
@@ -133,7 +133,7 @@ class B(Choices):
 assert_type(A.X._value_, str)
 assert_type(A.X.value, str)
 assert_type(A.values, list[str])
-assert_type(B.X._value_, int)
+assert_type(B.X._value_, Literal[1])
 assert_type(B.X.value, str)
 assert_type(B.values, list[str])
     "#,
