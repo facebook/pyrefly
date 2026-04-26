@@ -22,6 +22,22 @@ impl PysaLocation {
         Self(range)
     }
 
+    pub fn line(&self) -> u32 {
+        self.0.start.line_within_file().get()
+    }
+
+    pub fn col(&self) -> u32 {
+        self.0.start.column().get()
+    }
+
+    pub fn end_line(&self) -> u32 {
+        self.0.end.line_within_file().get()
+    }
+
+    pub fn end_col(&self) -> u32 {
+        self.0.end.column().get()
+    }
+
     pub fn as_key(&self) -> String {
         format!(
             "{}:{}-{}:{}",

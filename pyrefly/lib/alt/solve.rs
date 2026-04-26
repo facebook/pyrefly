@@ -15,8 +15,12 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::facet::FacetKind;
+use pyrefly_types::tensor::TensorType;
 use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_alias::TypeAliasIndex;
+use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
@@ -36,6 +40,7 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
@@ -58,7 +63,7 @@ use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
-use crate::alt::unwrap::HintRef;
+use crate::alt::unwrap::HintRefOld;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
@@ -88,14 +93,15 @@ use crate::binding::binding::EmptyAnswer;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
-use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NoneIfRecursive;
@@ -110,8 +116,8 @@ use crate::binding::binding::SuperStyle;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeParameter;
 use crate::binding::binding::UnpackedPosition;
+use crate::binding::narrow::FacetSubject;
 use crate::binding::narrow::NarrowOp;
-use crate::binding::narrow::NarrowingSubject;
 use crate::binding::narrow::identifier_and_chain_for_expr;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::config::error_kind::ErrorKind;
@@ -129,7 +135,6 @@ use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
 use crate::types::callable::Function;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
@@ -139,8 +144,11 @@ use crate::types::display::TypeDisplayContext;
 use crate::types::literal::Lit;
 use crate::types::module::ModuleType;
 use crate::types::param_spec::ParamSpec;
+use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
+use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
+use crate::types::quantified::QuantifiedOrigin;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
 use crate::types::type_alias::TypeAlias;
@@ -149,16 +157,14 @@ use crate::types::type_info::TypeInfo;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::TypeVar;
+use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
-use crate::types::types::CalleeKind;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
-use crate::types::types::TParam;
 use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
 use crate::types::types::Type;
-use crate::types::types::Var;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TypeFormContext {
@@ -240,9 +246,18 @@ pub enum Iterable {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Solve a `BindingLegacyTypeParam`, producing a `LegacyTypeParameterLookup` that tells the
+    /// caller whether the name is a type parameter and, if so, which `Quantified` to use.
+    ///
+    /// The `scope_anchor` is the range of the `KeyLegacyTypeParam` key itself — the first
+    /// occurrence of the TypeVar name in this scope. It is unique per (scope, TypeVar) pair:
+    /// two functions that both use an imported `T` will have different first-occurrence ranges,
+    /// so their `Quantified`s will have different identities even though they share the same
+    /// module-level `TypeVar` declaration.
     pub fn solve_legacy_tparam(
         &self,
         binding: &BindingLegacyTypeParam,
+        scope_anchor: TextRange,
     ) -> Arc<LegacyTypeParameterLookup> {
         let maybe_parameter = match binding {
             BindingLegacyTypeParam::ParamKeyed(k) => self.get_idx(*k),
@@ -260,32 +275,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .into()
             }
         };
+        // Use the scope_anchor (the KeyLegacyTypeParam's own range, i.e. the first occurrence
+        // of this TypeVar name in the enclosing function/class/alias scope) as the identity
+        // anchor. This gives each (scope, TypeVar) pair a distinct Quantified even when multiple
+        // scopes import and reuse the same module-level TypeVar declaration.
+        let module = self.module().name();
         match maybe_parameter.ty() {
             Type::TypeVar(x) => {
-                let q = Quantified::from_type_var(x, self.uniques);
-                Arc::new(LegacyTypeParameterLookup::Parameter(TParam {
-                    quantified: q,
-                }))
+                let identity = QuantifiedIdentity::new(
+                    module,
+                    AnchorIndex::first(scope_anchor),
+                    QuantifiedOrigin::ScopedLegacy,
+                );
+                let q = Quantified::from_type_var(x, identity);
+                Arc::new(LegacyTypeParameterLookup::Parameter(q))
             }
             Type::TypeVarTuple(x) => {
+                let identity = QuantifiedIdentity::new(
+                    module,
+                    AnchorIndex::first(scope_anchor),
+                    QuantifiedOrigin::ScopedLegacy,
+                );
                 let q = Quantified::type_var_tuple(
                     x.qname().id().clone(),
-                    self.uniques,
+                    identity,
                     x.default().cloned(),
                 );
-                Arc::new(LegacyTypeParameterLookup::Parameter(TParam {
-                    quantified: q,
-                }))
+                Arc::new(LegacyTypeParameterLookup::Parameter(q))
             }
             Type::ParamSpec(x) => {
-                let q = Quantified::param_spec(
-                    x.qname().id().clone(),
-                    self.uniques,
-                    x.default().cloned(),
+                let identity = QuantifiedIdentity::new(
+                    module,
+                    AnchorIndex::first(scope_anchor),
+                    QuantifiedOrigin::ScopedLegacy,
                 );
-                Arc::new(LegacyTypeParameterLookup::Parameter(TParam {
-                    quantified: q,
-                }))
+                let q =
+                    Quantified::param_spec(x.qname().id().clone(), identity, x.default().cloned());
+                Arc::new(LegacyTypeParameterLookup::Parameter(q))
             }
             ty => Arc::new(LegacyTypeParameterLookup::NotParameter(ty.clone())),
         }
@@ -396,6 +422,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ));
                     }
                 }
+                if let Some(ty) = &mut ann.ty
+                    && ty.any(|t| matches!(t, Type::SpecialForm(SpecialForm::SelfType)))
+                {
+                    // The binding phase reports invalid uses of `Self` (for example, outside a class).
+                    // Replace any unresolved `Self` special forms with `Any` so they do not leak into
+                    // later phases as internal errors.
+                    ty.subst_self_special_form_mut(&self.heap.mk_any_error());
+                }
+                if let Some(ty) = &ann.ty {
+                    self.check_legacy_typevar_scoping(ty, x.range(), errors);
+                }
                 Arc::new(AnnotationWithTarget {
                     target: target.clone(),
                     annotation: ann,
@@ -417,9 +454,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().is_subset_eq(got, want, self.type_order())
     }
 
-    /// Check that got and want are consistent with each other
-    pub fn is_equal(&self, got: &Type, want: &Type) -> bool {
-        self.solver().is_equal(got, want, self.type_order()).is_ok()
+    pub fn is_consistent(&self, got: &Type, want: &Type) -> bool {
+        self.solver()
+            .is_consistent(got, want, self.type_order())
+            .is_ok()
+    }
+
+    pub fn is_equivalent(&self, got: &Type, want: &Type) -> bool {
+        self.solver()
+            .is_equivalent(got, want, self.type_order())
+            .is_ok()
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -545,7 +589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
+    pub(crate) fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
         // Note that this function only checks for correct syntax.
         // Semantic validation (e.g. that `typing.Self` is used in a class
         // context, or that a string evaluates to a proper type expression) is
@@ -732,6 +776,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn has_named_tuple_iter_override(&self, cls: &ClassType) -> bool {
+        if self
+            .get_metadata_for_class(cls.class_object())
+            .named_tuple_metadata()
+            .is_none()
+        {
+            return false;
+        }
+        let Some(iter_method) = self
+            .get_non_synthesized_class_member_and_defining_class(cls.class_object(), &dunder::ITER)
+        else {
+            return false;
+        };
+        !iter_method
+            .defining_class
+            .has_toplevel_qname("builtins", "tuple")
+            && !iter_method
+                .defining_class
+                .has_toplevel_qname("type_checker_internals", "NamedTupleFallback")
+    }
+
     /// Given an `iterable` type, determine the iteration type; this is the type
     /// of `x` if we were to loop using `for x in iterable`.
     ///
@@ -753,6 +818,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )
         };
         match iterable {
+            Type::ClassType(cls) if self.has_named_tuple_iter_override(cls) => {
+                let ty = self
+                    .call_magic_dunder_method(
+                        iterable,
+                        &dunder::ITER,
+                        range,
+                        &[],
+                        &[],
+                        errors,
+                        Some(&context),
+                    )
+                    .and_then(|iter_ty| self.unwrap_iterable(&iter_ty))
+                    .unwrap_or_else(|| {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorInfo::Kind(ErrorKind::NotIterable),
+                            context().format(),
+                        )
+                    });
+                vec![Iterable::OfType(ty)]
+            }
             Type::ClassType(cls) if let Some(Tuple::Concrete(elts)) = self.as_tuple(cls) => {
                 vec![Iterable::FixedLen(elts.clone())]
             }
@@ -883,12 +970,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn tvars_to_tparams_for_type_alias_type(
         &self,
         exprs: &Vec<Expr>,
+        legacy_params: &[Idx<KeyLegacyTypeParam>],
         seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
         seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
         seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<TParam>,
+        range: TextRange,
         errors: &ErrorCollector,
-    ) {
+    ) -> Vec<Quantified> {
+        let mut tparams = Vec::new();
         for expr in exprs {
             let ty = self.expr_infer(expr, errors);
             let ty = self.untype(ty, expr.range(), errors);
@@ -907,11 +996,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Entry::Vacant(e) => {
-                            let q = Quantified::from_type_var(&ty_var, self.uniques);
+                            // Use `range` (the alias expression range) as anchor so that two
+                            // TypeAliasType aliases at different positions get distinct Quantifieds
+                            // even when they use the same module-level TypeVar.
+                            let identity = QuantifiedIdentity::new(
+                                self.module().name(),
+                                AnchorIndex::new(range, u32::from(ty_var.qname().range().start())),
+                                QuantifiedOrigin::ScopedLegacy,
+                            );
+                            let q = Quantified::from_type_var(&ty_var, identity);
                             e.insert(q.clone());
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            tparams.push(q.clone());
                         }
                     };
                 }
@@ -926,15 +1021,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Entry::Vacant(e) => {
+                            let identity = QuantifiedIdentity::new(
+                                self.module().name(),
+                                AnchorIndex::new(
+                                    range,
+                                    u32::from(ty_var_tuple.qname().range().start()),
+                                ),
+                                QuantifiedOrigin::ScopedLegacy,
+                            );
                             let q = Quantified::type_var_tuple(
                                 ty_var_tuple.qname().id().clone(),
-                                self.uniques,
+                                identity,
                                 ty_var_tuple.default().cloned(),
                             );
                             e.insert(q.clone());
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            tparams.push(q.clone());
                         }
                     };
                 }
@@ -949,15 +1050,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Entry::Vacant(e) => {
+                            let identity = QuantifiedIdentity::new(
+                                self.module().name(),
+                                AnchorIndex::new(
+                                    range,
+                                    u32::from(param_spec.qname().range().start()),
+                                ),
+                                QuantifiedOrigin::ScopedLegacy,
+                            );
                             let q = Quantified::param_spec(
                                 param_spec.qname().id().clone(),
-                                self.uniques,
+                                identity,
                                 param_spec.default().cloned(),
                             );
                             e.insert(q.clone());
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            tparams.push(q.clone());
                         }
                     };
                 }
@@ -971,21 +1078,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
         }
+        let mut legacy_params = self
+            .create_legacy_type_params(legacy_params)
+            .into_iter()
+            .map(|param| (param.name().clone(), param))
+            .collect::<SmallMap<_, _>>();
+        // `legacy_params` contains the tparams (built via solve_legacy_tparam, anchored to the
+        // KeyLegacyTypeParam's scope range) actually used in the alias. If we find a tparam in
+        // `tparams` but not in `legacy_tparams`, that means it's declared and not used, which is
+        // pointless but legal.
+        let tparams =
+            tparams.into_map(|param| legacy_params.shift_remove(param.name()).unwrap_or(param));
+        // Conversely, if we find a tparam in `legacy_tparams` but not `tparams`, that means it's
+        // used and not declared, which is illegal.
+        for (_, extra_tparam) in legacy_params.iter() {
+            errors.add(
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                vec1![
+                    format!(
+                        "Type variable `{}` is out of scope for this `TypeAliasType`",
+                        extra_tparam.name()
+                    ),
+                    format!(
+                        "Type parameters must be passed as a tuple literal to the `type_params` argument",
+                    )
+                ],
+            );
+        }
+        tparams
     }
 
+    /// Walk `ty`, replacing each legacy TypeVar/ParamSpec/TypeVarTuple occurrence with a
+    /// `Type::Quantified`, and recording discovered type parameters in `tparams`.
+    ///
+    /// `alias_anchor` is the source range of the enclosing alias name (or expression). It is
+    /// used as the `anchor` in `QuantifiedIdentity` so that two aliases at different source
+    /// positions that both use the same module-level TypeVar get distinct `Quantified`s.
+    /// The `ordinal` is set to the declaration-range start of each TypeVar, which is unique
+    /// per TypeVar within a module and deterministic across runs.
     fn tvars_to_tparams_for_type_alias(
         &self,
         ty: &mut Type,
+        alias_anchor: TextRange,
         seen_type_vars: &mut SmallMap<TypeVar, Quantified>,
         seen_type_var_tuples: &mut SmallMap<TypeVarTuple, Quantified>,
         seen_param_specs: &mut SmallMap<ParamSpec, Quantified>,
-        tparams: &mut Vec<(TextRange, TParam)>,
+        tparams: &mut Vec<(TextRange, Quantified)>,
     ) {
         match ty {
             Type::Union(box Union { members: ts, .. }) => {
                 for t in ts.iter_mut() {
                     self.tvars_to_tparams_for_type_alias(
                         t,
+                        alias_anchor,
                         seen_type_vars,
                         seen_type_var_tuples,
                         seen_param_specs,
@@ -997,6 +1143,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for t in cls.targs_mut().as_mut() {
                     self.tvars_to_tparams_for_type_alias(
                         t,
+                        alias_anchor,
                         seen_type_vars,
                         seen_type_var_tuples,
                         seen_param_specs,
@@ -1012,6 +1159,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut visit = |t: &mut Type| {
                     self.tvars_to_tparams_for_type_alias(
                         t,
+                        alias_anchor,
                         seen_type_vars,
                         seen_type_var_tuples,
                         seen_param_specs,
@@ -1023,7 +1171,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Concatenate(prefix, pspec) => {
                 for t in prefix {
                     self.tvars_to_tparams_for_type_alias(
-                        &mut t.0,
+                        t.ty_mut(),
+                        alias_anchor,
                         seen_type_vars,
                         seen_type_var_tuples,
                         seen_param_specs,
@@ -1032,6 +1181,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 self.tvars_to_tparams_for_type_alias(
                     pspec,
+                    alias_anchor,
                     seen_type_vars,
                     seen_type_var_tuples,
                     seen_param_specs,
@@ -1042,6 +1192,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut visit = |t: &mut Type| {
                     self.tvars_to_tparams_for_type_alias(
                         t,
+                        alias_anchor,
                         seen_type_vars,
                         seen_type_var_tuples,
                         seen_param_specs,
@@ -1054,14 +1205,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let q = match seen_type_vars.entry(ty_var.dupe()) {
                     Entry::Occupied(e) => e.get().clone(),
                     Entry::Vacant(e) => {
-                        let q = Quantified::from_type_var(ty_var, self.uniques);
+                        // Use alias_anchor so two aliases using the same TypeVar get
+                        // different Quantifieds. The ordinal is the TypeVar's declaration
+                        // range start, which is unique per TypeVar within a module.
+                        let identity = QuantifiedIdentity::new(
+                            self.module().name(),
+                            AnchorIndex::new(
+                                alias_anchor,
+                                u32::from(ty_var.qname().range().start()),
+                            ),
+                            QuantifiedOrigin::ScopedLegacy,
+                        );
+                        let q = Quantified::from_type_var(ty_var, identity);
                         e.insert(q.clone());
-                        tparams.push((
-                            ty_var.qname().range(),
-                            TParam {
-                                quantified: q.clone(),
-                            },
-                        ));
+                        tparams.push((ty_var.qname().range(), q.clone()));
                         q
                     }
                 };
@@ -1071,18 +1228,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let q = match seen_type_var_tuples.entry(ty_var_tuple.dupe()) {
                     Entry::Occupied(e) => e.get().clone(),
                     Entry::Vacant(e) => {
+                        let identity = QuantifiedIdentity::new(
+                            self.module().name(),
+                            AnchorIndex::new(
+                                alias_anchor,
+                                u32::from(ty_var_tuple.qname().range().start()),
+                            ),
+                            QuantifiedOrigin::ScopedLegacy,
+                        );
                         let q = Quantified::type_var_tuple(
                             ty_var_tuple.qname().id().clone(),
-                            self.uniques,
+                            identity,
                             ty_var_tuple.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push((
-                            ty_var_tuple.qname().range(),
-                            TParam {
-                                quantified: q.clone(),
-                            },
-                        ));
+                        tparams.push((ty_var_tuple.qname().range(), q.clone()));
                         q
                     }
                 };
@@ -1092,18 +1252,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let q = match seen_param_specs.entry(param_spec.dupe()) {
                     Entry::Occupied(e) => e.get().clone(),
                     Entry::Vacant(e) => {
+                        let identity = QuantifiedIdentity::new(
+                            self.module().name(),
+                            AnchorIndex::new(
+                                alias_anchor,
+                                u32::from(param_spec.qname().range().start()),
+                            ),
+                            QuantifiedOrigin::ScopedLegacy,
+                        );
                         let q = Quantified::param_spec(
                             param_spec.qname().id().clone(),
-                            self.uniques,
+                            identity,
                             param_spec.default().cloned(),
                         );
                         e.insert(q.clone());
-                        tparams.push((
-                            param_spec.qname().range(),
-                            TParam {
-                                quantified: q.clone(),
-                            },
-                        ));
+                        tparams.push((param_spec.qname().range(), q.clone()));
                         q
                     }
                 };
@@ -1111,13 +1274,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Unpack(t) => self.tvars_to_tparams_for_type_alias(
                 t,
+                alias_anchor,
                 seen_type_vars,
                 seen_type_var_tuples,
                 seen_param_specs,
                 tparams,
             ),
-            Type::Type(t) => self.tvars_to_tparams_for_type_alias(
+            Type::Type(t) | Type::Annotated(t, _) => self.tvars_to_tparams_for_type_alias(
                 t,
+                alias_anchor,
                 seen_type_vars,
                 seen_type_var_tuples,
                 seen_param_specs,
@@ -1139,6 +1304,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !self.has_valid_annotation_syntax(expr, errors) {
             return TypeAlias::error(name.clone(), style);
         }
+        let annotated_metadata = match &ty {
+            Type::Annotated(_, metadata) => Some(metadata.clone()),
+            _ => None,
+        };
         let untyped = self.untype_opt(ty.clone(), range, errors);
         let ty = if let Some(untyped) = untyped {
             let validated =
@@ -1156,44 +1325,123 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             return TypeAlias::error(name.clone(), style);
         };
-        // Extract Annotated metadata; skip the first element since that's the type and collect the rest of the vector
-        let annotated_metadata = self
-            .get_annotated_metadata(expr, TypeFormContext::TypeAlias, errors)
-            .iter()
-            .map(|e| self.expr_infer(e, &self.error_swallower()))
-            .collect();
-        self.check_type_alias_for_cyclic_reference(name, &ty, range, errors);
-        TypeAlias::new(
-            name.clone(),
-            self.heap.mk_type_form(ty),
-            style,
-            annotated_metadata,
-        )
+        // If the original type was Annotated[T, ...], preserve the wrapper so that
+        // the alias is not callable and not assignable to type[T] in value position.
+        let stored_ty = if let Some(metadata) = annotated_metadata {
+            Type::Annotated(Box::new(ty), metadata)
+        } else {
+            self.heap.mk_type_of(ty)
+        };
+        TypeAlias::new(name.clone(), stored_ty, style)
     }
 
+    /// Check whether a type alias body contains a cyclic self-reference.
+    ///
+    /// Two kinds of invalid self-reference are detected:
+    /// 1. Direct top-level union member: `type X = int | X` (X appears as a
+    ///    direct union alternative, producing `int | int | ...` which is just `int`)
+    /// 2. Unguarded nested reference inside a builtin class, `type[...]`, or
+    ///    tuple: `type X = list[X]` (X appears inside a container with no union
+    ///    base case, producing an uninhabitable infinite type)
+    ///
+    /// Valid recursive aliases like `type X = int | list[X]` have a base case
+    /// (`int`) in the union, so the self-reference is "guarded".
+    ///
+    /// We only check for unguarded references inside builtin classes,
+    /// `type[...]`, and tuples, not user-defined generic classes. A
+    /// user-defined `class C[T]: x: T | None` makes `type A = C[A]`
+    /// inhabitable (e.g. `C(x=C(x=None))`), so we can't assume all generic
+    /// containers require their type parameter.
+    /// Returns `true` if a cyclic self-reference was found.
     fn check_type_alias_for_cyclic_reference(
         &self,
         name: &Name,
-        ty: &Type,
+        ta: &TypeAlias,
         range: TextRange,
         errors: &ErrorCollector,
-    ) {
-        let mut contains_cyclic_ref = false;
-        // We only check for the name of the current alias to avoid reporting duplicate errors
-        // for a cycle involving multiple aliases.
-        let is_self_ref =
-            |ty: &Type| matches!(ty, Type::TypeAlias(box TypeAliasData::Ref(r)) if r.name == *name);
-        self.map_over_union(ty, |ty| {
-            contains_cyclic_ref |= is_self_ref(ty);
+    ) -> bool {
+        // Unwrap the type[body] wrapper. We operate on the inner body because
+        // map_over_union wraps inner union members in type[...] when traversing
+        // inside Type::Type, which would prevent matching UntypedAlias nodes.
+        // Note: TypeAlias::error() and TypeAlias::unknown() store raw types
+        // (not wrapped in Type::Type), so we skip the check for those.
+        let ty = ta.as_type();
+        let body = match &ty {
+            Type::Type(inner) => inner.as_ref(),
+            _ => return false,
+        };
+        let is_self_ref = |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if ta.name() == name);
+
+        // Check 1: Direct top-level union member (e.g. `int | X`).
+        let mut direct_self_ref = false;
+        self.map_over_union(body, |ty| {
+            direct_self_ref |= is_self_ref(ty);
         });
-        if contains_cyclic_ref {
+
+        // Check 2: Unguarded nested reference (e.g. `list[X]`).
+        // A self-reference is "guarded" if it appears inside a union where at
+        // least one sibling branch does not (transitively) contain the self-ref.
+        // Returns true if the type contains a self-reference that is not guarded
+        // by a union base case, only recursing into known builtin collections.
+        fn has_unguarded_self_ref(ty: &Type, is_self_ref: &dyn Fn(&Type) -> bool) -> bool {
+            if is_self_ref(ty) {
+                return true;
+            }
+            match ty {
+                Type::Union(box Union { members, .. }) => {
+                    // If any member is free of self-refs, it provides a base case
+                    // and all other self-referencing members are guarded.
+                    let mut has_self_ref = false;
+                    let mut has_base_case = false;
+                    for m in members {
+                        if has_unguarded_self_ref(m, is_self_ref) {
+                            has_self_ref = true;
+                        } else {
+                            has_base_case = true;
+                        }
+                    }
+                    has_self_ref && !has_base_case
+                }
+                // Builtin classes use their type parameters in required
+                // positions (as elements, fields, or yielded values), so a
+                // self-reference with no union base case is uninhabitable.
+                Type::ClassType(cls) if cls.class_object().module_name().as_str() == "builtins" => {
+                    cls.targs()
+                        .as_slice()
+                        .iter()
+                        .any(|arg| has_unguarded_self_ref(arg, is_self_ref))
+                }
+                // type[X] wraps X, so a self-ref is unguarded here too.
+                Type::Type(inner) => has_unguarded_self_ref(inner, is_self_ref),
+                // Tuples: fixed-length tuples require all elements, and
+                // unbounded tuples are degenerate (only empty tuple inhabits).
+                // In either case a self-ref with no union base case is invalid.
+                Type::Tuple(_) => {
+                    let mut found = false;
+                    ty.recurse(&mut |child: &Type| {
+                        if has_unguarded_self_ref(child, is_self_ref) {
+                            found = true;
+                        }
+                    });
+                    found
+                }
+                // For user-defined generic classes and other types, we don't
+                // recurse — the class may have optional fields of type T that
+                // provide a base case we can't see here.
+                _ => false,
+            }
+        }
+
+        if direct_self_ref || has_unguarded_self_ref(body, &is_self_ref) {
             self.error(
                 errors,
                 range,
                 ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
                 format!("Found cyclic self-reference in `{name}`"),
             );
+            return true;
         }
+        false
     }
 
     /// `typealiastype_tparams` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
@@ -1209,6 +1457,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         mut ta: TypeAlias,
         params: &TypeAliasParams,
+        current_index: Option<TypeAliasIndex>,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -1216,16 +1465,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.heap.mk_any_error();
         }
 
+        // Step 1: Expand non-recursive UntypedAlias(Ref(...)) nodes by
+        // inlining the referenced alias's body. Only runs for binding-time
+        // aliases (current_index is Some); implicit legacy aliases detected
+        // at solve time skip expansion.
+        if let Some(index) = current_index {
+            self.expand_type_alias_refs(ta.as_type_mut(), index);
+        }
+
+        // Step 2: Check for cyclic self-references after expansion.
+        // If a cycle is found, replace the body with an error type to prevent
+        // infinite recursion when downstream operations (e.g. attribute lookup,
+        // subset checks) try to resolve the alias.
+        if self.check_type_alias_for_cyclic_reference(name, &ta, range, errors) {
+            return self.heap.mk_any_error();
+        }
+
+        // Step 3: Extract type parameters from the (now expanded) body.
         let mut seen_type_vars = SmallMap::new();
         let mut seen_type_var_tuples = SmallMap::new();
         let mut seen_param_specs = SmallMap::new();
-        let mut tparams = Vec::new();
 
+        // `range` (the alias expression range) serves as the anchor for Quantified identity.
+        // This ensures that two aliases at different source positions that use the same
+        // module-level TypeVar produce distinct Quantifieds.
+        let alias_anchor = range;
         let tvars_to_tparams_for_type_alias =
             |ty, seen_type_vars, seen_type_var_tuples, seen_param_specs| {
                 let mut tparams_with_ranges = Vec::new();
                 self.tvars_to_tparams_for_type_alias(
                     ty,
+                    alias_anchor,
                     seen_type_vars,
                     seen_type_var_tuples,
                     seen_param_specs,
@@ -1238,57 +1508,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 tparams_with_ranges
             };
 
-        match params {
-            TypeAliasParams::TypeAliasType(type_params) => {
+        let tparams = match params {
+            TypeAliasParams::TypeAliasType {
+                declared_params: type_params,
+                legacy_params,
+            } => {
                 // Handle type params from `TypeAliasType(type_params=...)`.
                 self.tvars_to_tparams_for_type_alias_type(
                     type_params,
+                    legacy_params,
                     &mut seen_type_vars,
                     &mut seen_type_var_tuples,
                     &mut seen_param_specs,
-                    &mut tparams,
-                    errors,
-                );
-                let extra_tparams = tvars_to_tparams_for_type_alias(
-                    ta.as_type_mut(),
-                    &mut seen_type_vars,
-                    &mut seen_type_var_tuples,
-                    &mut seen_param_specs,
-                );
-                for (_, extra_tparam) in extra_tparams {
-                    errors.add(
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
-                    vec1![
-                        format!(
-                            "Type variable `{}` is out of scope for this `TypeAliasType`",
-                            extra_tparam.name()
-                        ),
-                        format!(
-                            "Type parameters must be passed as a tuple literal to the `type_params` argument",
-                        )
-                    ],
-                );
-                }
+                    errors,
+                )
             }
             TypeAliasParams::Legacy(Some(legacy_tparams)) => {
                 // Collect type params that appear in a legacy type alias that we were able to detect
                 // syntactically in the bindings phase.
-                tparams = legacy_tparams
-                    .iter()
-                    .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
-                    .collect();
+                self.create_legacy_type_params(legacy_tparams)
             }
             TypeAliasParams::Legacy(None) => {
                 // Collect type params that appear in a legacy type alias that we needed type
                 // information to detect.
-                tparams = tvars_to_tparams_for_type_alias(
+                tvars_to_tparams_for_type_alias(
                     ta.as_type_mut(),
                     &mut seen_type_vars,
                     &mut seen_type_var_tuples,
                     &mut seen_param_specs,
                 )
-                .into_map(|(_, tp)| tp);
+                .into_map(|(_, tp)| tp)
             }
             TypeAliasParams::Scoped(scoped_tparams) => {
                 // Scoped type alias: error on undeclared type params and collect declared ones.
@@ -1306,15 +1556,140 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         format!("Type parameters used in `{name}` but not declared"),
                     );
                 }
-                tparams = self.scoped_type_params(scoped_tparams.as_ref(), errors);
+                self.scoped_type_params(scoped_tparams.as_ref(), errors)
             }
-        }
+        };
         Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(self.validated_tparams(
             range,
             tparams,
             TParamsSource::TypeAlias,
             errors,
         ))
+    }
+
+    /// Create TParams for a recursive reference to a type alias. This is essentially a
+    /// slimmed-down version of `wrap_type_alias` that skips most validation (because the
+    /// validation will be done by `wrap_type_alias`).
+    pub fn create_type_alias_params_recursive(
+        &self,
+        tparams: &TypeAliasParams,
+        anchor: TextRange,
+    ) -> Arc<TParams> {
+        let mut seen_type_vars = SmallMap::new();
+        let mut seen_type_var_tuples = SmallMap::new();
+        let mut seen_param_specs = SmallMap::new();
+        let errors = self.error_swallower();
+        let params = match tparams {
+            TypeAliasParams::TypeAliasType {
+                declared_params: tparams,
+                legacy_params,
+            } => self.tvars_to_tparams_for_type_alias_type(
+                tparams,
+                legacy_params,
+                &mut seen_type_vars,
+                &mut seen_type_var_tuples,
+                &mut seen_param_specs,
+                anchor,
+                &errors,
+            ),
+            TypeAliasParams::Legacy(Some(tparams)) => self.create_legacy_type_params(tparams),
+            TypeAliasParams::Legacy(None) => Vec::new(),
+            TypeAliasParams::Scoped(tparams) => self.scoped_type_params(tparams.as_ref(), &errors),
+        };
+        self.validated_tparams(anchor, params, TParamsSource::TypeAlias, &errors)
+    }
+
+    fn create_legacy_type_params(&self, keys: &[Idx<KeyLegacyTypeParam>]) -> Vec<Quantified> {
+        keys.iter()
+            .filter_map(|key| {
+                if let BindingLegacyTypeParam::ParamKeyed(def_key) = self.bindings().get(*key)
+                    && matches!(
+                        self.bindings().get(*def_key),
+                        Binding::TypeAlias(..) | Binding::TypeAliasRef(..)
+                    )
+                {
+                    // In the bindings phase, we were unable to determine whether this key
+                    // pointed to a legacy type parameter, so we created a
+                    // BindingLegacyTypeParam to defer the decision until the answers
+                    // phase. We now know that this is a type alias, so we can immediately
+                    // return None to indicate that this isn't a type param. Importantly,
+                    // we skip solving the binding to avoid a cycle in a recursive alias:
+                    //     Json = <blah> | list["Json"]
+                    //                           ^^^^
+                    //                           skip solving this binding so we don't try
+                    //                           to solve for Json while solving for Json
+                    None
+                } else {
+                    self.get_idx(*key).deref().parameter().cloned()
+                }
+            })
+            .collect()
+    }
+
+    /// Expand non-recursive `UntypedAlias(Ref(...))` nodes in a type by
+    /// inlining the referenced alias's raw body from `KeyTypeAlias`.
+    /// Recursive references (detected via a visiting set) are left in place.
+    /// `current_index` is the alias being defined — pre-seeded in the
+    /// visiting set so self-references are immediately recognized as recursive.
+    fn expand_type_alias_refs(&self, ty: &mut Type, current_index: TypeAliasIndex) {
+        let mut visiting = SmallSet::new();
+        visiting.insert((self.module().name(), current_index));
+        self.expand_type_alias_refs_inner(ty, &mut visiting);
+    }
+
+    /// Inner recursive walker for `expand_type_alias_refs`. Matches
+    /// `UntypedAlias(Ref(...))` nodes for same-module aliases, looks up
+    /// the raw body from `KeyTypeAlias`, and inlines it. Cross-module
+    /// refs are left untouched (they resolve through the exports table).
+    fn expand_type_alias_refs_inner(
+        &self,
+        ty: &mut Type,
+        visiting: &mut SmallSet<(ModuleName, TypeAliasIndex)>,
+    ) {
+        match ty {
+            Type::UntypedAlias(box TypeAliasData::Ref(r))
+                if r.module_name == self.module().name() =>
+            {
+                let key = (r.module_name, r.index);
+                if visiting.contains(&key) {
+                    // Recursive reference — leave as Ref for cycle detection
+                    return;
+                }
+                let key_type_alias = KeyTypeAlias(r.index);
+                let idx = self
+                    .bindings()
+                    .key_to_idx_hashed_opt(Hashed::new(&key_type_alias))
+                    .expect("same-module TypeAliasRef must have a corresponding KeyTypeAlias");
+                let ta: Arc<TypeAlias> = self.get_idx(idx);
+                // The body stored in KeyTypeAlias has already been through
+                // untype_opt during wrap_type_alias, so we just strip the
+                // Type::Type wrapper rather than re-running untype.
+                // Note: TypeAlias::error() and TypeAlias::unknown() store raw
+                // types (not wrapped in Type::Type), so we leave the Ref in
+                // place for those — the error is already reported elsewhere.
+                let mut body = match ta.as_type() {
+                    Type::Type(inner) => *inner,
+                    // If the body was an Annotated type, return it without the wrapper
+                    Type::Annotated(inner, _) => *inner,
+                    _ => return,
+                };
+                // Recursively expand any Refs in the inlined body, so that all nested
+                // alias bodies are inlined before we apply the outer substitution.
+                visiting.insert(key);
+                self.expand_type_alias_refs_inner(&mut body, visiting);
+                visiting.shift_remove(&key);
+                // Apply type arguments if the reference was parameterized.
+                // For generic aliases used without explicit args, promote_forall
+                // in untype_opt will have already injected implicit Any args.
+                if let Some(args) = &r.args {
+                    args.substitute_into_mut(&mut body);
+                }
+                *ty = body;
+            }
+            _ => ty.recurse_mut(&mut |child: &mut Type| {
+                self.expand_type_alias_refs_inner(child, visiting);
+            }),
+        }
     }
 
     fn context_value_enter(
@@ -1393,7 +1768,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             },
         };
-        let base_exception_class_type = self.heap.mk_type_form(
+        let base_exception_class_type = self.heap.mk_type_of(
             self.heap
                 .mk_class_type(self.stdlib.base_exception().clone()),
         );
@@ -1469,12 +1844,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .mk_optional(self.heap.mk_class_type(self.stdlib.bool().clone())),
                 range,
                 errors,
-                &|| TypeCheckContext {
-                    kind: TypeCheckKind::MagicMethodReturn(
+                &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::MagicMethodReturn(
                         self.for_display(context_manager_type.clone()),
                         kind.context_exit_dunder(),
-                    ),
-                    context: Some(context()),
+                    ))
+                    .with_context(Some(context()))
                 },
             );
             // TODO: `exit_type` may also affect exceptional control flow, which is yet to be supported:
@@ -1529,21 +1904,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             ));
         }
-        Quantified::new(
-            tp.unique,
+        let q = Quantified::new(
+            tp.identity.clone(),
             tp.name.clone(),
             tp.kind,
             default_ty,
             restriction,
             PreInferenceVariance::Undefined,
-        )
+        );
+        if let Some(owner) = &tp.owner {
+            q.with_owner(owner.clone())
+        } else {
+            q
+        }
     }
 
     pub fn scoped_type_params(
         &self,
         x: Option<&TypeParams>,
         errors: &ErrorCollector,
-    ) -> Vec<TParam> {
+    ) -> Vec<Quantified> {
         match x {
             Some(x) => {
                 let mut params = Vec::new();
@@ -1563,7 +1943,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             binding
                         ),
                     };
-                    params.push(TParam { quantified });
+                    params.push(quantified);
                 }
                 params
             }
@@ -1574,33 +1954,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn validate_type_params(
         &self,
         range: TextRange,
-        tparams: &[TParam],
+        tparams: &[Quantified],
         source: TParamsSource,
         errors: &ErrorCollector,
     ) {
-        let mut last_tparam: Option<&TParam> = None;
+        let mut last_tparam: Option<&Quantified> = None;
         let mut seen = SmallSet::new();
         let mut typevartuple = None;
         let mut typevartuple_count = 0;
         for tparam in tparams {
             if let Some(p) = last_tparam
-                && p.quantified.default().is_some()
+                && p.default().is_some()
             {
                 // Check for missing default
-                if tparam.quantified.default().is_none() {
+                if tparam.default().is_none() {
                     self.error(
                         errors,
                         range,
                         ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "Type parameter `{}` without a default cannot follow type parameter `{}` with a default",
-                            tparam.quantified.name(),
+                            tparam.name(),
                             p.name()
                         )
                     );
                 }
             }
-            if let Some(default) = tparam.quantified.default() {
+            if let Some(default) = tparam.default() {
                 let mut out_of_scope_names = Vec::new();
                 default.collect_raw_legacy_type_variables(&mut out_of_scope_names);
                 out_of_scope_names.retain(|name| !seen.contains(name));
@@ -1611,13 +1991,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "Default of type parameter `{}` refers to out-of-scope {} {}",
-                            tparam.quantified.name(),
+                            tparam.name(),
                             pluralize(out_of_scope_names.len(), "type parameter"),
                             out_of_scope_names.map(|n| format!("`{n}`")).join(", "),
                         ),
                     );
                 }
-                if tparam.quantified.is_type_var()
+                if tparam.is_type_var()
                     && let Some(tvt) = &typevartuple
                 {
                     self.error(
@@ -1626,15 +2006,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
                         format!(
                             "TypeVar `{}` with a default cannot follow TypeVarTuple `{}`",
-                            tparam.quantified.name(),
+                            tparam.name(),
                             tvt
                         ),
                     );
                 }
             }
-            seen.insert(tparam.quantified.name().clone());
-            if tparam.quantified.is_type_var_tuple() {
-                typevartuple = Some(tparam.quantified.name().clone());
+            seen.insert(tparam.name().clone());
+            if tparam.is_type_var_tuple() {
+                typevartuple = Some(tparam.name().clone());
                 typevartuple_count += 1;
             }
             last_tparam = Some(tparam);
@@ -1655,7 +2035,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn validated_tparams(
         &self,
         range: TextRange,
-        tparams: Vec<TParam>,
+        tparams: Vec<Quantified>,
         source: TParamsSource,
         errors: &ErrorCollector,
     ) -> Arc<TParams> {
@@ -1669,25 +2049,90 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<TypeInfo> {
-        // Special case for forward, as we don't want to re-expand the type
-        if let Binding::Forward(fwd) = binding {
+        // Special case for forward, as we don't want to re-expand the type.
+        // ForwardToFirstUse is handled here too: the partial answer shortcut
+        // lives in get_idx (before push), so by the time we reach solve_binding
+        // the shortcut didn't match and we fall through to normal resolution.
+        if let Binding::Forward(fwd) | Binding::ForwardToFirstUse(fwd) = binding {
             return self.get_idx(*fwd);
         }
-        let mut type_info = self.binding_to_type_info(binding, errors);
+        if let Binding::PromoteForward(fwd) = binding {
+            return Arc::new(self.resolve_promote_forward(*fwd));
+        }
+        // Inline first-use pinning for NameAssign.
+        let mut type_info = if let Binding::NameAssign(na) = binding
+            && self.solver().infer_with_first_use
+            && na.def_idx.is_some()
+            && na.annotation.is_none()
+            && let FirstUse::UsedBy(first_use_idx) = &na.first_use
+        {
+            self.solve_binding_with_first_use_pinning(
+                binding,
+                na.def_idx.unwrap(),
+                *first_use_idx,
+                errors,
+            )
+        } else {
+            self.binding_to_type_info(binding, errors)
+        };
         type_info.visit_mut(&mut |ty| {
-            // Skip pinning for NameAssign and PartialTypeWithUpstreamsCompleted bindings
-            // when infer_with_first_use is enabled, as these bindings can contain partial
-            // types that should be pinned by first use. When infer_with_first_use is disabled,
-            // we pin immediately since there's no first-use inference mechanism.
-            let pin_partial_types = !self.solver().infer_with_first_use
-                || !matches!(
-                    binding,
-                    Binding::NameAssign { .. } | Binding::PartialTypeWithUpstreamsCompleted(..)
-                );
-            self.pin_all_placeholder_types(ty, pin_partial_types, range, errors);
+            self.pin_all_placeholder_types(ty, true, range, errors);
             self.expand_vars_mut(ty);
         });
         Arc::new(type_info)
+    }
+
+    /// Compute the TypeInfo for a NameAssign that participates in first-use pinning.
+    ///
+    /// This evaluates the raw binding, checks for partial types (placeholder Vars),
+    /// and if present, stores a partial answer that the first-use binding can read
+    /// to constrain the placeholders via side effects before pinning occurs.
+    fn solve_binding_with_first_use_pinning(
+        &self,
+        binding: &Binding,
+        def_idx: Idx<Key>,
+        first_use_idx: Idx<Key>,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        // Step 1: Compute raw TypeInfo (Vars unpinned)
+        let type_info = self.binding_to_type_info(binding, errors);
+
+        // Step 2: Check whether the type actually contains partial types that
+        // need pinning. If not, skip the inline first-use evaluation entirely
+        // to avoid triggering unnecessary cycles through the binding graph.
+        let has_partial_types = {
+            let solver = self.solver();
+            let mut found = false;
+            type_info.visit(&mut |ty| {
+                if !found {
+                    let vars = ty.collect_maybe_placeholder_vars();
+                    found = vars.iter().any(|v| solver.var_is_partial(*v));
+                }
+            });
+            found
+        };
+
+        if !has_partial_types {
+            return type_info;
+        }
+
+        // Step 3: Store partial answer that the first-use solve will read and potentially pin.
+        self.store_partial_answer(def_idx, Arc::new(type_info.clone()));
+
+        // Step 4: Evaluate the first-use; throw away both the result and errors, this is
+        // *purely* for side-effects.
+        //
+        // Note that if the first use is a NameAssign, this will *not* recursively trigger
+        // first-use, because we're using `binding_to_type_info` which is a lower layer and
+        // the first-use pin is in `solve_binding`. This is good - we don't want to consume
+        // length-of-chain stack space.
+        let first_use_binding = self.bindings().get(first_use_idx);
+        let _ = self.binding_to_type_info(first_use_binding, &self.error_swallower());
+
+        // Step 5: Remove the partial answer, we've finished with it, and proceed to
+        // pinning as usual before we expose this result as an answer.
+        self.clear_partial_answer(def_idx);
+        type_info
     }
 
     /// Force the outermost type, without deep-forcing. Without this, narrowing behavior
@@ -1927,6 +2372,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match t {
                         Type::ClassDef(_) => true,
                         Type::Type(box Type::ClassType(cls)) => cls.targs().is_empty(),
+                        // `None` is `NoneType` at runtime, which is a plain type that
+                        // doesn't support `__or__` with string literals.
+                        Type::None => true,
                         Type::TypeAlias(ta) => {
                             let ta = me.get_type_alias(&ta);
                             let t = if ta.style == TypeAliasStyle::Scoped {
@@ -1967,6 +2415,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 annotation: annot_key,
                 expr,
                 is_explicit,
+                ..
             } => {
                 let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, errors);
                 if let Some(annot) = &annot
@@ -1986,7 +2435,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                 ))
             }
-            BindingTypeAlias::Scoped { name, expr } => {
+            BindingTypeAlias::Scoped { name, expr, .. } => {
                 let ty = self.expr_infer(expr, errors);
                 Arc::new(self.as_type_alias(name, TypeAliasStyle::Scoped, ty, expr, errors))
             }
@@ -1994,6 +2443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 name,
                 annotation,
                 expr,
+                ..
             } => {
                 let ta = if let Some(expr) = expr {
                     let mut ty = self.expr_infer(expr, errors);
@@ -2038,7 +2488,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let Some(owner) = class_binding.0.as_ref() else {
                 return;
             };
-            if owner.contains(&expect.attr.id)
+            if self
+                .get_class_fields(owner)
+                .is_some_and(|f| f.contains(&expect.attr.id))
                 && self.is_subset_eq(
                     &value_type,
                     &self.union(
@@ -2093,6 +2545,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         }
 
+        let Some(cls_fields) = self.get_class_fields(cls) else {
+            return;
+        };
         let mro = self.get_mro_for_class(cls);
         for (field_name, _field) in self.get_class_field_map(cls).iter() {
             // Apply the same filters as check_consistent_override_for_field.
@@ -2111,10 +2566,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 continue;
             }
 
-            if let Some(child_range) = cls.field_decl_range(field_name) {
+            if let Some(child_range) = cls_fields.field_decl_range(field_name) {
                 for ancestor in mro.ancestors(self.stdlib) {
+                    let ancestor_fields = self.get_class_fields(ancestor.class_object());
                     if let Some(ancestor_range) =
-                        ancestor.class_object().field_decl_range(field_name)
+                        ancestor_fields.and_then(|f| f.field_decl_range(field_name))
                     {
                         let ancestor_module_path = ancestor.class_object().module().path();
                         if !Self::should_skip_module_for_indexing(ancestor_module_path) {
@@ -2169,25 +2625,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.def_index,
                 &x.def,
                 &x.parent,
-                x.fields.clone(),
                 x.tparams_require_binding,
                 errors,
             ),
-            BindingClass::FunctionalClassDef(def_index, x, parent, fields) => {
-                self.functional_class_definition(*def_index, x, parent, fields)
+            BindingClass::FunctionalClassDef(def_index, x, parent) => {
+                self.functional_class_definition(*def_index, x, parent)
             }
         };
         Arc::new(NoneIfRecursive(Some(cls)))
     }
 
     pub fn solve_tparams(&self, binding: &BindingTParams, errors: &ErrorCollector) -> Arc<TParams> {
-        self.calculate_class_tparams(
+        let result = self.calculate_class_tparams(
             &binding.name,
             binding.scoped_type_params.as_deref(),
             &binding.generic_bases,
             &binding.legacy_tparams,
             errors,
-        )
+        );
+        // Truncate recursive TArgs nesting in restrictions. This prevents unbounded
+        // growth during fixpoint iteration when mutually-recursive classes reference
+        // each other in type parameter bounds.
+        Arc::new(Arc::unwrap_or_clone(result).truncate_recursive_targs())
     }
 
     pub fn solve_class_base_type(
@@ -2209,7 +2668,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<ClassField> {
         let functional_class_def = matches!(
             self.bindings().get(field.class_idx),
-            BindingClass::FunctionalClassDef(_, _, _, _)
+            BindingClass::FunctionalClassDef(_, _, _)
         );
         let field = match &self.get_idx(field.class_idx).0 {
             None => ClassField::recursive(self.heap),
@@ -2300,13 +2759,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Get type parameters and their declared variances
             let tparams = self.get_class_tparams(class);
 
-            // Only check violations for type parameters that have declared variance
-            let has_declared_variance = tparams
-                .as_vec()
-                .iter()
-                .any(|p| p.variance() != PreInferenceVariance::Undefined);
+            // Only check violations when there are covariant/contravariant
+            // TypeVars — invariant TypeVars are valid in any position.
+            let has_non_invariant_variance = tparams.as_vec().iter().any(|p| {
+                matches!(
+                    p.variance(),
+                    PreInferenceVariance::Covariant | PreInferenceVariance::Contravariant
+                )
+            });
 
-            if has_declared_variance {
+            if has_non_invariant_variance {
                 let result = self.compute_variance(class, true);
 
                 for violation in &result.violations {
@@ -2317,6 +2779,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorInfo::Kind(ErrorKind::InvalidVariance),
                         message,
                     );
+                }
+            }
+
+            // For protocols: warn when an invariant TypeVar could be declared
+            // with a narrower variance. We only check invariant TypeVars here
+            // because wrong variance on covariant/contravariant TypeVars is
+            // already caught by InvalidVariance at the usage site.
+            let metadata = self.get_metadata_for_class(class);
+            if metadata.is_protocol()
+                && tparams.as_vec().iter().any(|p| {
+                    p.kind() == QuantifiedKind::TypeVar
+                        && p.variance() == PreInferenceVariance::Invariant
+                })
+            {
+                let inferred = self.infer_variance_ignoring_declared(class);
+                for tparam in tparams.as_vec() {
+                    if tparam.kind() != QuantifiedKind::TypeVar
+                        || tparam.variance() != PreInferenceVariance::Invariant
+                    {
+                        continue;
+                    }
+                    let inferred_v = inferred.get(tparam.name());
+                    let effective_v = if inferred_v == Variance::Bivariant {
+                        Variance::Covariant
+                    } else {
+                        inferred_v
+                    };
+                    if effective_v != Variance::Invariant {
+                        self.error(
+                            errors,
+                            // TODO: ideally this would point to where the TypeVar
+                            // is bound in the class header rather than the class name.
+                            class.range(),
+                            ErrorInfo::Kind(ErrorKind::VarianceMismatch),
+                            format!(
+                                "Type variable `{}` in class `{}` is declared as invariant, but could be {} based on its usage",
+                                tparam.name(),
+                                class.name(),
+                                effective_v,
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -2470,8 +2974,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
             Restriction::Bound(bound_ty) => {
                 let default_for_check = match default {
-                    Type::TypeVar(tv) => tv.restriction().as_type(self.stdlib),
-                    Type::Quantified(q) if q.is_type_var() => q.restriction().as_type(self.stdlib),
+                    Type::TypeVar(tv) => tv.bound_type(self.stdlib, self.heap),
+                    Type::Quantified(q) if q.is_type_var() => q.bound_type(self.stdlib, self.heap),
                     _ => default.clone(),
                 };
                 if !self.is_subset_eq(&default_for_check, bound_ty) {
@@ -2495,16 +2999,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::TypeVar(tv) => match tv.restriction() {
                         Restriction::Constraints(default_constraints) => default_constraints
                             .iter()
-                            .all(|dc| constraints.iter().any(|c| self.is_equal(c, dc))),
+                            .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
                         Restriction::Bound(_) | Restriction::Unrestricted => false,
                     },
                     Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                         Restriction::Constraints(default_constraints) => default_constraints
                             .iter()
-                            .all(|dc| constraints.iter().any(|c| self.is_equal(c, dc))),
+                            .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
                         Restriction::Bound(_) | Restriction::Unrestricted => false,
                     },
-                    _ => constraints.iter().any(|c| self.is_equal(c, default)),
+                    _ => constraints.iter().any(|c| self.is_consistent(c, default)),
                 };
                 if !valid {
                     let formatted_constraints = constraints
@@ -2576,7 +3080,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        if annot.annotation.is_final() {
+        // Skip when `AnnAssignHasValue::No`: that assignment is the initialization, not a
+        // reassignment.  The "must be initialized" error is handled in `Binding::AnnotatedType`.
+        if annot.annotation.is_final()
+            && !matches!(
+                annot.target,
+                AnnotationTarget::Assign(_, AnnAssignHasValue::No)
+            )
+        {
             self.error(
                 errors,
                 range,
@@ -2589,68 +3100,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    // =========================================================================
+    // -------------------------------------------------------------------------
     // Helper functions for binding_to_type - extracted to reduce stack frame size
-    // =========================================================================
+    // -------------------------------------------------------------------------
 
     /// Handle `Binding::Exhaustive` - check if a match or if/elif chain is exhaustive.
+    ///
+    /// Loops over all narrow entries. For each, resolves the subject type, optionally
+    /// extracts the facet chain type, narrows it, and checks if the result is `Never`.
+    /// If ANY entry narrows to `Never`, the construct is exhaustive.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
     fn binding_to_type_exhaustive(
         &self,
-        subject_idx: Idx<Key>,
-        subject_range: TextRange,
-        exhaustiveness_info: &Option<(NarrowingSubject, (Box<NarrowOp>, TextRange))>,
+        narrow_entries: &[(Idx<Key>, Box<NarrowOp>, TextRange)],
     ) -> Type {
-        // If we couldn't determine narrowing info, conservatively assume not exhaustive
-        let Some((narrowing_subject, (op, narrow_range))) = exhaustiveness_info else {
-            return self.heap.mk_none();
-        };
-
-        let subject_info = self.get_idx(subject_idx);
-        let mut subject_ty = subject_info.ty().clone();
-        self.expand_vars_mut(&mut subject_ty);
-
-        // Check if this type should have exhaustiveness checked
-        if !self.should_check_exhaustiveness(&subject_ty) {
-            return self.heap.mk_none(); // Not exhaustible, assume fall-through
-        }
-
         let ignore_errors = self.error_swallower();
-        let narrowing_subject_info = match narrowing_subject {
-            NarrowingSubject::Name(_) => &subject_info,
-            NarrowingSubject::Facets(_, facets) => {
-                let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
-                    return self.heap.mk_none();
-                };
-                let type_info = TypeInfo::of_ty(self.heap.mk_any_implicit());
-                &type_info.with_narrow(resolved_chain.facets(), subject_ty.clone())
+        for (subject_idx, op, narrow_range) in narrow_entries {
+            let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+            let facet_chain = Self::extract_facet_from_op(op)
+                .and_then(|facets| self.resolve_facet_chain(facets.chain.clone()));
+            let narrowed = self.narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors);
+            let mut remaining_ty = match &facet_chain {
+                Some(resolved_chain) => {
+                    self.get_facet_chain_type(&narrowed, resolved_chain, *narrow_range)
+                }
+                None => narrowed.ty().clone(),
+            };
+            self.expand_vars_mut(&mut remaining_ty);
+            if remaining_ty.is_never() {
+                return self.heap.mk_never();
             }
-        };
+        }
+        self.heap.mk_none()
+    }
 
-        let narrowed = self.narrow(
-            narrowing_subject_info,
-            op.as_ref(),
-            *narrow_range,
-            &ignore_errors,
-        );
-
-        let mut remaining_ty = match narrowing_subject {
-            NarrowingSubject::Name(_) => narrowed.ty().clone(),
-            NarrowingSubject::Facets(_, facets) => {
-                let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
-                    return self.heap.mk_none();
-                };
-                self.get_facet_chain_type(&narrowed, &resolved_chain, subject_range)
+    /// Walk a `NarrowOp` tree to find the first `FacetSubject`.
+    /// Returns `None` for plain name narrowing, `Some(FacetSubject)` for attribute narrowing.
+    fn extract_facet_from_op(op: &NarrowOp) -> Option<FacetSubject> {
+        match op {
+            NarrowOp::Atomic(facet, _) => facet.clone(),
+            NarrowOp::And(ops) | NarrowOp::Or(ops) => {
+                ops.iter().find_map(Self::extract_facet_from_op)
             }
-        };
-        self.expand_vars_mut(&mut remaining_ty);
-
-        // If the result is `Never` then the cases were exhaustive
-        if remaining_ty.is_never() {
-            self.heap.mk_never()
-        } else {
-            self.heap.mk_none()
         }
     }
 
@@ -2715,6 +3207,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Extract the source range of an annotation expression from a binding key.
+    /// Returns `None` for special forms which don't have a source expression.
+    pub(crate) fn annotation_range(&self, key: Idx<KeyAnnotation>) -> Option<TextRange> {
+        match self.bindings().get(key) {
+            BindingAnnotation::AnnotateExpr(_, expr, _) => Some(expr.range()),
+            BindingAnnotation::SpecialForm(..) => None,
+        }
+    }
+
     fn name_assign_infer(
         &self,
         name: &Name,
@@ -2726,11 +3227,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // First infer the type as a normal value
             Some((style, k)) => {
                 let annot = self.get_idx(*k);
+                let annot_range = self.annotation_range(*k);
                 let tcc: &dyn Fn() -> TypeCheckContext = &|| {
                     TypeCheckContext::of_kind(match style {
                         AnnotationStyle::Direct => TypeCheckKind::AnnAssign,
-                        AnnotationStyle::Forwarded => TypeCheckKind::AnnotatedName(name.clone()),
+                        AnnotationStyle::ForwardedInitial | AnnotationStyle::Forwarded => {
+                            TypeCheckKind::AnnotatedName(name.clone())
+                        }
                     })
+                    .with_annotation(annot_range, "declared type".to_owned())
                 };
                 let annot_ty = annot.ty(self.heap, self.stdlib);
                 let hint = annot_ty.as_ref().map(|t| (t, tcc));
@@ -2739,9 +3244,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // For direct assignments, user-provided annotation takes
                     // precedence over inferred expr type.
                     annot_ty.unwrap_or(expr_ty)
+                } else if style == &AnnotationStyle::ForwardedInitial
+                    && expr_ty.is_any()
+                    && let Some(annot) = annot_ty
+                {
+                    // First assignment after a bare annotation: if the expression
+                    // is Any, preserve the declared type since Any provides no
+                    // useful narrowing information.
+                    annot
                 } else {
-                    // For forwarded assignment, user-provided annotation is treated
-                    // as just an upper-bound hint.
+                    // For reassignment or non-Any expressions, the expression
+                    // type takes precedence (narrowing behavior).
                     expr_ty
                 };
                 (Some(annot), ty)
@@ -2774,13 +3287,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.check_final_reassignment(annot, expr.range(), errors);
         }
-        let is_bare_annotated = matches!(expr, Expr::Name(_) | Expr::Attribute(_))
+        let is_bare_special_form = matches!(expr, Expr::Name(_) | Expr::Attribute(_))
             && matches!(
                 &ty,
-                Type::Type(inner)
-                    if matches!(inner.as_ref(), Type::SpecialForm(SpecialForm::Annotated))
+                Type::Type(inner) if matches!(inner.as_ref(), Type::SpecialForm(_))
             );
-        if !is_bare_annotated
+        if !is_bare_special_form
             && annot.is_none()
             && self.may_be_implicit_type_alias(&ty)
             && !is_in_function_scope
@@ -2792,6 +3304,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 name,
                 ta,
                 &TypeAliasParams::Legacy(legacy_tparams.clone()),
+                None,
                 expr.range(),
                 errors,
             )
@@ -2806,12 +3319,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
     fn binding_to_type_return_type(&self, x: &ReturnType, errors: &ErrorCollector) -> Type {
-        match &x.kind {
+        let ty = match &x.kind {
             ReturnTypeKind::ShouldValidateAnnotation {
                 range,
                 annotation,
-                stub_or_impl,
-                decorators,
                 implicit_return,
                 is_generator,
                 has_explicit_return,
@@ -2820,28 +3331,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // It will result in an implicit Any type, which is reasonable, but we should
                 // at least error here.
                 let ty = self.get_idx(*annotation).annotation.get_type().clone();
-                // If the function body is stubbed out or if the function is decorated with
-                // `@abstractmethod`, we blindly accept the return type annotation.
-                if *stub_or_impl != FunctionStubOrImpl::Stub
-                    && !decorators.iter().any(|k| {
-                        let decorator = self.get_idx(*k);
-                        match decorator.ty.callee_kind() {
-                            Some(CalleeKind::Function(FunctionKind::AbstractMethod)) => true,
-                            _ => false,
-                        }
-                    })
-                {
-                    let implicit_return = self.get_idx(*implicit_return);
-                    self.check_implicit_return_against_annotation(
-                        implicit_return,
-                        &ty,
-                        x.is_async,
-                        *is_generator,
-                        *has_explicit_return,
-                        *range,
-                        errors,
-                    );
-                }
+                let implicit_return = self.get_idx(*implicit_return);
+                self.check_implicit_return_against_annotation(
+                    implicit_return,
+                    &ty,
+                    x.is_async,
+                    *is_generator,
+                    *has_explicit_return,
+                    *range,
+                    errors,
+                );
                 self.return_type_from_annotation(ty, x.is_async, *is_generator)
             }
             ReturnTypeKind::ShouldTrustAnnotation {
@@ -2865,8 +3364,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 implicit_return,
                 yields,
                 yield_froms,
-                body_is_trivial,
-                class_metadata_key,
             } => {
                 let is_generator = !(yields.is_empty() && yield_froms.is_empty());
                 let returns = returns.iter().map(|k| self.get_idx(*k).arc_clone_ty());
@@ -2884,16 +3381,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .collect(),
                     )
                 };
-                // If this is a method with a trivial body (e.g., `raise NotImplementedError()`)
-                // in a class that extends ABC, treat it as an abstract method and return Any
-                // instead of Never. This handles transitive ABC inheritance.
-                let is_abstract_method = *body_is_trivial
-                    && return_ty.is_never()
-                    && class_metadata_key.is_some_and(|key| self.get_idx(key).extends_abc());
-                let return_ty = if is_abstract_method {
+                // Cap inferred return unions aggressively. A small shared width
+                // budget keeps both top-level and nested inferred unions from
+                // accumulating many alternatives across recursive inference.
+                // For inferred return types, wide unions are often noisy and
+                // prone to downstream false positives even when they converge.
+                const MAX_INFERRED_RETURN_UNION_WIDTH: usize = 3;
+                // Truncate excessively deep inferred return types. During iterative
+                // SCC solving, mutually-recursive functions with self-referential return
+                // types (e.g. `dict[int, dict[int, …]]`) grow one nesting level deeper
+                // per iteration. A limit of 3 lets truncation kick in by iteration 4
+                // while keeping the global fixpoint iteration budget at 5.
+                const MAX_INFERRED_RETURN_NESTING_DEPTH: usize = 3;
+                let return_ty = if return_ty.union_width() > MAX_INFERRED_RETURN_UNION_WIDTH {
                     self.heap.mk_any_implicit()
                 } else {
-                    return_ty
+                    let any = self.heap.mk_any_implicit();
+                    return_ty.truncate_class_nesting(
+                        MAX_INFERRED_RETURN_NESTING_DEPTH,
+                        MAX_INFERRED_RETURN_UNION_WIDTH,
+                        &any,
+                    )
                 };
                 if is_generator {
                     let yield_ty = self.unions({
@@ -2926,6 +3434,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return_ty
                 }
             }
+        };
+        if let Some(class_key) = x.implicit_dunder_new_self {
+            let class = &*self.get_idx(class_key);
+            let Some(cls) = &class.0 else {
+                unreachable!("implicit __new__ return type must point at a class");
+            };
+            self.heap.mk_self_type(self.as_class_type_unchecked(cls))
+        } else {
+            ty
         }
     }
 
@@ -2961,8 +3478,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else if x.is_generator {
             let hint = hint.and_then(|ty| self.decompose_generator(&ty).map(|(_, _, r)| r));
-            let tcc: &dyn Fn() -> TypeCheckContext =
-                &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
+            let annot_range = x.annot.and_then(|k| self.annotation_range(k));
+            let tcc: &dyn Fn() -> TypeCheckContext = &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn)
+                    .with_annotation(annot_range, "declared return type".to_owned())
+            };
             if let Some(box expr) = &x.expr {
                 self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
             } else if let Some(hint) = hint {
@@ -2986,8 +3506,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_none()
             }
         } else {
-            let tcc: &dyn Fn() -> TypeCheckContext =
-                &|| TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn);
+            let annot_range = x.annot.and_then(|k| self.annotation_range(k));
+            let tcc: &dyn Fn() -> TypeCheckContext = &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn)
+                    .with_annotation(annot_range, "declared return type".to_owned())
+            };
             if let Some(box expr) = &x.expr {
                 self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
             } else if let Some(hint) = hint {
@@ -3099,20 +3622,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Tuple(tup) => tup
                 .elts
                 .iter()
-                .map(|e| check_exception_type(self.expr_infer(e, errors), e.range()))
+                .flat_map(|e| match e {
+                    Expr::Starred(starred) => self.decompose_except_types(
+                        self.expr_infer(&starred.value, errors),
+                        e.range(),
+                        &check_exception_type,
+                    ),
+                    _ => vec![check_exception_type(self.expr_infer(e, errors), e.range())],
+                })
                 .collect(),
             _ => {
                 let exception_types = self.expr_infer(ann, errors);
-                match exception_types {
-                    Type::Tuple(Tuple::Concrete(ts)) => ts
-                        .into_iter()
-                        .map(|t| check_exception_type(t, ann.range()))
-                        .collect(),
-                    Type::Tuple(Tuple::Unbounded(t)) => {
-                        vec![check_exception_type(*t, ann.range())]
-                    }
-                    _ => vec![check_exception_type(exception_types, ann.range())],
-                }
+                self.decompose_except_types(exception_types, ann.range(), &check_exception_type)
             }
         };
         let exceptions = self.unions(exceptions);
@@ -3120,6 +3641,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(t)
         } else {
             exceptions
+        }
+    }
+
+    /// Decompose a type used in an `except` clause into individual exception types,
+    /// validating each one via `check`. In Python, an `except` clause accepts a single
+    /// exception class or a tuple of exception classes. The type may also be a union
+    /// (e.g. `type[X] | tuple[type[X], ...]`), in which case each member is processed
+    /// independently.
+    fn decompose_except_types(
+        &self,
+        ty: Type,
+        range: TextRange,
+        check: &impl Fn(Type, TextRange) -> Type,
+    ) -> Vec<Type> {
+        // Normalize nominal tuple ClassTypes (e.g. from `tuple()` constructor calls)
+        // to structural Type::Tuple so they match the tuple arms below.
+        let ty = match ty {
+            Type::ClassType(cls) => match self.as_tuple(&cls) {
+                Some(tuple) => Type::Tuple(tuple),
+                None => Type::ClassType(cls),
+            },
+            other => other,
+        };
+        match ty {
+            Type::Tuple(Tuple::Concrete(ts)) => ts.into_iter().map(|t| check(t, range)).collect(),
+            Type::Tuple(Tuple::Unbounded(t)) => {
+                vec![check(*t, range)]
+            }
+            Type::Union(box Union { members, .. }) => members
+                .into_iter()
+                .flat_map(|t| self.decompose_except_types(t, range, check))
+                .collect(),
+            _ => vec![check(ty, range)],
         }
     }
 
@@ -3164,7 +3718,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             });
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
+                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRefOld::soft), errors);
             self.async_iterate(&iterable, e.range(), errors)
         } else {
             let infer_hint = ann.clone().and_then(|x| {
@@ -3172,13 +3726,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .map(|ty| self.heap.mk_class_type(self.stdlib.iterable(ty.clone())))
             });
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
+                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRefOld::soft), errors);
             self.iterate(&iterable, e.range(), errors, None)
         };
         let value = self.get_produced_type(iterables);
         let check_hint = ann.clone().and_then(|x| x.ty(self.heap, self.stdlib));
         if let Some(check_hint) = check_hint {
-            self.check_and_return_type(value, &check_hint, e.range(), errors, tcc)
+            if value.is_any() {
+                // Any provides no useful narrowing information, so preserve
+                // the declared type rather than letting Any leak through.
+                check_hint
+            } else {
+                self.check_and_return_type(value, &check_hint, e.range(), errors, tcc)
+            }
         } else {
             value
         }
@@ -3254,7 +3814,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann) = ann.map(|idx| self.get_idx(idx)) {
             self.check_final_reassignment(&ann, range, errors);
             if let Some(want) = ann.ty(self.heap, self.stdlib) {
-                self.check_type(&got, &want, range, errors, &|| {
+                return self.check_and_return_type(got, &want, range, errors, &|| {
                     TypeCheckContext::of_kind(TypeCheckKind::UnpackedAssign)
                 });
             }
@@ -3262,9 +3822,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         got
     }
 
-    // =========================================================================
+    // -------------------------------------------------------------------------
     // Helper functions for binding_to_type - Phase 2 (medium arms)
-    // =========================================================================
+    // -------------------------------------------------------------------------
 
     /// Handle `Binding::Expr` - process expression with optional annotation.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
@@ -3338,9 +3898,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         if let Some(cls) = &self.get_idx(class_key).as_ref().0 {
+            let metadata = self.get_metadata_for_class(cls);
+            if metadata.is_metaclass() {
+                self.error(
+                    errors,
+                    r,
+                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    "`Self` cannot be used in a metaclass".to_owned(),
+                );
+            }
             match self.instantiate(cls) {
                 Type::ClassType(class_type) => {
-                    self.heap.mk_type_form(self.heap.mk_self_type(class_type))
+                    self.heap.mk_type_of(self.heap.mk_self_type(class_type))
                 }
                 ty => self.error(
                     errors,
@@ -3382,7 +3951,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         // We're specifically looking for attributes that are inherited from the parent class
         if let Some(cls) = &self.get_idx(class_key).as_ref().0
-            && !cls.contains(&name.id)
+            && !self
+                .get_class_fields(cls)
+                .is_some_and(|f| f.contains(&name.id))
         {
             // If the attribute lookup fails here, we'll emit an `unknown-name` error, since this
             // is a deferred lookup that can't be calculated at the bindings step
@@ -3417,9 +3988,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann) = ann {
             self.check_final_reassignment(&ann, range, errors);
             if let Some(ty) = ann.ty(self.heap, self.stdlib) {
-                self.check_and_return_type(context_value, &ty, range, errors, &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(&ann.target))
-                })
+                if context_value.is_any() {
+                    // Any provides no useful narrowing information, so preserve
+                    // the declared type rather than letting Any leak through.
+                    ty
+                } else {
+                    self.check_and_return_type(context_value, &ty, range, errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(
+                            &ann.target,
+                        ))
+                    })
+                }
             } else {
                 context_value
             }
@@ -3452,14 +4031,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         finalize(&annotation.target, self.heap.mk_any_implicit())
                     })
             }
-            FunctionParameter::Unannotated(var, function_idx, target) => {
-                // It's important that we force the undecorated function binding before reading
-                // from this var. Solving the undecorated function binding pins the type of the var,
-                // either to a concrete type or to any. Without this we can have non-determinism
-                // where the reader can observe an unresolved var or a resolved type, depending on
-                // the order of solved bindings.
-                self.get_idx(*function_idx);
-                let ty = self.solver().force_var(*var);
+            FunctionParameter::Unannotated(function_idx, target, param_name) => {
+                // Get the resolved UndecoratedFunction - this ensures the function has been solved
+                // and resolved_param_types has been populated.
+                let undecorated = self.get_idx(*function_idx);
+                // Look up the type from resolved_param_types. This should always succeed since
+                // we populate it for all unannotated parameters during function solving.
+                let ty = undecorated
+                    .resolved_param_types
+                    .get(param_name)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        // Fallback to Any for safety, though this should never happen
+                        self.heap.mk_any_implicit()
+                    });
                 finalize(target, ty)
             }
         }
@@ -3488,12 +4073,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     },
             } = &*self.get_idx(k)
         {
-            self.check_and_return_type(ty, want, x.range, errors, &|| {
+            // Validate the annotation but always preserve the special TypeVarTuple type,
+            // so that solve_legacy_tparam can recognize it downstream.
+            self.check_type(&ty, want, x.range, errors, &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
-            })
-        } else {
-            ty
+            });
         }
+        ty
     }
 
     /// Handle `Binding::StmtExpr` - process statement expression.
@@ -3511,11 +4097,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && self.is_coroutine(&result)
             && !self.extends_any(cls.class_object())
         {
+            let msg = if matches!(e, Expr::Await(_)) {
+                "Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).".to_owned()
+            } else {
+                "Result of async function call is unused. Did you forget to `await`?".to_owned()
+            };
             self.error(
                 errors,
                 e.range(),
                 ErrorInfo::Kind(ErrorKind::UnusedCoroutine),
-                "Result of async function call is unused. Did you forget to `await`?".to_owned(),
+                msg,
             );
         }
         result
@@ -3540,9 +4131,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    // =========================================================================
+    // -------------------------------------------------------------------------
     // Helper functions for binding_to_type_info
-    // =========================================================================
+    // -------------------------------------------------------------------------
 
     /// Handle `Binding::Phi` in binding_to_type_info - join multiple branches.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
@@ -3555,40 +4146,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if branches.len() == 1 {
             self.get_idx(branches[0].value_key).arc_clone()
         } else {
-            // Filter branches based on type-based termination (Never/NoReturn)
-            let live_value_keys: Vec<Idx<Key>> = branches
+            let type_infos: Vec<_> = branches
                 .iter()
                 .filter_map(|branch| {
-                    match branch.termination_key {
-                        None => {
-                            // No terminal statement, branch is live
-                            Some(branch.value_key)
-                        }
-                        Some(term_key) => {
-                            let term_type = self.get_idx(term_key);
-                            if term_type.ty().is_never() {
-                                // Branch terminated with Never/NoReturn
-                                None
-                            } else {
-                                // Terminal statement doesn't return Never, branch is live
-                                Some(branch.value_key)
-                            }
-                        }
+                    // Filter branches based on type-based termination (Never/NoReturn)
+                    let t = self.get_idx(branch.value_key);
+                    if let Some(term_key) = branch.termination_key
+                        && self.get_idx(term_key).ty().is_never()
+                    {
+                        None
+                    } else {
+                        Some(t)
                     }
                 })
-                .collect();
-
-            // If all branches terminated, use all value keys (consistent with binding-time)
-            let keys_to_use = if live_value_keys.is_empty() {
-                branches.iter().map(|b| b.value_key).collect()
-            } else {
-                live_value_keys
-            };
-
-            let type_infos = keys_to_use
-                .iter()
-                .filter_map(|k| {
-                    let t: Arc<TypeInfo> = self.get_idx(*k);
+                .filter_map(|t| {
                     // Filter out all `@overload`-decorated types except the one that
                     // accumulates all signatures into a Type::Overload.
                     if matches!(t.ty(), Type::Overload(_)) || !t.ty().is_overload() {
@@ -3597,7 +4168,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None
                     }
                 })
-                .collect::<Vec<_>>();
+                .collect();
 
             TypeInfo::join(
                 type_infos,
@@ -3781,7 +4352,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ),
                     );
                 }
-                p.quantified.clone().to_value()
+                p.clone().to_value()
             }
             LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
         };
@@ -3819,9 +4390,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         type_info
     }
 
+    fn resolve_promote_forward(&self, fwd: Idx<Key>) -> TypeInfo {
+        self.get_idx(fwd)
+            .arc_clone()
+            .map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
+    }
+
     fn binding_to_type_info(&self, binding: &Binding, errors: &ErrorCollector) -> TypeInfo {
         match binding {
             Binding::Forward(k) => self.get_idx(*k).arc_clone(),
+            Binding::PromoteForward(k) => self.resolve_promote_forward(*k),
+            Binding::ForwardToFirstUse(k) => {
+                if let Some(def_idx) = self.def_idx_for_forward_to_first_use(*k)
+                    && let Some(type_info) = self.check_partial_answer(def_idx)
+                {
+                    return TypeInfo::arc_clone(type_info);
+                }
+                self.get_idx(*k).arc_clone()
+            }
             Binding::Narrow(k, op, range) => {
                 self.narrow(self.get_idx(*k).as_ref(), op, range.range(), errors)
             }
@@ -3829,25 +4415,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_info_phi(join_style, branches)
             }
             Binding::LoopPhi(default, ks) => self.binding_to_type_info_loop_phi(*default, ks),
-            Binding::NameAssign {
-                name: _,
-                annotation: _,
-                expr,
-                legacy_tparams: _,
-                is_in_function_scope: _,
-            } => self.binding_to_type_info_name_assign(binding, expr.as_ref(), errors),
-            Binding::AssignToAttribute {
-                attr,
-                value: got,
-                allow_assign_to_final,
-            } => self.binding_to_type_info_assign_to_attribute(
-                attr,
-                got,
-                *allow_assign_to_final,
+            Binding::NameAssign(x) => {
+                self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
+            }
+            Binding::AssignToAttribute(x) => self.binding_to_type_info_assign_to_attribute(
+                &x.attr,
+                &x.value,
+                x.allow_assign_to_final,
                 errors,
             ),
-            Binding::AssignToSubscript(subscript, value) => {
-                self.binding_to_type_info_assign_to_subscript(subscript, value, errors)
+            Binding::AssignToSubscript(x) => {
+                self.binding_to_type_info_assign_to_subscript(&x.0, &x.1, errors)
             }
             Binding::PossibleLegacyTParam(key, range_if_scoped_params_exist) => self
                 .binding_to_type_info_possible_legacy_tparam(
@@ -3855,15 +4433,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range_if_scoped_params_exist,
                     errors,
                 ),
-            Binding::PartialTypeWithUpstreamsCompleted(raw_idx, first_used_by) => {
-                // Force all of the upstream `Pin`s for which this was the first use.
-                for idx in first_used_by {
-                    self.get_idx(*idx);
-                }
-                // Recursively get the TypeInfo from the raw binding to preserve facets
-                // (e.g., dict literal key completions).
-                self.get_idx(*raw_idx).arc_clone()
-            }
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.
@@ -3891,7 +4460,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             prefix.push(FacetKind::Key(lit.value.to_string()));
             if let Ok(chain) = Vec1::try_from_vec(prefix.clone()) {
                 let swallower = self.error_swallower();
-                let value_ty = self.expr_infer(&item.value, &swallower);
+                let mut value_ty = self.expr_infer(&item.value, &swallower);
+                // Swallow errors when pinning inner placeholder types.
+                self.pin_all_placeholder_types(&mut value_ty, true, item.value.range(), &swallower);
+                self.expand_vars_mut(&mut value_ty);
                 info.record_key_completion(&chain, Some(value_ty.clone()));
                 self.populate_dict_literal_facets(info, prefix, &item.value);
             }
@@ -4068,20 +4640,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    fn promote_callable_legacy_typevars(&self, callable: &mut Callable) -> Vec<TParam> {
+    fn promote_callable_legacy_typevars(&self, callable: &mut Callable) -> Vec<Quantified> {
         let mut seen_type_vars = SmallMap::new();
         let mut tparams = Vec::new();
         let heap = self.heap;
+        let module = self.module().name();
         callable.visit_mut(&mut |ty| {
             ty.transform_raw_legacy_type_variables(&mut |ty| {
                 if let Type::TypeVar(tv) = ty {
                     let q = seen_type_vars
                         .entry(tv.dupe())
                         .or_insert_with(|| {
-                            let q = Quantified::from_type_var(tv, self.uniques);
-                            tparams.push(TParam {
-                                quantified: q.clone(),
-                            });
+                            let identity = QuantifiedIdentity::new(
+                                module,
+                                AnchorIndex::first(tv.qname().range()),
+                                QuantifiedOrigin::ScopedLegacy,
+                            );
+                            let q = Quantified::from_type_var(tv, identity);
+                            tparams.push(q.clone());
                             q
                         })
                         .clone();
@@ -4091,6 +4667,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             });
         });
         tparams
+    }
+
+    /// Check that a resolved type does not contain out-of-scope legacy TypeVars.
+    fn check_legacy_typevar_scoping(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
+        let wrapped = self.wrap_callable_legacy_typevars(ty.clone());
+        self.check_raw_legacy_type_variables(&wrapped, range, errors);
+    }
+
+    /// Check for raw legacy type variables in a resolved annotation type.
+    /// Raw legacy TypeVars in annotations indicate out-of-scope usage — in-scope
+    /// TypeVars are replaced with Quantified by LegacyTParamCollector.
+    fn check_raw_legacy_type_variables(
+        &self,
+        ty: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let mut names = Vec::new();
+        ty.collect_raw_legacy_type_variables(&mut names);
+        for name in names {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                format!("Type variable `{name}` is not in scope"),
+            );
+        }
     }
 
     fn check_implicit_return_against_annotation(
@@ -4141,7 +4744,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // when there is no annotation, so that `mylist = list` is treated
         // like a value assignment rather than a type alias?
         match ty {
-            Type::Type(_) | Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_) => true,
+            Type::Type(_)
+            | Type::TypeVar(_)
+            | Type::ParamSpec(_)
+            | Type::TypeVarTuple(_)
+            | Type::Annotated(_, _) => true,
             Type::TypeAlias(ta) => {
                 self.check_type_form(&self.get_type_alias(ta).as_type(), allow_none)
             }
@@ -4179,15 +4786,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Expand the type, in case unexpanded `Vars` are hiding further `Var`s that
         // need to be pinned.
         self.solver().expand_vars_mut(ty);
-        // Collect all the vars we may need to pin
-        fn f(t: &Type, vars: &mut Vec<Var>) {
-            match t {
-                Type::Var(v) => vars.push(*v),
-                _ => t.recurse(&mut |t| f(t, vars)),
-            }
-        }
-        let mut vars = vec![];
-        f(ty, &mut vars);
+        let vars = ty.collect_all_vars();
         // Pin all relevant vars and collect ranges of PartialContained vars
         for var in vars {
             match self.solver().pin_placeholder_type(var, pin_partial_types) {
@@ -4229,10 +4828,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn binding_to_type(&self, binding: &Binding, errors: &ErrorCollector) -> Type {
         match binding {
             Binding::Forward(..)
+            | Binding::PromoteForward(..)
+            | Binding::ForwardToFirstUse(..)
             | Binding::Phi(..)
             | Binding::LoopPhi(..)
             | Binding::Narrow(..)
-            | Binding::AssignToAttribute { .. }
+            | Binding::AssignToAttribute(..)
             | Binding::AssignToSubscript(..)
             | Binding::PossibleLegacyTParam(..) => {
                 // These forms require propagating attribute narrowing information, so they
@@ -4242,33 +4843,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::SelfTypeLiteral(class_key, r) => {
                 self.binding_to_type_self_type_literal(*class_key, *r, errors)
             }
-            Binding::ClassBodyUnknownName(class_key, name, suggestion) => {
-                self.binding_to_type_class_body_unknown_name(*class_key, name, suggestion, errors)
+            Binding::ClassBodyUnknownName(x) => {
+                self.binding_to_type_class_body_unknown_name(x.0, &x.1, &x.2, errors)
             }
-            Binding::Exhaustive {
-                subject_idx,
-                subject_range,
-                exhaustiveness_info,
-                ..
-            } => self.binding_to_type_exhaustive(*subject_idx, *subject_range, exhaustiveness_info),
-            Binding::CompletedPartialType(unpinned_idx, first_use) => {
-                // Calculate the first use for its side-effects (it might pin `Var`s)
-                match first_use {
-                    FirstUse::UsedBy(idx) => {
-                        self.get_idx(*idx);
-                    }
-                    FirstUse::Undetermined | FirstUse::DoesNotPin => {}
-                }
-                self.get_idx(*unpinned_idx).arc_clone().into_ty()
-            }
-            Binding::PartialTypeWithUpstreamsCompleted(raw_idx, first_used_by) => {
-                // Force all of the upstream `Pin`s for which was the first use. This ensures
-                // that any `Var` in the result originated directly from `raw_idx`.
-                for idx in first_used_by {
-                    self.get_idx(*idx);
-                }
-                self.get_idx(*raw_idx).arc_clone().into_ty()
-            }
+            Binding::Exhaustive(x) => self.binding_to_type_exhaustive(&x.narrow_entries),
             Binding::Expr(ann, e) => self.binding_to_type_expr(*ann, e, errors),
             Binding::StmtExpr(e, special_export) => {
                 self.binding_to_type_stmt_expr(e, *special_export, errors)
@@ -4295,30 +4873,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::PatternMatchClassPositional(_, idx, key, range) => {
                 self.binding_to_type_pattern_match_class_positional(*idx, *key, *range, errors)
             }
-            Binding::PatternMatchClassKeyword(_, attr, key) => {
+            Binding::PatternMatchClassKeyword(x) => {
                 // TODO: check that value matches class
                 // TODO: check against duplicate keys (optional)
-                let binding = self.get_idx(*key);
-                self.attr_infer(&binding, &attr.id, attr.range, errors, None)
+                let binding = self.get_idx(x.2);
+                self.attr_infer(&binding, &x.1.id, x.1.range, errors, None)
                     .into_ty()
             }
-            Binding::NameAssign {
-                name,
-                annotation: annot_key,
-                expr,
-                legacy_tparams,
-                is_in_function_scope,
-            } => self.binding_to_type_name_assign(
-                name,
-                *annot_key,
-                expr,
-                legacy_tparams,
-                *is_in_function_scope,
+            Binding::NameAssign(x) => self.binding_to_type_name_assign(
+                &x.name,
+                x.annotation,
+                &x.expr,
+                &x.legacy_tparams,
+                x.is_in_function_scope,
                 errors,
             ),
-            Binding::TypeVar(ann, name, x) => {
+            Binding::TypeVar(x) => {
+                let (ann, name, call) = x.as_ref();
                 let ty = self
-                    .typevar_from_call(name.clone(), x, errors)
+                    .typevar_from_call(name.clone(), call, errors)
                     .to_type(self.heap);
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
@@ -4330,16 +4903,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             },
                     } = &*self.get_idx(*k)
                 {
-                    self.check_and_return_type(ty, want, x.range, errors, &|| {
+                    // Validate the annotation but always preserve the special TypeVar type,
+                    // so that solve_legacy_tparam can recognize it downstream.
+                    self.check_type(&ty, want, call.range, errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
-                    })
-                } else {
-                    ty
+                    });
                 }
+                ty
             }
-            Binding::ParamSpec(ann, name, x) => {
+            Binding::ParamSpec(x) => {
+                let (ann, name, call) = x.as_ref();
                 let ty = self
-                    .paramspec_from_call(name.clone(), x, errors)
+                    .paramspec_from_call(name.clone(), call, errors)
                     .to_type(self.heap);
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
@@ -4351,15 +4926,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             },
                     } = &*self.get_idx(*k)
                 {
-                    self.check_and_return_type(ty, want, x.range, errors, &|| {
+                    // Validate the annotation but always preserve the special ParamSpec type,
+                    // so that solve_legacy_tparam can recognize it downstream.
+                    self.check_type(&ty, want, call.range, errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
-                    })
-                } else {
-                    ty
+                    });
                 }
+                ty
             }
-            Binding::TypeVarTuple(ann, name, x) => {
-                self.binding_to_type_type_var_tuple(*ann, name, x, errors)
+            Binding::TypeVarTuple(x) => {
+                let (ann, name, call) = x.as_ref();
+                self.binding_to_type_type_var_tuple(*ann, name, call, errors)
             }
             Binding::ReturnType(x) => self.binding_to_type_return_type(x, errors),
             Binding::ReturnExplicit(x) => self.binding_to_type_return_explicit(x, errors),
@@ -4368,7 +4945,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_exception_handler(ann, *is_star, errors)
             }
             Binding::AugAssign(ann, x) => self.augassign_infer(*ann, x, errors),
-            Binding::IterableValue(ann, e, is_async) => {
+            Binding::IterableValueComprehension(e, is_async, _) => {
+                self.binding_to_type_iterable_value(None, e, *is_async, errors)
+            }
+            Binding::IterableValueLoop(ann, e, is_async) => {
                 self.binding_to_type_iterable_value(*ann, e, *is_async, errors)
             }
             Binding::ContextValue(ann, e, range, kind) => {
@@ -4381,17 +4961,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let def = self.get_decorated_function(idx);
                 self.solve_function_binding(def, &mut pred, class_meta.as_ref(), errors)
             }
-            Binding::Import(m, name, _aliased) => self
-                .get_from_export(*m, None, &KeyExport(name.clone()))
+            Binding::Import(x) => self
+                .get_from_export(x.0, None, &KeyExport(x.1.clone()))
                 .arc_clone(),
-            Binding::ImportViaGetattr(m, _name) => {
+            Binding::ImportViaGetattr(x) => {
                 // Import via module-level __getattr__ for incomplete stubs.
                 // Get the return type of __getattr__.
                 let getattr_ty = self
-                    .get_from_export(*m, None, &KeyExport(dunder::GETATTR.clone()))
+                    .get_from_export(x.0, None, &KeyExport(dunder::GETATTR.clone()))
                     .arc_clone();
                 getattr_ty
-                    .callable_return_type()
+                    .callable_return_type(self.heap)
                     .unwrap_or_else(|| self.heap.mk_any_implicit())
             }
             Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
@@ -4406,33 +4986,66 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap.mk_class_def(cls.dupe())
                 }
             },
-            Binding::AnnotatedType(ann, val) => match self.get_idx(*ann).ty(self.heap, self.stdlib)
-            {
-                Some(ty) => self.wrap_callable_legacy_typevars(ty),
-                None => self.binding_to_type(val, errors),
-            },
+            Binding::AnnotatedType(ann, val) => {
+                let annot = self.get_idx(*ann);
+                // `Binding::AnnotatedType` is the active binding for annotation-only declarations
+                // (`x: Final[int]`).  Fire the "must be initialized" error unless the name is
+                // subsequently initialized via a non-annotated assignment (tuple unpacking, walrus,
+                // `with … as`), which is tracked in `subsequently_initialized` at bind time.
+                if annot.annotation.is_final()
+                    && annot.annotation.ty.is_some()
+                    && matches!(
+                        annot.target,
+                        AnnotationTarget::Assign(_, AnnAssignHasValue::No)
+                    )
+                    && !self.module().path().is_interface()
+                    && !self.bindings().subsequently_initialized(*ann)
+                {
+                    self.error(
+                        errors,
+                        self.bindings().idx_to_key(*ann).range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        "Final name must be initialized with a value".to_owned(),
+                    );
+                }
+                match annot.ty(self.heap, self.stdlib) {
+                    Some(ty) => self.wrap_callable_legacy_typevars(ty),
+                    None => self.binding_to_type(val, errors),
+                }
+            }
             Binding::None => self.heap.mk_none(),
             Binding::Any(style) => self.heap.mk_any(*style),
             Binding::Global(global) => global.as_type(self.stdlib, self.heap),
             Binding::TypeParameter(tp) => {
                 self.quantified_from_type_parameter(tp, errors).to_value()
             }
-            Binding::Module(m, path, prev) => self.binding_to_type_module(*m, path, *prev),
-            Binding::TypeAlias {
-                name,
-                tparams,
-                key_type_alias,
-                range,
-            } => self.wrap_type_alias(
-                name,
-                (*self.get_idx(*key_type_alias)).clone(),
-                tparams,
-                *range,
+            Binding::Module(x) => self.binding_to_type_module(x.0, &x.1, x.2),
+            Binding::TypeAlias(x) => self.wrap_type_alias(
+                &x.name,
+                (*self.get_idx(x.key_type_alias)).clone(),
+                &x.tparams,
+                Some(self.bindings().idx_to_key(x.key_type_alias).0),
+                x.range,
                 errors,
             ),
-            Binding::LambdaParameter(var) => var.to_type(self.heap),
+            Binding::TypeAliasRef(x) => {
+                let index = self.bindings().idx_to_key(x.key_type_alias).0;
+                let r = TypeAliasRef {
+                    name: x.name.clone(),
+                    args: None,
+                    module_name: self.module().name(),
+                    module_path: self.module().path().clone(),
+                    index,
+                };
+                let anchor = KeyTypeAlias::range_with(x.key_type_alias, self.bindings());
+                let tparams = self.create_type_alias_params_recursive(&x.tparams, anchor);
+                Forallable::TypeAlias(TypeAliasData::Ref(r)).forall(tparams)
+            }
+            Binding::LambdaParameter(id, owner) => self
+                .resolve_lambda_param_var(*id, *owner)
+                .to_type(self.heap),
             Binding::FunctionParameter(param) => self.binding_to_type_function_parameter(param),
-            Binding::SuperInstance(style, range) => self.solve_super_binding(style, *range, errors),
+            Binding::SuperInstance(x) => self.solve_super_binding(&x.0, x.1, errors),
             // For first-usage-based type inference, we occasionally just want a way to force
             // some other `K::Value` type in order to deterministically pin `Var`s introduced by a definition.
             Binding::UsageLink(linked_key) => {
@@ -4479,11 +5092,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<UndecoratedFunction> {
         self.undecorated_function(
             &x.def,
+            x.def_index,
             x.stub_or_impl,
+            x.placeholder_body_kind,
+            x.is_return_inferred,
             x.class_key.as_ref(),
             &x.decorators,
             &x.legacy_tparams,
             x.module_style,
+            x.outer_funcs.clone(),
             errors,
         )
     }
@@ -4545,17 +5162,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Arc::new(YieldResult::any_error(self.heap))
             }
+            // Unreachable yields are not errors: the `return; yield` pattern is a
+            // common idiom to create empty generators, since Python determines
+            // generator status syntactically. Infer types for IDE support.
             BindingYield::Unreachable(x) => {
-                if let Some(expr) = x.value.as_ref() {
-                    self.expr_infer(expr, errors);
-                }
-                self.error(
-                    errors,
-                    x.range,
-                    ErrorInfo::Kind(ErrorKind::Unreachable),
-                    "This `yield` expression is unreachable".to_owned(),
-                );
-                Arc::new(YieldResult::any_error(self.heap))
+                let yield_ty = if let Some(expr) = x.value.as_ref() {
+                    self.expr_infer(expr, errors)
+                } else {
+                    self.heap.mk_none()
+                };
+                let send_ty = self.heap.mk_any_implicit();
+                Arc::new(YieldResult { yield_ty, send_ty })
             }
         }
     }
@@ -4637,15 +5254,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Arc::new(YieldFromResult::any_error(self.heap))
             }
+            // Unreachable yield-from is not an error: see comment on
+            // BindingYield::Unreachable above.
             BindingYieldFrom::Unreachable(x) => {
-                self.expr_infer(&x.value, errors);
-                self.error(
-                    errors,
-                    x.range,
-                    ErrorInfo::Kind(ErrorKind::Unreachable),
-                    "This `yield from` expression is unreachable".to_owned(),
-                );
-                Arc::new(YieldFromResult::any_error(self.heap))
+                let ty = self.expr_infer(&x.value, errors);
+                if let Some(generator) = self.unwrap_generator(&ty) {
+                    Arc::new(YieldFromResult::from_generator(generator))
+                } else if let Some(yield_ty) = self.unwrap_iterable(&ty) {
+                    Arc::new(YieldFromResult::from_iterable(self.heap, yield_ty))
+                } else {
+                    Arc::new(YieldFromResult::any_error(self.heap))
+                }
             }
         }
     }
@@ -4676,7 +5295,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         if let Type::Forall(forall) = ty {
-            ty = self.promote_forall(*forall, range);
+            ty = self.promote_forall(*forall, range, errors);
         };
         match self.canonicalize_all_class_types(ty, range, errors) {
             Type::Union(box Union { members: xs, .. }) if !xs.is_empty() => {
@@ -4693,26 +5312,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ty @ (Type::TypeVar(_)
             | Type::ParamSpec(_)
             | Type::TypeVarTuple(_)
+            | Type::TypeForm(_)
             | Type::Args(_)
             | Type::Kwargs(_)) => Some(ty),
-            Type::Type(t) => Some(*t),
+            Type::Type(t) => {
+                // Canonicalize bare Dim to Type::Dim for consistency.
+                // Subscripted Dim[X] is already converted to Type::Dim in parse_symint_type,
+                // so only the bare case (promoted to ClassType with default targs) reaches here.
+                if let Type::ClassType(cls) = t.as_ref()
+                    && cls.has_qname("torch_shapes", "Dim")
+                {
+                    return Some(self.heap.mk_dim(cls.targs().as_slice()[0].clone()));
+                }
+                // Canonicalize bare Tensor to Type::Tensor(shapeless) for consistency.
+                // Subscripted Tensor[2, 3] is already converted to Type::Tensor in
+                // parse_tensor_type, so only the bare case reaches here.
+                if let Type::ClassType(cls) = t.as_ref()
+                    && cls.has_qname("torch", "Tensor")
+                {
+                    return Some(TensorType::shapeless(cls.clone()).to_type());
+                }
+                // Normalize type[NoneType] as None
+                if let Type::ClassType(cls) = t.as_ref()
+                    && cls.has_qname("types", "NoneType")
+                {
+                    return Some(self.heap.mk_none());
+                }
+                // Bare TypeForm (no subscript) is equivalent to TypeForm[Any]
+                if let Type::SpecialForm(SpecialForm::TypeForm) = t.as_ref() {
+                    return Some(Type::TypeForm(Box::new(Type::Any(AnyStyle::Implicit))));
+                }
+                Some(*t)
+            }
             Type::None => Some(self.heap.mk_none()), // Both a value and a type
             Type::Ellipsis => Some(self.heap.mk_ellipsis()), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),
             Type::TypeAlias(box TypeAliasData::Value(ta)) => {
                 let mut aliased_type = self.untype_opt(ta.as_type(), range, errors)?;
                 if let Type::Union(box Union { display_name, .. }) = &mut aliased_type {
-                    *display_name = Some(ta.name.as_str().into());
+                    *display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
                 Some(aliased_type)
             }
-            t @ Type::Unpack(
-                box Type::Tuple(_) | box Type::TypeVarTuple(_) | box Type::Quantified(_),
-            ) => Some(t),
             // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
-            // If we hit a recursive reference to the alias while untyping it, return the ref
-            // unchanged to avoid a cycle.
-            t @ Type::TypeAlias(box TypeAliasData::Ref(_)) => Some(t),
+            // If we hit a recursive reference to the alias while untyping it, delay the untyping
+            // to avoid a cycle.
+            Type::TypeAlias(ta @ box TypeAliasData::Ref(_)) => Some(Type::UntypedAlias(ta)),
+            t @ Type::Unpack(
+                box Type::Tuple(_)
+                | box Type::TypeVarTuple(_)
+                | box Type::Quantified(_)
+                | box Type::UntypedAlias(_),
+            ) => Some(t),
             Type::Unpack(box Type::Var(v)) if let Some(_guard) = self.recurse(v) => self
                 .untype_opt(
                     self.heap.mk_unpack(self.solver().force_var(v)),
@@ -4722,8 +5373,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::QuantifiedValue(q) => Some(q.to_type(self.heap)),
             Type::ArgsValue(q) => Some(self.heap.mk_args(*q)),
             Type::KwargsValue(q) => Some(self.heap.mk_kwargs(*q)),
+            // Dim, SizeExpr, and Tensor are already type forms
+            ty @ Type::Dim(_) => Some(ty),
+            ty @ Type::Size(_) => Some(ty),
+            ty @ Type::Tensor(_) => Some(ty),
+            ty @ Type::NNModule(_) => Some(ty),
+            // Handle bare class definitions (e.g., Dim, Module) by canonicalizing them to type forms
+            Type::ClassDef(cls) => {
+                let canonicalized =
+                    self.canonicalize_all_class_types(Type::ClassDef(cls), range, errors);
+                self.untype_opt(canonicalized, range, errors)
+            }
+            // Annotated[T, meta] in annotation/type-alias context unwraps to T
+            Type::Annotated(t, _) => Some(*t),
             _ => None,
         }
+    }
+
+    pub fn untype_alias(&self, ta: &TypeAliasData) -> Type {
+        let ty = self.get_type_alias(ta).as_type();
+        // We already validated the type when creating the type alias.
+        self.untype(ty, TextRange::default(), &self.error_swallower())
     }
 
     // Approximate the result of calling `type()` on something of type T
@@ -4731,9 +5401,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // we'll fall back to builtins.type. We can add more cases here as-needed.
     pub fn type_of(&self, ty: Type) -> Type {
         match ty {
-            Type::ClassType(cls) | Type::SelfType(cls) => {
-                self.heap.mk_class_def(cls.class_object().clone())
-            }
+            Type::ClassType(cls) => self.heap.mk_class_def(cls.class_object().clone()),
+            Type::SelfType(_) => self.heap.mk_type(ty),
             Type::Literal(lit) => self.heap.mk_class_def(
                 lit.value
                     .general_class_type(self.stdlib)
@@ -4759,8 +5428,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.unions(ts)
             }
             Type::TypeAlias(ta) => self.type_of(self.get_type_alias(&ta).as_type()),
-            Type::Any(style) => self.heap.mk_type_form(style.propagate()),
-            Type::ClassDef(cls) => self.heap.mk_type_form(
+            Type::Any(style) => self.heap.mk_type_of(style.propagate()),
+            Type::ClassDef(cls) => self.heap.mk_type_of(
                 self.heap.mk_class_type(
                     self.get_metadata_for_class(&cls)
                         .metaclass(self.stdlib)
@@ -5055,15 +5724,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let elts: Vec<Param> = x
                     .elts
                     .iter()
-                    .map(|x| {
-                        Param::PosOnly(
-                            None,
-                            self.expr_untype(x, type_form_context, errors),
-                            Required::Required,
-                        )
+                    .map(|elt| {
+                        let ty = self.expr_untype(elt, type_form_context, errors);
+                        Param::PosOnly(None, ty, Required::Required)
                     })
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
+            }
+            // Special case: integer literals in type argument or TypeVar default context with
+            // native tensor shapes. These can be used for Dim-bounded parameters
+            // (e.g., LinearLayer[6, 9]) or TypeVar defaults (e.g., class Conv2d[..., S = 1]).
+            // We convert them directly to Type::Size to distinguish from Literal[6].
+            Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. })
+                if matches!(
+                    type_form_context,
+                    TypeFormContext::TypeArgument | TypeFormContext::TypeVarDefault
+                ) && self.solver().tensor_shapes =>
+            {
+                match value {
+                    ruff_python_ast::Number::Int(i) => {
+                        if let Some(n) = i.as_i64() {
+                            Type::Size(SizeExpr::Literal(n))
+                        } else {
+                            // Integer too large to fit in i64, fall back to error
+                            let inferred_ty = self.expr_infer(x, errors);
+                            self.untype(inferred_ty, x.range(), errors)
+                        }
+                    }
+                    _ => {
+                        // For non-integer numbers (float, complex), fall through to the generic path
+                        let inferred_ty = self.expr_infer(x, errors);
+                        self.untype(inferred_ty, x.range(), errors)
+                    }
+                }
             }
             _ => {
                 let inferred_ty = self.expr_infer(x, errors);

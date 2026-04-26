@@ -1,0 +1,116 @@
+{
+  "name": "test",
+  "names": [
+    "test.x",
+    "test.y",
+    "test.z",
+    "test.w"
+  ],
+  "line_count": 10,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.x",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 6,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.y",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.z",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 8,
+        "column": 1
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.w",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 9,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [
+    {
+      "kind": "type",
+      "codes": [
+        "assignment"
+      ],
+      "location": {
+        "line": 6,
+        "column": 8
+      }
+    },
+    {
+      "kind": "pyright",
+      "codes": [
+        "reportGeneralClassIssue"
+      ],
+      "location": {
+        "line": 7,
+        "column": 8
+      }
+    },
+    {
+      "kind": "pyrefly",
+      "codes": [
+        "error-code"
+      ],
+      "location": {
+        "line": 8,
+        "column": 8
+      }
+    },
+    {
+      "kind": "pyre",
+      "codes": [
+        "7"
+      ],
+      "location": {
+        "line": 9,
+        "column": 8
+      }
+    }
+  ],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 0,
+  "n_attrs": 4,
+  "n_properties": 0,
+  "n_type_ignores": 4
+}

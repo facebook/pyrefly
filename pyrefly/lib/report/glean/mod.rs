@@ -168,12 +168,17 @@ print(b"world")
 "#;
 
     let type_lit_str = r#"from typing import Union
+import typing
+
 class B:
     class A:
         pass
 
     def other(self, x: "B") -> "Union[list[B], A, bool]":
         return False
+
+    def dotted(self, x: "B.A") -> "typing.List[int]":
+        return [0]
 "#;
 
     let exports_all = r#"from typing import Union as U

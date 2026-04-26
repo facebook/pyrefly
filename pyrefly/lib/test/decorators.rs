@@ -99,6 +99,28 @@ def takes_inferred(i) -> None:
 );
 
 testcase!(
+    test_generic_decorator_with_unannotated_param,
+    r#"
+from typing import Callable, TypeVar
+
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+
+def decorator(func: Callable[[T1, T2], T3]) -> Callable[[T1, T2], T3]:
+    return func
+
+class Expr:
+    @decorator
+    def __truediv__(self, other) -> "Expr":
+        return Expr()
+
+x = Expr()
+y = x / 2
+    "#,
+);
+
+testcase!(
     test_callable_instance,
     r#"
 from typing import Callable, reveal_type
@@ -586,10 +608,10 @@ testcase!(
     r#"
 import contextlib
 from contextlib import contextmanager
-from typing import Iterator, List, assert_type
+from typing import Generator, List, assert_type
 
 @contextmanager
-def generic_ctx[T](val: T) -> Iterator[T]:
+def generic_ctx[T](val: T) -> Generator[T, None, None]:
     yield val
 
 def test(x: int, items: List[int]):
@@ -655,6 +677,68 @@ def my_func[T](x: T) -> T:
 
 reveal_type(my_func)  # E: revealed type: (object) -> None
 "#,
+);
+
+testcase!(
+    test_dual_use_decorator,
+    r#"
+from typing import assert_type
+from functools import wraps
+
+def optional_debug(func_or_flag=None):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+    if callable(func_or_flag):
+        return decorator(func_or_flag)
+    return decorator
+
+# Used without parentheses — func_or_flag receives the function directly.
+@optional_debug
+def compute(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+r1 = compute(1, 2, 3)
+assert_type(r1, int)
+
+# Used with parentheses — func_or_flag receives the flag, returns decorator.
+@optional_debug(True)
+def compute2(x: int, y: int, z: int) -> int:
+    return x + y + z
+
+r2 = compute2(1, 2, 3)
+assert_type(r2, int)
+    "#,
+);
+
+testcase!(
+    test_unannotated_decorator_preserves_signature,
+    r#"
+from typing import assert_type
+
+def make_decorator(target, decorator_func):
+    decorator_func.__name__ = target.__name__
+    return decorator_func
+
+def add_dispatch_support(target=None):
+    def decorator(dispatch_target):
+        def op_dispatch_handler(*args, **kwargs):
+            return dispatch_target(*args, **kwargs)
+        op_dispatch_handler = make_decorator(dispatch_target, op_dispatch_handler)
+        return op_dispatch_handler
+    if target is None:
+        return decorator
+    return decorator(target)
+
+@add_dispatch_support
+def matmul(a: int, b: int, name: str | None = None) -> int:
+    return a + b
+
+r = matmul(1, 2, name="test")
+assert_type(r, int)
+    "#,
 );
 
 fn env_numba() -> TestEnv {

@@ -20,12 +20,17 @@ The main use of error kinds is as short names ("slugs") that can be used in
 error suppression comments.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
-- ignore: the diagnostic is not emitted and does not cause a nonzero exit in the CLI
-- info: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
-- warn: the diagnostic shows up yellow in the IDE and causes a nonzero exit in the CLI
-- error: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
+- **ignore**: the diagnostic is not emitted
+- **info**: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
+- **warn**: the diagnostic shows up yellow in the IDE and does not cause a nonzero exit in the CLI
+- **error**: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
 
 The default severity for diagnostics is `error` unless otherwise noted. Diagnostics with default severity `ignore` must be explicitly enabled to be emitted.
+
+By default, `pyrefly check` only displays diagnostics with severity `error` or higher.
+Use the [`min-severity`](../configuration#min-severity) config option or `--min-severity` CLI flag to also show lower-severity diagnostics (e.g. `--min-severity warn`).
+
+In the IDE, diagnostics below `error` severity are only shown for files that are currently open in the editor.
 
 ## abstract-method-call
 
@@ -299,12 +304,37 @@ That means everywhere that we call `Base.f` can safely call `Sub.f`.
 
 The opposite case, where `Base.f` takes `float` and `Sub.f` takes `int`, is an error because `Sub.f` cannot accept every `float` value.
 
-Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-param-name-override](#bad-param-name-override).
+Note that bad overrides caused by inconsistent parameter names are separately reported as [bad-override-param-name](#bad-override-param-name), and bad overrides caused by mutable attribute type changes are separately reported as [bad-override-mutable-attribute](#bad-override-mutable-attribute).
 
-## bad-param-name-override
+## bad-override-mutable-attribute
+
+Arises when a subclass overrides a mutable (read-write) attribute of a parent class with an incompatible type.
+Mutable attributes require invariant types — the child's type must be exactly compatible with the parent's — because the attribute can be both read and written through a reference to the parent class.
+
+```python
+class Base:
+  x: int | str
+
+class Sub(Base):
+  x: int  # Error: narrows the type
+```
+
+This is unsafe because code that holds a `Base` reference can write any `int | str` value to `x`, but `Sub` only expects `int`:
+
+```python
+def f(b: Base) -> None:
+  b.x = "hello"  # valid for Base, but breaks Sub's invariant
+
+f(Sub())
+```
+
+This is a sub-kind of [bad-override](#bad-override): suppressing `bad-override` also suppresses this error.
+Other type checkers like mypy do not enforce this check by default, so this error kind can be selectively disabled if desired.
+
+## bad-override-param-name
 
 Arises when a subclass overrides a method of its base class while changing the name of a positional parameter.
-This is a type of [bad override](#bad-override) but has a separate error kind so that it can be selectively disabled if desired.
+This is a sub-kind of [bad-override](#bad-override): suppressing `bad-override` also suppresses this error.
 Changing the name of a parameter breaks callers that pass in an argument by name:
 
 ```python
@@ -321,6 +351,11 @@ def f(base: Base):
 
 f(Sub())  # oops!
 ```
+
+## bad-param-name-override
+
+Deprecated: this error code has been renamed to [bad-override-param-name](#bad-override-param-name).
+The old name is still accepted in suppression comments and configuration for backwards compatibility.
 
 ## bad-raise
 
@@ -439,6 +474,16 @@ def f(): ...
 f()  # deprecated!
 ```
 
+## division-by-zero
+
+Division, floor division, or modulo by a literal zero value. This catches cases where the divisor is the literal `0` or a variable with type `Literal[0]`, which would always raise `ZeroDivisionError` at runtime.
+
+```python
+x = 10 / 0   # error: division by zero
+y = 10 // 0  # error: division by zero
+z = 10 % 0   # error: division by zero
+```
+
 ## implicit-abstract-class
 
 Pyrefly emits this error when a class defines abstract members but is not declared abstract (for example, it does not inherit from `abc.ABC` or use `abc.ABCMeta`). Such classes cannot be instantiated because they have unimplemented abstract methods. Add `ABC` as a base class, adjust the metaclass, or provide concrete implementations to resolve the issue.
@@ -460,13 +505,24 @@ x = []  # error: infers list[Any]
 
 ## implicit-import
 
-A module exists, but was not imported. At runtime, if something has made this import
-before your code, it will work. But relies on whatever did the import to continue doing it.
+This error is emitted when a submodule is accessed through a parent package without being explicitly imported in the current file.
+
+While Python’s global module cache (`sys.modules`) might allow this to work if another part of your program performed the import earlier, relying on this side effect is fragile. If that external code is refactored or removed, your code will crash at runtime with an `AttributeError`.
+
+To fix this, always use an explicit import for the submodule you want to access.
 
 ```python
-import importlib
-importlib.util.find_spec("os")  # error, `importlib.util` was not imported
+import urllib
+# error: 'urllib' has no attribute 'request' (unless imported elsewhere)
+urllib.request.urlopen(...)
+
+# Fix:
+import urllib.request
+urllib.request.urlopen(...)
+
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## implicitly-defined-attribute
 
@@ -515,6 +571,22 @@ def f(x: int) -> int | str:
     return x
 ```
 
+## inconsistent-overload-default
+
+In an overloaded function, the type of a parameter in an overload signature is inconsistent with
+its default value in the implementation.
+
+Example:
+```python
+from typing import Literal, overload
+@overload
+def f(x: Literal[True] = ...) -> None: ...  # error, `x` has default `False`, which is inconsistent with type `Literal[True]`
+@overload
+def f(x: Literal[False]) -> int: ...
+def f(x: bool = False) -> int | None:
+    return 0 if x else None
+```
+
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).
@@ -522,6 +594,8 @@ Ideally you'll never see this one. If you do, please consider [filing a bug](htt
 ## invalid-annotation
 
 There are several reasons why an annotation may be invalid. The most common case is misusing a typing special form, such as `typing.Final`, `typing.ClassVar`, `typing.ParamSpec`, and so on.
+
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 
 ```python
 from typing import *
@@ -815,6 +889,8 @@ A module could not be found.
 The error message will include which paths were searched, such as the site package paths.
 You may be missing a dependency, or you may need to inform Pyrefly where the module lives. See [Configuration](configuration.mdx) for further information.
 
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
+
 ## missing-module-attribute
 
 Arises when attempting to import a name that does not exist from a module.
@@ -868,6 +944,19 @@ The default severity of this diagnostic is `ignore`.
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
 
+## name-mismatch
+
+This warning indicates that the first string argument to a functional type definition does not
+match the name it is assigned to.
+
+```python
+from collections import namedtuple
+from enum import Enum
+
+RepoDetails = namedtuple("repo_details", ["source_dir", "age"])
+DviState = Enum("_dvistate", "pre outer inpage")
+```
+
 ## no-access
 
 The `no-access` error indicates that an attribute exists, but it cannot be used in this way.
@@ -905,6 +994,45 @@ def f(x: int | str) -> int | str:
 f(1.0)
 ```
 
+## non-convergent-recursion
+
+Some Python code has type analysis that is recursive. Consider, for example:
+```
+def f(): return g()
+def g(): return [f()]
+```
+Here, return-type inference for `f` depends on the return type of `g`, and vice versa
+so we get a cycle. Similarly, in
+```
+x = 1
+while some_condition():
+  x = [x]
+```
+the type of `x` at the end of the loop body depends on the type of `x` at the beginning,
+and this forms a cycle (and in this case the type doesn't converge to any closed form;
+the true type is a recursive type but Pyrefly will not infer an anonymous recursive type).
+
+Many more cycles are possible, sometimes involving harder-to-visualize problems like
+classes whose type parameters have constraints that are recursive, or class fields
+whose inferred types depend on one another.
+
+Pyrefly will attempt to resolve all such recursion using a *fixpoint*, where we
+repeatedly analyze the related entities in type inference. But because the results
+do not always converge (like `x = [x]` above), we have to limit the number of
+iterations, which means sometimes we cannot ensure that the inferred result
+is correct.
+
+In these cases, Pyrefly will produce a `non-convergent-recursion` error that
+warns you our fixpoint did not converge, and tells you the result we inferred
+based on the last iteration. In some cases, the error message will recommend
+that by adding more annotations you may be able to help Pyrefly determine the
+correct type.
+
+If you're filing a bug report for this error, set the environment variable
+`PYREFLY_FIXPOINT_DETAILS=1` when running Pyrefly and include additional
+diagnostic information in the issue that will help the Pyrefly team root cause
+the non-convergence.
+
 ## non-exhaustive-match
 
 Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
@@ -922,6 +1050,8 @@ def describe(color: Color) -> str:
     case Color.RED:
       return "danger"
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## not-a-type
 
@@ -1113,19 +1243,23 @@ This error is used to indicate a type that's equivalent to True or False is used
 def f() -> bool:
   ...
 
-# This will throw error, as it's likely that the function needs to be invoked.
+# This is likely a mistake, as it's likely that the function needs to be invoked.
 if f:
   ...
-# This will throw error, as it's equivalent to `if True`.
+# This is likely a mistake, as it's equivalent to `if True`.
 if "abc":
   ...
 ```
+
+The default severity of this diagnostic is `warn`.
 
 ## reveal-type
 
 Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
 
 The default severity of this diagnostic is `info`.
+
+`reveal_type` is a *directive* — it is always shown in CLI output regardless of the [`min-severity`](../configuration#min-severity) threshold, and is never subject to suppression or baseline exclusion. To hide it, set `reveal-type = "ignore"` in the [`errors`](../configuration#errors) table.
 
 ## unannotated-attribute
 
@@ -1158,6 +1292,21 @@ def process_data(x: int, y):  # error: `process_data` is missing an annotation f
 # Fixed version:
 def process_data(x: int, y: int) -> int:
     return x + y
+```
+
+## unannotated-protocol-member
+
+This error is raised when a protocol member is assigned a value in the class body without an explicit type annotation. Protocol members must have explicitly declared types so that implementations know exactly what type to provide.
+
+```python
+from typing import Protocol
+
+class MyProto(Protocol):
+    x = None  # error: Protocol member `x` must have an explicit type annotation
+
+# Fixed version:
+class MyProto(Protocol):
+    x: int | None = None
 ```
 
 ## unannotated-return
@@ -1208,9 +1357,20 @@ def takes_kwonly(*, x: int) -> int:
 takes_kwonly(1)  # should be `takes_kwonly(x=1)`!
 ```
 
+## unimported-directive
+
+Using a [type checker directive](https://typing.python.org/en/latest/spec/directives.html#type-checker-directives) without importing it from `typing` first will result in a runtime error.
+
+```python
+reveal_type(1)  # error
+assert_type(1, int)  # error
+```
+
 ## unknown-name
 
 `unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
+
+Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 
 ```python
 def where() -> None:
@@ -1234,13 +1394,27 @@ def test0() -> None:
     if True is not False:  # unnecessary-comparison: always True
         pass
 
-def test1(x: object) -> None:
+class User: ...
+class Admin(User): ...
+
+def test1(user: User) -> None:
     # Comparing an instance to a class is always False
-    if x is int:  # unnecessary-comparison: did you mean isinstance(x, int)?
+    if user is Admin:  # unnecessary-comparison: did you mean isinstance(user, Admin)?
         pass
 ```
 
 This check is relatively conservative and only warns on limited cases where the comparison is highly likely to be redundant.
+
+## unnecessary-type-conversion
+
+This warning is raised when a builtin type constructor (`str`, `int`, `float`, `bool`, or `bytes`) is called on a value that is already of that type, making the conversion redundant.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+def f(x: str) -> None:
+    y = str(x)  # unnecessary-type-conversion: `x` is already of type `str`
+```
 
 ## unreachable
 
@@ -1269,6 +1443,28 @@ can produce multiple values:
 def valid_generator():
     yield 1
     yield 2  # This is valid
+```
+
+The default severity of this diagnostic is `warn`.
+
+## unresolvable-dunder-all
+
+Default severity: **warn**
+
+This warning is raised when `__all__` is defined but its value cannot be
+statically analyzed. This can happen when `__all__` is assigned a function call,
+a variable, a list comprehension, or any expression that Pyrefly cannot resolve
+at analysis time.
+
+When this occurs, Pyrefly falls back to inferring public exports from
+module-level definitions (all names that do not start with an underscore).
+
+```python
+def generate_all():
+    return ["x", "y"]
+
+__all__ = generate_all()
+# `__all__` could not be statically analyzed [unresolvable-dunder-all]
 ```
 
 ## unsafe-overlap
@@ -1338,6 +1534,21 @@ async def bar():
 
 ## unused-ignore
 
-This error is raised when a `# pyre-ignore` comment is not used to suppress an error, and can be safely removed.
+This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
 
 The default severity of this diagnostic is `ignore`.
+
+## variance-mismatch
+
+The inferred variance of a type variable does not match its declared variance. This warning is raised for protocols where the way a type variable is used implies a different variance than what was declared. For example, if a protocol only uses `T` in covariant positions but `T` is declared as invariant, this warning suggests declaring `T` as covariant.
+
+The default severity of this diagnostic is `warn`.
+
+```python
+from typing import Protocol, TypeVar
+
+T = TypeVar("T")
+
+class A(Protocol[T]):  # variance-mismatch: Type variable `T` in class `A` is declared as invariant, but could be covariant based on its usage
+    def f(self) -> T: ...
+```

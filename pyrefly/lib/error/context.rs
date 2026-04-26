@@ -9,9 +9,11 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::config::error_kind::ErrorKind;
+use crate::types::display::TypeDisplayContext;
 use crate::types::types::Type;
 
 /// General context for an error. For many errors, the root cause is some steps removed from what
@@ -30,11 +32,13 @@ pub enum ErrorContext {
     /// with x: ...
     BadContextManager(Type),
     /// Unary operation like `+x`
-    UnaryOp(String, Type),
+    UnaryOp(String, Type, TextRange),
     /// Binary operation like `x + y`
-    BinaryOp(String, Type, Type),
+    // TODO: Consider refactoring to a named struct to improve readability of the 5 fields.
+    BinaryOp(String, Type, Type, TextRange, TextRange),
     /// In-place binary operation like `x += y`
-    InplaceBinaryOp(String, Type, Type),
+    // TODO: Consider refactoring to a named struct to improve readability of the 5 fields.
+    InplaceBinaryOp(String, Type, Type, TextRange, TextRange),
     /// for x in y: ...
     Iteration(Type),
     /// async for x in y: ...
@@ -54,6 +58,30 @@ pub enum ErrorContext {
 }
 
 impl ErrorContext {
+    /// Return secondary annotations that label relevant spans with type information.
+    pub fn annotations(&self) -> Vec<(TextRange, String)> {
+        match self {
+            Self::BinaryOp(_op, left, right, left_range, right_range) => {
+                let ctx = TypeDisplayContext::new(&[left, right]);
+                vec![
+                    (*left_range, format!("has type `{}`", ctx.display(left))),
+                    (*right_range, format!("has type `{}`", ctx.display(right))),
+                ]
+            }
+            Self::InplaceBinaryOp(_op, left, right, left_range, right_range) => {
+                let ctx = TypeDisplayContext::new(&[left, right]);
+                vec![
+                    (*left_range, format!("has type `{}`", ctx.display(left))),
+                    (*right_range, format!("has type `{}`", ctx.display(right))),
+                ]
+            }
+            Self::UnaryOp(_op, operand, operand_range) => {
+                vec![(*operand_range, format!("has type `{operand}`"))]
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn as_error_kind(&self) -> ErrorKind {
         match self {
             Self::BadContextManager(..) => ErrorKind::BadContextManager,
@@ -104,6 +132,8 @@ impl<'a> ErrorInfo<'a> {
 pub struct TypeCheckContext {
     pub kind: TypeCheckKind,
     pub context: Option<ErrorContext>,
+    /// Optional secondary annotations to attach to the error.
+    pub annotations: Vec<(TextRange, String)>,
 }
 
 impl TypeCheckContext {
@@ -111,6 +141,25 @@ impl TypeCheckContext {
         Self {
             kind,
             context: None,
+            annotations: Vec::new(),
+        }
+    }
+
+    pub fn with_context(mut self, context: Option<ErrorContext>) -> Self {
+        self.context = context;
+        self
+    }
+
+    pub fn with_annotations(mut self, annotations: Vec<(TextRange, String)>) -> Self {
+        self.annotations = annotations;
+        self
+    }
+
+    /// Add a single annotation at the given range, if present.
+    pub fn with_annotation(self, range: Option<TextRange>, label: String) -> Self {
+        match range {
+            Some(r) => self.with_annotations(vec![(r, label)]),
+            None => self,
         }
     }
 }
@@ -161,10 +210,6 @@ pub enum TypeCheckKind {
     AnnAssign,
     /// Check one portion of an unpacked assignment (e.g. `x, y = foo()`) against the expected type.
     UnpackedAssign,
-    /// We break cycles using recursive `Var`s, which the solver might pin. When we record a final
-    /// answer, if the solver pinned the Var to an incompatible type, we record a type error with this
-    /// kind. This is hard to understand and should be avoided when possible.
-    CycleBreaking,
     /// Class used in an `except C` clause.
     ExceptionClass,
     /// Yielding a value that conflicts with the return annotation.
@@ -179,6 +224,8 @@ pub enum TypeCheckKind {
     OverloadReturn,
     /// Consistency check for overload input signature, as (overload_signature, implementation_signature)
     OverloadInput(Callable, Callable),
+    /// Consistency check for overload defaults, as (parameter name).
+    OverloadDefault(Name),
     /// Check that the type a TypeVar is specialized with is compatible with its type restriction.
     TypeVarSpecialization(Name),
     /// An `x in y` check
@@ -217,7 +264,6 @@ impl TypeCheckKind {
             Self::IterationVariableMismatch(..) => ErrorKind::BadAssignment,
             Self::AnnAssign => ErrorKind::BadAssignment,
             Self::UnpackedAssign => ErrorKind::BadAssignment,
-            Self::CycleBreaking => ErrorKind::BadAssignment,
             Self::ExceptionClass => ErrorKind::InvalidInheritance,
             Self::YieldValue => ErrorKind::InvalidYield,
             Self::YieldFrom => ErrorKind::InvalidYield,
@@ -225,6 +271,7 @@ impl TypeCheckKind {
             Self::PostInit => ErrorKind::BadFunctionDefinition,
             Self::OverloadReturn => ErrorKind::InconsistentOverload,
             Self::OverloadInput(..) => ErrorKind::InconsistentOverload,
+            Self::OverloadDefault(..) => ErrorKind::InconsistentOverloadDefault,
             Self::TypeVarSpecialization(..) => ErrorKind::BadSpecialization,
             Self::Container => ErrorKind::UnsupportedOperation,
         }

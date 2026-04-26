@@ -13,6 +13,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 
 use dupe::Dupe;
+use lock_free_hashtable::sharded;
 use lock_free_hashtable::sharded::ShardedLockFreeRawTable;
 
 use crate::with_hash::WithHash;
@@ -109,6 +110,32 @@ impl<K: Eq + Hash + 'static, V: 'static> LockedMap<K, V> {
 
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.map.iter().map(|x| &x.1)
+    }
+}
+
+impl<K: Eq + Hash + 'static, V: 'static> IntoIterator for LockedMap<K, V> {
+    type Item = (K, V);
+    type IntoIter = IntoIter<K, V>;
+
+    fn into_iter(self) -> IntoIter<K, V> {
+        IntoIter {
+            iter: self.map.into_iter(),
+        }
+    }
+}
+
+/// Consuming iterator over entries in a `LockedMap`.
+pub struct IntoIter<K, V> {
+    iter: sharded::IntoIter<Box<(WithHash<K>, V)>, 64>,
+}
+
+impl<K: 'static, V: 'static> Iterator for IntoIter<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.iter.next()?;
+        let (with_hash, value) = *entry;
+        Some((with_hash.into_key(), value))
     }
 }
 

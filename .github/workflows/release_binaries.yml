@@ -109,6 +109,10 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> ${{ matrix.github_env }}
 
+      - name: Set jemalloc page size for ARM64 macOS
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> ${{ matrix.github_env }}
+
       - name: Build binary (native)
         if: ${{ !matrix.cross }}
         run: cargo build --release --manifest-path pyrefly/Cargo.toml -p pyrefly --target ${{ matrix.target }}

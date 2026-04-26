@@ -74,6 +74,70 @@ D(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type
 );
 
 testcase!(
+    test_metaclass_with_fields,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform()
+class Meta(type): ...
+
+class C(metaclass=Meta):
+    x: int
+    y: str = ""
+C(x=0)
+C(x=0, y="hello")
+C(x="oops")  # E: `Literal['oops']` is not assignable to parameter `x` with type `int`
+    "#,
+);
+
+testcase!(
+    test_metaclass_inheritance_with_fields,
+    r#"
+from typing import Any, dataclass_transform
+
+@dataclass_transform(kw_only_default=True)
+class Meta(type):
+    def __new__(mcs, name: str, bases: tuple[type, ...], namespace: dict[str, Any], **kwargs: Any) -> Any:
+        return super().__new__(mcs, name, bases, namespace)
+
+class Base(metaclass=Meta):
+    key: str
+    name: str | None = None
+
+class Child(Base):
+    device_class: str | None = None
+    unit: str | None = None
+
+Child(key="temperature", device_class="temperature", name="Sensor")
+Child()  # E: Missing argument `key`
+    "#,
+);
+
+testcase!(
+    test_metaclass_frozen_inheritance,
+    r#"
+from typing import Any, dataclass_transform
+
+@dataclass_transform()
+class Meta(type): ...
+
+class Base(metaclass=Meta):
+    x: int
+
+# A frozen subclass of a non-frozen base is allowed for dataclass_transform classes.
+class FrozenChild(Base, frozen=True):
+    y: str
+
+f = FrozenChild(x=0, y="hello")
+f.y = "world"  # E: frozen dataclass member
+
+# A non-frozen subclass of a frozen class is not allowed.
+class MutableChild(FrozenChild, frozen=False):  # E: Cannot inherit non-frozen dataclass `MutableChild` from frozen dataclass `FrozenChild`
+    z: int
+    "#,
+);
+
+testcase!(
     test_call_transform,
     r#"
 from typing import dataclass_transform
@@ -143,6 +207,58 @@ def build(x): ...
 class C:
     x: int = field()
 C(x=0)
+C()  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
+    test_class_field_specifier_required,
+    r#"
+from typing import dataclass_transform, Any
+class CustomField:
+    def __init__(self, **kwargs: Any) -> None: ...
+@dataclass_transform(field_specifiers=(CustomField,))
+def build(x): ...
+@build
+class C:
+    x: int = CustomField()  # E: `CustomField` is not assignable to `int`
+C(x=0)
+C()  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
+    test_class_field_specifier_optional,
+    r#"
+from typing import dataclass_transform, Any
+class CustomField:
+    def __init__(self, *, default: Any = ..., **kwargs: Any) -> None: ...
+@dataclass_transform(field_specifiers=(CustomField,))
+def build(x): ...
+@build
+class C:
+    x: str = CustomField(default="foo")  # E: `CustomField` is not assignable to `str`
+C(x="bar")
+C()  # OK because `default` gives `x` a default
+    "#,
+);
+
+testcase!(
+    test_class_field_specifier_with_str_mixin,
+    r#"
+from typing import dataclass_transform, Any
+class CustomField(str):
+    def __new__(cls, *, default: Any = ..., **kwargs: Any) -> "CustomField":
+        return super().__new__(cls)
+    def __init__(self, *, default: Any = ..., **kwargs: Any) -> None: ...
+@dataclass_transform(field_specifiers=(CustomField,))
+def build(x): ...
+@build
+class C:
+    x: int = CustomField()  # E: `CustomField` is not assignable to `int`
+    y: str = CustomField(default="foo")  # CustomField is a str, so this is fine
+C(x=0)
+C(x=0, y="bar")
 C()  # E: Missing argument `x`
     "#,
 );

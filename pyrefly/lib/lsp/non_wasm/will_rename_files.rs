@@ -211,6 +211,7 @@ pub fn will_rename_files(
                     .for_directory(new_path.parent())
                     .iter(),
             ),
+            &config.extra_file_extensions,
         );
 
         let new_module_name = match new_module_name {

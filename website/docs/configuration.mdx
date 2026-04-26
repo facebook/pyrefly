@@ -14,12 +14,9 @@ description: Configure Pyrefly settings and options
 
 # Pyrefly Configuration
 
-Pyrefly has a basic configuration that can (or will) allow you to customize your
+Pyrefly has a configuration system that allows you to customize your
 Pyrefly runs without having to specify all of your arguments on the command
 line.
-
-NOTE: this is early in its development, so the options listed here are subject
-to change in name, usage, type, quantity, and structure.
 
 Configurations can be specified in a [TOML file](https://toml.io/en/) at the root of
 your project (or elsewhere, as long as the path-based config options point to the right place) named
@@ -32,7 +29,7 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 Both absolute and config-relative paths are supported.
 
 :::info
-Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+Want all type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
 :::
 
 ## Simple Configuration Example
@@ -428,6 +425,73 @@ types (like `object`, `str`, ...) and types/type signatures from stdlib modules.
 - Default: none (resolves to bundled typeshed)
 - Flag equivalent: `--typeshed-path`
 
+### `baseline`
+
+Path to a baseline JSON file for comparing type errors. Errors matching the baseline
+are suppressed, so only newly-introduced errors are reported. This is useful when
+introducing type checking to a project for the first time, or when rolling out
+changes that would otherwise produce many new errors at once.
+
+To generate (or re-generate) the baseline file, run:
+
+```
+pyrefly check --baseline="<path to baseline file>" --update-baseline
+```
+
+See the [Error Suppressions docs](./error-suppressions.mdx#baseline-files-experimental) for
+more details on how baseline files work.
+
+- Type: path to a JSON file
+- Default: none (no baseline)
+- Flag equivalent: `--baseline`
+- Notes:
+    - `baseline` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - Errors suppressed by the baseline file are still shown in the IDE.
+    - Errors are matched with the baseline by file, error code, and column number.
+
+### `min-severity`
+
+The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
+below this threshold are hidden from output and do not affect the exit code.
+
+```toml
+# pyrefly.toml — show warnings and errors
+min-severity = "warn"
+```
+
+```toml
+# pyproject.toml
+[tool.pyrefly]
+min-severity = "warn"
+```
+
+- Type: `"ignore"` | `"info"` | `"warn"` | `"error"`
+- Default: `"error"`
+- Flag equivalent: `--min-severity`
+- Notes:
+    - `min-severity` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - This setting controls CLI display only. To change the severity of individual
+      error kinds, use the [`errors`](#errors) table instead.
+    - In the IDE, diagnostics below error severity are only shown for files that
+      are currently open in the editor, regardless of this setting.
+    - Directives such as [`reveal_type`](../error-kinds#reveal-type) are always
+      shown regardless of this threshold.
+
+### `output-format`
+
+Default format for `pyrefly check` error output when `--output-format` is not
+set on the CLI.
+
+- Type: `"min-text" | "full-text" | "json" | "github" | "omit-errors"`
+- Default: `full-text`
+- Flag equivalent: `--output-format`
+- Notes:
+    - `output-format` is a **project-level setting** and cannot be overridden in
+      [`sub-config`](#sub-configs) sections.
+    - A CLI `--output-format` flag still takes precedence over the config value.
+
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
@@ -467,6 +531,16 @@ _only_ want to see type errors on CLI/CI runs.
 - Notes: if you want to disable errors on CLI/CI runs as well, or if you're looking
   to turn on/off specific errors, you may be looking for the [`errors`](#errors) config
   option instead.
+
+### `skip-lsp-config-indexing`
+
+Disables automatic project indexing when running Pyrefly as a language server.
+Enabling this may speed up LSP startup and reduce resource usage on large projects,
+at the cost of some language server features that rely on a full project index.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
 
 ### `replace-imports-with-any`
 
@@ -544,51 +618,96 @@ x.append("2")  # ok
 - Default: `true`
 - Flag equivalent: `--infer-with-first-use`
 
-### `untyped-def-behavior`
+### `check-unannotated-defs`
 
-How should Pyrefly treat function definitions with no parameter or return type annotations?
+Whether Pyrefly should type check the bodies of function definitions that have
+no parameter or return type annotations.
 
-By default, Pyrefly uses the `"check-and-infer-return-type"` behavior and will
-check all function bodies, inferring the return type.
+When set to `true` (the default), Pyrefly checks all function bodies regardless
+of whether they have type annotations.
 
-:::info
-To provide inferred return types with `check-and-infer-return-type`, especially for
-site-package paths (third-party packages), Pyrefly may need to load and analyze
-more modules than you might otherwise see from mypy.
-
-This may result in increased type check durations or an output showing more modules
-analyzed than you expect. If this behavior is not preferred, you should set
-`untyped-def-behavior` to `skip-and-infer-return-any` in your config or pass it in
-as a flag.
-:::
-
-If this option is set to `"check-and-infer-return-any"`, then Pyrefly will still
-check the function body but will treat the return type as `Any`.
-
-If this option is set to `"skip-and-infer-return-any"`, Pyrefly will again treat
-the return type as `Any`, but will also skip checking the function body. In this
-case, Pyrefly will also infer `Any` as the type of any attributes inferred based
-on this function body. This behavior is what PEP 484 specifies, although we do
-not recommend it for most users today; since Pyrefly will not analyze the bodies
-of untyped functions, language server functionality like showing types on hover
-and finding definitions will not be available there.
+When set to `false`, Pyrefly skips checking the bodies of completely unannotated
+functions (functions with no parameter or return annotations). In this case,
+Pyrefly will infer `Any` as the type of any attributes inferred from these
+function bodies. This behavior is what PEP 484 specifies, although we do not
+recommend it for most users today; since Pyrefly will not analyze the bodies of
+untyped functions, language server functionality like showing types on hover and
+finding definitions will not be available there. Functions that have at least one
+annotation are still checked.
 
 :::info
-`skip-and-infer-return-any` is mypy's default inference behavior, and how we will
+`check-unannotated-defs = false` is mypy's default behavior, and how we will
 attempt to migrate your existing mypy configuration when running `pyrefly init`.
 See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for more information on config migration.
 :::
 
-- Type: one of `"check-and-infer-return-type"`, `"check-and-infer-return-any"`,
-  `"skip-and-infer-return-any"`
-- Default: `"check-and-infer-return-type"`
-- Flag equivalent: `--untyped-def-behavior`
+- Type: `bool`
+- Default: `true`
+- Flag equivalent: `--check-unannotated-defs`
 - Equivalent configs:
-    - The `"check-and-infer-return-type"` behavior emulates Pyright's default
-      behavior.
-    - The `"skip-and-infer-return-any"` behavior emulates mypy's default behavior.
-    - The `"check-and-infer-return-any"` behavior emulates mypy's
-      `check_untyped_defs` flag.
+    - `true` emulates mypy's `check_untyped_defs` flag.
+    - `false` emulates mypy's default behavior.
+
+### `infer-return-types`
+
+Controls when Pyrefly infers return types for functions without explicit return
+type annotations. This only applies to functions whose bodies are checked;
+unannotated functions are only eligible when `check-unannotated-defs` is `true`.
+
+- `"checked"` (default): Infer return types for all checked functions, including
+  completely unannotated ones.
+- `"annotated"`: Infer return types only for functions that have at least one
+  parameter or return annotation. This is useful when combined with
+  `check-unannotated-defs = false` to still get return type inference for
+  partially annotated functions.
+- `"never"`: Never infer return types; unannotated returns are treated as `Any`.
+
+:::info
+To provide inferred return types with `"checked"` or `"annotated"`, especially
+for site-package paths (third-party packages), Pyrefly may need to load and
+analyze more modules than you might otherwise see from mypy.
+
+This may result in increased type check durations or an output showing more
+modules analyzed than you expect. If this behavior is not preferred, you should
+set `infer-return-types` to `"never"` in your config or pass it as a flag.
+:::
+
+- Type: one of `"never"`, `"annotated"`, `"checked"`
+- Default: `"checked"`
+- Flag equivalent: `--infer-return-types`
+
+### `strict-callable-subtyping`
+
+Controls whether Pyrefly enforces strict parameter compatibility when checking
+callable subtyping for signatures with `*args: Any, **kwargs: Any`.
+
+When set to `false` (the default), callables with `*args: Any, **kwargs: Any`
+are treated as a gradual type — assignability checks in both directions succeed
+when they otherwise wouldn't, similar to how `...` (ellipsis) parameters behave.
+This is a pragmatic default because many real-world stubs and decorators use
+`*args: Any, **kwargs: Any` as a wildcard signature.
+
+When set to `true`, parameter list compatibility is checked strictly even when
+`*args: Any, **kwargs: Any` is present.
+
+[Try it in the sandbox.](https://pyrefly.org/sandbox/?project=N4IgZglgNgpgziAXKOBDAdgEwEYHsAeAdAA4CeSIAxlKnHAAQCCiAOuvR-ZjGPWABRwYUMABp6AKlQAnAOZxxEiQGsA7jPkBKRPUJ621WgwBC-Rtrad6AYnoARHqgCuUAC71%2BYVFCHb66XHoYaWlcaXpAFAJ6DFJ6OAhZdFRXJ2kYeggGSlwAW2JkiGxYelUIVwALegADfik5OB1GdFJFFXV6xubNKstOWwBlV2kISnd%2BIacYP2DQ8Kia-B0IdFdurlx4f1x3VEpKGGIdqChouSccmBX6KEzXBgrk6tqNBqZm1rUXztI1zA24Xocbi8ARCETiRYZFZ%2BPSEECiEBkNJgKCkQiuXJQCi2AAKpGRqLiGBwBHo2XQkFkqQKuHQhDYAxg6XKrlcxAaAHoOUieKjCGFZBzLhy-pQ4BzyZTqa4ILSOXwwtEAG6oaCoIrpSUJaWy9i4Q66uD09BkCq0gC0SuC8Vp9AAvPQWCAAMyEACMACYnWw4EMRq5zZRvDQNea4E5sK5SMRlrJ7fQJjA2ABtGZhOAAXTYTnQEDyYVcMEw5swEDSowgVvjAHIEgE0tW2AEA2kAI5OMtF83KGCkc27fZ0GvtdCN9AgAC%2BCN2MqtADFoDAKGgsHgiGRJ0A)
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--strict-callable-subtyping`
+
+### `untyped-def-behavior` (deprecated)
+
+:::warning
+This option is deprecated. Use [`check-unannotated-defs`](#check-unannotated-defs)
+and [`infer-return-types`](#infer-return-types) instead. The old option is still
+accepted for backwards compatibility and maps to the new fields, but new fields
+take precedence if both are set.
+
+- `"check-and-infer-return-type"` maps to `check-unannotated-defs = true` and `infer-return-types = "checked"`.
+- `"check-and-infer-return-any"` maps to `check-unannotated-defs = true` and `infer-return-types = "never"`.
+- `"skip-and-infer-return-any"` maps to `check-unannotated-defs = false` and `infer-return-types = "never"`.
+:::
 
 ### `use-ignore-files`
 
@@ -778,6 +897,48 @@ and values that can be overridden here.
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
 
+### `tensor-shapes`
+
+:::warning
+This feature is experimental and may change without notice.
+:::
+
+Enable tensor shape type inference. Supports both native (`Tensor[N, M]`) and
+jaxtyping (`Float[Tensor, "batch channels"]`) syntax.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--tensor-shapes`
+
+### `spec-compliant-overloads`
+
+:::warning
+This flag is temporary. It will be removed once the upstream Python typing specification discussion on
+[ambiguous arguments in overload call evaluation](https://discuss.python.org/t/spec-change-ambiguous-arguments-in-overload-call-evaluation/106891)
+is resolved and one of the two overload evaluation modes is removed.
+:::
+
+Controls whether Pyrefly uses spec-compliant overload evaluation semantics.
+When `false` (the default), Pyrefly attempts to resolve ambiguous calls
+precisely. When `true`, overload evaluation follows the typing spec exactly,
+falling back to `Any` more frequently.
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: none
+
+### `extra-file-extensions`
+
+Additional file extensions to treat as Python source files. Used for Python
+dialects that use non-standard extensions (e.g., Cinder's `.cinc` files).
+Unlike standard Python extensions (`.py`, `.pyi`), these extensions become part
+of the module name — for example, a file `foo.cinc` has module name `foo.cinc`,
+not `foo`.
+
+- Type: list of strings
+- Default: `[]`
+- Flag equivalent: none
+
 ### `recursion-depth-limit`
 
 :::warning
@@ -930,11 +1091,15 @@ We currently allow the following config options to be overridden in a SubConfig:
 
 - `errors`
 - `replace-imports-with-any`
-- `untyped-def-behavior`
+- `check-unannotated-defs`
+- `infer-return-types`
 - `ignore-errors-in-generated-code`
 
-All SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the
-Pyrefly configuration.
+Most SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the
+Pyrefly configuration. The exception is `errors`: a sub-config's error overrides are _merged_ with
+the root config's error overrides. The sub-config inherits error severities from the root for any
+error codes it doesn't explicitly set, and can override specific error codes on top of the root
+defaults.
 
 Any configs that change the list of files we're type checking, Python environment, or where we look
 for imports cannot be included in SubConfigs. Some other configs we also do not include because
@@ -993,7 +1158,7 @@ assert-type = true
 
 [[sub-config]]
 # apply this config to all files in `sub`
-matches = "sub/**`
+matches = "sub/**"
 
 # disable `assert-type` errors in `sub`
 [sub-config.errors]
@@ -1099,8 +1264,10 @@ replace-imports-with-any = []
 ignore-missing-imports = []
 # should Pyrefly skip type checking if we find a generated file?
 ignore-errors-in-generated-code = false
-# what should Pyrefly do when it encounters a function that is untyped?
-untyped-def-behavior = "check-and-infer-return-type"
+# should Pyrefly check the bodies of unannotated function definitions?
+check-unannotated-defs = true
+# when should Pyrefly infer return types for functions without return annotations?
+infer-return-types = "checked"
 # can Pyrefly recognize ignore directives other than `# pyrefly: ignore` and `# type: ignore`
 permissive-ignores = false
 
@@ -1190,7 +1357,7 @@ assert-type = true
 
 [[tool.pyrefly.sub-config]]
 # apply this config to all files in `sub`
-matches = "sub/**`
+matches = "sub/**"
 
 # disable `assert-type` errors in `sub/project`
 [tool.pyrefly.sub-config.errors]
@@ -1199,3 +1366,12 @@ assert-type = false
 # other non-Pyrefly configs
 ...
 ```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0    | Success - command completed without issues |
+| 1    | User error - command completed but problems (e.g., type errors) were found |
+| 3    | Infrastructure error - an error in the environment prevented the command from completing |
+| 101  | Panic - Pyrefly encountered an internal error and crashed |

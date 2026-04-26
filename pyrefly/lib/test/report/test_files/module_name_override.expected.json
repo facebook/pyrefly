@@ -1,0 +1,101 @@
+{
+  "name": "my.package.module",
+  "names": [
+    "my.package.module.foo",
+    "my.package.module.foo_unannotated",
+    "my.package.module.C.bar",
+    "my.package.module.C.Inner.baz",
+    "my.package.module.C",
+    "my.package.module.C.Inner"
+  ],
+  "line_count": 22,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "my.package.module.foo",
+      "n_typable": 3,
+      "n_typed": 3,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "my.package.module.foo_unannotated",
+      "n_typable": 3,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 3,
+      "location": {
+        "line": 11,
+        "column": 1
+      }
+    },
+    {
+      "kind": "function",
+      "name": "my.package.module.C.bar",
+      "n_typable": 3,
+      "n_typed": 3,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 16,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "my.package.module.C.Inner.baz",
+      "n_typable": 3,
+      "n_typed": 3,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 20,
+        "column": 9
+      }
+    },
+    {
+      "kind": "class",
+      "name": "my.package.module.C",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 15,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "my.package.module.C.Inner",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 19,
+        "column": 5
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 12,
+  "n_typed": 9,
+  "n_any": 0,
+  "n_untyped": 3,
+  "coverage": 75.0,
+  "strict_coverage": 75.0,
+  "n_functions": 2,
+  "n_methods": 2,
+  "n_function_params": 4,
+  "n_method_params": 4,
+  "n_classes": 2,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

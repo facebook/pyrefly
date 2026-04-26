@@ -20,6 +20,7 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
 use crate::binding::binding::AnnotationStyle;
+use crate::binding::binding::AssignToAttribute;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingTypeAlias;
@@ -30,7 +31,9 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::MethodSelfKind;
+use crate::binding::binding::NameAssign;
 use crate::binding::binding::SizeExpectation;
+use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::BindingsBuilder;
@@ -179,11 +182,11 @@ impl<'a> BindingsBuilder<'a> {
         let value = make_assigned_value(assigned.as_deref(), None);
         let idx = self.insert_binding_current(
             user,
-            Binding::AssignToAttribute {
+            Binding::AssignToAttribute(Box::new(AssignToAttribute {
                 attr,
                 value: Box::new(value.clone()),
                 allow_assign_to_final,
-            },
+            })),
         );
         if let Some(identifier) = narrowing_identifier {
             self.narrow_if_name_is_defined(identifier, idx);
@@ -228,8 +231,10 @@ impl<'a> BindingsBuilder<'a> {
             self.ensure_expr(assigned, user.usage());
         }
         let value = make_assigned_value(assigned.as_deref(), None);
-        let idx = self
-            .insert_binding_current(user, Binding::AssignToSubscript(subscript, Box::new(value)));
+        let idx = self.insert_binding_current(
+            user,
+            Binding::AssignToSubscript(Box::new((subscript, Box::new(value)))),
+        );
         if let Some(identifier) = narrowing_identifier {
             self.narrow_if_name_is_defined(identifier, idx);
         }
@@ -273,7 +278,7 @@ impl<'a> BindingsBuilder<'a> {
         ensure_assigned: bool,
     ) {
         let binding_of = |v, ann| match v {
-            ExprOrBinding::Expr(e) => Binding::Expr(ann, e),
+            ExprOrBinding::Expr(e) => Binding::Expr(ann, Box::new(e)),
             ExprOrBinding::Binding(b) => b,
         };
         match target {
@@ -392,7 +397,8 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 let mut user = self.declare_current_idx(Key::Anon(value.range()));
                 self.ensure_expr(value, user.usage());
-                let rhs_idx = self.insert_binding_current(user, Binding::Expr(None, value.clone()));
+                let rhs_idx =
+                    self.insert_binding_current(user, Binding::Expr(None, Box::new(value.clone())));
                 for target in targets.iter_mut() {
                     let range = target.range();
                     self.bind_target_impl(
@@ -433,7 +439,17 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
+        // If the name was annotation-only (`x: T`, `FlowStyle::Uninitialized`) before this
+        // assignment, it is the initialization rather than a reassignment — record it so
+        // the solver can suppress the "Final must be initialized" error.
+        let was_uninitialized = self
+            .scopes
+            .current_flow_style(&name.id)
+            .is_some_and(|s| matches!(s, FlowStyle::Uninitialized));
         let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
+        if was_uninitialized && let Some(ann_idx) = ann {
+            self.insert_subsequently_initialized(ann_idx);
+        }
         let binding = make_binding(assigned.as_deref(), ann);
         self.insert_binding_current(user, binding);
     }
@@ -464,7 +480,7 @@ impl<'a> BindingsBuilder<'a> {
             let range = value.range();
             let mut user = self.declare_current_idx(Key::Anon(range));
             self.ensure_expr(&mut value, user.usage());
-            self.insert_binding_current(user, Binding::Expr(None, *value));
+            self.insert_binding_current(user, Binding::Expr(None, Box::new(*value)));
             return None;
         }
         let identifier = ShortIdentifier::new(name);
@@ -473,22 +489,22 @@ impl<'a> BindingsBuilder<'a> {
             .is_some_and(|(e, _)| self.as_special_export(e) == Some(SpecialExport::TypeAlias));
         let is_definitely_type_alias =
             has_type_alias_qualifier || self.is_definitely_type_alias_rhs(value.as_ref());
-        // Only create partial type bindings when infer_with_first_use is enabled.
-        // When disabled, we bind directly to the definition idx and skip the
-        // CompletedPartialType/PartialTypeWithUpstreamsCompleted indirection.
-        let pinned_idx = if !is_definitely_type_alias && self.infer_with_first_use() {
-            Some(self.idx_for_promise(Key::CompletedPartialType(identifier)))
-        } else {
-            None
-        };
-        let scope_idx = pinned_idx.unwrap_or_else(|| current.idx());
+        let has_typeform_annotation = direct_ann.is_some_and(|(e, _)| {
+            self.as_special_export(e) == Some(SpecialExport::TypeForm)
+                || matches!(e, Expr::Subscript(x) if self.as_special_export(&x.value) == Some(SpecialExport::TypeForm))
+        });
+        // Track whether this name assignment participates in partial type inference.
+        let uses_first_use = !is_definitely_type_alias && self.infer_with_first_use();
+        let scope_idx = current.idx();
         let mut tparams = None;
         if is_definitely_type_alias {
             let mut legacy = Some(LegacyTParamCollector::new(false));
-            self.ensure_type(&mut value, &mut legacy);
+            self.ensure_type_with_usage(&mut value, &mut legacy, &mut Usage::TypeAliasRhs);
             if let Some(collector) = legacy {
                 tparams = Some(collector.lookup_keys().into_boxed_slice());
             }
+        } else if has_typeform_annotation && value.is_string_literal_expr() {
+            self.ensure_type_with_usage(&mut value, &mut None, &mut Usage::StaticTypeInformation);
         } else {
             self.ensure_expr(&mut value, current.usage());
         }
@@ -500,53 +516,55 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.register_variable(name);
             FlowStyle::Other
         };
+        // Must check before bind_name updates the flow.
+        let was_uninitialized = matches!(
+            self.scopes.flow_style_for_name(&name.id),
+            Some(FlowStyle::Uninitialized)
+        );
         let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
-            None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
+            None => canonical_ann.map(|idx| {
+                let forwarded_style = if was_uninitialized {
+                    AnnotationStyle::ForwardedInitial
+                } else {
+                    AnnotationStyle::Forwarded
+                };
+                (forwarded_style, idx)
+            }),
         };
+        // Compute def_idx before building the binding, since the NameAssign needs
+        // its own idx for partial type inference support.
+        let def_idx = current.into_idx();
         let binding = if is_definitely_type_alias {
             let range = value.range();
             let key_type_alias = KeyTypeAlias(self.type_alias_index());
             let binding_type_alias = BindingTypeAlias::Legacy {
                 name: name.id.clone(),
+                range: name.range,
                 annotation: ann,
                 expr: value,
                 is_explicit: has_type_alias_qualifier,
             };
             let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
-            Binding::TypeAlias {
+            Binding::TypeAlias(Box::new(TypeAliasBinding {
                 name: name.id.clone(),
                 tparams: TypeAliasParams::Legacy(tparams),
                 key_type_alias: idx_type_alias,
                 range,
-            }
+            }))
         } else {
-            Binding::NameAssign {
+            Binding::NameAssign(Box::new(NameAssign {
                 name: name.id.clone(),
                 annotation: ann,
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
-            }
+                first_use: FirstUse::Undetermined,
+                def_idx: if uses_first_use { Some(def_idx) } else { None },
+            }))
         };
-        // Record the raw assignment
-        let def_idx = current.into_idx();
-        let def_idx = self.insert_binding_idx(def_idx, binding);
-        // Create partial type bindings (when infer_with_first_use is enabled)
-        if let Some(pinned_idx) = pinned_idx {
-            // Create PartialTypeWithUpstreamsCompleted with an empty first_uses list.
-            // Deferred binding processing will populate the first_uses list after AST traversal.
-            let unpinned_idx = self.insert_binding(
-                Key::PartialTypeWithUpstreamsCompleted(identifier),
-                Binding::PartialTypeWithUpstreamsCompleted(def_idx, Box::new([])),
-            );
-            // Insert the Pin binding that will pin any types, potentially after evaluating the first downstream use.
-            self.insert_binding_idx(
-                pinned_idx,
-                Binding::CompletedPartialType(unpinned_idx, FirstUse::Undetermined),
-            );
-        }
+        self.insert_binding_idx(def_idx, binding);
         canonical_ann
     }
 

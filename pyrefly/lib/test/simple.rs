@@ -59,6 +59,54 @@ def f(x: type[int] | type[str], y: type[int | str]) -> None:
 );
 
 testcase!(
+    test_distribute_type_assignability,
+    r#"
+def f() -> type[int | str]: ...
+def g() -> type[int] | type[str]: ...
+x: type[int] | type[str] = f()
+y: type[int | str] = g()
+    "#,
+);
+
+testcase!(
+    test_type_of_union_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T]) -> T: ...
+assert_type(f(int | None), int | None)
+    "#,
+);
+
+testcase!(
+    test_type_of_union_matches_type_param_or_none,
+    r#"
+from typing import assert_type
+def f[T](x: type[T] | None) -> T: ...
+assert_type(f(int | str), int | str)
+    "#,
+);
+
+testcase!(
+    test_type_of_union_partially_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T] | type[int]) -> T: ...
+def g(x: type[int | str]):
+    assert_type(f(x), str)
+    "#,
+);
+
+testcase!(
+    test_union_of_type_matches_type_param,
+    r#"
+from typing import assert_type
+def f[T](x: type[T]) -> T: ...
+def g(x: type[int] | type[str]):
+    assert_type(f(x), int | str)
+    "#,
+);
+
+testcase!(
     test_simple_call,
     r#"
 from typing import assert_type
@@ -193,6 +241,41 @@ def f(x: str) -> str:
     return x
 y = x
 assert_type(y, Literal[1])
+"#,
+);
+
+testcase!(
+    test_shadow_builtin_zip,
+    r#"
+from typing import assert_type
+
+def zip(*args) -> list[int]:
+    return []
+
+def f(a: list[int], b: list[int]):
+    return zip(a, b)
+
+assert_type(f([1], [2]), list[int])
+"#,
+);
+
+testcase!(
+    test_conditional_shadow_builtin_zip,
+    r#"
+from typing import assert_type
+import random
+
+cond = random.randint(0, 1)
+if cond:
+    def zip(*args) -> list[int]:
+        return []
+
+def f(a: list[int], b: list[int]):
+    return zip(a, b)
+
+# Note that we completely ignore the builtin `zip` here even though it is conditionally shadowed.
+# This matches the behavior of pyright, mypy, and ty.
+assert_type(f([1], [2]), list[int])
 "#,
 );
 
@@ -346,6 +429,25 @@ assert_type(f(1), int)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2722
+testcase!(
+    test_signature_diff_no_panic,
+    r#"
+class TestABC:
+    pass
+
+class Asset(TestABC):
+    @classmethod
+    def _money_desc(cls):
+        return '累计可领(元)'
+
+class PensionAsset(Asset):
+    @classmethod
+    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']`, which is not assignable to `(cls: type[PensionAsset]) -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
+        return '90岁累计可领(元)'
+"#,
+);
+
 testcase!(
     test_final_annotated,
     r#"
@@ -404,8 +506,8 @@ for x in [1, 2, 3]:  # E: Cannot assign to variable `x` because it is marked fin
 xs: Final[list[int]] = []
 [_, *xs] = [1, 2, 3]  # E: Cannot assign to variable `xs` because it is marked final
 
-f: Final[TextIO]
-with open("file.txt") as f: # E: Cannot assign to variable `f` because it is marked final
+f: Final[TextIO] = open("file.txt")
+with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is marked final
     ...
 "#,
 );
@@ -475,7 +577,19 @@ testcase!(
 def f(x: str) -> str:
     return x
 
-x = f"abc{f(1)}def"  # E: Argument `Literal[1]` is not assignable to parameter `x` with type `str`
+x = f"abc{f(1)}def"  # E: `Literal[1]` is not assignable to parameter `x` with type `str`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2669
+testcase!(
+    test_fstring_type_errors,
+    r#"
+arr = [1, 2, 3]
+
+a = f"{len(False)}"  # E: Protocol `Sized` requires attribute `__len__`
+b = f"{2 + 'Foo'}"  # E: `+` is not supported between `Literal[2]` and `Literal['Foo']`
+c = f"{arr['foo']}"  # E: Cannot index into `list[int]`
 "#,
 );
 
@@ -530,11 +644,11 @@ testcase!(
     r#"
 from typing import Callable, Optional, Type, TypeGuard, TypeIs
 
-def test0() -> Type[int, int]: ...  # E: requires exactly one argument
-def test1() -> TypeGuard[int, int]: ...  # E: requires exactly one argument
-def test2() -> TypeIs[int, int]: ...  # E: requires exactly one argument
-def test3() -> Optional[int, int]: ...  # E: requires exactly one argument
-def test4() -> Callable[[], int, int]: ...  # E: requires exactly two arguments
+def test0() -> Type[int, int]: ...  # E: Expected 1 type argument
+def test1() -> TypeGuard[int, int]: ...  # E: Expected 1 type argument
+def test2() -> TypeIs[int, int]: ...  # E: Expected 1 type argument
+def test3() -> Optional[int, int]: ...  # E: Expected 1 type argument
+def test4() -> Callable[[], int, int]: ...  # E: Expected 2 arguments
 "#,
 );
 
@@ -847,13 +961,11 @@ assert_type(x, list[int])
 );
 
 testcase!(
-    bug = "TODO",
     test_type_of_type,
     r#"
 class C:
     pass
 c1: type[C] = C
-# TODO(stroxler): Handle `type[Any]` correctly here.
 c2: type[C, C] = C  # E: Expected 1 type argument for `type`, got 2
     "#,
 );
@@ -886,6 +998,15 @@ Y = Annotated[int] # E: `Annotated` needs at least one piece of metadata in addi
 );
 
 testcase!(
+    test_annotated_dunder_doc,
+    r#"
+from typing import Annotated, assert_type
+x = Annotated[int, "meta"].__doc__
+assert_type(x, str | None)
+    "#,
+);
+
+testcase!(
     test_nested_string_annotation,
     r#"
 x: "'int'" = 1  # E: Expected a type form, got instance of `Literal['int']`
@@ -908,15 +1029,13 @@ z: " T" = 1  # E: Expected a type form, got instance of `Literal[' T']`
 );
 
 testcase!(
-    test_no_backtracking,
+    test_backtracking,
     r#"
 from typing import assert_type
 def foo(x: tuple[list[int], list[int]] | tuple[list[str], list[str]]) -> None: ...
 def test(x: list[str]) -> None:
     y = ([], x)
-    # Because we pin down the `[]` first, we end up with a type error.
-    # If we had backtracking we wouldn't.
-    foo(y)  # E: Argument `tuple[list[int], list[str]]` is not assignable to parameter `x` with type `tuple[list[int], list[int]] | tuple[list[str], list[str]]`
+    foo(y)
 "#,
 );
 
@@ -956,12 +1075,34 @@ assert_type(type(x6), type[dict])
 );
 
 testcase!(
+    test_builtins_type_constructor_union,
+    r#"
+from typing import assert_type
+def f(x: int | str) -> None:
+    assert_type(type(x), type[int] | type[str])
+    assert_type(type(x), type[int | str])
+"#,
+);
+
+testcase!(
+    test_assert_nonetype,
+    r#"
+from types import NoneType
+from typing import assert_type
+
+def f(x: int | NoneType):
+    assert_type(x, int | None)
+"#,
+);
+
+testcase!(
     test_anywhere_binding,
     r#"
 from typing import assert_type, Literal
 x = 1
 def foo():
-    assert_type(x, Literal['test', 1])
+    # Cross-barrier read promotes Literal[1, 'test'] → int | str
+    assert_type(x, int | str)
 foo()
 x = "test"
 "#,
@@ -1009,6 +1150,18 @@ def test(x: list[int], y: list[str]):
     assert_type([*x, "test"], list[int | str])
     assert_type([*x, *y], list[int | str])
     [*1]  # E: Expected an iterable
+"#,
+);
+
+testcase!(
+    test_unpack_map_in_list_literal,
+    r#"
+from typing import assert_type
+def test(cs: list[str], n: int):
+    assert_type(
+        ",".join([*("=" + c for c in cs), *map(str, range(n))]),
+        str,
+    )
 "#,
 );
 
@@ -1067,6 +1220,13 @@ testcase!(
 # This parse error results in two identical Identifiers, which previously caused a panic.
 a = True if # E: Parse
 "#,
+);
+
+testcase!(
+    test_syntax_error_resulting_in_empty_defintion,
+    r#"
+@:a=1 # E: Parse # E: Could not find name `a`
+    "#,
 );
 
 testcase!(
@@ -1596,6 +1756,22 @@ def g(f: Callable[[Any], int], inputs: Any) -> None:
 );
 
 testcase!(
+    test_map_str_method_with_splitlines,
+    r#"
+def main(a: str) -> None:
+    _ = map(str.strip, a.splitlines())
+    "#,
+);
+
+testcase!(
+    test_str_maketrans_with_dict,
+    r#"
+def main() -> None:
+    _ = str.maketrans({"a": "b", "c": None})
+    "#,
+);
+
+testcase!(
     test_union_function_exponential,
     r#"
 # This used to take an exponential amount of time to type check
@@ -1690,6 +1866,20 @@ async def bar():
     await foo()  # ok
     x = foo()  # ok
     not_async()  # ok
+"#,
+);
+
+testcase!(
+    test_unused_coroutine_after_await,
+    r#"
+from typing import Any, Coroutine
+async def inner() -> int:
+    return 1
+class Engine:
+    async def call_flow_fn(self) -> Coroutine[Any, Any, int]:
+        return inner()
+async def run(engine: Engine) -> None:
+    await engine.call_flow_fn()  # E: Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).
 "#,
 );
 
@@ -1895,6 +2085,40 @@ assert_type(Foo[0], str)
 "#,
 );
 
+testcase!(
+    test_class_getitem_classmethod_does_not_double_bind_cls,
+    r#"
+from types import GenericAlias
+from typing import assert_type
+
+class SparseBase:
+    @classmethod
+    def __class_getitem__(cls, arg: object, /) -> GenericAlias:
+        return GenericAlias(cls, arg)
+
+class SparseMatrix(SparseBase):
+    pass
+
+assert_type(SparseMatrix[int], GenericAlias)
+"#,
+);
+
+testcase!(
+    test_class_metaclass_getitem,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __getitem__(self, item: int) -> str:
+        return str(item)
+
+class Foo(metaclass=Meta):
+    pass
+
+assert_type(Foo[0], str)
+"#,
+);
+
 testcase!(test_panic_docstring, "\"\"\" F\n\u{85}\"\"\"",);
 
 testcase!(
@@ -1936,6 +2160,16 @@ testcase!(
     r#"
 __all__ = ["x", "y"]  # E: Name `y` is listed in `__all__` but is not defined in the module
 x = 5
+    "#,
+);
+
+testcase!(
+    test_missing_name_in_dunder_all_with_getattr,
+    r#"
+from typing import Any
+__all__ = ["x", "y"]
+x = 5
+def __getattr__(name: str) -> Any: ...
     "#,
 );
 
@@ -2074,4 +2308,88 @@ takes_type_any(Callable[..., int]) # E: is not assignable to parameter `x` with 
 takes_Type_any(Callable) # E: is not assignable to parameter `x` with type `type[Any]` in function
 takes_Type_any(Callable[..., int]) # E: is not assignable to parameter `x` with type `type[Any]` in function
 "#,
+);
+
+testcase!(
+    test_min_max_int_and_float,
+    r#"
+from typing import reveal_type
+def f(x: float):
+    # We use reveal_type rather than assert_type here to verify that the type is exactly float, not
+    # int | float. Even though the two are equivalent, pyrefly doesn't eagerly simplify the union,
+    # so producing the union would cause spurious downstream errors.
+    reveal_type(min(0, x))  # E: revealed type: float
+    reveal_type(max(0, x))  # E: revealed type: float
+    "#,
+);
+
+testcase!(
+    test_open_return_type,
+    r#"
+from io import BufferedReader, TextIOWrapper
+from typing import Any, assert_type, BinaryIO, IO
+def f(fi: Any, buffering1: int, buffering2: Any):
+    with open(fi, "r") as f:
+        assert_type(f, TextIOWrapper)
+    with open(fi, "rb") as f:
+        assert_type(f, BufferedReader)
+    with open(fi, "rb", 1) as f:
+        assert_type(f, BufferedReader)
+    with open(fi, "rb", buffering1) as f:
+        assert_type(f, BinaryIO)
+    with open(fi, "rb", buffering2) as f:
+        assert_type(f, IO[Any])
+    "#,
+);
+
+testcase!(
+    test_index_into_sequence_of_str,
+    r#"
+from typing import assert_type, Sequence
+def f(x: Sequence[str], idx):
+    # idx may be a slice
+    assert_type(x[idx], Sequence[str])
+    "#,
+);
+
+testcase!(
+    test_subscript_with_union_type,
+    r#"
+d: dict[type[bool] | type[float] | type[int], bool | float | int] = {}
+k: type[bool | float | int] = bool
+d[k]
+    "#,
+);
+
+testcase!(
+    test_bool_and_unknown,
+    r#"
+from typing import Any, assert_type
+def f(x):
+    y = True
+    y &= x
+    assert_type(y, Any)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3048
+testcase!(
+    test_enumerate_reversed,
+    r#"
+from collections.abc import Iterator, Sequence
+
+class Series: ...
+
+class DataFrame:
+    def __iter__(self) -> Iterator[Series]: ...
+    def __reversed__(self) -> Iterator[Series]: ...
+    def __len__(self) -> int: ...
+    def __getitem__(self, key: int | Sequence[int]) -> Series | DataFrame: ...
+
+def func(s: Series) -> None: ...
+
+def main(a: DataFrame) -> None:
+    for i, s in enumerate(reversed(a)):
+        func(s)
+    "#,
 );

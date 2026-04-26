@@ -162,19 +162,37 @@ impl ConfigFinder {
         Self {
             search: UpwardSearch::new_grouped(
                 vec![
-                    // Prefer config files with actual Pyrefly configuration contents
-                    // over any marker file types. For `pyproject.toml`, this requires
-                    // a `[tool.pyrefly]` section (even if empty).
+                    // Group 1: Prefer config files with actual Pyrefly configuration.
+                    // For `pyproject.toml`, this requires a `[tool.pyrefly]` section
+                    // (even if empty). A real pyrefly config always takes highest
+                    // priority, even over Python tool markers in closer directories.
                     FileGroup::new(
                         ConfigFile::CONFIG_FILE_NAMES
                             .iter()
                             .map(OsString::from)
                             .collect(),
-                        |c: &ArcId<ConfigFile>| matches!(c.source, ConfigSource::File(_)),
+                        |c: &ArcId<ConfigFile>| {
+                            matches!(
+                                c.source,
+                                ConfigSource::File(_) | ConfigSource::FailedParse(_)
+                            )
+                        },
                     ),
-                    // Perform a fallback search, taking any marker files that we can
+                    // Group 2: pyproject.toml files with Python tool sections
+                    // (e.g. [tool.ruff], [tool.mypy], [tool.pyright]) are a strong
+                    // signal of a Python project root. They take priority over bare
+                    // markers but never supersede real pyrefly configuration.
+                    FileGroup::new(
+                        iter::once(&ConfigFile::PYPROJECT_FILE_NAME)
+                            .map(OsString::from)
+                            .collect(),
+                        |c: &ArcId<ConfigFile>| {
+                            matches!(c.source, ConfigSource::PythonToolMarker(_))
+                        },
+                    ),
+                    // Group 3: Fallback search, taking any marker files that we can
                     // find. For `pyproject.toml`, no `[tool.pyrefly]` is required
-                    // (though the previous search group would have ruled that out already).
+                    // (though previous search groups would have ruled that out already).
                     FileGroup::new_simple(
                         iter::once(&ConfigFile::PYPROJECT_FILE_NAME)
                             .chain(ConfigFile::ADDITIONAL_ROOT_FILE_NAMES)

@@ -12,6 +12,7 @@ use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
+use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -30,8 +31,12 @@ fn capitalize_first(s: &str) -> String {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn lax_display_name_for_class(&self, cls: &ClassType) -> String {
-        format!("{}{}", LAX_PREFIX, capitalize_first(cls.name().as_str()))
+    fn lax_display_name_for_class(&self, cls: &ClassType) -> Name {
+        Name::new(format!(
+            "{}{}",
+            LAX_PREFIX,
+            capitalize_first(cls.name().as_str())
+        ))
     }
 
     fn types_to_lax_union(&self, base_type: &ClassType, types: &[&ClassType]) -> Type {
@@ -42,7 +47,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect();
         let mut union_type = self.unions(expanded_types);
         if let Type::Union(ref mut boxed_union) = union_type {
-            boxed_union.display_name = Some(display_name.into_boxed_str());
+            boxed_union.display_name = Some((ModuleName::unknown(), display_name));
         }
         union_type
     }
@@ -156,6 +161,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         None
     }
 
+    fn get_regex_pattern_lax_conversion(
+        &self,
+        class_obj: &Class,
+        ty: &Type,
+        targs: &[Type],
+    ) -> Option<Type> {
+        if class_obj.has_toplevel_qname(ModuleName::from_str("re").as_str(), "Pattern")
+            || class_obj.has_toplevel_qname(ModuleName::typing().as_str(), "Pattern")
+        {
+            let pattern_input = targs
+                .first()
+                .cloned()
+                .unwrap_or_else(|| self.heap.mk_any_implicit());
+            return Some(self.union(ty.clone(), pattern_input));
+        }
+        None
+    }
+
     fn get_tuple_element_type(&self, tuple: &Tuple) -> Type {
         match tuple {
             Tuple::Unbounded(elem) => self.expand_type_for_lax_mode(elem),
@@ -184,8 +207,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let class_obj = cls.class_object();
                 let targs = cls.targs().as_slice();
 
-                // Special handling for dict: don't expand key type (Mapping is invariant in key)
-                if class_obj == self.stdlib.dict_object() {
+                // Special handling for dict and Mapping: don't expand key type
+                // (Mapping is invariant in key, so expanding it would make
+                // dict[str, V] not assignable to Mapping[LaxStr, V])
+                if class_obj == self.stdlib.dict_object()
+                    || class_obj == self.stdlib.mapping_object()
+                {
                     let key_ty = targs
                         .first()
                         .cloned()
@@ -198,6 +225,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self
                         .heap
                         .mk_class_type(self.stdlib.mapping(key_ty, expanded_val));
+                }
+
+                if let Some(converted) = self.get_regex_pattern_lax_conversion(class_obj, ty, targs)
+                {
+                    return converted;
                 }
 
                 let expanded_targs = self.expand_types(targs);

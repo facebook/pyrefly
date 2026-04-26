@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -30,8 +29,7 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::prelude::SliceExt;
-use pyrefly_util::thread_pool::ThreadCount;
-use pyrefly_util::thread_pool::init_thread_pool;
+pub use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::trace::init_tracing;
 use ruff_python_ast::name::Name;
 use ruff_source_file::LineIndex;
@@ -42,6 +40,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::KeyExport;
+use crate::config::base::InferReturnTypes;
 use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
@@ -101,7 +100,9 @@ fn default_path(module: ModuleName) -> PathBuf {
 pub struct TestEnv {
     modules: Vec<(ModuleName, ModulePath, Option<Arc<FileContents>>)>,
     version: PythonVersion,
-    untyped_def_behavior: UntypedDefBehavior,
+    platform: PythonPlatform,
+    check_unannotated_defs: bool,
+    infer_return_types: InferReturnTypes,
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
@@ -113,7 +114,13 @@ pub struct TestEnv {
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
+    strict_callable_subtyping: bool,
+    spec_compliant_overloads: bool,
     default_require_level: Require,
+    extra_file_extensions: Vec<String>,
+    /// The `Require` level passed to `run()` in `to_state()`. Controls whether
+    /// IDE features (indexing, hover) are enabled. Defaults to `Require::Everything`.
+    run_require: Require,
 }
 
 impl TestEnv {
@@ -123,7 +130,9 @@ impl TestEnv {
         TestEnv {
             modules: Vec::new(),
             version: PythonVersion::default(),
-            untyped_def_behavior: UntypedDefBehavior::default(),
+            platform: PythonPlatform::default(),
+            check_unannotated_defs: true,
+            infer_return_types: InferReturnTypes::Checked,
             infer_with_first_use: true,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
@@ -135,13 +144,17 @@ impl TestEnv {
             open_unpacking_error: false,
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
+            strict_callable_subtyping: false,
+            spec_compliant_overloads: false,
             default_require_level: Require::Exports,
+            extra_file_extensions: Vec::new(),
+            run_require: Require::Everything,
         }
     }
 
-    pub fn new_with_site_package_path(path: &str) -> Self {
+    pub fn new_with_site_package_paths(paths: &[&str]) -> Self {
         let mut res = Self::new();
-        res.site_package_path = vec![PathBuf::from(path)];
+        res.site_package_path = paths.iter().map(PathBuf::from).collect();
         res
     }
 
@@ -151,9 +164,66 @@ impl TestEnv {
         res
     }
 
+    pub fn new_with_platform(platform: PythonPlatform) -> Self {
+        let mut res = Self::new();
+        res.platform = platform;
+        res
+    }
+
+    /// State 1: `check_unannotated_defs=false`, no return inference.
+    /// In batch/CLI mode (`Require::Errors`), unannotated bodies are skipped.
+    /// In IDE mode (`Require::Indexing` or higher), unannotated bodies are
+    /// still analyzed for hover/goto-def, but return types remain `Any`.
+    pub fn new_skip_check_no_infer() -> Self {
+        let mut res = Self::new();
+        res.check_unannotated_defs = false;
+        res.infer_return_types = InferReturnTypes::Never;
+        res
+    }
+
+    /// State 2: `check_unannotated_defs=false`, infer returns for annotated functions.
+    /// In batch/CLI mode (`Require::Errors`), unannotated bodies are skipped.
+    /// In IDE mode (`Require::Indexing` or higher), unannotated bodies are
+    /// still analyzed for hover/goto-def, but return types remain `Any`.
+    pub fn new_skip_check_infer_return_types() -> Self {
+        let mut res = Self::new();
+        res.check_unannotated_defs = false;
+        res.infer_return_types = InferReturnTypes::Annotated;
+        res
+    }
+
+    /// State 5: check all bodies, but never infer returns.
+    pub fn new_check_all_no_infer() -> Self {
+        let mut res = Self::new();
+        res.check_unannotated_defs = true;
+        res.infer_return_types = InferReturnTypes::Never;
+        res
+    }
+
+    /// State 6: check all bodies, but only infer returns for annotated functions.
+    pub fn new_check_infer_annotated_only() -> Self {
+        let mut res = Self::new();
+        res.check_unannotated_defs = true;
+        res.infer_return_types = InferReturnTypes::Annotated;
+        res
+    }
+
     pub fn new_with_untyped_def_behavior(untyped_def_behavior: UntypedDefBehavior) -> Self {
         let mut res = Self::new();
-        res.untyped_def_behavior = untyped_def_behavior;
+        match untyped_def_behavior {
+            UntypedDefBehavior::CheckAndInferReturnType => {
+                res.check_unannotated_defs = true;
+                res.infer_return_types = InferReturnTypes::Checked;
+            }
+            UntypedDefBehavior::CheckAndInferReturnAny => {
+                res.check_unannotated_defs = true;
+                res.infer_return_types = InferReturnTypes::Never;
+            }
+            UntypedDefBehavior::SkipAndInferReturnAny => {
+                res.check_unannotated_defs = false;
+                res.infer_return_types = InferReturnTypes::Never;
+            }
+        }
         res
     }
 
@@ -208,8 +278,28 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_strict_callable_subtyping(mut self) -> Self {
+        self.strict_callable_subtyping = true;
+        self
+    }
+
+    pub fn enable_spec_compliant_overloads(mut self) -> Self {
+        self.spec_compliant_overloads = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
+        self
+    }
+
+    pub fn with_run_require(mut self, require: Require) -> Self {
+        self.run_require = require;
+        self
+    }
+
+    pub fn with_extra_file_extensions(mut self, extensions: Vec<String>) -> Self {
+        self.extra_file_extensions = extensions;
         self
     }
 
@@ -219,8 +309,15 @@ impl TestEnv {
     }
 
     pub fn add_with_path(&mut self, name: &str, path: &str, code: &str) {
+        let has_extra_ext = self
+            .extra_file_extensions
+            .iter()
+            .any(|ext| path.ends_with(&format!(".{ext}")));
         assert!(
-            path.ends_with(".py") || path.ends_with(".pyi") || path.ends_with(".rs"),
+            path.ends_with(".py")
+                || path.ends_with(".pyi")
+                || path.ends_with(".rs")
+                || has_extra_ext,
             "{path} doesn't look like a reasonable path"
         );
         self.modules.push((
@@ -259,7 +356,7 @@ impl TestEnv {
     }
 
     pub fn sys_info(&self) -> SysInfo {
-        SysInfo::new(self.version, PythonPlatform::linux())
+        SysInfo::new(self.version, self.platform.clone())
     }
 
     pub fn get_memory(&self) -> Vec<(PathBuf, Option<Arc<FileContents>>)> {
@@ -275,10 +372,13 @@ impl TestEnv {
     pub fn config(&self) -> ArcId<ConfigFile> {
         let mut config = ConfigFile::default();
         config.python_environment.python_version = Some(self.version);
-        config.python_environment.python_platform = Some(PythonPlatform::linux());
+        config.python_environment.python_platform = Some(self.platform.clone());
         config.python_environment.site_package_path = Some(self.site_package_path.clone());
-        config.root.untyped_def_behavior = Some(self.untyped_def_behavior);
+        config.root.check_unannotated_defs = Some(self.check_unannotated_defs);
+        config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
+        config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
+        config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
@@ -310,6 +410,7 @@ impl TestEnv {
         if self.not_required_key_access_error {
             errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
         }
+        config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
         for (name, path, _) in self.modules.iter() {
             sourcedb.insert(*name, path.dupe());
@@ -335,14 +436,14 @@ impl TestEnv {
             .rev()
             .map(|(x, path, _)| Handle::new(*x, path.dupe(), config.dupe()))
             .collect::<Vec<_>>();
-        let state = State::new(self.config_finder());
+        let state = State::new(self.config_finder(), TEST_THREAD_COUNT);
         let subscriber = TestSubscriber::new();
         let mut transaction = state.new_committable_transaction(
             self.default_require_level,
             Some(Box::new(subscriber.dupe())),
         );
         transaction.as_mut().set_memory(self.get_memory());
-        transaction.as_mut().run(&handles, Require::Everything);
+        transaction.as_mut().run(&handles, self.run_require, None);
         state.commit_transaction(transaction, None);
         subscriber.finish();
         let project_root = PathBuf::new();
@@ -352,13 +453,13 @@ impl TestEnv {
                 .transaction()
                 .get_errors(handles.iter())
                 .collect_errors()
-                .shown,
+                .ordinary,
         );
         (state, move |module| {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(&config_file, name, None, None)
+                find_import(&config_file, name, None, None, None)
                     .finding()
                     .unwrap(),
                 config.dupe(),
@@ -466,7 +567,7 @@ pub fn mk_multi_file_state(
                 .transaction()
                 .get_errors(handles.values())
                 .collect_errors()
-                .shown
+                .ordinary
                 .len(),
             0
         );
@@ -530,7 +631,22 @@ pub fn get_batched_lsp_operations_report_no_cursor(
     files: &[(&'static str, &str)],
     get_report: impl Fn(&State, &Handle) -> String,
 ) -> String {
-    let (handles, state) = mk_multi_file_state(files, Require::Exports, true);
+    get_batched_lsp_operations_report_no_cursor_helper(files, true, get_report)
+}
+
+pub fn get_batched_lsp_operations_report_no_cursor_allow_error(
+    files: &[(&'static str, &str)],
+    get_report: impl Fn(&State, &Handle) -> String,
+) -> String {
+    get_batched_lsp_operations_report_no_cursor_helper(files, false, get_report)
+}
+
+fn get_batched_lsp_operations_report_no_cursor_helper(
+    files: &[(&'static str, &str)],
+    assert_zero_errors: bool,
+    get_report: impl Fn(&State, &Handle) -> String,
+) -> String {
+    let (handles, state) = mk_multi_file_state(files, Require::Exports, assert_zero_errors);
     let mut report = String::new();
     for (name, _code) in files {
         report.push_str("# ");
@@ -549,8 +665,6 @@ pub fn get_batched_lsp_operations_report_no_cursor(
 pub fn init_test() {
     ColorChoice::write_global(ColorChoice::Always);
     init_tracing(true, true);
-    // Enough threads to see parallelism bugs, but not too many to debug through.
-    init_thread_pool(ThreadCount::NumThreads(NonZeroUsize::new(3).unwrap()));
 }
 
 /// Shared state with all the builtins already initialized (by a dummy module).
@@ -594,10 +708,10 @@ pub fn testcase_for_macro(
                 PathBuf::from(file),
                 Some(Arc::new(FileContents::from_source(contents.clone()))),
             )]);
-            t.run(&[h.dupe()], Require::Everything);
+            t.run(&[h.dupe()], Require::Everything, None);
             let errors = t.get_errors([&h]);
             let project_root = PathBuf::new();
-            print_errors(project_root.as_path(), &errors.collect_errors().shown);
+            print_errors(project_root.as_path(), &errors.collect_display_errors());
             check(errors)?;
         } else {
             let (state, handle) = env.clone().to_state();

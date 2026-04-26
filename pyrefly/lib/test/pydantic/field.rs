@@ -307,3 +307,24 @@ house = House(
 )
     "#,
 );
+
+pydantic_testcase!(
+    test_model_fields_with_bounded_typevar,
+    r#"
+from pydantic import BaseModel
+
+class MyModel(BaseModel):
+    field: int
+
+class A[T: BaseModel]:
+    def __init__(self, model_type: type[T]) -> None:
+        self._model_type = model_type
+
+    def print_model_fields(self) -> None:
+        for field in self._model_type.model_fields:
+            print(field)
+
+a = A(MyModel)
+a.print_model_fields()
+    "#,
+);

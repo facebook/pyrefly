@@ -12,6 +12,7 @@ pub mod class;
 pub mod django;
 pub mod expr;
 pub mod function;
+pub mod metadata;
 pub mod narrow;
 pub mod pattern;
 pub mod pydantic;
