@@ -294,6 +294,14 @@ assert_type(result4, str)
 );
 
 testcase!(
+    test_literal_string_join_map_str,
+    r#"
+def test(cs: list[str], n: int):
+    return ",".join([*("=" + c for c in cs), *map(str, range(n))])
+"#,
+);
+
+testcase!(
     test_literal_string_replace,
     r#"
 from typing import assert_type, LiteralString
