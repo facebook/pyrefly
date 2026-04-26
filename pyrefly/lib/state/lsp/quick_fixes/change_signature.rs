@@ -26,6 +26,7 @@ use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::MethodInfo;
 use super::extract_shared::code_at_range;
@@ -264,6 +265,8 @@ fn parameter_is_referenced_in_body(
     collector.ranges.into_iter().any(|range| {
         transaction
             .find_definition(handle, range.start(), FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
             .into_iter()
             .any(|definition| {
                 definition.module.path() == module_path
@@ -363,6 +366,8 @@ fn build_callsite_edits(
             function_ctx.function_def.name.range.start(),
             FindPreference::default(),
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .find(|def| {
             def.module.path() == module_info.path()
