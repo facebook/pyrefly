@@ -1714,7 +1714,7 @@ class Foo:
         raise TypeError
 
 class Bar(Foo):
-    def __bool__(self) -> bool:
+    def __bool__(self) -> bool:  # pyrefly: ignore[bad-override]
         return True
 
 bar: Foo = Bar()
