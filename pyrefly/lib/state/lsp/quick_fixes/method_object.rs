@@ -22,6 +22,7 @@ use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
@@ -295,11 +296,11 @@ impl Visitor<'_> for ParameterReferenceCollector<'_, '_> {
         if let Expr::Name(name) = expr
             && let Some(expected_definition) = self.definition_ranges.get(name.id.as_str())
         {
-            let definitions = self.transaction.find_definition(
-                self.handle,
-                name.range().start(),
-                FindPreference::default(),
-            );
+            let definitions = self
+                .transaction
+                .find_definition(self.handle, name.range().start(), FindPreference::default())
+                .map(Vec1::into_vec)
+                .unwrap_or_default();
             if definitions.iter().any(|definition| {
                 definition.module.path() == self.module_path
                     && definition.definition_range == *expected_definition
