@@ -158,6 +158,11 @@ impl TestEnv {
         res
     }
 
+    pub fn with_site_package_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.site_package_path = paths;
+        self
+    }
+
     pub fn new_with_version(version: PythonVersion) -> Self {
         let mut res = Self::new();
         res.version = version;
