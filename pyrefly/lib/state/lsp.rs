@@ -825,6 +825,43 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub(crate) fn target_imported_module_name(
+        handle: &Handle,
+        identifier: &Identifier,
+        module_name: ModuleName,
+        dots: u32,
+        position: TextSize,
+    ) -> ModuleName {
+        let resolved_module_name = if dots > 0 {
+            let is_init = handle.path().is_init();
+            let suffix = if module_name.as_str().is_empty() {
+                None
+            } else {
+                Some(&Name::new(module_name.as_str()))
+            };
+            handle
+                .module()
+                .new_maybe_relative(is_init, dots, suffix)
+                .unwrap_or(module_name)
+        } else {
+            module_name
+        };
+
+        let components = resolved_module_name.components();
+        if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
+            ModuleName::from_parts(&components[..=idx])
+        } else if identifier.as_str() == resolved_module_name.as_str() {
+            let module_str = resolved_module_name.as_str();
+            let offset = (position - identifier.range.start())
+                .to_usize()
+                .min(module_str.len());
+            let idx = module_str[..offset].matches('.').count();
+            ModuleName::from_parts(&components[..=idx])
+        } else {
+            resolved_module_name
+        }
+    }
+
     fn callee_at(&self, handle: &Handle, position: TextSize) -> Option<ExprCall> {
         let mod_module = self.get_ast(handle)?;
         fn f(x: &Expr, find: TextSize, res: &mut Option<ExprCall>) {
@@ -1929,42 +1966,13 @@ impl<'a> Transaction<'a> {
                         dots,
                     },
             }) => {
-                // For relative imports (dots > 0), resolve the module name using
-                // the current file's module name as context.
-                let resolved_module_name = if dots > 0 {
-                    let is_init = handle.path().is_init();
-                    let suffix = if module_name.as_str().is_empty() {
-                        None
-                    } else {
-                        Some(&Name::new(module_name.as_str()))
-                    };
-                    handle
-                        .module()
-                        .new_maybe_relative(is_init, dots, suffix)
-                        .unwrap_or(module_name)
-                } else {
-                    module_name
-                };
-
-                // Build the module name for lookup based on identifier position.
-                let components = resolved_module_name.components();
-
-                let target_module_name =
-                    if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
-                        // Identifier matches a module component.
-                        ModuleName::from_parts(&components[..=idx])
-                    } else if identifier.as_str() == resolved_module_name.as_str() {
-                        // Identifier matches full module name; decide which component based on position offset.
-                        let module_str = resolved_module_name.as_str();
-                        let offset = (position - identifier.range.start())
-                            .to_usize()
-                            .min(module_str.len());
-                        let idx = module_str[..offset].matches('.').count();
-                        ModuleName::from_parts(&components[..=idx])
-                    } else {
-                        // Fallback: use the whole module name.
-                        resolved_module_name
-                    };
+                let target_module_name = Self::target_imported_module_name(
+                    handle,
+                    &identifier,
+                    module_name,
+                    dots,
+                    position,
+                );
                 match self.find_definition_for_imported_module(
                     handle,
                     target_module_name,

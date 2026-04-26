@@ -208,6 +208,8 @@ use pyrefly_build::handle::Handle;
 use pyrefly_config::config::ConfigSource;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::PYTHON_EXTENSIONS;
+use pyrefly_python::ast::Ast;
+use pyrefly_python::module::Module;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
@@ -328,9 +330,12 @@ use crate::lsp::wasm::provide_type::provide_type;
 use crate::module::bundled::BundledStub;
 use crate::state::load::Load;
 use crate::state::load::LspFile;
+use crate::state::loader::LoaderFindCache;
 use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportBehavior;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::notebook::LspNotebook;
@@ -1993,6 +1998,28 @@ impl Server {
                         message,
                     ));
                     return Ok(ProcessEvent::Continue);
+                }
+
+                if let Some(params) = as_request::<GotoDefinition>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<GotoDefinition>(
+                            params, &x.id,
+                        )
+                    {
+                        if let Some(response) = self.goto_definition_import_fast_path(&params) {
+                            let response = match response {
+                                Ok(response) => response,
+                                Err(reason) => {
+                                    telemetry_event.set_empty_response_reason(reason);
+                                    None
+                                }
+                            };
+                            self.send_response(new_response(x.id, Ok(response)));
+                            return Ok(ProcessEvent::Continue);
+                        }
+                    } else {
+                        return Ok(ProcessEvent::Continue);
+                    }
                 }
 
                 let mut transaction =
@@ -4142,6 +4169,84 @@ impl Server {
     ) -> Result<Handle, HandleError> {
         self.make_handle_with_lsp_analysis_config_if_enabled(uri, method)
             .map(|(handle, _)| handle)
+    }
+
+    fn module_for_uri_fast_path(&self, uri: &Url, handle: &Handle) -> Option<Module> {
+        let path = self.path_for_uri_or_notebook_cell(uri)?;
+        if let Some(file) = self.open_files.read().get(&path).duped() {
+            return Some(match &*file {
+                LspFile::Source(contents) => {
+                    Module::new(handle.module(), handle.path().dupe(), Arc::clone(contents))
+                }
+                LspFile::Notebook(notebook) => Module::new_notebook(
+                    handle.module(),
+                    handle.path().dupe(),
+                    Arc::clone(notebook.ruff_notebook()),
+                ),
+            });
+        }
+        let contents = std::fs::read_to_string(&path).ok()?;
+        Some(Module::new(
+            handle.module(),
+            handle.path().dupe(),
+            Arc::new(contents),
+        ))
+    }
+
+    fn goto_definition_import_fast_path(
+        &self,
+        params: &GotoDefinitionParams,
+    ) -> Option<Result<Option<GotoDefinitionResponse>, EmptyResponseReason>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = match self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD)) {
+            Ok(handle) => handle,
+            Err(err) => return Some(Err(err.into())),
+        };
+        let module = match self.module_for_uri_fast_path(uri, &handle) {
+            Some(module) => module,
+            None => return Some(Err(EmptyResponseReason::ModuleInfoNotFound)),
+        };
+        let position = module.from_lsp_position(
+            params.text_document_position_params.position,
+            self.maybe_get_cell_index(uri),
+        );
+        let ast = Ast::parse(module.contents(), module.source_type()).0;
+        let covering_nodes = Ast::locate_node(&ast, position);
+        let Some(IdentifierWithContext {
+            identifier,
+            context: IdentifierContext::ImportedModule { name, dots },
+        }) = Transaction::identifier_from_covering_nodes(&covering_nodes)
+        else {
+            return None;
+        };
+        let target_module =
+            Transaction::target_imported_module_name(&handle, &identifier, name, dots, position);
+        let config = self
+            .state
+            .config_finder()
+            .python_file(handle.module_kind(), handle.path());
+        let loader = LoaderFindCache::new(config.dupe());
+        let Some(target_path) = loader
+            .find_import_prefer_executable(target_module, Some(handle.path()))
+            .finding()
+        else {
+            return Some(Err(EmptyResponseReason::ModuleNotFound));
+        };
+        let Some(path) = to_real_path(&target_path) else {
+            return Some(Err(EmptyResponseReason::ModuleInfoNotFound));
+        };
+        let path = match &self.path_remapper {
+            Some(remapper) => remapper(&path).into_owned(),
+            None => path,
+        };
+        let uri = match Url::from_file_path(path.absolutize()) {
+            Ok(uri) => uri,
+            Err(_) => return Some(Err(EmptyResponseReason::NoFilePath)),
+        };
+        Some(Ok(Some(GotoDefinitionResponse::Scalar(Location {
+            uri,
+            range: Range::default(),
+        }))))
     }
 
     fn goto_definition(
