@@ -2522,7 +2522,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn attrs_default_for_field(&self, cls: &Class, field_name: &Name) -> Option<Type> {
-        for name in cls.class_body_fields() {
+        let class_fields = self.get_class_fields(cls)?;
+        for name in class_fields.class_body_fields() {
             if name == field_name {
                 continue;
             }
