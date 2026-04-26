@@ -10,8 +10,8 @@ use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemTag;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
-use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::sys_info::PythonVersion;
 use ruff_text_size::TextSize;
 
 use crate::state::lsp::CompletionResolveData;
