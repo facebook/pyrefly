@@ -678,12 +678,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if !ret.is_error()
                         && let Params::List(chosen_params) = &chosen_sig.params
                     {
-                        let tcc = &|| TypeCheckContext {
-                            kind: TypeCheckKind::CallArgument(
+                        let tcc = &|| {
+                            TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
                                 param_name.cloned(),
                                 callable_name.cloned(),
-                            ),
-                            context: context.map(|ctx| ctx()),
+                            ))
+                            .with_context(context.map(|ctx| ctx()))
                         };
                         self.check_type(
                             &self.heap.mk_param_spec_value(chosen_params.clone()),
@@ -705,7 +705,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             record(bound_args, name, overload_type);
                         }
                     }
-                    return;
+                    return expected_types;
                 }
             }
         }
