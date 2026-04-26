@@ -50,7 +50,6 @@ use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
-use crate::state::lsp::completion_data_doc_range;
 use crate::state::lsp::completion_data_handle_path;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
@@ -411,6 +410,7 @@ impl Transaction<'_> {
             .import_handle(handle, ModuleName::builtins(), None)
             .finding()
         {
+            let builtin_path = completion_data_handle_path(&builtin_handle);
             let builtin_exports = self.get_exports(&builtin_handle);
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
@@ -421,19 +421,30 @@ impl Transaction<'_> {
                 {
                     continue;
                 }
-                let kind = match location {
+                let (kind, data) = match location {
                     ExportLocation::OtherModule(..) => continue,
-                    ExportLocation::ThisModule(export) => export
-                        .symbol_kind
-                        .map_or(Some(CompletionItemKind::VARIABLE), |k| {
-                            Some(k.to_lsp_completion_item_kind())
-                        }),
+                    ExportLocation::ThisModule(export) => {
+                        let data = CompletionResolveData::export_value(
+                            ModuleName::builtins(),
+                            name.as_str(),
+                            export.docstring_range.and(builtin_path.clone()),
+                            export.docstring_range,
+                        );
+                        (
+                            export
+                                .symbol_kind
+                                .map_or(Some(CompletionItemKind::VARIABLE), |k| {
+                                    Some(k.to_lsp_completion_item_kind())
+                                }),
+                            Some(data),
+                        )
+                    }
                 };
                 completions.push(RankedCompletion::new(CompletionItem {
                     label: name.as_str().to_owned(),
                     detail: None,
                     kind,
-                    data: Some(serde_json::json!("builtin")),
+                    data,
                     ..Default::default()
                 }));
             }
@@ -630,7 +641,7 @@ impl Transaction<'_> {
                     handle_for_data.module(),
                     name.clone(),
                     completion_data_handle_path(&handle_for_data),
-                    completion_data_doc_range(export.docstring_range),
+                    export.docstring_range,
                 );
 
                 completions.push(RankedCompletion {
@@ -852,7 +863,7 @@ impl Transaction<'_> {
                         imp_handle.module(),
                         name.as_str(),
                         completion_data_handle_path(imp_handle),
-                        completion_data_doc_range(export.docstring_range),
+                        export.docstring_range,
                     )),
                 ),
                 ExportLocation::OtherModule(_, _) => (false, CompletionItemKind::VARIABLE, None),
