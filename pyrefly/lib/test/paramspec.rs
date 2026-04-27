@@ -90,7 +90,7 @@ def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
 def foo[T](x: T, y: T) -> T:
     return x
 foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
+reveal_type(foo2)  # E: revealed type: (x: @_, y: @_) -> @_
 "#,
 );
 
@@ -106,7 +106,7 @@ class C[T]:
   def __init__(self, x: T) -> None:
     self.x = x
 c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
+reveal_type(c2)  # E: revealed type: (x: @_) -> C[@_]
 x: C[int] = c2(1)
 "#,
 );
