@@ -286,6 +286,8 @@ pub(crate) enum IdentifierContext {
         base_range: TextRange,
         /// The range of the entire expression.
         range: TextRange,
+        /// Whether the attribute is being loaded, assigned to, or deleted.
+        expr_context: ExprContext,
     },
     /// An identifier appeared as the name of a keyword argument.
     /// ex: `x` in `f(x=1)`. We also store some info about the callee `f` so
@@ -495,6 +497,7 @@ impl IdentifierWithContext {
             context: IdentifierContext::Attribute {
                 base_range: attr.value.range(),
                 range: attr.range(),
+                expr_context: attr.ctx,
             },
         }
     }
@@ -2912,6 +2915,29 @@ impl<'a> Transaction<'a> {
             },
         )
         .concat()
+    }
+
+    pub fn local_reference_is_write(&self, handle: &Handle, range: TextRange) -> bool {
+        matches!(
+            self.identifier_at(handle, range.start()),
+            Some(IdentifierWithContext {
+                context: IdentifierContext::Expr(ExprContext::Store | ExprContext::Del)
+                    | IdentifierContext::Attribute {
+                        expr_context: ExprContext::Store | ExprContext::Del,
+                        ..
+                    }
+                    | IdentifierContext::ImportedModule { .. }
+                    | IdentifierContext::ImportedName { .. }
+                    | IdentifierContext::FunctionDef { .. }
+                    | IdentifierContext::MethodDef { .. }
+                    | IdentifierContext::ClassDef { .. }
+                    | IdentifierContext::Parameter
+                    | IdentifierContext::TypeParameter
+                    | IdentifierContext::ExceptionHandler
+                    | IdentifierContext::PatternMatch(_),
+                ..
+            })
+        )
     }
 
     fn local_references_from_external_definition(

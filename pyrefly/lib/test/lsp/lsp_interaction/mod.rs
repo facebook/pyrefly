@@ -20,6 +20,7 @@ mod convert_module_package;
 mod definition;
 mod diagnostic;
 mod did_change;
+mod document_highlight;
 mod document_symbols;
 mod empty_response_reason;
 mod file_watcher;

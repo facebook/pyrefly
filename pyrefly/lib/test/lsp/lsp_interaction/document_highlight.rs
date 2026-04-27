@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::Url;
+use lsp_types::request::DocumentHighlightRequest;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
@@ -12,21 +14,29 @@ use crate::object_model::LspInteraction;
 use crate::util::get_test_files_root;
 
 #[test]
-fn test_notebook_document_highlight() {
+fn document_highlight_includes_read_write_kind() {
     let root = get_test_files_root();
+    let path = root.path().join("document_highlight.py");
+    std::fs::write(&path, "x = 1\ny = x\n").unwrap();
+
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
-        .initialize(InitializeSettings {
-            configuration: Some(None),
-            ..Default::default()
-        })
+        .initialize(InitializeSettings::default())
         .unwrap();
-    interaction.open_notebook("notebook.ipynb", vec!["x = 1\ny = x"]);
+    interaction.client.did_open("document_highlight.py");
 
-    // Highlight all references to "x" in the cell
     interaction
-        .document_highlight_cell("notebook.ipynb", "cell1", 0, 0)
+        .client
+        .send_request::<DocumentHighlightRequest>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&path).unwrap().to_string()
+            },
+            "position": {
+                "line": 1,
+                "character": 4
+            }
+        }))
         .expect_response(json!([
             {
                 "range": {
