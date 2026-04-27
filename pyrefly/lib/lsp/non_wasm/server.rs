@@ -212,10 +212,12 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
+use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::HiddenDirFilter;
 use pyrefly_util::includes::Includes as _;
@@ -326,6 +328,7 @@ use crate::lsp::wasm::provide_type::ProvideTypeParams;
 use crate::lsp::wasm::provide_type::ProvideTypeResponse;
 use crate::lsp::wasm::provide_type::provide_type;
 use crate::module::bundled::BundledStub;
+use crate::state::load::FileContents;
 use crate::state::load::Load;
 use crate::state::load::LspFile;
 use crate::state::lsp::DisplayTypeErrors;
@@ -1698,6 +1701,41 @@ impl Server {
         }
     }
 
+    fn stale_definition_request_disk_contents(
+        &self,
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        path: &Path,
+    ) -> Option<String> {
+        let disk_contents = fs_anyhow::read_to_string(path).ok()?;
+        if let Some(open_file) = self.open_files.read().get(path) {
+            return match &**open_file {
+                LspFile::Source(contents) if contents.as_str() != disk_contents.as_str() => {
+                    Some(disk_contents)
+                }
+                LspFile::Source(_) | LspFile::Notebook(_) => None,
+            };
+        }
+        let module_info = transaction.get_module_info(handle)?;
+        if module_info.is_notebook() || module_info.contents().as_str() == disk_contents.as_str() {
+            None
+        } else {
+            Some(disk_contents)
+        }
+    }
+
+    fn invalidate_all_definition_files(&self, transaction: &mut Transaction<'_>) {
+        let files = transaction
+            .handles()
+            .into_iter()
+            .filter_map(|handle| match handle.path().details() {
+                ModulePathDetails::FileSystem(path) => Some(path.as_path().to_path_buf()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        transaction.invalidate_disk(&files);
+    }
+
     /// Returns a snapshot of all currently open notebooks, keyed by their filesystem path.
     /// Used to remap file paths to notebook cell URIs in closures that don't have
     /// access to `self`.
@@ -2031,7 +2069,7 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let response = match self.goto_definition(&transaction, params) {
+                        let response = match self.goto_definition(&mut transaction, params) {
                             Ok(response) => response,
                             Err(reason) => {
                                 telemetry_event.set_empty_response_reason(reason);
@@ -4144,19 +4182,18 @@ impl Server {
             .map(|(handle, _)| handle)
     }
 
-    fn goto_definition(
+    fn goto_definition_response(
         &self,
         transaction: &Transaction<'_>,
-        params: GotoDefinitionParams,
+        handle: &Handle,
+        uri: &Url,
+        position: Position,
     ) -> Result<Option<GotoDefinitionResponse>, EmptyResponseReason> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
         let info = transaction
-            .get_module_info(&handle)
+            .get_module_info(handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
-        let range =
-            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
-        let targets = transaction.goto_definition(&handle, range)?;
+        let range = self.from_lsp_position(uri, &info, position);
+        let targets = transaction.goto_definition(handle, range)?;
         let mut lsp_targets = targets
             .iter()
             .filter_map(|x| self.to_lsp_location(x))
@@ -4176,6 +4213,55 @@ impl Server {
         } else {
             Ok(Some(GotoDefinitionResponse::Array(lsp_targets)))
         }
+    }
+
+    fn goto_definition(
+        &self,
+        transaction: &mut Transaction<'_>,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>, EmptyResponseReason> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self.make_handle_if_enabled(uri, Some(GotoDefinition::METHOD))?;
+        let path = self.path_for_uri(uri);
+        let stale_disk_contents = path.as_deref().and_then(|path| {
+            self.stale_definition_request_disk_contents(transaction, &handle, path)
+        });
+        if stale_disk_contents.is_some() {
+            self.invalidate_all_definition_files(transaction);
+            transaction.run(
+                std::slice::from_ref(&handle),
+                Require::Everything,
+                Some(&self.lsp_thread_pool),
+            );
+        }
+        let position = params.text_document_position_params.position;
+        let response = self.goto_definition_response(transaction, &handle, uri, position);
+        if matches!(response, Ok(Some(_))) {
+            return response;
+        }
+        let Some(path) = path else {
+            return response;
+        };
+        let Some(disk_contents) = stale_disk_contents else {
+            return response;
+        };
+        let should_retry = matches!(
+            self.open_files.read().get(&path).map(|file| &**file),
+            Some(LspFile::Source(_))
+        );
+        if !should_retry {
+            return response;
+        }
+        transaction.set_memory(vec![(
+            path,
+            Some(Arc::new(FileContents::from_source(disk_contents))),
+        )]);
+        transaction.run(
+            std::slice::from_ref(&handle),
+            Require::Everything,
+            Some(&self.lsp_thread_pool),
+        );
+        self.goto_definition_response(transaction, &handle, uri, position)
     }
 
     fn goto_declaration(
