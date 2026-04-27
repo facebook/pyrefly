@@ -23,3 +23,4 @@ pub(crate) mod pytest_fixture;
 pub(crate) mod redundant_cast;
 pub(crate) mod safe_delete;
 pub(crate) mod types;
+pub(crate) mod unwrap_block;

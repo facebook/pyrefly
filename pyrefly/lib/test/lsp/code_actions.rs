@@ -320,6 +320,19 @@ fn apply_first_inline_parameter_action(code: &str) -> Option<String> {
     Some(apply_refactor_edits_for_module(&module_info, &edits))
 }
 
+fn apply_first_unwrap_block_action(code: &str, selection: TextRange) -> Option<String> {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .unwrap_block_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edits = actions.first()?.edits.clone();
+    Some(apply_refactor_edits_for_module(&module_info, &edits))
+}
+
 fn apply_first_safe_delete_action(code: &str) -> Option<String> {
     apply_first_safe_delete_action_multi(&[("main", code)], "main")
 }
@@ -380,6 +393,21 @@ fn assert_no_introduce_parameter_action(code: &str) {
     assert!(
         actions.is_empty(),
         "expected no introduce-parameter actions, found {}",
+        actions.len()
+    );
+}
+
+fn assert_no_unwrap_block_action(code: &str, selection: TextRange) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let actions = transaction
+        .unwrap_block_code_actions(handle, selection)
+        .unwrap_or_default();
+    assert!(
+        actions.is_empty(),
+        "expected no unwrap-block actions, found {}",
         actions.len()
     );
 }
@@ -4099,6 +4127,315 @@ class Child(Base):
         return 2
 "#;
     assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn unwrap_block_if_body() {
+    let code = r#"
+def f():
+    if True:
+        print(2)
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print(2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_if_header_selection() {
+    let code = r#"
+def f():
+    if True:
+        print(2)
+"#;
+    let selection = find_nth_range(code, "True", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print(2)
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_if_else_branch_after_colon() {
+    let code = r#"
+def f():
+    if True:
+        print("then")
+    else:
+        # keep this comment
+        print("else")
+"#;
+    let else_colon = find_nth_range(code, ":", 3);
+    let selection = TextRange::new(else_colon.end(), else_colon.end());
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    # keep this comment
+    print("else")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_elif_branch() {
+    let code = r#"
+def f(value):
+    if value == 0:
+        print("zero")
+    elif value == 1:
+        print("one")
+    else:
+        print("other")
+"#;
+    let selection = find_nth_range(code, "value == 1", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f(value):
+    print("one")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_rejects_loop_else() {
+    let code = r#"
+def f(items):
+    for item in items:
+        print(item)
+    else:
+        print("done")
+"#;
+    let selection = find_nth_range(code, ":", 3);
+    assert_no_unwrap_block_action(code, selection);
+}
+
+#[test]
+fn unwrap_block_with_statement() {
+    let code = r#"
+def f():
+    with open("x.txt") as f:
+        print(f.read())
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print(f.read())
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_while_without_else() {
+    let code = r#"
+def f():
+    while True:
+        print("tick")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("tick")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_outer_nested_if() {
+    let code = r#"
+def f():
+    if True:
+        if True:
+            print("value")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    if True:
+        print("value")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_inner_nested_if() {
+    let code = r#"
+def f():
+    if True:
+        if True:
+            print("value")
+"#;
+    let selection = find_nth_range(code, ":", 3);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    if True:
+        print("value")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_multiline_header() {
+    let code = r#"
+def f():
+    if (
+        True
+    ):
+        print("then")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_multiline_triple_quoted_string_header() {
+    let code = r#"
+def f():
+    if bool("""first:
+second"""):
+        print("then")
+"#;
+    let selection = find_nth_range(code, "second", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_header_comment_with_colon() {
+    let code = r#"
+def f():
+    if True:  # comment with :
+        print("then")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_rejects_comment_colon_selection() {
+    let code = r#"
+def f():
+    if True:  # comment with :
+        print("then")
+"#;
+    let comment_colon =
+        TextSize::try_from(code.rfind(':').expect("expected comment colon")).unwrap();
+    let selection = TextRange::new(comment_colon, comment_colon);
+    assert_no_unwrap_block_action(code, selection);
+}
+
+#[test]
+fn unwrap_block_f_string_format_spec() {
+    let code = r#"
+def f(value):
+    if f"{value:02}":
+        print("then")
+"#;
+    let selection = find_nth_range(code, "value:02", 1);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f(value):
+    print("then")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_try_selected_except_branch() {
+    let code = r#"
+def f(value):
+    try:
+        print("try")
+    except ValueError:
+        print("value")
+    except TypeError:
+        print("type")
+"#;
+    let selection = find_nth_range(code, ":", 4);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f(value):
+    print("type")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_try_finally_branch() {
+    let code = r#"
+def f():
+    try:
+        print("try")
+    finally:
+        print("cleanup")
+"#;
+    let selection = find_nth_range(code, ":", 3);
+    let updated =
+        apply_first_unwrap_block_action(code, selection).expect("expected unwrap-block action");
+    let expected = r#"
+def f():
+    print("cleanup")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn unwrap_block_rejects_try_header_with_finally() {
+    let code = r#"
+def f():
+    try:
+        print("try")
+    finally:
+        print("cleanup")
+"#;
+    let selection = find_nth_range(code, "try", 1);
+    assert_no_unwrap_block_action(code, selection);
+}
+
+#[test]
+fn unwrap_block_rejects_single_line_suite() {
+    let code = r#"
+def f():
+    if True: print("then")
+"#;
+    let selection = find_nth_range(code, ":", 2);
+    assert_no_unwrap_block_action(code, selection);
 }
 
 #[test]
