@@ -45,6 +45,90 @@ pub struct Interpreters {
     pub skip_interpreter_query: bool,
 }
 
+#[cfg(feature = "jsonschema")]
+impl schemars::JsonSchema for Interpreters {
+    fn schema_name() -> String {
+        "Interpreters".to_owned()
+    }
+
+    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::*;
+
+        let mut properties = schemars::Map::new();
+
+        properties.insert(
+            "python-interpreter-path".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::String.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Path to the Python interpreter to use for type checking.".to_owned(),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "fallback-python-interpreter-name".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::String.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "A generic command name (e.g. 'python3') to resolve via `which` into a python_interpreter path."
+                            .to_owned(),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "conda-environment".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::String.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some("Name of the Conda environment to use.".to_owned()),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        properties.insert(
+            "skip-interpreter-query".to_owned(),
+            SchemaObject {
+                instance_type: Some(InstanceType::Boolean.into()),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(
+                        "Whether to skip querying an interpreter for site-packages and stdlib paths."
+                            .to_owned(),
+                    ),
+                    default: Some(serde_json::json!(false)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }
+            .into(),
+        );
+
+        SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            object: Some(Box::new(ObjectValidation {
+                properties,
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
+}
+
 impl Display for Interpreters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

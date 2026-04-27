@@ -49,6 +49,8 @@ pub mod panic;
 pub mod prelude;
 pub mod recurser;
 pub mod ruff_visitors;
+#[cfg(feature = "jsonschema")]
+pub mod schema_helpers;
 pub mod small_map1;
 pub mod small_set1;
 pub mod stdlib;

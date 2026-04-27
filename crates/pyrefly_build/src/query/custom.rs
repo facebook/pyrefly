@@ -19,6 +19,7 @@ use crate::query::SourceDbQuerier;
 
 /// Args and settings for querying a custom source DB.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default, Hash)]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub struct CustomQueryArgs {
     /// The command to run.
@@ -33,6 +34,10 @@ pub struct CustomQueryArgs {
     ///
     /// `<arg-flag>` is either `--file` or `--target`, depending on the type
     /// of `<arg>`, and `<arg>` is an absolute path to a file or a build system's target.
+    #[cfg_attr(
+        feature = "jsonschema",
+        schemars(schema_with = "pyrefly_util::schema_helpers::vec1_string_schema")
+    )]
     pub command: Vec1<String>,
 
     /// The root of the repository. Repo roots here will be shared between configs.
