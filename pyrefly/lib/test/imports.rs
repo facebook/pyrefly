@@ -1521,7 +1521,16 @@ assert_type(c.name, str)
 testcase!(
     test_malformed_def_from_star,
     r#"
-def # E: Expected an identifier
-from *a # E: Expected `)` # E: Cannot find module # E: only allowed at module level # E: Expected a module name # E: Star import must be the only import # E: Expected `,`
+def # E: Parse error: Expected an identifier
+from *a # E: Parse error: Expected `)`, found `from` # E: Parse error: Expected a module name # E: Parse error: Star import must be the only import # E: Parse error: Expected `,`, found name
+"#,
+);
+
+// Additional regression test for https://github.com/facebook/pyrefly/issues/2983
+testcase!(
+    test_malformed_class_from_star,
+    r#"
+class # E: Parse error: Expected an identifier
+from *a # E: Parse error: Expected an indented block after `class` definition # E: Parse error: Expected a module name # E: Parse error: Star import must be the only import # E: Parse error: Expected `,`, found name # E: Cannot find module `main`
 "#,
 );

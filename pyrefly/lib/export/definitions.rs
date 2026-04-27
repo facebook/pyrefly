@@ -426,6 +426,9 @@ impl DefinitionsBuilder {
         style: DefinitionStyle,
         body: Option<&[Stmt]>,
     ) {
+        if x.is_empty() {
+            return;
+        }
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
                 e.get_mut().merge(style, range);
