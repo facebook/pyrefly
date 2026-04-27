@@ -415,6 +415,26 @@ assert_type(z, dict[str, int])
 );
 
 testcase!(
+    test_empty_set_constructor_call_inside_loop,
+    r#"
+from typing import assert_type
+
+rows: list[dict[str, str]] = []
+seen = set()
+deduped = []
+
+for r in rows:
+    key = r['a']
+    if key not in seen:
+        seen.add(key)
+        deduped.append(r)
+
+assert_type(seen, set[str])
+assert_type(deduped, list[dict[str, str]])
+    "#,
+);
+
+testcase!(
     bug = "Container contents should be promoted",
     test_redundant_empty_container_constructor_call,
     r#"
