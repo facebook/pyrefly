@@ -377,6 +377,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         defs,
                         errors,
                     );
+                    let sigs = if let [impl_sig] = def.ty.callable_signatures().as_slice() {
+                        self.normalize_async_generator_overloads(sigs, impl_sig)
+                    } else {
+                        sigs
+                    };
                     self.check_signature_consistency(&sigs, &def, errors);
                     Type::Overload(Overload {
                         signatures: sigs.mapped(|(_, sig)| sig),
@@ -1762,6 +1767,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .find_map(|(_, _, metadata)| metadata.flags.dataclass_transform_metadata.clone());
         }
         metadata
+    }
+
+    fn normalize_async_generator_overload_signature(&self, sig: &Callable) -> Callable {
+        if let Some((_, _, ret)) = self.unwrap_coroutine(&sig.ret)
+            && self.decompose_async_generator(&ret).is_some()
+        {
+            let mut sig = sig.clone();
+            sig.ret = ret;
+            sig
+        } else {
+            sig.clone()
+        }
+    }
+
+    fn normalize_async_generator_overloads(
+        &self,
+        overloads: Vec1<(TextRange, OverloadType)>,
+        impl_sig: &Callable,
+    ) -> Vec1<(TextRange, OverloadType)> {
+        if self.decompose_async_generator(&impl_sig.ret).is_none() {
+            return overloads;
+        }
+        overloads.mapped(|(range, overload)| {
+            (
+                range,
+                match overload {
+                    OverloadType::Function(func) => OverloadType::Function(Function {
+                        signature: self
+                            .normalize_async_generator_overload_signature(&func.signature),
+                        metadata: func.metadata,
+                    }),
+                    OverloadType::Forall(forall) => OverloadType::Forall(Forall {
+                        tparams: forall.tparams,
+                        body: Function {
+                            signature: self.normalize_async_generator_overload_signature(
+                                &forall.body.signature,
+                            ),
+                            metadata: forall.body.metadata,
+                        },
+                    }),
+                },
+            )
+        })
     }
 
     /// Substitute each type parameter with its upper bound, for overload consistency checking.

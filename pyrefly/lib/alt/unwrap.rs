@@ -17,6 +17,7 @@ use crate::types::callable::Required;
 use crate::types::class::ClassType;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
+use crate::types::types::Union;
 use crate::types::types::Var;
 
 // The error collector is None for a "soft" type hint, where we try to
@@ -360,16 +361,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn decompose_generator(&self, ty: &Type) -> Option<(Type, Type, Type)> {
         match ty {
-            Type::Union(u) => {
-                let mut yield_tys = Vec::new();
-                let mut send_tys = Vec::new();
-                let mut return_tys = Vec::new();
-                for member in &u.members {
-                    let (y, s, r) = self.decompose_generator(member)?;
-                    yield_tys.push(y);
-                    send_tys.push(s);
-                    return_tys.push(r);
-                }
+            Type::Union(box Union { members, .. }) => {
+                let results: Option<Vec<_>> = members
+                    .iter()
+                    .map(|member| self.decompose_generator(member))
+                    .collect();
+                let (yield_tys, send_tys, return_tys) = results?.into_iter().fold(
+                    (Vec::new(), Vec::new(), Vec::new()),
+                    |mut acc, (yield_ty, send_ty, return_ty)| {
+                        acc.0.push(yield_ty);
+                        acc.1.push(send_ty);
+                        acc.2.push(return_ty);
+                        acc
+                    },
+                );
                 Some((
                     self.unions(yield_tys),
                     self.unions(send_tys),
@@ -402,22 +407,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn decompose_async_generator(&self, ty: &Type) -> Option<(Type, Type)> {
-        let yield_ty = self.fresh_var();
-        let send_ty = self.fresh_var();
-        let async_generator_ty = self.heap.mk_class_type(
-            self.stdlib
-                .async_generator(yield_ty.to_type(self.heap), send_ty.to_type(self.heap)),
-        );
-        if self.is_subset_eq(&async_generator_ty, ty) {
-            let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
-            let send_ty = self
-                .resolve_var_opt(ty, send_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
-            Some((yield_ty, send_ty))
-        } else if ty.is_any() {
-            Some((self.heap.mk_any_explicit(), self.heap.mk_any_explicit()))
-        } else {
-            None
+        match ty {
+            Type::Union(box Union { members, .. }) => {
+                let results: Option<Vec<_>> = members
+                    .iter()
+                    .map(|member| self.decompose_async_generator(member))
+                    .collect();
+                let (yield_tys, send_tys) = results?.into_iter().unzip();
+                Some((self.unions(yield_tys), self.unions(send_tys)))
+            }
+            _ => {
+                let yield_ty = self.fresh_var();
+                let send_ty = self.fresh_var();
+                let async_generator_ty = self.heap.mk_class_type(
+                    self.stdlib
+                        .async_generator(yield_ty.to_type(self.heap), send_ty.to_type(self.heap)),
+                );
+                if self.is_subset_eq(&async_generator_ty, ty) {
+                    let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
+                    let send_ty = self
+                        .resolve_var_opt(ty, send_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    Some((yield_ty, send_ty))
+                } else if ty.is_any() {
+                    Some((self.heap.mk_any_explicit(), self.heap.mk_any_explicit()))
+                } else {
+                    None
+                }
+            }
         }
     }
 
