@@ -86,6 +86,7 @@ fn main() -> Result<(), std::io::Error> {
     // Only watch for metadata changes to avoid having Cargo repeatedly crawling for
     // changes in the entire typeshed dir.
     println!("cargo::rerun-if-changed=third_party/typeshed_metadata.json");
+    println!("cargo::rerun-if-changed=third_party/typeshed/stdlib/VERSIONS");
 
     let output_dir = get_output_path().unwrap();
 

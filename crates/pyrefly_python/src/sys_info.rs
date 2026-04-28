@@ -159,6 +159,10 @@ impl PythonVersion {
     pub fn at_least(self, major: u32, minor: u32) -> bool {
         self >= PythonVersion::new(major, minor, 0)
     }
+
+    pub fn cmp_ignore_patch(self, other: Self) -> Ordering {
+        (self.major, self.minor).cmp(&(other.major, other.minor))
+    }
 }
 
 /// The platform on which Python is running, e.g. "linux", "darwin", "win32".
