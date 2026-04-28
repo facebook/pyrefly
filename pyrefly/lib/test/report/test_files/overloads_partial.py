@@ -8,7 +8,7 @@
 from typing import overload
 
 
-# Partial: one overload typed, one missing return → worst wins.
+# Partial: one overload fully typed, one missing return → best wins.
 @overload
 def partial(x: int) -> int: ...
 

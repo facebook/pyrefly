@@ -146,14 +146,14 @@ impl SlotCounts {
     }
 }
 
-/// Annotation quality for a single slot, ordered worst-to-best so that
-/// `min()` gives "worst-wins" semantics.
+/// Annotation quality for a single slot, ordered so that `max()` gives "best-wins" semantics across
+/// overloads. `Skip` is the neutral element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum SlotRank {
+    Skip,
     Untyped,
     Any,
     Typed,
-    Skip,
 }
 
 impl SlotRank {
@@ -521,7 +521,7 @@ impl ReportArgs {
     }
 
     /// Merge overloads with the same qualified name into one entry,
-    /// keeping the worst annotation quality per deduplicated slot.
+    /// keeping the best annotation quality per deduplicated slot.
     fn merge_overloads(functions: &mut Vec<Function>) {
         let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, func) in functions.iter().enumerate() {
@@ -544,12 +544,12 @@ impl ReportArgs {
                 } else {
                     SlotRank::classify(has_annotation, func.is_return_type_known)
                 };
-                return_rank = return_rank.min(ret);
+                return_rank = return_rank.max(ret);
 
                 for param in &func.parameters {
                     if let Some(key) = &param.merge_key {
                         let entry = param_slots.entry(key.clone()).or_insert(SlotRank::Skip);
-                        *entry = (*entry).min(param.into());
+                        *entry = (*entry).max(param.into());
                     }
                 }
             }
@@ -2529,6 +2529,15 @@ mod tests {
     fn test_report_overloads_partial() {
         let report = build_module_report_for_test("overloads_partial.py");
         compare_snapshot("overloads_partial.expected.json", &report);
+    }
+
+    /// @overload merging with a fallback returning `Any`.
+    /// Best-wins semantics mean the merged return is `Typed`, not `Any`.
+    /// Regression test for https://github.com/facebook/pyrefly/issues/3257.
+    #[test]
+    fn test_report_overloads_any_fallback() {
+        let report = build_module_report_for_test("overloads_any_fallback.py");
+        compare_snapshot("overloads_any_fallback.expected.json", &report);
     }
 
     /// @dataclass, Enum, TypedDict, NamedTuple: schema class fields.
