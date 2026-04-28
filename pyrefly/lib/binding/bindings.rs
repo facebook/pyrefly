@@ -66,6 +66,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyExportNameAssignTypeForm;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
@@ -691,6 +692,9 @@ impl Bindings {
             if exported.contains_key_hashed(name.as_ref()) {
                 let key = name.into_key().clone();
                 exported_names.insert(key.clone());
+                builder
+                    .table
+                    .insert(KeyExportNameAssignTypeForm(key.clone()), binding.clone());
                 builder.table.insert(KeyExport(key), binding);
             }
         }
@@ -702,6 +706,10 @@ impl Bindings {
                 exported_names.insert(name.clone());
                 builder.table.insert(
                     KeyExport(name.clone()),
+                    BindingExport::forward_maybe_promote(key, &name),
+                );
+                builder.table.insert(
+                    KeyExportNameAssignTypeForm(name.clone()),
                     BindingExport::forward_maybe_promote(key, &name),
                 );
             }
