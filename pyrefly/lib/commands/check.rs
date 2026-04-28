@@ -76,6 +76,7 @@ use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::subscriber::ProgressBarSubscriber;
+use crate::state::subscriber::TestSubscriber;
 
 /// Result data from a non-watch check run, used for telemetry logging.
 pub struct CheckResult {
@@ -262,6 +263,10 @@ struct OutputArgs {
     /// Format for pysa report output (json or capnp)
     #[arg(long, value_enum, default_value_t = report::pysa::PysaFormat::Capnp)]
     report_pysa_format: report::pysa::PysaFormat,
+    /// Report the cross-module demand tree (aggregated summary of LookupAnswer
+    /// and LookupExport calls). Useful for analyzing laziness properties.
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    report_demand_tree: Option<PathBuf>,
     /// Generate a CinderX-format type report (experimental, internal-only).
     #[arg(long, value_name = "OUTPUT_DIR", hide = true)]
     report_cinderx: Option<PathBuf>,
@@ -947,15 +952,22 @@ impl CheckArgs {
         }
 
         let type_check_start = Instant::now();
-        let show_progress_bar =
-            self.output.summary != Summary::None && !self.output.no_progress_bar;
-        if show_progress_bar {
-            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
-        }
+        let demand_tree_subscriber = if self.output.report_demand_tree.is_some() {
+            transaction
+                .set_demand_collector(Some(pyrefly_util::demand_tree::DemandCollector::new()));
+            let sub = TestSubscriber::new();
+            transaction.set_subscriber(Some(Box::new(sub.dupe())));
+            Some(sub)
+        } else {
+            let show_progress_bar =
+                self.output.summary != Summary::None && !self.output.no_progress_bar;
+            if show_progress_bar {
+                transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+            }
+            None
+        };
         transaction.run(handles, require, None);
-        if show_progress_bar {
-            transaction.set_subscriber(None);
-        }
+        transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
@@ -1199,6 +1211,12 @@ impl CheckArgs {
                 report::dependency_graph::dependency_graph(transaction, handles),
             )?;
         }
+        if let Some(path) = &self.output.report_demand_tree {
+            let roots = transaction.take_demand_roots();
+            let module_steps = demand_tree_subscriber.unwrap().finish_detailed();
+            let output = demand_tree_report_json(&roots, &module_steps);
+            fs_anyhow::write(path, output)?;
+        }
         if self.behavior.expectations {
             loads.check_against_expectations()?;
             Ok((CommandExitStatus::Success, output_errors))
@@ -1208,6 +1226,50 @@ impl CheckArgs {
             Ok((CommandExitStatus::Success, output_errors))
         }
     }
+}
+
+/// Serialize the demand tree and per-module step info as a pretty-printed
+/// JSON document.
+fn demand_tree_report_json(
+    roots: &[pyrefly_util::demand_tree::DemandNode],
+    module_steps: &SmallMap<Handle, crate::state::subscriber::TestModuleInfo>,
+) -> String {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct ModuleStep {
+        module: String,
+        last_step: &'static str,
+    }
+
+    #[derive(Serialize)]
+    struct Report<'a> {
+        module_steps: Vec<ModuleStep>,
+        demand_tree: &'a [pyrefly_util::demand_tree::DemandNode],
+    }
+
+    let mut steps: Vec<ModuleStep> = module_steps
+        .iter()
+        .map(|(handle, info)| ModuleStep {
+            module: handle.module().as_str().to_owned(),
+            last_step: match info.last_step {
+                Some(crate::state::steps::Step::Load) => "Load",
+                Some(crate::state::steps::Step::Ast) => "Ast",
+                Some(crate::state::steps::Step::Exports) => "Exports",
+                Some(crate::state::steps::Step::Answers) => "Answers",
+                Some(crate::state::steps::Step::Solutions) => "Solutions",
+                None => "Nothing",
+            },
+        })
+        .collect();
+    // Stable ordering makes diffing reports tractable.
+    steps.sort_by(|a, b| a.module.cmp(&b.module));
+
+    let report = Report {
+        module_steps: steps,
+        demand_tree: roots,
+    };
+    serde_json::to_string_pretty(&report).expect("demand tree report should always serialize")
 }
 
 #[cfg(test)]

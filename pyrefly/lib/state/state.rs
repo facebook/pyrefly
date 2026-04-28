@@ -41,6 +41,7 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::demand_tree::DemandCollector;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lock::Mutex;
@@ -598,6 +599,7 @@ impl<'a> TransactionData<'a> {
                 sub_task_telemetry: None,
                 readable,
                 timing: Default::default(),
+                demand_collector: None,
             })
         } else {
             Err(state_lock_blocked)
@@ -617,6 +619,10 @@ pub struct Transaction<'a> {
     readable: RwLockReadGuard<'a, StateData>,
     /// Atomic nanosecond counters accumulated across worker threads during a transaction.
     timing: TransactionTimingCounters,
+    /// Optional demand-tree collector for this run. Set via
+    /// [`Transaction::set_demand_collector`] before `run`; read by
+    /// `TransactionHandle` event sites.
+    demand_collector: Option<DemandCollector>,
 }
 
 impl<'a> Transaction<'a> {
@@ -628,6 +634,7 @@ impl<'a> Transaction<'a> {
             sub_task_telemetry: _,
             readable,
             timing,
+            demand_collector: _,
         } = self;
         drop(readable);
         let mut stats = stats.into_inner();
@@ -643,6 +650,23 @@ impl<'a> Transaction<'a> {
 
     pub fn set_subscriber(&mut self, subscriber: Option<Box<dyn Subscriber>>) {
         self.data.subscriber = subscriber;
+    }
+
+    /// Install a demand-tree collector for this transaction. Pass `None` to
+    /// disable collection. Collected events come from `TransactionHandle`
+    /// event sites; call [`Transaction::take_demand_roots`] after `run` to
+    /// harvest the tree.
+    pub fn set_demand_collector(&mut self, collector: Option<DemandCollector>) {
+        self.demand_collector = collector;
+    }
+
+    /// Take the demand-tree roots collected during this run. Returns an
+    /// empty vec if no collector was installed.
+    pub fn take_demand_roots(&self) -> Vec<pyrefly_util::demand_tree::DemandNode> {
+        self.demand_collector
+            .as_ref()
+            .map(|c| c.take_roots())
+            .unwrap_or_default()
     }
 
     /// Set the pysa reporter for inline extraction during type checking.
@@ -1306,6 +1330,11 @@ impl<'a> Transaction<'a> {
             };
             ns_counter.fetch_add(elapsed_ns, Ordering::Relaxed);
             count_counter.fetch_add(1, Ordering::Relaxed);
+
+            // Notify subscriber of step completion.
+            if let Some(subscriber) = &self.data.subscriber {
+                subscriber.step_computed(&module_data.handle, todo);
+            }
 
             let mut load_result = None;
             // Compute which exports changed for fine-grained invalidation.
@@ -2485,8 +2514,12 @@ impl<'a> TransactionHandle<'a> {
         module: ModuleName,
         f: impl FnOnce(&Exports, &Self) -> T,
         dep: ModuleDep,
+        reason: &str,
     ) -> Option<T> {
         let module_data = self.get_module(module, None, dep).finding()?;
+        if let Some(c) = self.transaction.demand_collector.as_ref() {
+            c.exports_event(self.module_data.handle.module(), module, reason);
+        }
         let exports = self.transaction.lookup_export(module_data);
         let lookup = TransactionHandle {
             transaction: self.transaction,
@@ -2597,6 +2630,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
             module,
             |exports, lookup| exports.exports(lookup).contains_key(name),
             dep,
+            "export_exists",
         )
         .unwrap_or(false)
     }
@@ -2606,12 +2640,16 @@ impl<'a> LookupExport for TransactionHandle<'a> {
             module,
             |exports, lookup| exports.wildcard(lookup),
             ModuleDep::Wildcard,
+            "get_wildcard",
         )
     }
 
     fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
         self.get_module(module, None, ModuleDep::Exists)
             .map(|module_data| {
+                if let Some(c) = self.transaction.demand_collector.as_ref() {
+                    c.exports_event(self.module_data.handle.module(), module, "module_exists");
+                }
                 self.transaction.lookup_export(module_data);
             })
     }
@@ -2621,6 +2659,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
             module,
             |exports, _lookup| exports.is_submodule_imported_implicitly(name),
             ModuleDep::NameMetadata(name.clone()),
+            "is_submodule_imported_implicitly",
         )
         .unwrap_or(false)
     }
@@ -2636,6 +2675,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     .collect::<SmallSet<Name>>()
             },
             ModuleDep::Exists,
+            "get_every_export_untracked",
         )
     }
 
@@ -2650,6 +2690,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 _ => None,
             },
             ModuleDep::NameMetadata(name.clone()),
+            "get_deprecated",
         )?
     }
 
@@ -2663,6 +2704,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 )
             },
             ModuleDep::NameMetadata(name.clone()),
+            "is_reexport",
         )
         .unwrap_or(false)
     }
@@ -2691,6 +2733,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     }
                 },
                 ModuleDep::NameMetadata(name.clone()),
+                "is_special_export",
             )??;
 
             match next {
@@ -2715,6 +2758,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 _ => None,
             },
             ModuleDep::NameMetadata(name.clone()),
+            "docstring_range",
         )?
     }
 
@@ -2737,6 +2781,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     None => Err(false),
                 },
                 ModuleDep::NameMetadata(name.clone()),
+                "is_final",
             );
 
             match next {
@@ -2772,6 +2817,14 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
             .get_module(module, path, ModuleDep::Key(k.to_anykey()))
             .finding()
             .unwrap();
+        // Hold the span guard for the duration of the lookup so that a panic
+        // inside `lookup_answer` still closes the span (keeping the per-thread
+        // demand stack balanced on this worker for subsequent demands).
+        let _demand_span = self
+            .transaction
+            .demand_collector
+            .as_ref()
+            .map(|c| c.enter(self.module_data.handle.module(), module, k));
         let res = self.transaction.lookup_answer(module_data, k, thread_state);
         if res.is_none() {
             let msg = format!(
@@ -3050,6 +3103,7 @@ impl State {
             }),
             sub_task_telemetry: None,
             timing: Default::default(),
+            demand_collector: None,
             data: TransactionData {
                 state: self,
                 stdlib,
@@ -3121,6 +3175,7 @@ impl State {
                     stats,
                     sub_task_telemetry: _,
                     timing,
+                    demand_collector: _,
                     data:
                         TransactionData {
                             stdlib,

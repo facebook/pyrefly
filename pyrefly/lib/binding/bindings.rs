@@ -51,6 +51,7 @@ use vec1::Vec1;
 use vec1::vec1;
 
 use crate::binding::binding::AnnotationTarget;
+use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExport;
