@@ -84,6 +84,7 @@ use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_info::JoinStyle;
+use crate::types::type_info::NameAssignTypeFormInfo;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::AnyStyle;
 use crate::types::types::TParams;
@@ -93,6 +94,7 @@ assert_words!(Key, 2);
 assert_bytes!(KeyExpect, 12);
 assert_bytes!(KeyTypeAlias, 4);
 assert_words!(KeyExport, 3);
+assert_words!(KeyExportNameAssignTypeForm, 3);
 assert_words!(KeyClass, 1);
 assert_bytes!(KeyTParams, 4);
 assert_bytes!(KeyClassBaseType, 4);
@@ -142,6 +144,7 @@ pub enum AnyIdx {
     KeyVarianceCheck(Idx<KeyVarianceCheck>),
     KeyClassSynthesizedFields(Idx<KeyClassSynthesizedFields>),
     KeyExport(Idx<KeyExport>),
+    KeyExportNameAssignTypeForm(Idx<KeyExportNameAssignTypeForm>),
     KeyDecorator(Idx<KeyDecorator>),
     KeyDecoratedFunction(Idx<KeyDecoratedFunction>),
     KeyUndecoratedFunction(Idx<KeyUndecoratedFunction>),
@@ -201,6 +204,9 @@ macro_rules! dispatch_anyidx {
                 $self.$method::<$crate::binding::binding::KeyClassSynthesizedFields>(*idx)
             }
             AnyIdx::KeyExport(idx) => $self.$method::<$crate::binding::binding::KeyExport>(*idx),
+            AnyIdx::KeyExportNameAssignTypeForm(idx) => {
+                $self.$method::<$crate::binding::binding::KeyExportNameAssignTypeForm>(*idx)
+            }
             AnyIdx::KeyDecorator(idx) => {
                 $self.$method::<$crate::binding::binding::KeyDecorator>(*idx)
             }
@@ -271,6 +277,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyExport(idx) => {
                 $self.$method::<$crate::binding::binding::KeyExport>(*idx, $($args),+)
             }
+            AnyIdx::KeyExportNameAssignTypeForm(idx) => {
+                $self.$method::<$crate::binding::binding::KeyExportNameAssignTypeForm>(*idx, $($args),+)
+            }
             AnyIdx::KeyDecorator(idx) => {
                 $self.$method::<$crate::binding::binding::KeyDecorator>(*idx, $($args),+)
             }
@@ -326,6 +335,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyVarianceCheck(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassSynthesizedFields(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyExport(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyExportNameAssignTypeForm(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyDecorator(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyDecoratedFunction(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyUndecoratedFunction(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -351,6 +361,7 @@ pub enum AnyExportedKey {
     KeyClassSynthesizedFields(KeyClassSynthesizedFields),
     KeyVariance(KeyVariance),
     KeyExport(KeyExport),
+    KeyExportNameAssignTypeForm(KeyExportNameAssignTypeForm),
     KeyClassMetadata(KeyClassMetadata),
     KeyClassMro(KeyClassMro),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
@@ -591,7 +602,7 @@ impl Keyed for KeyVarianceCheck {
 impl Keyed for KeyExport {
     const EXPORTED: bool = true;
     type Value = BindingExport;
-    type Answer = TypeInfo;
+    type Answer = Type;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyExport(idx)
     }
@@ -608,6 +619,28 @@ impl Keyed for KeyExport {
 impl Exported for KeyExport {
     fn to_anykey(&self) -> AnyExportedKey {
         AnyExportedKey::KeyExport(self.clone())
+    }
+}
+impl Keyed for KeyExportNameAssignTypeForm {
+    const EXPORTED: bool = true;
+    type Value = BindingExport;
+    type Answer = NameAssignTypeFormInfo;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyExportNameAssignTypeForm(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).key_idx()).range()
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyExportNameAssignTypeForm(self.clone()))
+    }
+}
+impl Exported for KeyExportNameAssignTypeForm {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyExportNameAssignTypeForm(self.clone())
     }
 }
 impl Keyed for KeyDecorator {
@@ -1313,6 +1346,15 @@ pub struct KeyExport(pub Name);
 impl DisplayWith<ModuleInfo> for KeyExport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyExport({})", self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyExportNameAssignTypeForm(pub Name);
+
+impl DisplayWith<ModuleInfo> for KeyExportNameAssignTypeForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyExportNameAssignTypeForm({})", self.0)
     }
 }
 

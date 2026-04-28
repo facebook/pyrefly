@@ -23,6 +23,7 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::type_info::NameAssignTypeForm;
+use pyrefly_types::type_info::NameAssignTypeFormInfo;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Union;
@@ -82,6 +83,7 @@ use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
+use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingTypeAlias;
@@ -100,6 +102,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyExportNameAssignTypeForm;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
@@ -692,16 +695,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         expr: &Expr,
         ty: &Type,
         is_in_function_scope: bool,
-    ) -> Option<NameAssignTypeForm> {
+    ) -> NameAssignTypeFormInfo {
         if annotation.is_some() || is_in_function_scope {
-            return None;
+            return NameAssignTypeFormInfo::default();
         }
-        let problem = self.annotation_syntax_problem(expr)?;
+        let Some(problem) = self.annotation_syntax_problem(expr) else {
+            return NameAssignTypeFormInfo::default();
+        };
         if matches!(
             ty,
             Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
         ) {
-            return Some(NameAssignTypeForm::RuntimeTypeValue);
+            return NameAssignTypeFormInfo::default();
         }
         if let Expr::Call(call) = expr
             && (self.call_has_synthesized_runtime_type(call)
@@ -709,9 +714,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     &self.expr_infer(&call.func, &self.error_swallower()),
                 ))
         {
-            return Some(NameAssignTypeForm::RuntimeTypeValue);
+            return NameAssignTypeFormInfo::default();
         }
-        Some(NameAssignTypeForm::InvalidImplicitAlias(problem.into()))
+        NameAssignTypeFormInfo::invalid_implicit_alias(problem.into())
+    }
+
+    fn name_assign_type_form_for_idx(
+        &self,
+        mut idx: Idx<Key>,
+        _errors: &ErrorCollector,
+    ) -> NameAssignTypeFormInfo {
+        let mut visited = SmallSet::new();
+        loop {
+            if !visited.insert(idx) {
+                unreachable!("cycle in binding chain while classifying implicit type alias syntax");
+            }
+            match self.bindings().get(idx) {
+                Binding::Forward(next)
+                | Binding::PromoteForward(next)
+                | Binding::ForwardToFirstUse(next)
+                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                Binding::NameAssign(name_assign) => {
+                    let ty =
+                        self.binding_to_type(self.bindings().get(idx), &self.error_swallower());
+                    return self.classify_name_assign_type_form(
+                        name_assign.annotation,
+                        &name_assign.expr,
+                        &ty,
+                        name_assign.is_in_function_scope,
+                    );
+                }
+                Binding::Import(import) => {
+                    return self
+                        .get_from_export_name_assign_type_form(
+                            import.0,
+                            None,
+                            &KeyExportNameAssignTypeForm(import.1.clone()),
+                        )
+                        .as_ref()
+                        .clone();
+                }
+                Binding::PossibleLegacyTParam(key, _) => {
+                    match (self.bindings().get(*key), &*self.get_idx(*key)) {
+                        (
+                            BindingLegacyTypeParam::ParamKeyed(next),
+                            LegacyTypeParameterLookup::NotParameter(_),
+                        ) => idx = *next,
+                        _ => return NameAssignTypeFormInfo::default(),
+                    }
+                }
+                _ => return NameAssignTypeFormInfo::default(),
+            }
+        }
     }
 
     fn annotation_name_assign_type_form(
@@ -719,7 +773,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &ruff_python_ast::ExprName,
     ) -> Option<NameAssignTypeForm> {
         let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        self.get(&key).name_assign_type_form().cloned()
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        self.name_assign_type_form_for_idx(idx, &self.error_swallower())
+            .as_ref()
+            .cloned()
+    }
+
+    pub fn name_assign_type_form_for_export(
+        &self,
+        binding: &BindingExport,
+        errors: &ErrorCollector,
+    ) -> NameAssignTypeFormInfo {
+        self.name_assign_type_form_for_idx(binding.key_idx(), errors)
     }
 
     fn expr_annotation(
@@ -4469,15 +4534,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> TypeInfo {
         let ty = self.binding_to_type(binding, errors);
-        let mut type_info = TypeInfo::of_ty(ty.clone());
-        if let Some(name_assign_type_form) = self.classify_name_assign_type_form(
-            name_assign.annotation,
-            name_assign.expr.as_ref(),
-            &ty,
-            name_assign.is_in_function_scope,
-        ) {
-            type_info = type_info.with_name_assign_type_form(name_assign_type_form);
-        }
+        let mut type_info = TypeInfo::of_ty(ty);
         let mut prefix = Vec::new();
         self.populate_dict_literal_facets(&mut type_info, &mut prefix, name_assign.expr.as_ref());
         type_info
@@ -4524,10 +4581,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range_if_scoped_params_exist,
                     errors,
                 ),
-            Binding::Import(x) => self
-                .get_from_export_type_info(x.0, None, &KeyExport(x.1.clone()))
-                .as_ref()
-                .clone(),
             _ => {
                 // All other Bindings model `Type` level operations where we do not
                 // propagate any attribute narrows.

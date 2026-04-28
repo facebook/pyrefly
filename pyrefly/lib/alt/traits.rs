@@ -67,6 +67,7 @@ use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyExportNameAssignTypeForm;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyTypeAlias;
@@ -82,6 +83,7 @@ use crate::binding::binding::UndecoratedFunctionRangeAnswer;
 use crate::error::collector::ErrorCollector;
 use crate::types::annotation::Annotation;
 use crate::types::class::Class;
+use crate::types::type_info::NameAssignTypeFormInfo;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::AnyStyle;
 use crate::types::types::TParams;
@@ -230,7 +232,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
         binding: &BindingExport,
         range: TextRange,
         errors: &ErrorCollector,
-    ) -> Arc<TypeInfo> {
+    ) -> Arc<Type> {
         let inner = match binding {
             BindingExport::Forward(idx) => Binding::Forward(*idx),
             BindingExport::PromoteForward(idx) => Binding::PromoteForward(*idx),
@@ -238,7 +240,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
                 Binding::AnnotatedType(*ann, Box::new(Binding::Forward(*idx)))
             }
         };
-        answers.solve_binding(&inner, range, errors)
+        Arc::new(answers.solve_binding(&inner, range, errors).arc_clone_ty())
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
@@ -248,7 +250,22 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
         // returning Unknown here avoids leaking a Var across module boundaries
         // in iterative-fixpoint SCC solving (where cross-module back-edges on
         // KeyExport would otherwise return a Type::Var from a foreign solver).
-        TypeInfo::of_ty(Type::Any(AnyStyle::Implicit))
+        Type::Any(AnyStyle::Implicit)
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyExportNameAssignTypeForm {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingExport,
+        _range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Arc<NameAssignTypeFormInfo> {
+        Arc::new(answers.name_assign_type_form_for_export(binding, errors))
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        NameAssignTypeFormInfo::default()
     }
 }
 

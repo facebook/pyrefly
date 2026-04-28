@@ -62,6 +62,7 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyExportNameAssignTypeForm;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::bindings::BindingEntry;
@@ -85,6 +86,7 @@ use crate::types::class::ClassFields;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 use crate::types::stdlib::Stdlib;
+use crate::types::type_info::NameAssignTypeFormInfo;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -2917,15 +2919,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         path: Option<&ModulePath>,
         k: &KeyExport,
     ) -> Arc<Type> {
-        Arc::new(self.get_from_export_type_info(module, path, k).ty().clone())
+        self.get_from_module(module, path, k).unwrap_or_else(|| {
+            panic!("We should have checked Exports before calling this, {module} {k:?}")
+        })
     }
 
-    pub fn get_from_export_type_info(
+    pub fn get_from_export_name_assign_type_form(
         &self,
         module: ModuleName,
         path: Option<&ModulePath>,
-        k: &KeyExport,
-    ) -> Arc<TypeInfo> {
+        k: &KeyExportNameAssignTypeForm,
+    ) -> Arc<NameAssignTypeFormInfo> {
         self.get_from_module(module, path, k).unwrap_or_else(|| {
             panic!("We should have checked Exports before calling this, {module} {k:?}")
         })

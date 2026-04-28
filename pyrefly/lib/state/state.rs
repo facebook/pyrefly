@@ -140,7 +140,6 @@ use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFields;
 use crate::types::stdlib::Stdlib;
-use crate::types::type_info::TypeInfo;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -216,6 +215,9 @@ impl ModuleChanges {
             AnyExportedKey::KeyExport(k) => {
                 self.0.names.entry(k.0).or_default();
             }
+            AnyExportedKey::KeyExportNameAssignTypeForm(k) => {
+                self.0.names.entry(k.0).or_default();
+            }
             // Classes and type aliases don't distinguish between existence and change.
             _ => self.add_key(key),
         }
@@ -273,6 +275,9 @@ impl ModuleDeps {
     fn add_key(&mut self, key: AnyExportedKey) {
         match key {
             AnyExportedKey::KeyExport(k) => {
+                self.names.entry(k.0).or_default().type_ = true;
+            }
+            AnyExportedKey::KeyExportNameAssignTypeForm(k) => {
                 self.names.entry(k.0).or_default().type_ = true;
             }
             AnyExportedKey::KeyTypeAlias(k) => {
@@ -1573,7 +1578,7 @@ impl<'a> Transaction<'a> {
         }
 
         let t = self.lookup_answer(module_data, &KeyExport(name.clone()), thread_state);
-        let class = match t.as_deref().map(TypeInfo::ty) {
+        let class = match t.as_deref() {
             Some(Type::ClassDef(cls)) => Some(cls.dupe()),
             ty => {
                 self.add_error(

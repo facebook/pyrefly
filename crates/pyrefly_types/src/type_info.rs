@@ -25,7 +25,7 @@ use crate::facet::FacetKind;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
-assert_bytes!(TypeInfo, 64);
+assert_bytes!(TypeInfo, 40);
 
 /// The style of a phi.
 ///
@@ -40,6 +40,35 @@ pub enum JoinStyle<T> {
     ReassignmentOf(T),
     // A merge where the name was already defined in the base flow, and was only narrowed.
     NarrowOf(T),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Visit, VisitMut, TypeEq)]
+pub enum NameAssignTypeForm {
+    InvalidImplicitAlias(Box<str>),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Visit, VisitMut, TypeEq)]
+pub struct NameAssignTypeFormInfo(Option<NameAssignTypeForm>);
+
+impl NameAssignTypeFormInfo {
+    pub fn invalid_implicit_alias(problem: Box<str>) -> Self {
+        Self(Some(NameAssignTypeForm::InvalidImplicitAlias(problem)))
+    }
+
+    pub fn as_ref(&self) -> Option<&NameAssignTypeForm> {
+        self.0.as_ref()
+    }
+}
+
+impl Display for NameAssignTypeFormInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) => {
+                write!(f, "InvalidImplicitAlias({problem})")
+            }
+            None => write!(f, "None"),
+        }
+    }
 }
 
 impl<T> JoinStyle<T> {
@@ -84,29 +113,17 @@ impl<T> JoinStyle<T> {
 pub struct TypeInfo {
     ty: Type,
     facets: Option<Box<NarrowedFacets>>,
-    name_assign_type_form: Option<NameAssignTypeForm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Visit, VisitMut, TypeEq)]
-pub enum NameAssignTypeForm {
-    RuntimeTypeValue,
-    InvalidImplicitAlias(Box<str>),
 }
 
 impl TypeInfo {
     pub fn of_ty(ty: Type) -> Self {
-        Self {
-            ty,
-            facets: None,
-            name_assign_type_form: None,
-        }
+        Self { ty, facets: None }
     }
 
     pub fn with_ty(self, ty: Type) -> Self {
         Self {
             ty,
             facets: self.facets,
-            name_assign_type_form: self.name_assign_type_form,
         }
     }
 
@@ -114,17 +131,7 @@ impl TypeInfo {
         Self {
             ty: f(self.ty),
             facets: self.facets,
-            name_assign_type_form: self.name_assign_type_form,
         }
-    }
-
-    pub fn with_name_assign_type_form(mut self, x: NameAssignTypeForm) -> Self {
-        self.name_assign_type_form = Some(x);
-        self
-    }
-
-    pub fn name_assign_type_form(&self) -> Option<&NameAssignTypeForm> {
-        self.name_assign_type_form.as_ref()
     }
 
     pub fn record_key_completion(&mut self, facets: &Vec1<FacetKind>, ty: Option<Type>) {
@@ -150,12 +157,10 @@ impl TypeInfo {
             Some(NarrowedFacet::WithoutRoot { facets, .. }) => Self {
                 ty: fallback(),
                 facets: Some(Box::new(facets.clone())),
-                name_assign_type_form: self.name_assign_type_form.clone(),
             },
             Some(NarrowedFacet::WithRoot(ty, narrowed_facets)) => Self {
                 ty: ty.clone(),
                 facets: Some(Box::new(narrowed_facets.clone())),
-                name_assign_type_form: self.name_assign_type_form.clone(),
             },
         }
     }
@@ -184,7 +189,7 @@ impl TypeInfo {
             n => {
                 let (tys, facets_branches): (Vec<Type>, Vec<Option<NarrowedFacets>>) = branches
                     .into_iter()
-                    .map(|TypeInfo { ty, facets, .. }| (ty, facets.map(|x| *x)))
+                    .map(|TypeInfo { ty, facets }| (ty, facets.map(|x| *x)))
                     .unzip();
                 let ty = join_types(
                     tys,
@@ -209,7 +214,6 @@ impl TypeInfo {
                 Self {
                     ty,
                     facets: facets.map(Box::new),
-                    name_assign_type_form: None,
                 }
             }
         }
