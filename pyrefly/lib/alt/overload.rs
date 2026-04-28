@@ -239,6 +239,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         // If we're constructing a class, its type arguments. A successful call will fill these in.
         ctor_targs: Option<&mut TArgs>,
+        record_trace: bool,
     ) -> (Type, Callable) {
         // There may be Expr values in args and keywords.
         // If we infer them for each overload, we may end up inferring them multiple times.
@@ -353,23 +354,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *targs = chosen_targs;
         }
-        // Record the closest overload to power IDE services.
-        let mut overload_trace = |target: &TargetWithTParams<Function>| {
-            let tparams = target
-                .0
-                .as_ref()
-                .filter(|tparams| !tparams.is_empty())
-                .cloned();
-            OverloadTrace::new(target.1.signature.clone(), tparams)
-        };
-        let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
-        let closest_overload_trace = overload_trace(closest_overload.func);
-        self.record_overload_trace(
-            arguments_range,
-            all_overload_traces,
-            closest_overload_trace,
-            matched,
-        );
+        if record_trace {
+            // Record the closest overload to power IDE services.
+            let mut overload_trace = |target: &TargetWithTParams<Function>| {
+                let tparams = target
+                    .0
+                    .as_ref()
+                    .filter(|tparams| !tparams.is_empty())
+                    .cloned();
+                OverloadTrace::new(target.1.signature.clone(), tparams)
+            };
+            let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
+            let closest_overload_trace = overload_trace(closest_overload.func);
+            self.record_overload_trace(
+                arguments_range,
+                all_overload_traces,
+                closest_overload_trace,
+                matched,
+            );
+        }
         if matched {
             // If the selected overload is deprecated, we log a deprecation error.
             if let Some(deprecation) = &closest_overload.func.1.metadata.flags.deprecation {
