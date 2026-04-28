@@ -2289,6 +2289,52 @@ def test_empty_not_in(e: Empty, k: str):
 );
 
 testcase!(
+    test_typed_dict_union_subject_contains_narrowing,
+    r#"
+from typing import TypedDict, assert_type
+
+class Foo(TypedDict, closed=True):
+    a: int
+
+class Bar(TypedDict, closed=True):
+    b: int
+
+def test(foo: Foo | Bar) -> None:
+    if "a" in foo:
+        assert_type(foo, Foo)
+        assert_type(foo["a"], int)
+    else:
+        assert_type(foo, Bar)
+        assert_type(foo["b"], int)
+"#,
+);
+
+testcase!(
+    test_typed_dict_open_contains_narrowing,
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict):
+    x: int
+
+class TD2(TypedDict):
+    x: int
+    y: int
+
+def test(td: TD) -> None:
+    if "y" in td:
+        assert_type(td["y"], object)
+
+def test_union(td: TD | TD2) -> None:
+    if "y" in td:
+        assert_type(td, TD | TD2)
+        assert_type(td["y"], object)
+    else:
+        assert_type(td, TD)
+"#,
+);
+
+testcase!(
     test_illegal_unpacking_in_def,
     r#"
 from typing import TypedDict
