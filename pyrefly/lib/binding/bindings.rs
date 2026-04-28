@@ -521,9 +521,12 @@ impl Bindings {
     }
 
     pub fn function_def_has_return_annotation(&self, def_index: FuncDefIndex) -> bool {
-        let short_identifier = self
-            .get(self.key_to_idx(&KeyUndecoratedFunctionRange(def_index)))
-            .0;
+        let Some(idx) =
+            self.key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))
+        else {
+            return false;
+        };
+        let short_identifier = self.get(idx).0;
         self.function_has_return_annotation_at_short_identifier(short_identifier)
     }
 
