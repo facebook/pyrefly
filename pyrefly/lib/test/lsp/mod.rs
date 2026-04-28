@@ -13,6 +13,7 @@ mod completion;
 mod declaration;
 mod definition;
 mod diagnostic;
+mod document_highlight;
 mod document_symbols;
 mod folding_ranges;
 mod hover;

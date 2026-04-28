@@ -4651,11 +4651,18 @@ impl Server {
                 .find_local_references(&handle, position, true)
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
-                    kind: Some(if transaction.local_reference_is_write(&handle, range) {
-                        DocumentHighlightKind::WRITE
-                    } else {
-                        DocumentHighlightKind::READ
-                    }),
+                    kind: Some(
+                        if transaction
+                            .identifier_at(&handle, range.start())
+                            .expect("local references should point at identifiers")
+                            .context
+                            .is_write()
+                        {
+                            DocumentHighlightKind::WRITE
+                        } else {
+                            DocumentHighlightKind::READ
+                        },
+                    ),
                 }),
         ))
     }

@@ -343,6 +343,28 @@ pub(crate) enum IdentifierContext {
     MutableCapture,
 }
 
+impl IdentifierContext {
+    pub(crate) fn is_write(&self) -> bool {
+        matches!(
+            self,
+            IdentifierContext::Expr(ExprContext::Store | ExprContext::Del)
+                | IdentifierContext::Attribute {
+                    expr_context: ExprContext::Store | ExprContext::Del,
+                    ..
+                }
+                | IdentifierContext::ImportedModule { .. }
+                | IdentifierContext::ImportedName { .. }
+                | IdentifierContext::FunctionDef { .. }
+                | IdentifierContext::MethodDef { .. }
+                | IdentifierContext::ClassDef { .. }
+                | IdentifierContext::Parameter
+                | IdentifierContext::TypeParameter
+                | IdentifierContext::ExceptionHandler
+                | IdentifierContext::PatternMatch(_)
+        )
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct IdentifierWithContext {
     pub(crate) identifier: Identifier,
@@ -2915,29 +2937,6 @@ impl<'a> Transaction<'a> {
             },
         )
         .concat()
-    }
-
-    pub fn local_reference_is_write(&self, handle: &Handle, range: TextRange) -> bool {
-        matches!(
-            self.identifier_at(handle, range.start()),
-            Some(IdentifierWithContext {
-                context: IdentifierContext::Expr(ExprContext::Store | ExprContext::Del)
-                    | IdentifierContext::Attribute {
-                        expr_context: ExprContext::Store | ExprContext::Del,
-                        ..
-                    }
-                    | IdentifierContext::ImportedModule { .. }
-                    | IdentifierContext::ImportedName { .. }
-                    | IdentifierContext::FunctionDef { .. }
-                    | IdentifierContext::MethodDef { .. }
-                    | IdentifierContext::ClassDef { .. }
-                    | IdentifierContext::Parameter
-                    | IdentifierContext::TypeParameter
-                    | IdentifierContext::ExceptionHandler
-                    | IdentifierContext::PatternMatch(_),
-                ..
-            })
-        )
     }
 
     fn local_references_from_external_definition(
