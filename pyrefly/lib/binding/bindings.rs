@@ -552,19 +552,9 @@ impl Bindings {
         }
     }
 
-<<<<<<< HEAD
-    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
-        let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
-        if let Binding::ReturnType(r) = b {
-||||||| parent of 9e4f6adef (fix FP)
-    pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
-        let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
-        if let Binding::ReturnType(box r) = b {
-=======
     fn function_has_return_annotation_at_short_identifier(&self, name: ShortIdentifier) -> bool {
         let b = self.get(self.key_to_idx(&Key::ReturnType(name)));
-        if let Binding::ReturnType(box r) = b {
->>>>>>> 9e4f6adef (fix FP)
+        if let Binding::ReturnType(r) = b {
             r.kind.has_return_annotation()
         } else if matches!(b, Binding::Any(_)) {
             // This happens when we have an un-annotated return & the inference behavior is "skip and infer Any"
@@ -586,9 +576,12 @@ impl Bindings {
     }
 
     pub fn function_def_has_return_annotation(&self, def_index: FuncDefIndex) -> bool {
-        let short_identifier = self
-            .get(self.key_to_idx(&KeyUndecoratedFunctionRange(def_index)))
-            .0;
+        let Some(idx) =
+            self.key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))
+        else {
+            return false;
+        };
+        let short_identifier = self.get(idx).0;
         self.function_has_return_annotation_at_short_identifier(short_identifier)
     }
 
