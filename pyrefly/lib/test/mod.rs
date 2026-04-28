@@ -66,6 +66,7 @@ mod returns;
 mod scope;
 mod semantic_syntax_errors;
 mod simple;
+mod sklearn;
 mod slots;
 mod state;
 mod subscript_narrow;
