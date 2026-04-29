@@ -496,9 +496,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         &mut self,
         l_params: &Params,
         u_params: &Params,
-        _call_context: &CallContext,
+        call_context: &CallContext,
     ) -> Result<(), SubsetError> {
-        self.is_subset_params(l_params, u_params)
+        self.with_active_call_context(call_context, |me| me.is_subset_params(l_params, u_params))
     }
 
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
@@ -2114,11 +2114,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Forall(forall), _) => {
                 // Finalizing the quantified vars returns instantiation errors
                 let (vs, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
-                let witness_context = self.make_forall_witness_context(&vs, want);
+                let mut witness_context = self.make_forall_witness_context(&vs, want);
                 let result = self.is_subset_eq_with_context(&got, want, &witness_context);
                 if result.is_ok()
-                    && let Some(witness) = witness_context.residual_witness()
+                    && let Some(witness) = witness_context.residual_witness_mut()
                 {
+                    if let Some(deferred_vars) =
+                        self.take_witness_deferred_vars(witness.witness_id())
+                    {
+                        witness.extend_deferred_vars(deferred_vars);
+                    }
                     self.solver.record_generic_residuals_for_witness(witness);
                 }
                 result.and(

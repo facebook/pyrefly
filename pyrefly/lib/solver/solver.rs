@@ -1982,6 +1982,7 @@ impl Solver {
             subset_cache: SmallMap::new(),
             class_protocol_assumptions: SmallSet::new(),
             coinductive_assumptions_used: false,
+            witness_deferred_vars: SmallMap::new(),
             next_witness_context_id: 0,
         }
     }
@@ -2252,6 +2253,16 @@ pub struct ResidualWitnessContext {
     deferred_vars: SmallSet<Var>,
 }
 
+impl ResidualWitnessContext {
+    pub(crate) fn witness_id(&self) -> usize {
+        self.identity.witness_id
+    }
+
+    pub(crate) fn extend_deferred_vars(&mut self, vars: SmallSet<Var>) {
+        self.deferred_vars.extend(vars);
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct CallContext {
     witness: Option<ResidualWitnessContext>,
@@ -2276,7 +2287,11 @@ impl CallContext {
         self.witness.as_ref()
     }
 
-    pub fn with_preserved_polarity(&self) -> Self {
+    pub fn residual_witness_mut(&mut self) -> Option<&mut ResidualWitnessContext> {
+        self.witness.as_mut()
+    }
+
+    pub(crate) fn with_preserved_polarity(&self) -> Self {
         self.clone()
     }
 
@@ -2339,6 +2354,7 @@ pub struct Subset<'a, Ans: LookupAnswer> {
     /// the current computation. Used to avoid caching protocol results in the
     /// persistent cross-call cache when they depend on coinductive assumptions.
     pub coinductive_assumptions_used: bool,
+    witness_deferred_vars: SmallMap<usize, SmallSet<Var>>,
     next_witness_context_id: usize,
 }
 
@@ -2412,6 +2428,41 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         self.gas.restore();
         self.active_call_context = old_context;
         res
+    }
+
+    pub(crate) fn with_active_call_context<T>(
+        &mut self,
+        call_context: &CallContext,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let old_context = mem::replace(&mut self.active_call_context, call_context.clone());
+        let res = f(self);
+        self.active_call_context = old_context;
+        res
+    }
+
+    pub(crate) fn take_witness_deferred_vars(
+        &mut self,
+        witness_id: usize,
+    ) -> Option<SmallSet<Var>> {
+        self.witness_deferred_vars.shift_remove(&witness_id)
+    }
+
+    fn record_deferred_residual_target_vars(&mut self, origin_var: Var, other: &Type) {
+        let Some(witness) = self.active_call_context.residual_witness_mut() else {
+            return;
+        };
+        if !witness.origin_vars.contains(&origin_var) {
+            return;
+        }
+        let witness_id = witness.identity.witness_id;
+        let target_vars = witness.identity.target_vars.clone();
+        let deferred_vars = self.witness_deferred_vars.entry(witness_id).or_default();
+        for var in other.collect_maybe_placeholder_vars() {
+            if target_vars.contains(&var) {
+                deferred_vars.insert(var);
+            }
+        }
     }
 
     /// For a constrained TypeVar, find the narrowest constraint that `ty` is assignable to.
@@ -2540,6 +2591,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         match (got, want) {
             _ if got == want => Ok(()),
             (Type::Var(v1), Type::Var(v2)) => {
+                self.record_deferred_residual_target_vars(*v1, want);
+                self.record_deferred_residual_target_vars(*v2, got);
                 let variables = self.solver.variables.lock();
                 // Variable unification is destructive, so we have to copy bounds first.
                 let root1 = variables.get_root(*v1);
@@ -2712,6 +2765,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
             }
             (Type::Var(v1), t2) => {
+                self.record_deferred_residual_target_vars(*v1, t2);
                 let variables = self.solver.variables.lock();
                 let v1_ref = variables.get(*v1);
                 match &*v1_ref {
@@ -2840,6 +2894,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
             }
             (t1, Type::Var(v2)) => {
+                self.record_deferred_residual_target_vars(*v2, t1);
                 let variables = self.solver.variables.lock();
                 let v2_ref = variables.get(*v2);
                 match &*v2_ref {

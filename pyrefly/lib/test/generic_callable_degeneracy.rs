@@ -91,8 +91,7 @@ reveal_type(out_b)  # E: revealed type: str
 "#,
 );
 
-// Passing a generic function through a ParamSpec wrapper loses generic structure.
-// The result is a partial callable; calling it with a concrete arg pins the types.
+// Passing a generic function through a ParamSpec wrapper preserves generic structure.
 testcase!(
     test_paramspec_wrap_generic,
     r#"
@@ -142,8 +141,6 @@ reveal_type(out_c)  # E: revealed type: () -> Any
 "#,
 );
 
-// Concatenate preserves generic structure, but parameter/return correlation is
-// still degraded through Unknown in the parameter slot.
 testcase!(
     test_concatenate_preserves_generic_param,
     r#"
@@ -160,8 +157,6 @@ reveal_type(called)  # E: revealed type: str
 "#,
 );
 
-// ParamSpec pins to first overload instead of preserving overload structure.
-// This is the core bug from GitHub issue #2105.
 testcase!(
     bug = "ParamSpec pins to first overload (issue #2105)",
     test_overload_paramspec_pins_first,
