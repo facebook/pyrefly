@@ -4726,6 +4726,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub(crate) fn resolve_descriptor_get_from_raw_type(
+        &self,
+        attr_name: &Name,
+        ty: &Type,
+        base: DescriptorBase,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Type::ClassType(cls) = ty else {
+            return None;
+        };
+        let getter = self
+            .get_class_member(cls.class_object(), &dunder::GET)
+            .is_some();
+        if !getter {
+            return None;
+        }
+        let setter = self
+            .get_class_member(cls.class_object(), &dunder::SET)
+            .is_some();
+        self.resolve_get_class_attr(
+            attr_name,
+            ClassAttribute::descriptor(
+                Descriptor {
+                    range,
+                    cls: cls.clone(),
+                    getter,
+                    setter,
+                },
+                base,
+            ),
+            range,
+            errors,
+            None,
+        )
+        .ok()
+    }
+
     fn resolve_descriptor_getter(
         &self,
         attr_name: &Name,
