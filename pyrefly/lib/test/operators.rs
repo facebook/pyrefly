@@ -43,6 +43,19 @@ class A(Generic[N]):
 );
 
 testcase!(
+    test_preserve_constrained_typevar_through_binop,
+    r#"
+from typing import TypeVar
+
+T = TypeVar("T", str, int)
+
+def foo(a: T) -> T:
+    doubled = 2 * a
+    return a + doubled
+"#,
+);
+
+testcase!(
     test_bound_typevar_comparison,
     r#"
 def f1[T: int | float](x: T, y: T) -> bool:
