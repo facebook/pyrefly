@@ -11,7 +11,6 @@ use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 
-use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
 use pyrefly_util::display::Fmt;
@@ -36,6 +35,7 @@ use crate::type_alias::TypeAliasRef;
 use crate::type_alias::TypeAliasStyle;
 use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
+use crate::type_output::TypeLabelPart;
 use crate::type_output::TypeOutput;
 use crate::type_var::Restriction;
 use crate::typed_dict::TypedDict;
@@ -338,11 +338,12 @@ impl<'a> TypeDisplayContext<'a> {
         name: &str,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        if self.always_display_module_name {
-            output.write_str(module)?;
-            output.write_str(".")?;
-        }
-        output.write_str(name)
+        let module_name = ModuleName::from_str(module);
+        output.write_symbol(
+            module_name,
+            std::borrow::Cow::Borrowed(name),
+            self.always_display_module_name,
+        )
     }
 
     /// Helper function to format a sequence of types with a separator.
@@ -1079,7 +1080,11 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)
             }
             Type::Concatenate(args, pspec) => {
-                self.maybe_fmt_with_module("typing", "Concatenate", output)?;
+                if self.always_display_module_name {
+                    output.write_str("typing.")?;
+                }
+                let qname = self.get_special_form_qname("Concatenate");
+                output.write_builtin("Concatenate", qname)?;
                 output.write_str("[")?;
                 write!(
                     output,
@@ -1129,7 +1134,13 @@ impl<'a> TypeDisplayContext<'a> {
             Type::SpecialForm(x) => write!(output, "{x}"),
             Type::Ellipsis => output.write_str("Ellipsis"),
             Type::Any(style) => match style {
-                AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),
+                AnyStyle::Explicit => {
+                    if self.always_display_module_name {
+                        output.write_str("typing.")?;
+                    }
+                    let qname = self.get_special_form_qname("Any");
+                    output.write_builtin("Any", qname)
+                }
                 AnyStyle::Implicit | AnyStyle::Error => output.write_str("Unknown"),
             },
             Type::TypeAlias(ta) => match &**ta {
@@ -1283,10 +1294,7 @@ impl Type {
         rendered
     }
 
-    pub fn get_types_with_locations(
-        &self,
-        stdlib: Option<&Stdlib>,
-    ) -> Vec<(String, Option<TextRangeWithModule>)> {
+    pub fn get_types_with_locations(&self, stdlib: Option<&Stdlib>) -> Vec<TypeLabelPart> {
         let mut ctx = TypeDisplayContext::new(&[self]);
         if let Some(s) = stdlib {
             ctx.set_stdlib(s);
@@ -1324,6 +1332,7 @@ pub mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_python::sys_info::PythonVersion;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
     use vec1::vec1;
@@ -1336,6 +1345,7 @@ pub mod tests {
     use crate::callable::Param;
     use crate::callable::ParamList;
     use crate::callable::Params;
+    use crate::callable::PrefixParam;
     use crate::callable::Required;
     use crate::class::Class;
     use crate::class::ClassDefIndex;
@@ -1349,6 +1359,7 @@ pub mod tests {
     use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
     use crate::quantified::QuantifiedOrigin;
+    use crate::stdlib::Stdlib;
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
     use crate::type_alias::TypeAliasData;
@@ -1411,6 +1422,30 @@ pub mod tests {
             None,
             PreInferenceVariance::Invariant,
         )
+    }
+
+    fn fake_module(name: &str) -> Module {
+        Module::new(
+            ModuleName::from_str(name),
+            ModulePath::filesystem(PathBuf::from(name)),
+            Arc::new("1234567890".to_owned()),
+        )
+    }
+
+    fn fake_special_form_stdlib(special_forms: &[(&'static str, u32)]) -> Stdlib {
+        Stdlib::new(PythonVersion::default(), &|_, _| None, &|module, name| {
+            special_forms
+                .iter()
+                .find(|(special_form, _)| {
+                    module == ModuleName::typing() && name.as_str() == *special_form
+                })
+                .map(|(_, range)| {
+                    (
+                        fake_module("typing"),
+                        TextRange::empty(TextSize::new(*range)),
+                    )
+                })
+        })
     }
 
     fn fake_bound_method(method_name: &str, class_name: &str, module_name_str: &str) -> Type {
@@ -2234,32 +2269,34 @@ def overloaded_func[T](
     }
 
     // Helper functions for testing get_types_with_location
-    fn get_parts(t: &Type) -> Vec<(String, Option<TextRangeWithModule>)> {
+    fn get_parts(t: &Type) -> Vec<TypeLabelPart> {
         let ctx = TypeDisplayContext::new(&[t]);
         let output = ctx.get_types_with_location(t, false);
         output.parts().to_vec()
     }
 
-    fn parts_to_string(parts: &[(String, Option<TextRangeWithModule>)]) -> String {
-        parts.iter().map(|(s, _)| s.as_str()).collect::<String>()
+    fn get_parts_with_stdlib(t: &Type, stdlib: &Stdlib) -> Vec<TypeLabelPart> {
+        t.get_types_with_locations(Some(stdlib))
     }
 
-    fn assert_part_has_location(
-        parts: &[(String, Option<TextRangeWithModule>)],
-        name: &str,
-        module: &str,
-        position: u32,
-    ) {
-        let part = parts.iter().find(|(s, _)| s == name);
+    fn parts_to_string(parts: &[TypeLabelPart]) -> String {
+        parts
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect::<String>()
+    }
+
+    fn assert_part_has_location(parts: &[TypeLabelPart], name: &str, module: &str, position: u32) {
+        let part = parts.iter().find(|part| part.text == name);
         assert!(part.is_some(), "Should have {} in parts", name);
-        let (_, location) = part.unwrap();
-        assert!(location.is_some(), "{} should have location", name);
-        let loc = location.as_ref().unwrap();
+        let loc = part.unwrap().location.as_ref();
+        assert!(loc.is_some(), "{} should have location", name);
+        let loc = loc.unwrap();
         assert_eq!(loc.module.name().as_str(), module);
         assert_eq!(loc.range.start().to_u32(), position);
     }
 
-    fn assert_output_contains(parts: &[(String, Option<TextRangeWithModule>)], needle: &str) {
+    fn assert_output_contains(parts: &[TypeLabelPart], needle: &str) {
         let full_str = parts_to_string(parts);
         assert!(
             full_str.contains(needle),
@@ -2287,9 +2324,28 @@ def overloaded_func[T](
         let t = Type::ClassType(ClassType::new(foo, TArgs::new(tparams, vec![inner_type])));
         let parts = get_parts(&t);
 
-        assert_eq!(parts[0].0, "Foo");
+        assert_eq!(parts[0].text, "Foo");
         assert_part_has_location(&parts, "Foo", "test.module", 10);
-        assert!(parts.iter().any(|(s, _)| s == "Bar"), "Should have Bar");
+        assert!(
+            parts.iter().any(|part| part.text == "Bar"),
+            "Should have Bar"
+        );
+    }
+
+    #[test]
+    fn test_get_types_with_location_typevar() {
+        let heap = TypeHeap::new();
+        let tvar = fake_tyvar("T", "test.module", 15);
+        let t = tvar.to_type(&heap);
+        let parts = get_parts(&t);
+
+        let typevar_part = parts.iter().find(|part| part.text == "TypeVar");
+        assert!(typevar_part.is_some(), "Should have TypeVar in parts");
+        assert!(
+            typevar_part.unwrap().location.is_none(),
+            "TypeVar should not have location"
+        );
+        assert_part_has_location(&parts, "T", "test.module", 15);
     }
 
     #[test]
@@ -2304,8 +2360,14 @@ def overloaded_func[T](
         let parts1 = ctx.get_types_with_location(&t1, false).parts().to_vec();
         let parts2 = ctx.get_types_with_location(&t2, false).parts().to_vec();
 
-        let loc1 = parts1.iter().find_map(|(_, loc)| loc.as_ref()).unwrap();
-        let loc2 = parts2.iter().find_map(|(_, loc)| loc.as_ref()).unwrap();
+        let loc1 = parts1
+            .iter()
+            .find_map(|part| part.location.as_ref())
+            .unwrap();
+        let loc2 = parts2
+            .iter()
+            .find_map(|part| part.location.as_ref())
+            .unwrap();
         assert_ne!(
             loc1.range.start().to_u32(),
             loc2.range.start().to_u32(),
@@ -2320,6 +2382,11 @@ def overloaded_func[T](
 
         assert_output_contains(&parts, "Literal");
         assert_output_contains(&parts, "True");
+        let literal_part = parts.iter().find(|part| part.text == "Literal");
+        assert!(literal_part.is_some());
+        let literal_part = literal_part.unwrap();
+        assert!(literal_part.location.is_none());
+        assert!(literal_part.symbol.is_none());
     }
 
     #[test]
@@ -2343,8 +2410,8 @@ def overloaded_func[T](
         let parts = get_parts(&t);
 
         assert_eq!(parts.len(), 1);
-        assert_eq!(parts[0].0, "None");
-        assert!(parts[0].1.is_none(), "None should not have location");
+        assert_eq!(parts[0].text, "None");
+        assert!(parts[0].location.is_none(), "None should not have location");
     }
 
     #[test]
@@ -2369,7 +2436,11 @@ def overloaded_func[T](
         for param in &["T", "U", "Ts"] {
             assert_output_contains(&parts, param);
         }
-        assert!(parts.iter().any(|(s, loc)| s == "[" && loc.is_none()));
+        assert!(
+            parts
+                .iter()
+                .any(|part| part.text == "[" && part.location.is_none())
+        );
         assert!(parts_to_string(&parts).starts_with('['));
         assert_output_contains(&parts, "](");
     }
@@ -2399,7 +2470,7 @@ def overloaded_func[T](
         for expected in &["Literal", "Color", "RED"] {
             assert_output_contains(&parts, expected);
         }
-        assert!(parts.iter().any(|(_, loc)| loc.is_some()));
+        assert!(parts.iter().any(|part| part.location.is_some()));
     }
 
     #[test]
@@ -2516,6 +2587,37 @@ def overloaded_func[T](
 
         assert_output_contains(&parts, "ParamSpec");
         assert_part_has_location(&parts, "P", "test.module", 75);
+    }
+
+    #[test]
+    fn test_get_types_with_location_explicit_any_special_form() {
+        let stdlib = fake_special_form_stdlib(&[("Any", 101)]);
+        let parts = get_parts_with_stdlib(&Type::any_explicit(), &stdlib);
+
+        assert_part_has_location(&parts, "Any", "typing", 101);
+    }
+
+    #[test]
+    fn test_get_types_with_location_annotated_special_form() {
+        let stdlib = fake_special_form_stdlib(&[("Annotated", 102)]);
+        let parts = get_parts_with_stdlib(
+            &Type::Annotated(Box::new(Type::None), Box::new([])),
+            &stdlib,
+        );
+
+        assert_part_has_location(&parts, "Annotated", "typing", 102);
+    }
+
+    #[test]
+    fn test_get_types_with_location_concatenate_special_form() {
+        let stdlib = fake_special_form_stdlib(&[("Concatenate", 103)]);
+        let t = Type::Concatenate(
+            vec![PrefixParam::new(Type::None, Required::Required)].into_boxed_slice(),
+            Box::new(Type::Ellipsis),
+        );
+        let parts = get_parts_with_stdlib(&t, &stdlib);
+
+        assert_part_has_location(&parts, "Concatenate", "typing", 103);
     }
 
     #[test]

@@ -29,6 +29,9 @@ use crate::types::Type;
 /// These are defined as annotated assignments in typing.pyi (e.g., `Literal: _SpecialForm`)
 /// rather than as classes, so they require special handling.
 const SPECIAL_FORM_NAMES: &[&str] = &[
+    "Annotated",
+    "Any",
+    "Concatenate",
     "Literal",
     "LiteralString",
     "Never",
