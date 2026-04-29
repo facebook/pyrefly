@@ -697,6 +697,17 @@ impl Solver {
         Forallable::Callable(callable).forall(Arc::new(TParams::new(tparams)))
     }
 
+    fn promote_function_to_forall(&self, func: Function) -> Type {
+        let callable_ty = self
+            .heap
+            .mk_callable(func.signature.params.clone(), func.signature.ret.clone());
+        let mut tparams = Vec::new();
+        callable_ty.for_each_quantified(&mut |q| tparams.push(q.clone()));
+        tparams.sort();
+        tparams.dedup();
+        Forallable::Function(func).forall(Arc::new(TParams::new(tparams)))
+    }
+
     fn generic_residual_quantified(&self, residual: &CallableResidual) -> Quantified {
         let CallableResidualKind::Generic { quantified } = &residual.kind;
         quantified.clone()
@@ -792,6 +803,67 @@ impl Solver {
                     }
                 } else {
                     (changed, false)
+                }
+            }
+            Type::Function(function) => {
+                let mut signature = function.signature.clone();
+                let (changed, consumed_residual) = self.finalize_callable_residuals_mut(
+                    &mut signature.ret,
+                    true,
+                    preserve_class_targs,
+                );
+                let (params_changed, params_consumed) = match &mut signature.params {
+                    Params::List(params) => {
+                        let mut any_changed = false;
+                        let mut any_consumed = false;
+                        for param in params.items_mut() {
+                            let (param_changed, param_consumed) = self
+                                .finalize_callable_residuals_mut(
+                                    param.as_type_mut(),
+                                    true,
+                                    preserve_class_targs,
+                                );
+                            any_changed |= param_changed;
+                            any_consumed |= param_consumed;
+                        }
+                        (any_changed, any_consumed)
+                    }
+                    Params::ParamSpec(prefix, p) => {
+                        let mut any_changed = false;
+                        let mut any_consumed = false;
+                        for prefix_param in prefix.iter_mut() {
+                            let prefix_ty = match prefix_param {
+                                PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
+                            };
+                            let (prefix_changed, prefix_consumed) = self
+                                .finalize_callable_residuals_mut(
+                                    prefix_ty,
+                                    true,
+                                    preserve_class_targs,
+                                );
+                            any_changed |= prefix_changed;
+                            any_consumed |= prefix_consumed;
+                        }
+                        let (paramspec_changed, paramspec_consumed) =
+                            self.finalize_callable_residuals_mut(p, true, preserve_class_targs);
+                        any_changed |= paramspec_changed;
+                        any_consumed |= paramspec_consumed;
+                        (any_changed, any_consumed)
+                    }
+                    Params::Ellipsis | Params::Materialization => (false, false),
+                };
+                let changed = changed | params_changed;
+                let consumed_residual = consumed_residual | params_consumed;
+                if !changed {
+                    return (false, false);
+                }
+                function.signature = signature;
+                if consumed_residual && !callable_slot {
+                    let promoted = self.promote_function_to_forall((**function).clone());
+                    *ty = promoted;
+                    (true, true)
+                } else {
+                    (true, consumed_residual)
                 }
             }
             Type::ClassType(_) if preserve_class_targs && !callable_slot => (false, false),
@@ -1536,6 +1608,14 @@ impl Solver {
     fn solve_one_bounds(&self, mut bounds: Vec<Type>) -> Option<Type> {
         if bounds.is_empty() {
             return None;
+        }
+        // Callable residual bounds are fallback-only. If we also learned a concrete
+        // non-Any bound, prefer that and discard residual markers.
+        if bounds
+            .iter()
+            .any(|t| !t.is_any() && !matches!(t, Type::CallableResidual(_)))
+        {
+            bounds.retain(|t| !t.is_any() && !matches!(t, Type::CallableResidual(_)));
         }
         // Keeping `Any` bounds causes `Any` to propagate to too many places,
         // so we filter them out unless `Any` is the only solution.

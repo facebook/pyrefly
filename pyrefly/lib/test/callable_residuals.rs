@@ -267,7 +267,6 @@ reveal_type(called)  # E: revealed type: int
 );
 
 testcase!(
-    bug = "Wrapper.__call__ with P.args / P.kwargs does not preserve generic behavior yet",
     test_callable_class_wrapper,
     r#"
 from typing import Callable, reveal_type
@@ -284,10 +283,10 @@ def wrap[**P, R](f: Callable[P, R]) -> Wrapper[P, R]:
 
 def f[S](x: S) -> S: ...
 wrapper = wrap(f)
-reveal_type(wrapper)  # E: revealed type: Wrapper[[x: Unknown], Unknown]
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
 result = wrapper(1)
-reveal_type(result)  # E: revealed type: Unknown
+reveal_type(result)  # E: revealed type: int
 "#,
 );
 
