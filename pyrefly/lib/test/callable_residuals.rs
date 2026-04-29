@@ -501,6 +501,50 @@ result(1, 1)  # E: Argument `Literal[1]` is not assignable to parameter with typ
 "#,
 );
 
+testcase!(
+    bug = "Overload branch selection commits to first branch in wrapped Callable returns",
+    test_typevar_overloaded_return_wraps_argument,
+    r#"
+from typing import Callable, overload, reveal_type
+def higher_order[A, R](x: Callable[[A], R]) -> Callable[[list[A]], R]: ...
+
+@overload
+def f(x: int) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `None`
+@overload
+def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to implementation return type `None`
+def f(x): ...
+
+result = higher_order(f)
+reveal_type(result)  # E: revealed type: (list[int]) -> str
+out_a = result([1])
+reveal_type(out_a)  # E: revealed type: str
+out_b = result(["ok"])  # E: Argument `list[str]` is not assignable to parameter with type `list[int]`
+reveal_type(out_b)  # E: revealed type: str
+"#,
+);
+
+testcase!(
+    bug = "Overload branch selection commits to first branch in wrapped Callable returns",
+    test_typevar_overloaded_return_wraps_return,
+    r#"
+from typing import Callable, overload, reveal_type
+def higher_order[A, R](x: Callable[[A], R]) -> Callable[[A], list[R]]: ...
+
+@overload
+def f(x: int) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `None`
+@overload
+def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to implementation return type `None`
+def f(x): ...
+
+result = higher_order(f)
+reveal_type(result)  # E: revealed type: (int) -> list[str]
+out_a = result(1)
+reveal_type(out_a)  # E: revealed type: list[str]
+out_b = result("ok")  # E: Argument `Literal['ok']` is not assignable to parameter with type `int`
+reveal_type(out_b)  # E: revealed type: list[str]
+"#,
+);
+
 // Regression tests for https://github.com/facebook/pyrefly/issues/2105
 // Overloaded callable protocol passed to higher-order function with ParamSpec.
 // The solver commits to one overload branch too early and rejects valid calls.
