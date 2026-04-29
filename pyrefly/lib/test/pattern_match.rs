@@ -477,6 +477,23 @@ def test_seq_pat_with_union(x: int | Sequence[int]) -> None:
 );
 
 testcase!(
+    test_sequence_pattern_alias_exhaustive,
+    r#"
+from typing import assert_never
+
+def f(value: float | tuple[float, float]) -> None:
+    match value:
+        case (_, _):
+            pass
+        case float():
+            pass
+        case _ as unreachable:
+            assert_never(value)
+            assert_never(unreachable)
+"#,
+);
+
+testcase!(
     test_exhaustive_bool_match_warning,
     r#"
 def describe(flag: bool):
