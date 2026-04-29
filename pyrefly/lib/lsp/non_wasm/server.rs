@@ -609,8 +609,7 @@ impl Connection {
         pipe_name: &str,
     ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
         use std::fs::OpenOptions;
-        let path = format!(r"\\.\pipe\{}", pipe_name);
-        let stream = OpenOptions::new().read(true).write(true).open(&path)?;
+        let stream = OpenOptions::new().read(true).write(true).open(&pipe_name)?;
         let reader = stream.try_clone()?;
         Ok((Box::new(stream), Box::new(reader)))
     }
