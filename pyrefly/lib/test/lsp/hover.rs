@@ -901,6 +901,56 @@ from lib import bar as baz
 }
 
 #[test]
+fn hover_on_qualified_type_alias_in_parameter_annotation() {
+    let utils = r#"
+from typing import Annotated, TypeAlias
+
+ValueRange: TypeAlias = Annotated[int, "value range"]
+"#;
+    let code = r#"
+import utils
+
+def takes(x: utils.ValueRange) -> None: ...
+#                  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("utils", utils)], get_test_report);
+    assert!(
+        !report.contains("\nNone\n"),
+        "Expected hover for qualified type alias in annotation, got: {report}"
+    );
+    assert!(
+        report.contains("ValueRange"),
+        "Expected hover to mention the type alias name, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_imported_annotated_metadata_in_parameter_annotation() {
+    let utils = r#"
+class ValueRange:
+    pass
+"#;
+    let code = r#"
+from typing import Annotated
+import utils
+
+def takes(x: Annotated[int, utils.ValueRange]) -> None: ...
+#                                  ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("utils", utils)], get_test_report);
+    assert!(
+        !report.contains("\nNone\n"),
+        "Expected hover for imported Annotated metadata, got: {report}"
+    );
+    assert!(
+        report.contains("ValueRange"),
+        "Expected hover to mention the metadata symbol name, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_import_different_name_alias_second_token_test() {
     let lib = r#"
 def bar() -> None: ...
