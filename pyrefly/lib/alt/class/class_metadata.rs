@@ -984,6 +984,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(|pyd| InitDefaults {
                 init_by_name: pyd.validation_flags.validate_by_name,
                 init_by_alias: pyd.validation_flags.validate_by_alias,
+                alias_generator: pyd.validation_alias_generator.clone(),
             })
             .unwrap_or_default();
         let default_can_be_positional = pydantic_config.is_some() || is_attrs_class;
