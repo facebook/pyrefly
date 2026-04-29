@@ -75,9 +75,6 @@ if some_cond:
 
 An `assert-type` error is raised when a `typing.assert_type()` call fails.
 
-This error kind should never be suppressed, since that rather defeats the point
-of of `typing.assert_type()`.
-
 ## bad-argument-count
 
 This error arises when a function is called with the wrong number of arguments.
@@ -161,7 +158,7 @@ a.x: int = 2  # Type cannot be declared in assignment to non-self attribute `a.x
 This error indicates that there is something wrong with the class definition.
 It tends to be a bit rarer, since most issues would be tagged with other error kinds, such as
 `annotation-mismatch` or one of the function errors.
-inheritance has its own complexities, so it has its own error kind called `invalid-inheritance`.
+Inheritance has its own complexities, so it has its own error kind called `invalid-inheritance`.
 
 One place you may see it is dynamic class generation:
 
@@ -211,7 +208,7 @@ This only occurs when Pyrefly can statically verify that the index is incorrect,
 
 ```python
 def add_three(x: tuple[int, int]) -> int:
-  return x[0] + x[1] + x[2]
+  return x[0] + x[1] + x[2]  # Error: index 2 is out of range.
 ```
 
 Pyrefly also knows the keys of `TypedDict`s, but those have their own error kind.
@@ -400,14 +397,15 @@ Each generic type has an expected number of type vars, and each type var can be 
 Attempting to use specialize a generic type in a way that violates these specifications will result in a `bad-specialization` error:
 
 ```python
-x: list[int, str]
+x: list[int, str]  # Error: expected 1 type argument, got 2.
+
+class A[T: str]: ...
+y: A[int]  # Error: `int` is not assignable to `str`.
 ```
 
 ## bad-typed-dict
 
 This error is reported when a `TypedDict` definition includes an unsupported keyword argument.
-According to the typing specification, the only keyword argument allowed in a `TypedDict`'s
-base class list is `total`.
 
 ```python
 from typing import TypedDict
@@ -486,7 +484,29 @@ z = 10 % 0   # error: division by zero
 
 ## implicit-abstract-class
 
-Pyrefly emits this error when a class defines abstract members but is not declared abstract (for example, it does not inherit from `abc.ABC` or use `abc.ABCMeta`). Such classes cannot be instantiated because they have unimplemented abstract methods. Add `ABC` as a base class, adjust the metaclass, or provide concrete implementations to resolve the issue.
+Pyrefly emits this error when a class that inherits from an abstract class but is not itself explicitly abstract (for example, it does not directly inherit from `abc.ABC` or use `abc.ABCMeta`) has unimplemented abstract members. Such classes cannot be instantiated at runtime. To resolve the issue, explicitly declare the class as abstract or provide concrete implementations.
+
+```python
+from abc import ABC, abstractmethod
+class A(ABC):
+    @abstractmethod
+    def f(self) -> int: ...
+class B(A): ...  # Error: `B` cannot be instantiated due to unimplemented abstract method `f`.
+```
+
+Two possible fixes:
+
+```python
+# 1. If `B` is not meant to be instantiable, explicitly declare it as abstract.
+class B(A, ABC): ...
+```
+
+```python
+# 2. Or, implement `f` to make `B` instantiable.
+class B(A):
+    def f(self) -> int:
+        return 0
+```
 
 The default severity of this diagnostic is `ignore`.
 
@@ -618,10 +638,10 @@ For example, `typing.NewType` is a handy special form for creating types that ar
 ```python
 from typing import *
 
-# The first arg must match the name!
+# Invalid argument to `NewType`: the first arg must match the name.
 Mismatch = NewType("Wrong Name", int)
 
-# NewTypes cannot be used in isinstance.
+# Invalid argument to `isinstance`: `NewType`s cannot be used in `isinstance`.
 UserId = NewType("UserId", int)
 if isinstance(1, UserId):
   ...
@@ -1516,7 +1536,7 @@ Type information for some third-party libraries is shipped in a stubs package se
 library's source code. This error is emitted when we detect that a library is being used without
 the recommended stubs package being installed.
 
-The default severity of this diagnostic is `ignore`.
+The default severity of this diagnostic is `warn`.
 
 ## unused-coroutine
 

@@ -254,12 +254,16 @@ Rich syntax highlighting based on token type and origin.
 
 Inline hints for types, parameter names, and return values.
 
-:::info
-We reuse Pyright's `python.analysis.inlayHints.<>` settings for backwards compatibility. If you have or had Pyright, check these settings if inlay hints do not appear.
-:::
+You can turn inlay hints on or off using the [VS Code setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
 
-You can turn inlay hints on or off using the [VSCode Setting](https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints) `editor.inlayHints.enabled`.
+We reuse Pyright's `python.analysis.inlayHints.*` settings for backwards compatibility. If you have or had Pyright installed, check these settings if inlay hints do not appear as expected.
 
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `python.analysis.inlayHints.callArgumentNames` | `"all"` \| `"off"` \| `"partial"` | `"off"` | Show parameter names at call sites. `"partial"` only shows names for arguments where the name is not obvious from the value. |
+| `python.analysis.inlayHints.functionReturnTypes` | `boolean` | `true` | Show return type hints on functions without a return type annotation. |
+| `python.analysis.inlayHints.variableTypes` | `boolean` | `true` | Show type hints on variable assignments without a type annotation. |
+| `python.analysis.inlayHints.pytestParameters` | `boolean` | `false` | Show type hints for pytest fixture parameters. |
 
 Inlay hints can be double clicked to insert them as an annotation.
 <video

@@ -34,8 +34,8 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.2ccc2416.css">
-<script src="/assets/js/runtime~main.fc1d5f9b.js" defer="defer"></script>
-<script src="/assets/js/main.511b398d.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.6dcaeda7.js" defer="defer"></script>
+<script src="/assets/js/main.1710eb47.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -108,8 +108,9 @@
 <hr>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="inlay-hints"><a href="https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_inlayHint" target="_blank" rel="noopener noreferrer">Inlay hints</a><a href="#inlay-hints" class="hash-link" aria-label="Direct link to inlay-hints" title="Direct link to inlay-hints">​</a></h3>
 <p>Inline hints for types, parameter names, and return values.</p>
-<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>We reuse Pyright&#x27;s <code>python.analysis.inlayHints.&lt;&gt;</code> settings for backwards compatibility. If you have or had Pyright, check these settings if inlay hints do not appear.</p></div></div>
-<p>You can turn inlay hints on or off using the <a href="https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints" target="_blank" rel="noopener noreferrer">VSCode Setting</a> <code>editor.inlayHints.enabled</code>.</p>
+<p>You can turn inlay hints on or off using the <a href="https://code.visualstudio.com/docs/editing/editingevolved#_inlay-hints" target="_blank" rel="noopener noreferrer">VS Code setting</a> <code>editor.inlayHints.enabled</code>.</p>
+<p>We reuse Pyright&#x27;s <code>python.analysis.inlayHints.*</code> settings for backwards compatibility. If you have or had Pyright installed, check these settings if inlay hints do not appear as expected.</p>
+<table><thead><tr><th>Setting</th><th>Type</th><th>Default</th><th>Description</th></tr></thead><tbody><tr><td><code>python.analysis.inlayHints.callArgumentNames</code></td><td><code>&quot;all&quot;</code> | <code>&quot;off&quot;</code> | <code>&quot;partial&quot;</code></td><td><code>&quot;off&quot;</code></td><td>Show parameter names at call sites. <code>&quot;partial&quot;</code> only shows names for arguments where the name is not obvious from the value.</td></tr><tr><td><code>python.analysis.inlayHints.functionReturnTypes</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Show return type hints on functions without a return type annotation.</td></tr><tr><td><code>python.analysis.inlayHints.variableTypes</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Show type hints on variable assignments without a type annotation.</td></tr><tr><td><code>python.analysis.inlayHints.pytestParameters</code></td><td><code>boolean</code></td><td><code>false</code></td><td>Show type hints for pytest fixture parameters.</td></tr></tbody></table>
 <p>Inlay hints can be double clicked to insert them as an annotation.</p>
 <video src="/videos/double-click-inlay-hint.mp4" width="720" muted="" loop="" autoplay="" playsinline="" preload="metadata"></video>
 <p>Go-to-definition can be used on a type in an inlay hint to jump its definition. This works even if the type isn&#x27;t explicitly imported by the current file.</p>
