@@ -24,6 +24,23 @@ reveal_type(r_out)  # E: revealed type: Unknown
 );
 
 testcase!(
+    test_callback_protocol_generic_call,
+    r#"
+from typing import Callable, Protocol, reveal_type
+
+class GenericCallback(Protocol):
+    def __call__[T](self, x: T) -> T: ...
+
+def identity[A, R](f: Callable[[A], R]) -> Callable[[A], R]:
+    return f
+
+def use_it(cb: GenericCallback) -> None:
+    result = identity(cb)
+    reveal_type(result)  # E: revealed type: [R](R) -> R
+"#,
+);
+
+testcase!(
     test_simple_generic_residual,
     r#"
 from typing import Callable, reveal_type
