@@ -222,6 +222,24 @@
                         }
                     }
                 },
+                "python.pyrefly.rename": {
+                    "type": "object",
+                    "default": {},
+                    "description": "Rename refactoring options.",
+                    "scope": "resource",
+                    "properties": {
+                        "commentsAndStrings": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Rename occurrences found in comments and string literals."
+                        },
+                        "textOccurrences": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Rename occurrences found in non-Python text files."
+                        }
+                    }
+                },
                 "python.analysis.showHoverGoToLinks": {
                     "type": "boolean",
                     "default": true,

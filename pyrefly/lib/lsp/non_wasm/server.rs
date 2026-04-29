@@ -92,6 +92,9 @@ use lsp_types::InlayHint;
 use lsp_types::InlayHintLabel;
 use lsp_types::InlayHintLabelPart;
 use lsp_types::InlayHintParams;
+use lsp_types::LinkedEditingRangeParams;
+use lsp_types::LinkedEditingRangeServerCapabilities;
+use lsp_types::LinkedEditingRanges;
 use lsp_types::Location;
 use lsp_types::NotebookCellSelector;
 use lsp_types::NotebookDocumentSyncOptions;
@@ -186,6 +189,7 @@ use lsp_types::request::GotoTypeDefinitionResponse;
 use lsp_types::request::HoverRequest;
 use lsp_types::request::Initialize;
 use lsp_types::request::InlayHintRequest;
+use lsp_types::request::LinkedEditingRange;
 use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
@@ -300,6 +304,8 @@ use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::rename::append_comment_and_string_occurrences;
+use crate::lsp::non_wasm::rename::text_occurrence_edits_in_workspace;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
 use crate::lsp::non_wasm::stdlib::no_config_severity_override;
@@ -1425,6 +1431,12 @@ pub fn capabilities(
                 }))
             }
         },
+        linked_editing_range_provider: match indexing_mode {
+            IndexingMode::None => None,
+            IndexingMode::LazyNonBlockingBackground | IndexingMode::LazyBlocking => {
+                Some(LinkedEditingRangeServerCapabilities::Simple(true))
+            }
+        },
         signature_help_provider: Some(SignatureHelpOptions {
             trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
             ..Default::default()
@@ -1512,6 +1524,11 @@ struct TypeHierarchyTarget {
     module_path: ModulePath,
     name_range: TextRange,
     is_object: bool,
+}
+
+struct RenameSearchResults {
+    references: Vec<(ModuleInfo, Vec<TextRange>)>,
+    text_occurrences: HashMap<Url, Vec<TextEdit>>,
 }
 
 pub fn lsp_loop(
@@ -2254,6 +2271,25 @@ impl Server {
                             }
                         };
                         self.send_response(new_response(x.id, Ok(response)));
+                    }
+                } else if let Some(params) = as_request::<LinkedEditingRange>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<LinkedEditingRange>(
+                            params, &x.id,
+                        )
+                    {
+                        self.set_file_stats(
+                            params
+                                .text_document_position_params
+                                .text_document
+                                .uri
+                                .clone(),
+                            telemetry_event,
+                        );
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(self.linked_editing_range(&transaction, params)),
+                        ));
                     }
                 } else if let Some(params) = as_request::<Rename>(&x) {
                     if let Some(params) =
@@ -4977,31 +5013,168 @@ impl Server {
     ) -> Result<(), EmptyResponseReason> {
         let uri = &params.text_document_position.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, Some(Rename::METHOD))?;
-        self.async_find_references_helper(
+        let info = transaction
+            .get_module_info(&handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+        let position = self.from_lsp_position(uri, &info, params.text_document_position.position);
+        let old_name = match transaction
+            .identifier_at(&handle, position)
+            .map(|id| id.identifier.id.as_str().to_owned())
+        {
+            Some(name) if !name.is_empty() => name,
+            _ => {
+                return Err(EmptyResponseReason::NotAnIdentifier {
+                    found: "none".to_owned(),
+                });
+            }
+        };
+        let rename_config = self.workspaces.rename_config(handle.path().as_path());
+        let workspace_root = self
+            .workspaces
+            .get_with(handle.path().as_path().to_path_buf(), |(root, _)| {
+                root.cloned()
+            });
+        let new_name = params.new_name.clone();
+        let new_name_for_text_occurrences = new_name.clone();
+        let path_remapper = self.path_remapper.clone();
+        let open_notebooks = self.snapshot_open_notebooks();
+
+        self.async_find_from_definition_helper(
             request_id,
             transaction,
             handle,
             uri,
             params.text_document_position.position,
-            true,
+            FindPreference {
+                import_behavior: ImportBehavior::StopAtRenamedImports,
+                ..Default::default()
+            },
             activity_key,
-            move |results| {
-                let mut changes = HashMap::new();
-                for (uri, ranges) in results {
-                    changes.insert(
-                        uri,
-                        ranges.into_map(|range| TextEdit {
-                            range,
-                            new_text: params.new_name.clone(),
-                        }),
+            move |transaction, handle, definition, _telemetry, _telemetry_event| {
+                let FindDefinitionItemWithDocstring {
+                    metadata,
+                    definition_range,
+                    module,
+                    docstring_range: _,
+                    ..
+                } = definition;
+
+                let mut references = transaction.find_global_references_from_definition(
+                    *handle.sys_info(),
+                    metadata,
+                    TextRangeWithModule::new(module, definition_range),
+                    true,
+                )?;
+
+                if rename_config.comments_and_strings {
+                    append_comment_and_string_occurrences(
+                        transaction,
+                        workspace_root.as_deref(),
+                        &old_name,
+                        &mut references,
                     );
                 }
+
+                let text_occurrences = if rename_config.text_occurrences {
+                    text_occurrence_edits_in_workspace(
+                        workspace_root.as_deref(),
+                        &old_name,
+                        &new_name_for_text_occurrences,
+                    )
+                } else {
+                    HashMap::new()
+                };
+
+                Ok(RenameSearchResults {
+                    references,
+                    text_occurrences,
+                })
+            },
+            move |results: RenameSearchResults| {
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                for (info, mut ranges) in results.references {
+                    ranges.sort_by_key(|range| (range.start(), range.end()));
+                    ranges.dedup();
+                    if let Some(mut uri) = module_info_to_uri(&info, path_remapper.as_ref()) {
+                        for range in ranges {
+                            if let Some(cell_idx) = info.to_cell_for_lsp(range.start())
+                                && let Some(path) = to_real_path(info.path())
+                                && let Some(notebook) = open_notebooks.get(&path)
+                                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                            {
+                                uri = cell_url.clone();
+                            }
+                            changes.entry(uri.clone()).or_default().push(TextEdit {
+                                range: info.to_lsp_range(range),
+                                new_text: new_name.clone(),
+                            });
+                        }
+                    }
+                }
+
+                for (uri, edits) in results.text_occurrences {
+                    changes.entry(uri).or_default().extend(edits);
+                }
+
+                for edits in changes.values_mut() {
+                    edits.sort_by_key(|edit| {
+                        (
+                            edit.range.start.line,
+                            edit.range.start.character,
+                            edit.range.end.line,
+                            edit.range.end.character,
+                        )
+                    });
+                    edits.dedup_by(|a, b| a.range == b.range);
+                }
+
                 WorkspaceEdit {
                     changes: Some(changes),
                     ..Default::default()
                 }
             },
         )
+    }
+
+    fn linked_editing_range(
+        &self,
+        transaction: &Transaction<'_>,
+        params: LinkedEditingRangeParams,
+    ) -> Option<LinkedEditingRanges> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let handle = self
+            .make_handle_if_enabled(uri, Some(Rename::METHOD))
+            .ok()?;
+        if self.open_notebook_cells.read().contains_key(uri) {
+            return None;
+        }
+        let info = transaction.get_module_info(&handle)?;
+        let position =
+            self.from_lsp_position(uri, &info, params.text_document_position_params.position);
+        if transaction.prepare_rename(&handle, position).is_none() {
+            return None;
+        }
+        let identifier = transaction.identifier_at(&handle, position)?;
+        let mut ranges = transaction.find_local_references(&handle, position, true);
+        let rename_config = self.workspaces.rename_config(handle.path().as_path());
+        if rename_config.comments_and_strings {
+            ranges.extend(transaction.text_occurrences_in_comments_and_strings(
+                &info,
+                identifier.identifier.id.as_str(),
+            ));
+        }
+        ranges.sort_by_key(|range| (range.start(), range.end()));
+        ranges.dedup();
+        if ranges.is_empty() {
+            return None;
+        }
+        Some(LinkedEditingRanges {
+            ranges: ranges
+                .into_iter()
+                .map(|range| info.to_lsp_range(range))
+                .collect(),
+            word_pattern: None,
+        })
     }
 
     fn prepare_rename(

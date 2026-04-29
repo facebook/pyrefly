@@ -6,6 +6,7 @@
  */
 
 use lsp_types::Url;
+use lsp_types::request::LinkedEditingRange;
 use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::Rename;
 use serde_json::json;
@@ -271,6 +272,129 @@ fn test_rename() {
                     },
                 ]
             }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_rename_in_comments_strings_and_text_occurrences() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("rename_inline_options");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(json!([{
+                "pyrefly": {
+                    "rename": {
+                        "commentsAndStrings": true,
+                        "textOccurrences": true
+                    }
+                }
+            }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let main = root_path.join("main.py");
+    let notes = root_path.join("notes.txt");
+
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .send_request::<Rename>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&main).unwrap().to_string()
+            },
+            "position": {
+                "line": 0,
+                "character": 4
+            },
+            "newName": "bar"
+        }))
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(&main).unwrap().to_string(): [
+                    {
+                        "newText":"bar",
+                        "range":{"start":{"line":0,"character":4},"end":{"line":0,"character":7}}
+                    },
+                    {
+                        "newText":"bar",
+                        "range":{"start":{"line":3,"character":9},"end":{"line":3,"character":12}}
+                    },
+                    {
+                        "newText":"bar",
+                        "range":{"start":{"line":5,"character":2},"end":{"line":5,"character":5}}
+                    },
+                    {
+                        "newText":"bar",
+                        "range":{"start":{"line":6,"character":11},"end":{"line":6,"character":14}}
+                    }
+                ],
+                Url::from_file_path(&notes).unwrap().to_string(): [
+                    {
+                        "newText":"bar",
+                        "range":{"start":{"line":0,"character":10},"end":{"line":0,"character":13}}
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_linked_editing_range_includes_comments_and_strings() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("rename_inline_options");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(Some(json!([{
+                "pyrefly": {
+                    "rename": {
+                        "commentsAndStrings": true
+                    }
+                }
+            }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let main = root_path.join("main.py");
+
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .send_request::<LinkedEditingRange>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&main).unwrap().to_string()
+            },
+            "position": {
+                "line": 0,
+                "character": 4
+            }
+        }))
+        .expect_response(json!({
+            "ranges": [
+                {"start":{"line":0,"character":4},"end":{"line":0,"character":7}},
+                {"start":{"line":3,"character":9},"end":{"line":3,"character":12}},
+                {"start":{"line":5,"character":2},"end":{"line":5,"character":5}},
+                {"start":{"line":6,"character":11},"end":{"line":6,"character":14}}
+            ]
         }))
         .unwrap();
 
