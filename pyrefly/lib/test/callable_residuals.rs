@@ -129,6 +129,26 @@ reveal_type(result)  # E: revealed type: [T](list[T]) -> list[T]
 );
 
 testcase!(
+    bug = "Generic callback protocols with extra type params degrade callable precision to Any",
+    test_callback_protocol_phantom_target_var,
+    r#"
+from typing import Protocol, Callable, reveal_type
+
+class Callback[In, Out, Phantom](Protocol):
+    def __call__(self, x: In) -> Out: ...
+
+def lift[In, Out, Phantom](f: Callback[In, Out, Phantom]) -> tuple[Callable[[In], Out], Phantom]:
+    ...
+
+def id_fn[T](x: T) -> T: ...
+
+out_f, out_p = lift(id_fn)
+reveal_type(out_f)  # E: revealed type: (Any) -> Any
+reveal_type(out_p)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
     test_type_var_tuple_hof_against_concrete_tuple_with_generic_param,
     r#"
 from typing import Callable, reveal_type
