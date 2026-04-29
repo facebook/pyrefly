@@ -215,6 +215,9 @@ impl ModuleChanges {
             AnyExportedKey::KeyExport(k) => {
                 self.0.names.entry(k.0).or_default();
             }
+            AnyExportedKey::KeyExportNameAssignTypeForm(k) => {
+                self.0.names.entry(k.0).or_default();
+            }
             // Classes and type aliases don't distinguish between existence and change.
             _ => self.add_key(key),
         }
@@ -272,6 +275,9 @@ impl ModuleDeps {
     fn add_key(&mut self, key: AnyExportedKey) {
         match key {
             AnyExportedKey::KeyExport(k) => {
+                self.names.entry(k.0).or_default().type_ = true;
+            }
+            AnyExportedKey::KeyExportNameAssignTypeForm(k) => {
                 self.names.entry(k.0).or_default().type_ = true;
             }
             AnyExportedKey::KeyTypeAlias(k) => {

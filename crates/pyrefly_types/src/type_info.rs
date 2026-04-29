@@ -42,6 +42,35 @@ pub enum JoinStyle<T> {
     NarrowOf(T),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Visit, VisitMut, TypeEq)]
+pub enum NameAssignTypeForm {
+    InvalidImplicitAlias(Box<str>),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Visit, VisitMut, TypeEq)]
+pub struct NameAssignTypeFormInfo(Option<NameAssignTypeForm>);
+
+impl NameAssignTypeFormInfo {
+    pub fn invalid_implicit_alias(problem: Box<str>) -> Self {
+        Self(Some(NameAssignTypeForm::InvalidImplicitAlias(problem)))
+    }
+
+    pub fn as_ref(&self) -> Option<&NameAssignTypeForm> {
+        self.0.as_ref()
+    }
+}
+
+impl Display for NameAssignTypeFormInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) => {
+                write!(f, "InvalidImplicitAlias({problem})")
+            }
+            None => write!(f, "None"),
+        }
+    }
+}
+
 impl<T> JoinStyle<T> {
     pub fn map<S>(&self, f: impl FnOnce(&T) -> S) -> JoinStyle<S> {
         match self {

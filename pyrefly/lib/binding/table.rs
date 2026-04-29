@@ -29,6 +29,7 @@ macro_rules! table {
             $($vis)* type_aliases: $t<$crate::binding::binding::KeyTypeAlias>,
             $($vis)* consistent_override_checks: $t<$crate::binding::binding::KeyConsistentOverrideCheck>,
             $($vis)* exports: $t<$crate::binding::binding::KeyExport>,
+            $($vis)* export_name_assign_type_forms: $t<$crate::binding::binding::KeyExportNameAssignTypeForm>,
             $($vis)* decorators: $t<$crate::binding::binding::KeyDecorator>,
             $($vis)* decorated_functions: $t<$crate::binding::binding::KeyDecoratedFunction>,
             $($vis)* undecorated_functions: $t<$crate::binding::binding::KeyUndecoratedFunction>,
@@ -77,6 +78,12 @@ macro_rules! table {
             type Value = $t<$crate::binding::binding::KeyExport>;
             fn get(&self) -> &Self::Value { &self.exports }
             fn get_mut(&mut self) -> &mut Self::Value { &mut self.exports }
+        }
+
+        impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyExportNameAssignTypeForm> for $name {
+            type Value = $t<$crate::binding::binding::KeyExportNameAssignTypeForm>;
+            fn get(&self) -> &Self::Value { &self.export_name_assign_type_forms }
+            fn get_mut(&mut self) -> &mut Self::Value { &mut self.export_name_assign_type_forms }
         }
 
         impl $crate::binding::table::TableKeyed<$crate::binding::binding::KeyDecorator> for $name {
@@ -215,6 +222,7 @@ macro_rules! table_for_each(
         $f(&($e).type_aliases);
         $f(&($e).consistent_override_checks);
         $f(&($e).exports);
+        $f(&($e).export_name_assign_type_forms);
         $f(&($e).decorators);
         $f(&($e).decorated_functions);
         $f(&($e).undecorated_functions);
@@ -244,6 +252,7 @@ macro_rules! table_mut_for_each(
         $f(&mut ($e).type_aliases);
         $f(&mut ($e).consistent_override_checks);
         $f(&mut ($e).exports);
+        $f(&mut ($e).export_name_assign_type_forms);
         $f(&mut ($e).decorators);
         $f(&mut ($e).decorated_functions);
         $f(&mut ($e).undecorated_functions);
@@ -273,6 +282,7 @@ macro_rules! table_try_for_each(
         $f(&($e).type_aliases)?;
         $f(&($e).consistent_override_checks)?;
         $f(&($e).exports)?;
+        $f(&($e).export_name_assign_type_forms)?;
         $f(&($e).decorators)?;
         $f(&($e).decorated_functions)?;
         $f(&($e).undecorated_functions)?;

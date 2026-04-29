@@ -22,6 +22,8 @@ use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_alias::TypeAliasRef;
 use pyrefly_types::type_info::JoinStyle;
+use pyrefly_types::type_info::NameAssignTypeForm;
+use pyrefly_types::type_info::NameAssignTypeFormInfo;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Union;
@@ -80,6 +82,7 @@ use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
+use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingTypeAlias;
@@ -98,12 +101,14 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyExportNameAssignTypeForm;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::NameAssign;
 use crate::binding::binding::NoneIfRecursive;
 use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::RaisedException;
@@ -235,6 +240,18 @@ impl TypeFormContext {
             | SpecialForm::SelfType => true,
             _ => false,
         }
+    }
+
+    fn reports_implicit_alias_syntax_at_use_site(self) -> bool {
+        matches!(
+            self,
+            TypeFormContext::ClassVarAnnotation
+                | TypeFormContext::ParameterAnnotation
+                | TypeFormContext::ParameterArgsAnnotation
+                | TypeFormContext::ParameterKwargsAnnotation
+                | TypeFormContext::ReturnAnnotation
+                | TypeFormContext::VarAnnotation(_)
+        )
     }
 }
 
@@ -589,7 +606,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub(crate) fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
+    fn annotation_syntax_problem(&self, x: &Expr) -> Option<String> {
         // Note that this function only checks for correct syntax.
         // Semantic validation (e.g. that `typing.Self` is used in a class
         // context, or that a string evaluates to a proper type expression) is
@@ -605,7 +622,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::StringLiteral(..)
             | Expr::NoneLiteral(..)
             | Expr::Attribute(..)
-            | Expr::Starred(..) => return true,
+            | Expr::Starred(..) => return None,
             Expr::Subscript(s) => match *s.value {
                 Expr::Name(..)
                 | Expr::BinOp(ExprBinOp {
@@ -615,27 +632,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | Expr::Named(..)
                 | Expr::StringLiteral(..)
                 | Expr::NoneLiteral(..)
-                | Expr::Attribute(..) => return true,
-                _ => "Invalid subscript expression",
+                | Expr::Attribute(..) => return None,
+                _ => "Invalid subscript expression".to_owned(),
             },
-            Expr::Call(..) => "Function call",
-            Expr::Lambda(..) => "Lambda definition",
-            Expr::List(..) => "List literal",
-            Expr::NumberLiteral(..) => "Number literal",
-            Expr::Tuple(..) => "Tuple literal",
-            Expr::Dict(..) => "Dict literal",
-            Expr::ListComp(..) => "List comprehension",
-            Expr::If(..) => "If expression",
-            Expr::BooleanLiteral(..) => "Bool literal",
-            Expr::BoolOp(..) => "Boolean operation",
-            Expr::FString(..) => "F-string",
-            Expr::TString(..) => "T-string",
-            Expr::UnaryOp(..) => "Unary operation",
-            Expr::BinOp(ExprBinOp { op, .. }) => &format!("Binary operation `{}`", op.as_str()),
+            Expr::Call(..) => "Function call".to_owned(),
+            Expr::Lambda(..) => "Lambda definition".to_owned(),
+            Expr::List(..) => "List literal".to_owned(),
+            Expr::NumberLiteral(..) => "Number literal".to_owned(),
+            Expr::Tuple(..) => "Tuple literal".to_owned(),
+            Expr::Dict(..) => "Dict literal".to_owned(),
+            Expr::ListComp(..) => "List comprehension".to_owned(),
+            Expr::If(..) => "If expression".to_owned(),
+            Expr::BooleanLiteral(..) => "Bool literal".to_owned(),
+            Expr::BoolOp(..) => "Boolean operation".to_owned(),
+            Expr::FString(..) => "F-string".to_owned(),
+            Expr::TString(..) => "T-string".to_owned(),
+            Expr::UnaryOp(..) => "Unary operation".to_owned(),
+            Expr::BinOp(ExprBinOp { op, .. }) => {
+                format!("Binary operation `{}`", op.as_str())
+            }
             // There are many Expr variants. Not all of them are likely to be used
             // in annotations, even accidentally. We can add branches for specific
             // expression constructs if desired.
-            _ => "Expression",
+            _ => "Expression".to_owned(),
+        };
+        Some(problem)
+    }
+
+    pub(crate) fn has_valid_annotation_syntax(&self, x: &Expr, errors: &ErrorCollector) -> bool {
+        let Some(problem) = self.annotation_syntax_problem(x) else {
+            return true;
         };
         self.error(
             errors,
@@ -644,6 +670,120 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             format!("{problem} cannot be used in annotations"),
         );
         false
+    }
+
+    fn call_has_synthesized_runtime_type(&self, call: &ExprCall) -> bool {
+        let anon_key = Key::Anon(call.range);
+        self.bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&anon_key))
+            .is_some_and(|idx| matches!(self.bindings().get(idx), Binding::ClassDef(..)))
+    }
+
+    fn callable_is_builtin_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassDef(cls) => cls.is_builtin("type"),
+            Type::ClassType(cls) | Type::SelfType(cls) => cls.has_qname("builtins", "type"),
+            Type::Type(inner) => self.callable_is_builtin_type(inner),
+            _ => false,
+        }
+    }
+
+    fn classify_name_assign_type_form(
+        &self,
+        annotation: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
+        expr: &Expr,
+        ty: &Type,
+        is_in_function_scope: bool,
+    ) -> NameAssignTypeFormInfo {
+        if annotation.is_some() || is_in_function_scope {
+            return NameAssignTypeFormInfo::default();
+        }
+        let Some(problem) = self.annotation_syntax_problem(expr) else {
+            return NameAssignTypeFormInfo::default();
+        };
+        if matches!(
+            ty,
+            Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
+        ) {
+            return NameAssignTypeFormInfo::default();
+        }
+        if let Expr::Call(call) = expr
+            && (self.call_has_synthesized_runtime_type(call)
+                || self.callable_is_builtin_type(
+                    &self.expr_infer(&call.func, &self.error_swallower()),
+                ))
+        {
+            return NameAssignTypeFormInfo::default();
+        }
+        NameAssignTypeFormInfo::invalid_implicit_alias(problem.into())
+    }
+
+    fn name_assign_type_form_for_idx(
+        &self,
+        mut idx: Idx<Key>,
+        _errors: &ErrorCollector,
+    ) -> NameAssignTypeFormInfo {
+        let mut visited = SmallSet::new();
+        loop {
+            if !visited.insert(idx) {
+                unreachable!("cycle in binding chain while classifying implicit type alias syntax");
+            }
+            match self.bindings().get(idx) {
+                Binding::Forward(next)
+                | Binding::PromoteForward(next)
+                | Binding::ForwardToFirstUse(next)
+                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                Binding::NameAssign(name_assign) => {
+                    let ty =
+                        self.binding_to_type(self.bindings().get(idx), &self.error_swallower());
+                    return self.classify_name_assign_type_form(
+                        name_assign.annotation,
+                        &name_assign.expr,
+                        &ty,
+                        name_assign.is_in_function_scope,
+                    );
+                }
+                Binding::Import(import) => {
+                    return self
+                        .get_from_export_name_assign_type_form(
+                            import.0,
+                            None,
+                            &KeyExportNameAssignTypeForm(import.1.clone()),
+                        )
+                        .as_ref()
+                        .clone();
+                }
+                Binding::PossibleLegacyTParam(key, _) => {
+                    match (self.bindings().get(*key), &*self.get_idx(*key)) {
+                        (
+                            BindingLegacyTypeParam::ParamKeyed(next),
+                            LegacyTypeParameterLookup::NotParameter(_),
+                        ) => idx = *next,
+                        _ => return NameAssignTypeFormInfo::default(),
+                    }
+                }
+                _ => return NameAssignTypeFormInfo::default(),
+            }
+        }
+    }
+
+    fn annotation_name_assign_type_form(
+        &self,
+        name: &ruff_python_ast::ExprName,
+    ) -> Option<NameAssignTypeForm> {
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        self.name_assign_type_form_for_idx(idx, &self.error_swallower())
+            .as_ref()
+            .cloned()
+    }
+
+    pub fn name_assign_type_form_for_export(
+        &self,
+        binding: &BindingExport,
+        errors: &ErrorCollector,
+    ) -> NameAssignTypeFormInfo {
+        self.name_assign_type_form_for_idx(binding.key_idx(), errors)
     }
 
     fn expr_annotation(
@@ -4343,7 +4483,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range_if_scoped_params_exist: &Option<TextRange>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        let ty = match &*self.get_idx(key) {
+        let lookup = self.get_idx(key);
+        let ty = match &*lookup {
             LegacyTypeParameterLookup::Parameter(p) => {
                 // This class or function has scoped (PEP 695) type parameters. Mixing legacy-style parameters is an error.
                 if let Some(r) = range_if_scoped_params_exist {
@@ -4375,7 +4516,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     module
                 }
             }
-            BindingLegacyTypeParam::ParamKeyed(_) => TypeInfo::of_ty(ty),
+            BindingLegacyTypeParam::ParamKeyed(idx) => match &*lookup {
+                LegacyTypeParameterLookup::NotParameter(_) => self.get_idx(*idx).arc_clone(),
+                LegacyTypeParameterLookup::Parameter(_) => TypeInfo::of_ty(ty),
+            },
         }
     }
 
@@ -4384,14 +4528,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     #[inline(never)]
     fn binding_to_type_info_name_assign(
         &self,
+        name_assign: &NameAssign,
         binding: &Binding,
-        expr: &Expr,
         errors: &ErrorCollector,
     ) -> TypeInfo {
         let ty = self.binding_to_type(binding, errors);
         let mut type_info = TypeInfo::of_ty(ty);
         let mut prefix = Vec::new();
-        self.populate_dict_literal_facets(&mut type_info, &mut prefix, expr);
+        self.populate_dict_literal_facets(&mut type_info, &mut prefix, name_assign.expr.as_ref());
         type_info
     }
 
@@ -4420,9 +4564,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_info_phi(join_style, branches)
             }
             Binding::LoopPhi(default, ks) => self.binding_to_type_info_loop_phi(*default, ks),
-            Binding::NameAssign(x) => {
-                self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
-            }
+            Binding::NameAssign(x) => self.binding_to_type_info_name_assign(x, binding, errors),
             Binding::AssignToAttribute(x) => self.binding_to_type_info_assign_to_attribute(
                 &x.attr,
                 &x.value,
@@ -5747,6 +5889,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         type_form_context: TypeFormContext,
         errors: &ErrorCollector,
     ) -> Type {
+        if type_form_context.reports_implicit_alias_syntax_at_use_site()
+            && let Expr::Name(name) = x
+            && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) =
+                self.annotation_name_assign_type_form(name)
+        {
+            return self.error(
+                errors,
+                x.range(),
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                format!("{problem} cannot be used in annotations"),
+            );
+        }
         let result = match x {
             Expr::List(x)
                 if matches!(

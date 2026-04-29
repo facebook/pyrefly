@@ -1088,7 +1088,6 @@ def type_alias_subscript() -> Iterator["TResult[Line]"]:
 );
 
 testcase!(
-    bug = "conformance: Should error when using non-type expressions as implicit type aliases",
     test_bad_implicit_type_alias_conformance,
     r#"
 BadTypeAlias1 = eval("".join(map(chr, [105, 110, 116])))
@@ -1098,13 +1097,64 @@ BadTypeAlias8 = int if 1 < 3 else str
 BadTypeAlias12 = list or set
 
 def bad_type_aliases(
-    p1: BadTypeAlias1,  # should error: eval result is not a valid type
-    p6: BadTypeAlias6,  # should error: lambda call is not a valid type
-    p7: BadTypeAlias7,  # should error: list subscript is not a valid type
-    p8: BadTypeAlias8,  # should error: conditional expr is not a valid type
-    p12: BadTypeAlias12,  # should error: 'or' expr is not a valid type
+    p1: BadTypeAlias1,  # E: Function call cannot be used in annotations
+    p6: BadTypeAlias6,  # E: Function call cannot be used in annotations
+    p7: BadTypeAlias7,  # E: Invalid subscript expression cannot be used in annotations
+    p8: BadTypeAlias8,  # E: If expression cannot be used in annotations
+    p12: BadTypeAlias12,  # E: Boolean operation cannot be used in annotations
 ):
     pass
+"#,
+);
+
+testcase!(
+    test_bad_implicit_type_alias_imported,
+    TestEnv::one(
+        "mod_a",
+        r#"
+BadAlias = (lambda: int)()
+"#,
+    ),
+    r#"
+from mod_a import BadAlias
+
+def f(x: BadAlias):  # E: Function call cannot be used in annotations
+    pass
+"#,
+);
+
+testcase!(
+    test_implicit_alias_runtime_type_call,
+    r#"
+DynClass = type("DynClass", (), {})
+
+def f(x: DynClass) -> None:
+    y = DynClass()
+    _ = x
+    _ = y
+"#,
+);
+
+testcase!(
+    test_implicit_alias_runtime_type_call_minimal,
+    r#"
+DynClass = type("DynClass", (), {})
+def f(x: DynClass) -> None:
+    pass
+"#,
+);
+
+testcase!(
+    test_implicit_alias_functional_typed_dict_and_named_tuple,
+    r#"
+from typing import NamedTuple
+from typing_extensions import TypedDict
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+Config = TypedDict("Config", {"x": int})
+
+def f(p: Point, c: Config) -> tuple[Point, Config]:
+    return p, c
 "#,
 );
 
