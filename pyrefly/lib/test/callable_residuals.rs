@@ -86,6 +86,34 @@ reveal_type(result)  # E: revealed type: [T, S](S, T) -> T
 );
 
 testcase!(
+    bug = "Nested residuals are flattened instead of preserving inner generic parameter",
+    test_generic_residual_nested_pattern_inner_var,
+    r#"
+from typing import Callable, reveal_type
+def higher_order[A](x: Callable[[list[A]], list[A]]) -> Callable[[list[A]], list[A]]:
+    return x
+def generic_fn[T](x: T) -> T:
+    return x
+result = higher_order(generic_fn)
+reveal_type(result)  # E: revealed type: (list[Unknown]) -> list[Unknown]
+"#,
+);
+
+testcase!(
+    bug = "Nested source residuals are flattened instead of preserving inner generic parameter",
+    test_generic_residual_nested_source_inner_var,
+    r#"
+from typing import Callable, reveal_type
+def higher_order[A](x: Callable[[A], A]) -> Callable[[A], A]:
+    return x
+def generic_fn[T](x: list[T]) -> list[T]:
+    return x
+result = higher_order(generic_fn)
+reveal_type(result)  # E: revealed type: (list[Unknown]) -> list[Unknown]
+"#,
+);
+
+testcase!(
     bug = "Generic functions don't work with ParamSpec",
     test_param_spec_generic_function,
     r#"
