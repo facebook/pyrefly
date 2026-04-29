@@ -913,6 +913,19 @@ def f(x: TA) -> TA:
     )
 }
 
+fn env_with_large_alias_union() -> TestEnv {
+    TestEnv::one(
+        "bar",
+        r#"
+type TA = int | str | bytes
+
+class C: pass
+
+type TB = TA | C
+"#,
+    )
+}
+
 testcase!(
     test_alias_union_name,
     env_with_alias(),
@@ -948,6 +961,20 @@ x5: TA | C = val1
 x6: TA | C = val2
 x7: TA | C = C()
 c2: Callable[[int], int] = f2  # E: `(x: C | int | str) -> C | int | str` is not assignable to `(int) -> int`
+    "#,
+);
+
+testcase!(
+    test_union_display_name_with_pipe_reused,
+    env_with_large_alias_union(),
+    r#"
+from bar import TB
+from typing import Callable
+
+def f3(x: TB | float) -> TB | float:
+  return x
+
+c3: Callable[[int], int] = f3  # E: `(x: TB | float) -> TB | float` is not assignable to `(int) -> int`
     "#,
 );
 
