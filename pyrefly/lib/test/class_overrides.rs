@@ -692,6 +692,19 @@ class B(A):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3141
+testcase!(
+    test_property_constructor_override,
+    r#"
+class A:
+    @property
+    def p(self): ...
+
+class B(A):
+    p = property(lambda self: None)
+    "#,
+);
+
 testcase!(
     test_inherit_type_attribute,
     r#"
