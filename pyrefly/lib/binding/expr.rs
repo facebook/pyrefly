@@ -643,6 +643,68 @@ impl<'a> BindingsBuilder<'a> {
                 self.check_private_attribute_usage(attr);
                 self.ensure_expr(&mut attr.value, usage);
             }
+            Expr::Subscript(ExprSubscript { value, slice, .. }) => {
+                // Some subscripts are (or contain) type expressions even when they appear in a
+                // value context, e.g. `list["A | B"]([x])`. Ensure the slice is bound as a type so
+                // forward-reference strings are parsed and names inside are bound.
+                //
+                // Be careful about attribute access: `dict.__dict__` is an attribute on the class
+                // `dict` (not a module), and `dict.__dict__["fromkeys"]` is a runtime mappingproxy
+                // key lookup. Avoid treating those as "type-like subscripts".
+                let special_export = match &**value {
+                    Expr::Name(_) => self.as_special_export(value),
+                    Expr::Attribute(ExprAttribute { value: base, .. })
+                        if let Expr::Name(base_name) = &**base
+                            && matches!(
+                                self.scopes.flow_style_for_name(&base_name.id),
+                                Some(FlowStyle::MergeableImport(_) | FlowStyle::ImportAs(_))
+                            ) =>
+                    {
+                        self.as_special_export(value)
+                    }
+                    _ => None,
+                };
+
+                if let Some(special_export) = special_export
+                    && matches!(
+                        special_export,
+                        SpecialExport::Union
+                            | SpecialExport::Optional
+                            | SpecialExport::Annotated
+                            | SpecialExport::Callable
+                            | SpecialExport::BuiltinsDict
+                            | SpecialExport::TypingDict
+                            | SpecialExport::BuiltinsList
+                            | SpecialExport::TypingList
+                            | SpecialExport::BuiltinsTuple
+                            | SpecialExport::TypingTuple
+                            | SpecialExport::BuiltinsType
+                            | SpecialExport::TypingType
+                            | SpecialExport::BuiltinsSet
+                            | SpecialExport::BuiltinsFrozenset
+                            | SpecialExport::TypingMapping
+                            | SpecialExport::TypeForm
+                    )
+                {
+                    self.ensure_expr(&mut *value, usage);
+                    let mut type_usage = Usage::StaticTypeInformation;
+                    if special_export == SpecialExport::Annotated
+                        && let Expr::Tuple(tup) = &mut **slice
+                        && !tup.is_empty()
+                    {
+                        // Only the first argument to Annotated[...] is a type; the rest are metadata.
+                        self.ensure_type_impl(&mut tup.elts[0], &mut None, false, &mut type_usage);
+                        for elt in tup.elts[1..].iter_mut() {
+                            self.ensure_expr(elt, &mut Usage::StaticTypeInformation);
+                        }
+                    } else {
+                        self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
+                    }
+                } else {
+                    self.ensure_expr(&mut *value, usage);
+                    self.ensure_expr(&mut *slice, usage);
+                }
+            }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
                 // Process the test before forking so walrus-defined names are
