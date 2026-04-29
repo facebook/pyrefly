@@ -915,6 +915,14 @@ impl ConfigFile {
                  self.root.spec_compliant_overloads.unwrap())
     }
 
+    pub fn infer_pytest_fixture_types(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_infer_pytest_fixture_types, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.infer_pytest_fixture_types.unwrap())
+    }
+
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -1214,6 +1222,10 @@ impl ConfigFile {
 
         if self.root.spec_compliant_overloads.is_none() {
             self.root.spec_compliant_overloads = Some(false);
+        }
+
+        if self.root.infer_pytest_fixture_types.is_none() {
+            self.root.infer_pytest_fixture_types = Some(false);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
@@ -1578,6 +1590,7 @@ mod tests {
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
                     strict_callable_subtyping: None,
+                    infer_pytest_fixture_types: None,
                     tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
@@ -1603,6 +1616,7 @@ mod tests {
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
                         strict_callable_subtyping: Some(false),
+                        infer_pytest_fixture_types: None,
                         tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
@@ -2020,6 +2034,7 @@ output-format = "omit-errors"
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
                 strict_callable_subtyping: Some(false),
+                infer_pytest_fixture_types: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
@@ -2036,6 +2051,7 @@ output-format = "omit-errors"
                             ModuleWildcard::new("highest").unwrap(),
                         ]),
                         ignore_errors_in_generated_code: None,
+                        infer_pytest_fixture_types: Some(true),
                         ..Default::default()
                     },
                 },
@@ -2067,6 +2083,8 @@ output-format = "omit-errors"
 
         // test empty value falls back to next
         assert!(config.ignore_errors_in_generated_code(Path::new("this/is/highest/priority")));
+        assert!(config.infer_pytest_fixture_types(Path::new("this/is/highest/priority")));
+        assert!(!config.infer_pytest_fixture_types(Path::new("this/is/second/priority")));
 
         // test no pattern match
         assert!(config.replace_imports_with_any(
@@ -2443,6 +2461,7 @@ output-format = "omit-errors"
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
                 strict_callable_subtyping: Some(false),
+                infer_pytest_fixture_types: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
@@ -2482,6 +2501,7 @@ output-format = "omit-errors"
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
                 strict_callable_subtyping: Some(false),
+                infer_pytest_fixture_types: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),

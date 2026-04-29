@@ -165,6 +165,11 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_compliant_overloads: Option<bool>,
 
+    /// Whether to infer injected pytest fixture parameter types from fixture definitions.
+    /// When false (the default), injected fixture parameters fall back to `Any` unless explicitly annotated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infer_pytest_fixture_types: Option<bool>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -274,5 +279,9 @@ impl ConfigBase {
 
     pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
         base.spec_compliant_overloads
+    }
+
+    pub fn get_infer_pytest_fixture_types(base: &Self) -> Option<bool> {
+        base.infer_pytest_fixture_types
     }
 }

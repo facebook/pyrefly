@@ -91,6 +91,7 @@ use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod dict_completions;
+mod pytest;
 mod quick_fixes;
 
 pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
@@ -2039,18 +2040,28 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::Parameter,
             }) => {
-                let item = self.find_definition_for_simple_def(
+                if let Some(pytest_definitions) = self.pytest_fixture_definitions_for_parameter(
                     handle,
                     &identifier,
-                    SymbolKind::Parameter,
-                )?;
-                Ok(vec1![FindDefinitionItemWithDocstring {
-                    metadata: item.metadata,
-                    definition_range: item.definition_range,
-                    module: item.module,
-                    docstring_range: None,
-                    display_name: Some(identifier.id.to_string()),
-                }])
+                    &covering_nodes,
+                ) {
+                    Ok(Vec1::try_from_vec(pytest_definitions).expect(
+                        "pytest fixture parameter lookup should produce at least one definition",
+                    ))
+                } else {
+                    let item = self.find_definition_for_simple_def(
+                        handle,
+                        &identifier,
+                        SymbolKind::Parameter,
+                    )?;
+                    Ok(vec1![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        definition_range: item.definition_range,
+                        module: item.module,
+                        docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
+                    }])
+                }
             }
             Some(IdentifierWithContext {
                 identifier,
@@ -2992,6 +3003,13 @@ impl<'a> Transaction<'a> {
             ]
             .concat(),
         };
+        if let Some(pytest_references) = self.local_pytest_fixture_parameter_references(
+            handle,
+            definition_range,
+            definition_name,
+        ) {
+            references.extend(pytest_references);
+        }
         if include_declaration {
             references.push(definition_range);
         }
