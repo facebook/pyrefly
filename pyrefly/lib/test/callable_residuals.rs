@@ -412,3 +412,92 @@ identity2 = ctor(identity)
 reveal_type(identity2.__call__)  # E: revealed type: (Wrapper[Ellipsis, Unknown], ...) -> Unknown
 "#,
 );
+
+testcase!(
+    bug = "Overloads not preserved through ParamSpec transform",
+    test_paramspec_transform_overloaded,
+    r#"
+from typing import Callable, overload, reveal_type
+def transform[**P, T](f: Callable[P, T]) -> Callable[P, T]: ...
+
+@overload
+def multi(x: int, y: str) -> bool: ...  # E: Overload return type `bool` is not assignable to implementation return type `None`
+@overload
+def multi(x: str) -> int: ...  # E: Overload return type `int` is not assignable to implementation return type `None`
+def multi(*args, **kwargs): ...
+
+result = transform(multi)
+reveal_type(result)  # E: revealed type: (x: int, y: str) -> bool
+out_a = result(1, "ok")
+reveal_type(out_a)  # E: revealed type: bool
+out_b = result("ok")  # E: Missing argument `y`  # E: Argument `Literal['ok']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    bug = "Overloaded functions lose overloads through ParamSpec identity",
+    test_paramspec_identity_overloaded,
+    r#"
+from typing import Callable, overload, reveal_type
+def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
+    return x
+
+@overload
+def f(x: int) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `None`
+@overload
+def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to implementation return type `None`
+def f(x): ...
+
+result = identity(f)
+reveal_type(result)  # E: revealed type: (x: int) -> str
+out_a = result(1)
+reveal_type(out_a)  # E: revealed type: str
+out_b = result("ok")  # E: Argument `Literal['ok']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+// Regression tests for https://github.com/facebook/pyrefly/issues/2105
+// Overloaded callable protocol passed to higher-order function with ParamSpec.
+// The solver commits to one overload branch too early and rejects valid calls.
+
+testcase!(
+    bug = "Overloaded protocol callable commits to one branch too early (#2105)",
+    test_issue_2105_minimal,
+    r#"
+from typing import Protocol, overload, Callable
+
+class Foo(Protocol):
+    @overload
+    def __call__(
+        self,
+        x: bool,
+        y: int | None
+    ) -> None: ...
+    @overload
+    def __call__(
+        self,
+        x: bool = False,
+    ) -> None: ...
+
+def higher_order[**P, T](callback: Callable[P, T], /, *args: P.args, **kwds: P.kwargs) -> Callable[P, T]: ...
+
+def test(rmtree: Foo) -> None:
+    higher_order(rmtree, y=True)  # E: Missing argument `x` in function `higher_order`
+"#,
+);
+
+testcase!(
+    bug = "shutil.rmtree overloads not preserved through ExitStack.callback (#2105)",
+    test_issue_2105_original,
+    r#"
+import shutil
+from contextlib import ExitStack
+
+def foo(tmpdir):
+    with ExitStack() as resources:
+        resources.callback(shutil.rmtree, tmpdir, ignore_errors=True)  # E: Missing argument `onerror` in function `contextlib._BaseExitStack.callback`
+
+def bar(tmpdir):
+    shutil.rmtree(tmpdir, ignore_errors=True)
+"#,
+);
