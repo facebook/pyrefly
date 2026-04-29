@@ -38,6 +38,7 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::editable_install::get_editable_source_paths;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Glob;
@@ -1013,9 +1014,14 @@ impl ConfigFile {
                     result.insert(WatchPattern::root(config_root, format!("**/{config}")));
                 });
             }
+            let site_packages: Vec<PathBuf> = config.site_package_path().cloned().collect();
+            let editable_paths = get_editable_source_paths(&site_packages);
+
             config
                 .search_path()
-                .chain(config.site_package_path())
+                .cloned()
+                .chain(site_packages.iter().cloned())
+                .chain(editable_paths.iter().cloned())
                 .cartesian_product(
                     PYTHON_EXTENSIONS
                         .iter()
@@ -1025,10 +1031,20 @@ impl ConfigFile {
                 )
                 .for_each(|(s, suffix)| {
                     result.insert(WatchPattern::root(
-                        InternedPath::from_path(s),
+                        InternedPath::from_path(&s),
                         format!("**/*.{suffix}"),
                     ));
                 });
+
+            for site_package_path in &site_packages {
+                let root = InternedPath::from_path(site_package_path);
+                result.insert(WatchPattern::root(root.dupe(), "**/*.pth".to_owned()));
+                result.insert(WatchPattern::root(root.dupe(), "**/*.egg-link".to_owned()));
+                result.insert(WatchPattern::root(
+                    root,
+                    "**/*.dist-info/direct_url.json".to_owned(),
+                ));
+            }
         }
 
         for source_db in source_dbs {
