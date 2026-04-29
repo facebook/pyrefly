@@ -2070,6 +2070,17 @@ impl Solver {
         subset.is_subset_eq(got, want)
     }
 
+    pub(crate) fn is_subset_eq_with_call_context<Ans: LookupAnswer>(
+        &self,
+        got: &Type,
+        want: &Type,
+        type_order: TypeOrder<Ans>,
+        call_context: &CallContext,
+    ) -> Result<(), SubsetError> {
+        let mut subset = self.subset(type_order);
+        subset.is_subset_eq_with_context(got, want, call_context)
+    }
+
     pub fn is_consistent<Ans: LookupAnswer>(
         &self,
         got: &Type,
@@ -2318,26 +2329,24 @@ pub enum SubsetCacheEntry {
     Err(SubsetError),
 }
 
-/// Polarity for subset checks done while comparing callable signatures.
+/// Which side of a call argument check we are currently analyzing.
 ///
-/// `OutsideCall` is required because `is_subset_eq` is also called in contexts
-/// that are unrelated to callable subtyping.
-///
-/// TODO(stroxler): Rename this to something clearer (it's difficult to restack)
+/// `NotAnalyzingACall` is required because `is_subset_eq` is also called in
+/// contexts that are unrelated to callable argument-vs-parameter checks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub enum CallPolarity {
-    Positive,
-    Negative,
+pub enum ArgumentSide {
+    Got,
+    Want,
     #[default]
-    OutsideCall,
+    NotAnalyzingACall,
 }
 
-impl CallPolarity {
+impl ArgumentSide {
     fn negated(self) -> Self {
         match self {
-            Self::Positive => Self::Negative,
-            Self::Negative => Self::Positive,
-            Self::OutsideCall => Self::OutsideCall,
+            Self::Got => Self::Want,
+            Self::Want => Self::Got,
+            Self::NotAnalyzingACall => Self::NotAnalyzingACall,
         }
     }
 }
@@ -2348,7 +2357,7 @@ pub(crate) enum SubsetCacheContext {
     Default,
     Witness {
         witness_id: usize,
-        polarity: CallPolarity,
+        argument_side: ArgumentSide,
     },
 }
 
@@ -2366,6 +2375,7 @@ pub(crate) enum SubsetCacheContext {
 #[derive(Clone, Debug)]
 pub struct ResidualWitnessContext {
     identity: ResidualIdentity,
+    argument_side: ArgumentSide,
     origin_vars: SmallSet<Var>,
     deferred_vars: SmallSet<Var>,
 }
@@ -2383,7 +2393,7 @@ impl ResidualWitnessContext {
 #[derive(Clone, Debug, Default)]
 pub struct CallContext {
     witness: Option<ResidualWitnessContext>,
-    polarity: CallPolarity,
+    argument_side: ArgumentSide,
 }
 
 impl CallContext {
@@ -2391,12 +2401,20 @@ impl CallContext {
         Self::default()
     }
 
-    pub fn with_witness(witness: ResidualWitnessContext) -> Self {
-        // TODO(stroxler): Seeding the polarity as OutsideCall isn't quite right, but it's
-        // good enough to get started. We need to clean this up later.
+    pub fn with_argument_side(&self, argument_side: ArgumentSide) -> Self {
+        Self {
+            witness: self.witness.clone(),
+            argument_side,
+        }
+    }
+
+    pub(crate) fn with_witness_and_side(
+        witness: ResidualWitnessContext,
+        argument_side: ArgumentSide,
+    ) -> Self {
         Self {
             witness: Some(witness),
-            polarity: CallPolarity::OutsideCall,
+            argument_side,
         }
     }
 
@@ -2408,14 +2426,28 @@ impl CallContext {
         self.witness.as_mut()
     }
 
-    pub(crate) fn with_preserved_polarity(&self) -> Self {
+    pub(crate) fn with_preserved_side(&self) -> Self {
         self.clone()
     }
 
-    pub fn with_negated_polarity(&self) -> Self {
+    pub fn with_negated_side(&self) -> Self {
         Self {
             witness: self.witness.clone(),
-            polarity: self.polarity.negated(),
+            argument_side: self.argument_side.negated(),
+        }
+    }
+
+    pub(crate) fn argument_side(&self) -> ArgumentSide {
+        self.argument_side
+    }
+
+    pub(crate) fn residual_hooks_enabled(&self) -> bool {
+        match &self.witness {
+            Some(witness) => {
+                self.argument_side == witness.argument_side
+                    && !matches!(self.argument_side, ArgumentSide::NotAnalyzingACall)
+            }
+            None => false,
         }
     }
 
@@ -2426,7 +2458,7 @@ impl CallContext {
             // under Default context and keep prior cache behavior.
             SubsetCacheContext::Witness {
                 witness_id: witness.identity.witness_id,
-                polarity: self.polarity,
+                argument_side: self.argument_side,
             }
         } else {
             SubsetCacheContext::Default
@@ -2480,21 +2512,27 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         &mut self,
         vars: &QuantifiedHandle,
         want: &Type,
+        call_context: &CallContext,
     ) -> CallContext {
         let id = self.next_witness_context_id;
         self.next_witness_context_id = self
             .next_witness_context_id
             .checked_add(1)
             .expect("witness context id overflow");
-        CallContext::with_witness(ResidualWitnessContext {
-            identity: ResidualIdentity {
-                call_site_id: id,
-                witness_id: id,
-                target_vars: want.collect_maybe_placeholder_vars().into_iter().collect(),
+        let argument_side = call_context.argument_side();
+        CallContext::with_witness_and_side(
+            ResidualWitnessContext {
+                identity: ResidualIdentity {
+                    call_site_id: id,
+                    witness_id: id,
+                    target_vars: want.collect_maybe_placeholder_vars().into_iter().collect(),
+                },
+                argument_side,
+                origin_vars: vars.0.iter().copied().collect(),
+                deferred_vars: SmallSet::new(),
             },
-            origin_vars: vars.0.iter().copied().collect(),
-            deferred_vars: SmallSet::new(),
-        })
+            argument_side,
+        )
     }
 
     pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
@@ -2566,6 +2604,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     }
 
     fn record_deferred_residual_target_vars(&mut self, origin_var: Var, other: &Type) {
+        if !self.active_call_context.residual_hooks_enabled() {
+            return;
+        }
         let Some(witness) = self.active_call_context.residual_witness_mut() else {
             return;
         };

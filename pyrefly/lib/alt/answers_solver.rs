@@ -75,9 +75,12 @@ use crate::dispatch_anyidx;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
+use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::CallContext;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
@@ -3037,7 +3040,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
-        match self.is_subset_eq_with_reason(got, want) {
+        let subset_result = match tcc().kind {
+            TypeCheckKind::CallArgument(..)
+            | TypeCheckKind::CallVarArgs(..)
+            | TypeCheckKind::CallKwArgs(..)
+            | TypeCheckKind::CallUnpackKwArg(..) => {
+                let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
+                self.solver().is_subset_eq_with_call_context(
+                    got,
+                    want,
+                    self.type_order(),
+                    &call_context,
+                )
+            }
+            _ => self.is_subset_eq_with_reason(got, want),
+        };
+        match subset_result {
             Ok(()) => true,
             Err(error) => {
                 let note = self

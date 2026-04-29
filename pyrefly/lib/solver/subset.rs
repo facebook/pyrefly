@@ -1620,9 +1620,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     metadata: _,
                 }),
             ) => {
-                let params_context = call_context.with_negated_polarity();
+                let params_context = call_context.with_negated_side();
                 self.is_subset_params_with_context(&l.params, &u.params, &params_context)?;
-                let ret_context = call_context.with_preserved_polarity();
+                let ret_context = call_context.with_preserved_side();
                 self.is_subset_eq_with_context(&l.ret, &u.ret, &ret_context)
             }
             (Type::TypedDict(TypedDict::Anonymous(got)), Type::TypedDict(want)) => {
@@ -2114,9 +2114,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Forall(forall), _) => {
                 // Finalizing the quantified vars returns instantiation errors
                 let (vs, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
-                let mut witness_context = self.make_forall_witness_context(&vs, want);
+                let mut witness_context = self.make_forall_witness_context(&vs, want, call_context);
                 let result = self.is_subset_eq_with_context(&got, want, &witness_context);
                 if result.is_ok()
+                    && witness_context.residual_hooks_enabled()
                     && let Some(witness) = witness_context.residual_witness_mut()
                 {
                     if let Some(deferred_vars) =

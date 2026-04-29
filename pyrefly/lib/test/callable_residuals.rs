@@ -149,6 +149,30 @@ reveal_type(out_p)  # E: revealed type: Unknown
 );
 
 testcase!(
+    test_polarity_canary_protocol_in_negative_slot,
+    r#"
+from typing import Callable, Protocol, reveal_type
+
+class PolyCb(Protocol):
+    def __call__[T](self, x: T) -> T: ...
+
+def choose[A](f: Callable[[PolyCb], A]) -> A:
+    ...
+
+def id_cb[X](cb: Callable[[X], X]) -> Callable[[X], X]:
+    return cb
+
+out = choose(id_cb)
+reveal_type(out)  # E: revealed type: (Unknown) -> Unknown
+
+def bad(cb: Callable[[int], str]) -> int:
+    return 0
+
+out2 = choose(bad)  # E: Argument `(cb: (int) -> str) -> int` is not assignable to parameter `f` with type `(PolyCb) -> @_` in function `choose`
+"#,
+);
+
+testcase!(
     test_type_var_tuple_hof_against_concrete_tuple_with_generic_param,
     r#"
 from typing import Callable, reveal_type
