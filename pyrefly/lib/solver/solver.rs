@@ -1594,9 +1594,7 @@ impl Solver {
                     };
                     *e = if let Some(bound) = solved_bound {
                         Variable::Answer(bound)
-                    } else if (q.is_type_var() || q.is_param_spec())
-                        && let Some(ResidualIdentity { target_vars, .. }) = residual_candidate
-                    {
+                    } else if let Some(ResidualIdentity { target_vars, .. }) = residual_candidate {
                         Variable::ResidualAnswer {
                             target_vars,
                             ty: self.materialize_generic_residual_type(q),

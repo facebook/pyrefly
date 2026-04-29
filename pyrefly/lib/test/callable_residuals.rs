@@ -138,14 +138,13 @@ reveal_type(result)  # E: revealed type: [A, B](tuple[A, B]) -> tuple[A, B]
 );
 
 testcase!(
-    bug = "TypeVarTuple loses *Ts and degrades to Unknown tuple in revealed type",
     test_type_var_tuple_identity_of_identity,
     r#"
 from typing import Callable, reveal_type
 def identity_tuple[*Ts, R](x: Callable[[*Ts], R]) -> Callable[[*Ts], R]:
     return x
 result = identity_tuple(identity_tuple)
-reveal_type(result)  # E: revealed type: [R](**tuple[(**tuple[Unknown, ...]) -> R]) -> (**tuple[Unknown, ...]) -> R
+reveal_type(result)  # E: revealed type: [Ts, R](**tuple[(**tuple[*Ts]) -> R]) -> (**tuple[*Ts]) -> R
 "#,
 );
 
