@@ -2238,6 +2238,43 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    /// Finds overridden parent declarations for a method or class attribute definition.
+    ///
+    /// The answers index records override edges from a child declaration range to the
+    /// declaration ranges it overrides in the MRO. We use that mapping to make
+    /// go-to-declaration on an overriding member jump to the parent declaration instead
+    /// of back to the local implementation.
+    fn parent_declarations_for_definition(
+        &self,
+        handle: &Handle,
+        definition: &TextRangeWithModule,
+        module_cache: &mut SmallMap<ModulePath, Option<Module>>,
+    ) -> Vec<TextRangeWithModule> {
+        let Some(index) = solutions_index_for_module(self, handle, &definition.module) else {
+            return Vec::new();
+        };
+        let Some(parent_methods) = index
+            .lock()
+            .parent_methods_map
+            .get(&definition.range)
+            .cloned()
+        else {
+            return Vec::new();
+        };
+
+        let mut seen = HashSet::new();
+        let mut declarations = Vec::new();
+        for (parent_module_path, parent_range) in parent_methods {
+            let Some(module) = module_info_for_path(self, module_cache, &parent_module_path) else {
+                continue;
+            };
+            if seen.insert((module.path().dupe(), parent_range)) {
+                declarations.push(TextRangeWithModule::new(module, parent_range));
+            }
+        }
+        declarations
+    }
+
     pub fn goto_declaration(
         &self,
         handle: &Handle,
@@ -2254,10 +2291,26 @@ impl<'a> Transaction<'a> {
                 ..Default::default()
             },
         )?;
-
-        Ok(definitions
-            .into_vec()
-            .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range)))
+        let mut module_cache = SmallMap::new();
+        let mut seen = HashSet::new();
+        let mut results = Vec::new();
+        for definition in definitions {
+            let base =
+                TextRangeWithModule::new(definition.module.dupe(), definition.definition_range);
+            let declarations =
+                self.parent_declarations_for_definition(handle, &base, &mut module_cache);
+            let declarations = if declarations.is_empty() {
+                vec![base]
+            } else {
+                declarations
+            };
+            for declaration in declarations {
+                if seen.insert((declaration.module.path().dupe(), declaration.range)) {
+                    results.push(declaration);
+                }
+            }
+        }
+        Ok(results)
     }
 
     pub fn goto_type_definition(
@@ -3626,6 +3679,58 @@ fn find_child_implementations_impl<T: RdepTransaction>(
     }
 
     child_implementations
+}
+
+fn module_info_for_path(
+    transaction: &Transaction<'_>,
+    cache: &mut SmallMap<ModulePath, Option<Module>>,
+    module_path: &ModulePath,
+) -> Option<Module> {
+    if let Some(module) = cache.get(module_path) {
+        return module.dupe();
+    }
+
+    let counterpart_path = match module_path.details() {
+        ModulePathDetails::Memory(path) => Some(ModulePath::filesystem((**path).clone())),
+        ModulePathDetails::FileSystem(path) => Some(ModulePath::memory(path.clone().to_path_buf())),
+        _ => None,
+    };
+
+    let module = transaction.handles().into_iter().find_map(|handle| {
+        let path = handle.path();
+        ((path == module_path)
+            || counterpart_path
+                .as_ref()
+                .is_some_and(|counterpart| path == counterpart))
+        .then(|| transaction.get_module_info(&handle))
+        .flatten()
+    });
+    cache.insert(module_path.dupe(), module.dupe());
+    if let Some(counterpart_path) = counterpart_path {
+        cache.insert(counterpart_path, module.dupe());
+    }
+    module
+}
+
+fn solutions_index_for_module(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    module: &Module,
+) -> Option<Arc<Mutex<Index>>> {
+    let counterpart_path = match module.path().details() {
+        ModulePathDetails::Memory(path) => Some(ModulePath::filesystem((**path).clone())),
+        ModulePathDetails::FileSystem(path) => Some(ModulePath::memory(path.clone().to_path_buf())),
+        _ => None,
+    };
+    std::iter::once(module.path().dupe())
+        .chain(counterpart_path)
+        .find_map(|path| {
+            self::Transaction::get_solutions(
+                transaction,
+                &Handle::new(module.name(), path, handle.sys_info().dupe()),
+            )
+            .and_then(|solutions| solutions.get_index())
+        })
 }
 
 fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
