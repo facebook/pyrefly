@@ -1600,8 +1600,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     metadata: _,
                 }),
             ) => {
-                self.is_subset_params(&l.params, &u.params)?;
-                self.is_subset_eq(&l.ret, &u.ret)
+                // Check returns before parameters so quantified vars in the target callable
+                // pick up their covariant lower bounds before contravariant parameter checks.
+                // This keeps cases like `math.gcd <: Callable[[T, T], T]` precise: `int`
+                // from the return type should win over the looser `SupportsIndex` parameter
+                // bound.
+                self.is_subset_eq(&l.ret, &u.ret)?;
+                self.is_subset_params(&l.params, &u.params)
             }
             (Type::TypedDict(TypedDict::Anonymous(got)), Type::TypedDict(want)) => {
                 self.is_subset_anonymous_typed_dict(got, want)

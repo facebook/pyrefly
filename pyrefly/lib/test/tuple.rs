@@ -575,7 +575,7 @@ testcase!(
 from typing import assert_type
 
 class Foo(tuple[int, ...]):
-    def __getitem__(self, name: str) -> int:  # E: `Foo.__getitem__` has type
+    def __getitem__(self, name: str) -> int:  # pyrefly: ignore [bad-override]
         ...
 
 def test(foo: Foo) -> None:
@@ -589,7 +589,7 @@ testcase!(
 from typing import assert_type
 
 class Parent(tuple[int, ...]):
-    def __getitem__(self, name: str) -> int:  # E: `Parent.__getitem__` has type
+    def __getitem__(self, name: str) -> int:  # pyrefly: ignore [bad-override]
         ...
 
 class Child(Parent):
