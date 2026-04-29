@@ -661,6 +661,19 @@ def mixed_type_err(xs: tuple[int, int] | Iterable[str]):
 "#,
 );
 
+testcase!(
+    test_splat_bounded_slice,
+    r#"
+def f(x: int, y: int, z: int) -> None: ...
+
+def bounded_suffix(xs: list[int]) -> None:
+    f(*xs[-4:-2], 42) # OK
+
+def bounded_suffix_with_two_trailing_args(xs: list[int]) -> None:
+    f(*xs[-4:-2], 41, 42) # OK
+"#,
+);
+
 // Normally, positional arguments can not come after keyword arguments. Splat args are an
 // exception. However, splat args are still evaluated first, so they consume positional params
 // before any keyword arguments.
