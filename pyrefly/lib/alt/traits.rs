@@ -268,6 +268,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyDecorator {
         Decorator {
             ty: heap.mk_any_implicit(),
             deprecation: None,
+            attrs_default_field: None,
         }
     }
 }

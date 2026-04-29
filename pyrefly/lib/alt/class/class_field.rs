@@ -2500,12 +2500,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             DataclassMember::NotAField
         } else {
             let flags = field.dataclass_flags_of(self.heap);
+            let flags = if flags.default.is_none()
+                && self.get_metadata_for_class(cls).is_attrs_class()
+                && let Some(default_ty) = self.attrs_default_for_field(cls, name)
+            {
+                let mut flags = flags;
+                flags.default = Some(default_ty);
+                flags
+            } else {
+                flags
+            };
             if field.is_init_var() {
                 DataclassMember::InitVar(member, flags)
             } else {
                 DataclassMember::Field(member, flags)
             }
         }
+    }
+
+    fn attrs_default_for_field(&self, cls: &Class, field_name: &Name) -> Option<Type> {
+        let class_fields = self.get_class_fields(cls)?;
+        for name in class_fields.class_body_fields() {
+            if name == field_name {
+                continue;
+            }
+            let Some(field) = self.get_non_synthesized_field_from_current_class_only(cls, name)
+            else {
+                continue;
+            };
+            if !matches!(&field.0, ClassFieldInner::Method { .. }) {
+                continue;
+            }
+            let ty = field.ty();
+            if ty
+                .attrs_default_field()
+                .is_some_and(|default_name| default_name == field_name)
+            {
+                return ty
+                    .callable_return_type(self.heap)
+                    .or_else(|| Some(self.heap.mk_any_implicit()));
+            }
+        }
+        None
     }
 
     fn check_and_sanitize_type_parameters(

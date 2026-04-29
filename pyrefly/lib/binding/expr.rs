@@ -1232,13 +1232,65 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Vec<Idx<KeyDecorator>> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
+            let attrs_default_field = self.attrs_default_decorator_field(&x.expression);
             self.ensure_expr(&mut x.expression, usage);
             let k = self.insert_binding(
                 KeyDecorator(x.range),
-                BindingDecorator { expr: x.expression },
+                BindingDecorator {
+                    expr: x.expression,
+                    attrs_default_field,
+                },
             );
             decorator_keys.push(k);
         }
         decorator_keys
+    }
+
+    fn attrs_default_decorator_field(&self, expr: &Expr) -> Option<Name> {
+        if self.scopes.enclosing_class_and_metadata_keys().is_none() {
+            return None;
+        }
+        let Expr::Attribute(attr) = expr else {
+            return None;
+        };
+        if attr.attr.id.as_str() != "default" {
+            return None;
+        }
+        let Expr::Name(base_name) = &*attr.value else {
+            return None;
+        };
+        let (_, style) = self.scopes.binding_idx_for_name(&base_name.id)?;
+        let FlowStyle::ClassField {
+            initial_value: Some(initial_value),
+        } = style
+        else {
+            return None;
+        };
+        if self.is_attrs_field_specifier(&initial_value) {
+            Some(base_name.id.clone())
+        } else {
+            None
+        }
+    }
+
+    fn is_attrs_field_specifier(&self, expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        match &*call.func {
+            Expr::Name(name) => matches!(name.id.as_str(), "field" | "attrib" | "ib"),
+            Expr::Attribute(attr) => {
+                let attr_name = attr.attr.id.as_str();
+                if !matches!(attr_name, "field" | "attrib" | "ib") {
+                    return false;
+                }
+                if let Expr::Name(base) = &*attr.value {
+                    matches!(base.id.as_str(), "attr" | "attrs")
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 }
