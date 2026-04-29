@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::mem;
+use std::sync::Arc;
 
 use itertools::Either;
 use itertools::Itertools;
@@ -67,6 +68,7 @@ use crate::types::simplify::unions_with_literals;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::CallableResidual;
 use crate::types::types::CallableResidualKind;
+use crate::types::types::Forallable;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -83,6 +85,7 @@ const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to
 /// and each recursive call to is_subset_eq can use several KB of stack space
 /// due to large enums (Type) and lock guards.
 const INITIAL_GAS: Gas = Gas::new(200);
+const MAX_RESIDUAL_FINALIZE_ITERS: usize = 8;
 
 /// Accumulated bounds for a solver variable.
 #[derive(Clone, Debug, Default)]
@@ -643,9 +646,7 @@ impl Solver {
     /// expressions so that all-literal SizeExpr trees fold to single literals.
     pub fn finish_function_return(&self, mut t: Type) -> Type {
         self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), false, None);
-        // For the current plumbing stage, substitution finalization always flattens
-        // residual payloads back to their precomputed non-residual fallback.
-        t = self.flatten_residual_for_non_target_read(&t);
+        t = self.finalize_callable_residuals_at_boundary(t);
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
         // After variable expansion, dimension expressions may have all-literal operands
@@ -683,6 +684,125 @@ impl Solver {
             }
         });
         flattened
+    }
+
+    fn promote_callable_to_forall(&self, callable: Callable) -> Type {
+        let callable_ty = self
+            .heap
+            .mk_callable(callable.params.clone(), callable.ret.clone());
+        let mut tparams = Vec::new();
+        callable_ty.for_each_quantified(&mut |q| tparams.push(q.clone()));
+        tparams.sort();
+        tparams.dedup();
+        Forallable::Callable(callable).forall(Arc::new(TParams::new(tparams)))
+    }
+
+    fn generic_residual_quantified(&self, residual: &CallableResidual) -> Quantified {
+        let CallableResidualKind::Generic { quantified } = &residual.kind;
+        quantified.clone()
+    }
+
+    /// Finalize callable residuals after a substitution (either a return type or a class field)
+    /// once (as in, perform one round of finalization - if a residual resolves to another
+    /// residual, the second one will still be present).
+    ///
+    /// - Recursively replace `CallableResidual`s that are not nested in a Callable with flattened
+    ///   fallback types (for example generic residuals become the gradual fallback for that quantified)
+    /// - Transform callables that contain `CallableResidual`s (for example, if there are generic
+    ///   residuals, then replace them with the Quantified, and also promote to a Forall with
+    ///   those quantifieds scoped as type parameters).
+    ///
+    /// Returns
+    /// - did_we_encounter_any_residuals: used to terminate recursive
+    ///   transforms, which we need because residuals can nest (in particular,
+    ///   an overload residual can contain a generic residual)
+    /// - did_we_encounter_any_residuals_inside_a_callable: used to
+    ///   
+    ///
+    /// TODO(stroxler): See if this can be simplified or otherwise made clearer at the top of the
+    /// stack, including after overload support gets added and after optimizations.
+    fn finalize_callable_residuals_mut(&self, ty: &mut Type, callable_slot: bool) -> (bool, bool) {
+        match ty {
+            Type::CallableResidual(residual) => {
+                if !callable_slot {
+                    *ty = self.generic_residual_quantified(residual).as_gradual_type();
+                    return (true, false);
+                }
+                *ty = self
+                    .heap
+                    .mk_quantified(self.generic_residual_quantified(residual));
+                (true, true)
+            }
+            Type::Callable(callable) => {
+                let mut changed = false;
+                let mut consumed_residual = false;
+                match &mut callable.params {
+                    Params::List(params) => {
+                        for param in params.items_mut() {
+                            let (param_changed, param_consumed) =
+                                self.finalize_callable_residuals_mut(param.as_type_mut(), true);
+                            changed |= param_changed;
+                            consumed_residual |= param_consumed;
+                        }
+                    }
+                    Params::ParamSpec(prefix, p) => {
+                        for prefix_param in prefix.iter_mut() {
+                            let prefix_ty = match prefix_param {
+                                PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
+                            };
+                            let (prefix_changed, prefix_consumed) =
+                                self.finalize_callable_residuals_mut(prefix_ty, true);
+                            changed |= prefix_changed;
+                            consumed_residual |= prefix_consumed;
+                        }
+                        let (paramspec_changed, paramspec_consumed) =
+                            self.finalize_callable_residuals_mut(p, true);
+                        changed |= paramspec_changed;
+                        consumed_residual |= paramspec_consumed;
+                    }
+                    Params::Ellipsis | Params::Materialization => {}
+                }
+                let (ret_changed, ret_consumed) =
+                    self.finalize_callable_residuals_mut(&mut callable.ret, true);
+                changed |= ret_changed;
+                consumed_residual |= ret_consumed;
+                if consumed_residual {
+                    let promoted = self.promote_callable_to_forall((**callable).clone());
+                    *ty = promoted;
+                    (true, true)
+                } else {
+                    (changed, false)
+                }
+            }
+            _ => {
+                let mut changed = false;
+                let mut consumed_residual = false;
+                ty.recurse_mut(&mut |inner| {
+                    let (inner_changed, inner_consumed) =
+                        self.finalize_callable_residuals_mut(inner, false);
+                    changed |= inner_changed;
+                    consumed_residual |= inner_consumed;
+                });
+                (changed, consumed_residual)
+            }
+        }
+    }
+
+    /// Finalize callable residuals at a substitution boundary (a return type or class field).
+    ///
+    /// Because residuals can resolve to residuals, we do this until all residuals are removed.
+    ///
+    /// TODO(stroxler): We might be able to simplify this if we can guarantee that residuals
+    /// nest at most one deep; I *think* we only really need to handle generic residuals inside
+    /// an overload residual, which means two passes should suffice, but it is not trivial
+    /// to be certain about this.
+    fn finalize_callable_residuals_at_boundary(&self, mut ty: Type) -> Type {
+        for _ in 0..MAX_RESIDUAL_FINALIZE_ITERS {
+            if !self.finalize_callable_residuals_mut(&mut ty, false).0 {
+                return ty;
+            }
+        }
+        self.flatten_residual_for_non_target_read(&ty)
     }
 
     fn residual_read_for_query_var(
@@ -1632,7 +1752,7 @@ impl Solver {
 
     pub fn for_display(&self, mut t: Type) -> Type {
         self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), true, None);
-        t = self.flatten_residual_for_non_target_read(&t);
+        t = self.finalize_callable_residuals_at_boundary(t);
         self.simplify_mut(&mut t);
         t.deterministic_printing()
     }
