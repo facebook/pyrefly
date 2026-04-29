@@ -612,7 +612,7 @@ impl<'a> Transaction<'a> {
         let parent_handle = self
             .import_handle(handle, ModuleName::from_str(parent_module_str), None)
             .finding()?;
-        let (position, insert_text, imported_module) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             self.config_finder(),
             handle.dupe(),
@@ -622,9 +622,9 @@ impl<'a> Transaction<'a> {
         );
         Some((
             submodule_name.to_owned(),
-            position,
-            insert_text,
-            imported_module,
+            import_edit.range.start(),
+            import_edit.new_text,
+            import_edit.module_name,
         ))
     }
 
@@ -2521,7 +2521,7 @@ impl<'a> Transaction<'a> {
         handle_to_import_from: Handle,
         export: Export,
     ) {
-        let (position, insert_text, _) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             self.config_finder(),
             handle.dupe(),
@@ -2529,11 +2529,11 @@ impl<'a> Transaction<'a> {
             unknown_name,
             import_format,
         );
-        let range = TextRange::at(position, TextSize::new(0));
+        let range = import_edit.range;
         let is_deprecated = export.deprecation.is_some();
         let title = format!(
             "Insert import: `{}`{}",
-            insert_text.trim(),
+            import_edit.display_text,
             if is_deprecated { " (deprecated)" } else { "" }
         );
 
@@ -2547,7 +2547,7 @@ impl<'a> Transaction<'a> {
             title,
             module_info: module_info.dupe(),
             range,
-            insert_text,
+            insert_text: import_edit.new_text,
             is_deprecated,
             is_private_import,
         });
