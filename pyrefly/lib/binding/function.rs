@@ -63,6 +63,7 @@ use crate::binding::binding::ReturnTypeKind;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::pattern::pattern_is_syntactically_exhaustive_for_subject;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::InstanceAttribute;
 use crate::binding::scope::Scope;
@@ -974,7 +975,12 @@ fn function_last_expressions<'a>(
                 let mut syntactically_exhaustive = false;
                 for case in x.cases.iter() {
                     f(sys_info, &case.body, res)?;
-                    if case.pattern.is_wildcard() || case.pattern.is_irrefutable() {
+                    if case.guard.is_none()
+                        && pattern_is_syntactically_exhaustive_for_subject(
+                            &x.subject,
+                            &case.pattern,
+                        )
+                    {
                         syntactically_exhaustive = true;
                         break;
                     }
