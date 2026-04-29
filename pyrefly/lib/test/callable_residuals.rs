@@ -112,6 +112,44 @@ reveal_type(result)  # E: revealed type: [T](list[T]) -> list[T]
 );
 
 testcase!(
+    test_type_var_tuple_hof_against_concrete_tuple_with_generic_param,
+    r#"
+from typing import Callable, reveal_type
+def higher_order[*Ts](x: Callable[[tuple[*Ts]], tuple[*Ts]]) -> Callable[[tuple[*Ts]], tuple[*Ts]]:
+    return x
+def generic_fn[T](x: tuple[int, T]) -> tuple[int, T]:
+    return x
+result = higher_order(generic_fn)
+reveal_type(result)  # E: revealed type: [T](tuple[int, T]) -> tuple[int, T]
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_generic_argument_against_concrete_tuple_hof,
+    r#"
+from typing import Callable, reveal_type
+def higher_order[A, B](x: Callable[[tuple[A, B]], tuple[A, B]]) -> Callable[[tuple[A, B]], tuple[A, B]]:
+    return x
+def generic_fn[*Ts](x: tuple[*Ts]) -> tuple[*Ts]:
+    return x
+result = higher_order(generic_fn)
+reveal_type(result)  # E: revealed type: [A, B](tuple[A, B]) -> tuple[A, B]
+"#,
+);
+
+testcase!(
+    bug = "TypeVarTuple loses *Ts and degrades to Unknown tuple in revealed type",
+    test_type_var_tuple_identity_of_identity,
+    r#"
+from typing import Callable, reveal_type
+def identity_tuple[*Ts, R](x: Callable[[*Ts], R]) -> Callable[[*Ts], R]:
+    return x
+result = identity_tuple(identity_tuple)
+reveal_type(result)  # E: revealed type: [R](**tuple[(**tuple[Unknown, ...]) -> R]) -> (**tuple[Unknown, ...]) -> R
+"#,
+);
+
+testcase!(
     test_param_spec_generic_function,
     r#"
 from typing import Callable, reveal_type
