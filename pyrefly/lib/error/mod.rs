@@ -6,6 +6,7 @@
  */
 
 pub mod baseline;
+pub mod codeclimate;
 pub mod collector;
 pub mod context;
 pub mod display;
