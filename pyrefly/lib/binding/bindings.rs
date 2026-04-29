@@ -1129,8 +1129,8 @@ impl<'a> BindingsBuilder<'a> {
         match style {
             FlowStyle::Other
             | FlowStyle::ClassField { .. }
-            | FlowStyle::PossiblyUninitialized
-            | FlowStyle::MaybeInitialized(_)
+            | FlowStyle::PossiblyUninitialized(_)
+            | FlowStyle::MaybeInitialized(..)
             | FlowStyle::Uninitialized => {
                 self.special_export_from_binding_idx(idx, visited_names, visited_keys)
             }
@@ -1271,6 +1271,19 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
+        // Any non-narrowing use of a guard condition variable could
+        // change its truthiness. At the binding phase we cannot distinguish
+        // pure reads (`print(a)`) from mutations (`a.clear()`, `a.pop()`),
+        // so we conservatively invalidate on every non-narrowing use.
+        // This is required for soundness: without it, `a = []; if a: b = 3;
+        // a.append(1); if a: print(b)` would incorrectly suppress the
+        // uninitialized error — the guard "b is initialized when a is truthy"
+        // breaks once a's truthiness changes independently.
+        // TODO(guard-predicates): refine with type info to skip immutable reads.
+        if !matches!(usage, Usage::Narrowing(_)) {
+            self.scopes
+                .invalidate_guards_for_potential_mutation(name.key());
+        }
         let may_prove_initialized =
             !matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         let name_read_info = self.scopes.look_up_name_for_read(name, usage);
@@ -1759,6 +1772,8 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
+                self.scopes
+                    .satisfy_initialization_guard(name.into_key(), op);
             }
         }
     }

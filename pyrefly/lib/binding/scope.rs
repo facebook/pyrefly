@@ -66,6 +66,8 @@ use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::InitializedInFlow;
 use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
+use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::export::definitions::Definition;
 use crate::export::definitions::DefinitionStyle;
@@ -484,6 +486,27 @@ impl Static {
     }
 }
 
+/// Check whether a NarrowOp represents bare falsiness (`if a:` negated).
+fn is_bare_falsiness(op: &NarrowOp) -> bool {
+    match op {
+        NarrowOp::Atomic(None, AtomicNarrowOp::IsFalsy) => true,
+        NarrowOp::And(ops) => {
+            ops.iter()
+                .any(|op| matches!(op, NarrowOp::Atomic(None, AtomicNarrowOp::IsFalsy)))
+                && ops.iter().all(|op| {
+                    matches!(
+                        op,
+                        NarrowOp::Atomic(
+                            None,
+                            AtomicNarrowOp::IsFalsy | AtomicNarrowOp::Placeholder
+                        )
+                    )
+                })
+        }
+        _ => false,
+    }
+}
+
 /// Flow-sensitive information about a name.
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
@@ -501,6 +524,10 @@ pub struct Flow {
     /// The key for the last `Binding::StmtExpr` in this flow, if any.
     /// Used to check for type-based termination (NoReturn/Never) at solve time.
     last_stmt_expr: Option<Idx<Key>>,
+    /// Reverse index: condition variable → names guarded by it.
+    /// Invariant: a name appears here iff its FlowStyle carries a
+    /// matching `Some(condition_var)` guard.
+    guard_to_guarded: SmallMap<Name, Vec<Name>>,
 }
 
 impl Flow {
@@ -520,8 +547,23 @@ impl Flow {
         self.get_info_hashed(name)?.value()
     }
 
-    fn get_value_mut(&mut self, name: &Name) -> Option<&mut FlowValue> {
-        self.info.get_mut(name)?.value_mut()
+    /// Clear initialization guards whose condition involves `condition_var`.
+    fn invalidate_guards_for_condition_var(&mut self, condition_var: &Name) {
+        let Some(guarded_names) = self.guard_to_guarded.get_mut(condition_var) else {
+            return;
+        };
+        let guarded_names = std::mem::take(guarded_names);
+        for name in &guarded_names {
+            if let Some(value) = self.info.get_mut(name).and_then(|i| i.value_mut()) {
+                match &mut value.style {
+                    FlowStyle::PossiblyUninitialized(guard @ Some(_))
+                    | FlowStyle::MaybeInitialized(_, guard @ Some(_)) => {
+                        *guard = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
@@ -593,7 +635,6 @@ impl FlowInfo {
     fn updated_value(&self, idx: Idx<Key>, style: FlowStyle, in_loop: bool) -> Self {
         Self {
             value: Some(FlowValue { idx, style }),
-            // Note that any existing narrow is wiped when a new value is bound.
             narrow: None,
             narrow_depth: 0,
             loop_prior: if in_loop { self.loop_prior } else { idx },
@@ -635,14 +676,14 @@ impl FlowInfo {
     fn initialized(&self) -> InitializedInFlow {
         self.value()
             .map_or(InitializedInFlow::Yes, |v| match &v.style {
-                FlowStyle::MaybeInitialized(termination_keys) => {
+                FlowStyle::MaybeInitialized(termination_keys, _) => {
                     InitializedInFlow::DeferredCheck(termination_keys.clone())
                 }
                 FlowStyle::Uninitialized
                 | FlowStyle::ClassField {
                     initial_value: None,
                 } => InitializedInFlow::No,
-                FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
+                FlowStyle::PossiblyUninitialized(_) => InitializedInFlow::Conditionally,
                 _ => InitializedInFlow::Yes,
             })
     }
@@ -680,13 +721,19 @@ pub enum FlowStyle {
     },
     /// Am I a class definition?
     ClassDef,
-    /// The name is possibly uninitialized (perhaps due to merging branches)
-    PossiblyUninitialized,
+    /// The name is possibly uninitialized (perhaps due to merging branches).
+    /// The optional guard stores the condition under which it IS initialized
+    /// (e.g., from `if a: b = 3` where `b` is initialized only when `a` is truthy).
+    /// The optional guard is the condition variable name from a correlated
+    /// `if` (e.g., `a` in `if a: b = 3`). When a later `if a:` is seen,
+    /// the guard is satisfied and the name is treated as initialized.
+    PossiblyUninitialized(Option<Name>),
     /// The name may or may not be initialized depending on whether certain branches
     /// terminate (have `Never` type). The termination keys are checked at solve time;
     /// if all of them have `Never` type, the name is considered initialized.
     /// This is used when some branches don't define a variable but end with a NoReturn call.
-    MaybeInitialized(Vec<Idx<Key>>),
+    /// The optional guard has the same meaning as in `PossiblyUninitialized`.
+    MaybeInitialized(Vec<Idx<Key>>, Option<Name>),
     /// The name was in an annotated declaration like `x: int` but not initialized
     Uninitialized,
     /// I'm a speculative binding for a name that was narrowed but not assigned above
@@ -720,28 +767,31 @@ impl FlowStyle {
                 //
                 // Treating it as Other reduces false positives at the expense of
                 // some false negatives.
-                (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized, _)
-                | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized) => {
+                (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized(_), _)
+                | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized(_)) => {
                     match merge_style {
                         MergeStyle::BoolOp => {
                             merged = FlowStyle::Other;
                         }
-                        _ => return FlowStyle::PossiblyUninitialized,
+                        _ => return FlowStyle::PossiblyUninitialized(None),
                     }
                 }
                 // Two MaybeInitialized: combine termination keys from both branches.
                 // Each branch independently needs its keys to be Never for that path
                 // to be initialized, so we collect all keys.
-                (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
+                (
+                    FlowStyle::MaybeInitialized(keys, _),
+                    FlowStyle::MaybeInitialized(other_keys, _),
+                ) => {
                     keys.extend(other_keys);
                 }
                 // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
                 // keys since those paths still need verification at solve time.
-                (FlowStyle::MaybeInitialized(keys), _) => {
-                    merged = FlowStyle::MaybeInitialized(keys.clone());
+                (FlowStyle::MaybeInitialized(keys, _), _) => {
+                    merged = FlowStyle::MaybeInitialized(keys.clone(), None);
                 }
-                (_, FlowStyle::MaybeInitialized(keys)) => {
-                    merged = FlowStyle::MaybeInitialized(keys);
+                (_, FlowStyle::MaybeInitialized(keys, _)) => {
+                    merged = FlowStyle::MaybeInitialized(keys, None);
                 }
                 // Unclear how to merge, default to None
                 _ => {
@@ -771,15 +821,22 @@ impl FlowStyle {
                         MergeStyle::Loop
                         | MergeStyle::LoopDefinitelyRuns
                         | MergeStyle::Exclusive
-                        | MergeStyle::Inclusive => FlowStyle::PossiblyUninitialized,
+                        | MergeStyle::Inclusive => FlowStyle::PossiblyUninitialized(None),
                     }
                 }
             }
         }
     }
 
-    // Transform uninitialized flow styles to FlowStyle::Other
-    // This lets us assume captured variables exist in nested scopes
+    fn initialization_guard(&self) -> Option<&Name> {
+        match self {
+            FlowStyle::PossiblyUninitialized(guard) | FlowStyle::MaybeInitialized(_, guard) => {
+                guard.as_ref()
+            }
+            _ => None,
+        }
+    }
+
     pub fn assume_initialized(self) -> Self {
         match self {
             FlowStyle::Import(..)
@@ -791,8 +848,8 @@ impl FlowStyle {
             | FlowStyle::LoopRecursion
             | FlowStyle::Other => self,
             FlowStyle::Uninitialized
-            | FlowStyle::PossiblyUninitialized
-            | FlowStyle::MaybeInitialized { .. } => FlowStyle::Other,
+            | FlowStyle::PossiblyUninitialized(_)
+            | FlowStyle::MaybeInitialized(..) => FlowStyle::Other,
         }
     }
 }
@@ -1948,6 +2005,34 @@ impl Scopes {
         }
     }
 
+    /// Satisfy initialization guards matching this narrow by upgrading
+    /// guarded names to `FlowStyle::Other`. The merge dedup handles
+    /// the case where branches have different styles for the same idx.
+    /// TODO(guard-predicates): extend for more general predicates.
+    pub fn satisfy_initialization_guard(&mut self, narrow_name: &Name, narrow_op: &NarrowOp) {
+        if !matches!(narrow_op, NarrowOp::Atomic(None, AtomicNarrowOp::IsTruthy)) {
+            return;
+        }
+        let flow = &mut self.current_mut().flow;
+        let Some(guarded_names) = flow.guard_to_guarded.get_mut(narrow_name) else {
+            return;
+        };
+        let guarded_names = std::mem::take(guarded_names);
+        for name in &guarded_names {
+            if let Some(value) = flow.info.get_mut(name).and_then(|i| i.value_mut()) {
+                match &value.style {
+                    FlowStyle::PossiblyUninitialized(Some(guard))
+                    | FlowStyle::MaybeInitialized(_, Some(guard))
+                        if guard == narrow_name =>
+                    {
+                        value.style = FlowStyle::Other;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Track the binding from assigning a name in the current flow. Here "define" means:
     /// - any operation that actually binds a value at runtime (e.g. `x = 5`,
     ///   `x := 5`, `for x in ...`)
@@ -1965,6 +2050,13 @@ impl Scopes {
         style: FlowStyle,
     ) -> Option<NameWriteInfo> {
         let in_loop = self.loop_depth() != 0;
+        // Assigning to a name invalidates guards whose condition involves it
+        // (the condition changed, so it no longer means what it did).
+        // The guard on the name itself is cleared by `updated_value`.
+        let key = name.into_key();
+        self.current_mut()
+            .flow
+            .invalidate_guards_for_condition_var(key);
         match self.current_mut().flow.info.entry_hashed(name.cloned()) {
             Entry::Vacant(e) => {
                 e.insert(FlowInfo::new_value(idx, style));
@@ -1981,6 +2073,12 @@ impl Scopes {
         self.current().flow.get_value(name).map(|v| v.idx)
     }
 
+    pub fn invalidate_guards_for_potential_mutation(&mut self, name: &Name) {
+        self.current_mut()
+            .flow
+            .invalidate_guards_for_condition_var(name);
+    }
+
     /// PEP 572: walrus operators inside comprehensions bind to the enclosing
     /// non-comprehension scope. This method updates the flow of the nearest
     /// enclosing non-comprehension scope with the given name and binding idx.
@@ -1994,6 +2092,11 @@ impl Scopes {
         for i in (0..len - 1).rev() {
             if !matches!(self.scopes[i].scope.kind, ScopeKind::Comprehension { .. }) {
                 let in_loop = !self.scopes[i].scope.loops.is_empty();
+                let key = name.into_key();
+                self.scopes[i]
+                    .scope
+                    .flow
+                    .invalidate_guards_for_condition_var(key);
                 match self.scopes[i].scope.flow.info.entry_hashed(name.cloned()) {
                     Entry::Vacant(e) => {
                         e.insert(FlowInfo::new_value(idx, style));
@@ -2012,9 +2115,11 @@ impl Scopes {
     /// Don't change the type if one is present - downstream we'll emit
     /// uninitialized local errors but keep using our best guess for the type.
     pub fn mark_as_deleted(&mut self, name: &Name) {
-        if let Some(value) = self.current_mut().flow.get_value_mut(name) {
+        let flow = &mut self.current_mut().flow;
+        if let Some(value) = flow.info.get_mut(name).and_then(|i| i.value_mut()) {
             value.style = FlowStyle::Uninitialized;
         }
+        flow.invalidate_guards_for_condition_var(name);
     }
 
     fn get_flow_info(&self, name: &Name) -> Option<&FlowInfo> {
@@ -3259,8 +3364,10 @@ impl<'a> BindingsBuilder<'a> {
                     continue;
                 }
                 if value_idxs.insert(v.idx) {
-                    // An invariant in Pyrefly is that we only set style when we
-                    // set a value, so duplicate value_idxs always have the same style.
+                    styles.push(v.style);
+                } else if !merge_style.is_loop() && v.style.initialization_guard().is_some() {
+                    // Guard satisfaction changes style without changing idx.
+                    // Push the guarded style so the merge sees both.
                     styles.push(v.style);
                 }
                 // Treat uninitialized branches like missing branches for termination keys.
@@ -3298,7 +3405,9 @@ impl<'a> BindingsBuilder<'a> {
         // Helper to compute the final FlowStyle based on definition status.
         let compute_final_style = |styles: Vec<FlowStyle>| -> FlowStyle {
             match &definition_status {
-                DefinitionStatus::DeferredCheck(keys) => FlowStyle::MaybeInitialized(keys.clone()),
+                DefinitionStatus::DeferredCheck(keys) => {
+                    FlowStyle::MaybeInitialized(keys.clone(), None)
+                }
                 DefinitionStatus::Defined => {
                     FlowStyle::merged(true, styles.into_iter(), merge_style)
                 }
@@ -3448,6 +3557,31 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
 
+        // Determine which guards survive the merge. A guard on name N
+        // survives only if N still carries that guard in every branch.
+        // Modification of the condition variable is caught implicitly:
+        // assignment/deletion calls invalidate_guards_for_condition_var,
+        // which clears all guarded names' guards in that branch.
+        let surviving_guards: SmallMap<Name, Name> = base
+            .guard_to_guarded
+            .iter()
+            .flat_map(|(cond_var, guarded_names)| {
+                let cond_var = cond_var.clone();
+                guarded_names
+                    .iter()
+                    .filter(|name| {
+                        flows.iter().all(|flow| {
+                            flow.info
+                                .get(*name)
+                                .and_then(|i| i.value()?.style.initialization_guard())
+                                .is_some_and(|g| g == &cond_var)
+                        })
+                    })
+                    .map(|name| (name.clone(), cond_var.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
         // Create a MergeItem for each flow being merged and each name appearing in any flow.
         let flow_infos: Vec<SmallMap<Name, FlowInfo>> = flows.into_iter().map(|f| f.info).collect();
         let mut merge_items: SmallMap<Name, MergeItem> = SmallMap::with_capacity(all_names.len());
@@ -3486,12 +3620,32 @@ impl<'a> BindingsBuilder<'a> {
             );
         }
 
+        // Re-apply surviving guards to the merged FlowInfos.
+        let mut guard_to_guarded: SmallMap<Name, Vec<Name>> = SmallMap::new();
+        for (name, guard) in surviving_guards {
+            if let Some(value) = merged_flow_infos.get_mut(&name).and_then(|i| i.value_mut()) {
+                match &mut value.style {
+                    FlowStyle::PossiblyUninitialized(g) | FlowStyle::MaybeInitialized(_, g) => {
+                        guard_to_guarded
+                            .entry(guard.clone())
+                            .or_default()
+                            .push(name.clone());
+                        *g = Some(guard);
+                    }
+                    // The variable was fully initialized in all branches
+                    // (e.g., unconditionally reassigned), so no guard needed.
+                    _ => {}
+                }
+            }
+        }
+
         // The resulting flow has terminated only if all branches had terminated.
         let flow = Flow {
             info: merged_flow_infos,
             has_terminated,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
+            guard_to_guarded,
         };
         self.scopes.current_mut().flow = flow
     }
@@ -3684,6 +3838,43 @@ impl<'a> BindingsBuilder<'a> {
         );
         let branches = fork.branches;
         if let Some(negated_prev_ops) = negated_prev_ops_if_nonexhaustive {
+            let initialized_in_branch: SmallSet<Name> = branches
+                .iter()
+                .flat_map(|branch| {
+                    branch.info.iter().filter_map(|(name, info)| {
+                        let is_initialized = info.value().is_some_and(|v| {
+                            !matches!(
+                                v.style,
+                                FlowStyle::PossiblyUninitialized(_)
+                                    | FlowStyle::MaybeInitialized(..)
+                                    | FlowStyle::Uninitialized
+                                    | FlowStyle::LoopRecursion
+                            )
+                        });
+                        is_initialized.then(|| name.clone())
+                    })
+                })
+                .collect();
+
+            // Check whether the condition variable was reassigned or deleted
+            // inside any branch. If so, the guard correlation is broken and
+            // we must not set new guards after the merge.
+            let cond_var_modified = negated_prev_ops.0.len() == 1
+                && negated_prev_ops
+                    .0
+                    .iter()
+                    .next()
+                    .is_some_and(|(cond_var, _)| {
+                        fork.base.get_value(cond_var).is_none_or(|base_val| {
+                            branches.iter().any(|branch| {
+                                branch.get_value(cond_var).is_some_and(|v| {
+                                    v.idx != base_val.idx
+                                        || matches!(v.style, FlowStyle::Uninitialized)
+                                })
+                            })
+                        })
+                    });
+
             self.scopes.current_mut().flow = fork.base.clone();
             self.bind_narrow_ops(
                 negated_prev_ops,
@@ -3695,6 +3886,10 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.current_mut().flow.last_stmt_expr = Some(key);
             }
             self.merge_flow(fork.base, branches, fork.range, MergeStyle::Inclusive);
+
+            if !cond_var_modified {
+                self.set_initialization_guards(negated_prev_ops, &initialized_in_branch);
+            }
         } else {
             self.merge_flow(
                 fork.base,
@@ -3706,6 +3901,40 @@ impl<'a> BindingsBuilder<'a> {
                     MergeStyle::Exclusive
                 },
             );
+        }
+    }
+
+    /// Set initialization guards on candidate names after a non-exhaustive fork.
+    /// TODO(guard-predicates): only single-variable guards (`if a:`) are
+    /// supported. Compound conditions (elif) would need per-variable decomposition.
+    fn set_initialization_guards(&mut self, guard: &NarrowOps, candidates: &SmallSet<Name>) {
+        // Only set guards for bare truthiness (`if a:`). The negated ops
+        // for `if a:` are `{a: IsFalsy}` — skip anything else (compound
+        // conditions, `if not a:` which produces `{a: IsTruthy}`, etc).
+        if guard.0.len() != 1 {
+            return;
+        }
+        let Some((cond_var, (op, _))) = guard.0.iter().next() else {
+            return;
+        };
+        if !is_bare_falsiness(op) {
+            return;
+        }
+        let cond_var = cond_var.clone();
+        let flow = &mut self.scopes.current_mut().flow;
+        for name in candidates {
+            if let Some(value) = flow.info.get_mut(name).and_then(|i| i.value_mut()) {
+                match &mut value.style {
+                    FlowStyle::PossiblyUninitialized(g) | FlowStyle::MaybeInitialized(_, g) => {
+                        *g = Some(cond_var.clone());
+                        let guarded = flow.guard_to_guarded.entry(cond_var.clone()).or_default();
+                        if !guarded.contains(name) {
+                            guarded.push(name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
