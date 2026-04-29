@@ -456,6 +456,51 @@ out_b = result("ok")  # E: Argument `Literal['ok']` is not assignable to paramet
 "#,
 );
 
+testcase!(
+    bug = "Overloaded functions lose overloads through simple Callable identity",
+    test_typevar_identity_overloaded,
+    r#"
+from typing import Callable, overload, reveal_type
+def identity[A, R](x: Callable[[A], R]) -> Callable[[A], R]:
+    return x
+
+@overload
+def f(x: int) -> str: ...  # E: Overload return type `str` is not assignable to implementation return type `None`
+@overload
+def f(x: str) -> int: ...  # E: Overload return type `int` is not assignable to implementation return type `None`
+def f(x): ...
+
+result = identity(f)
+reveal_type(result)  # E: revealed type: (int) -> str
+out_a = result(1)
+reveal_type(out_a)  # E: revealed type: str
+out_b = result("ok")  # E: Argument `Literal['ok']` is not assignable to parameter with type `int`
+"#,
+);
+
+testcase!(
+    bug = "Overloaded signatures collapse to one branch through multi-arg Callable identity",
+    test_typevar_identity_overloaded_two_arg,
+    r#"
+from typing import Callable, overload, reveal_type
+def identity[A, B, R](x: Callable[[A, B], R]) -> Callable[[A, B], R]:
+    return x
+
+@overload
+def f(x: int, y: str) -> bool: ...  # E: Overload return type `bool` is not assignable to implementation return type `None`
+@overload
+def f(x: str, y: int) -> bytes: ...  # E: Overload return type `bytes` is not assignable to implementation return type `None`
+def f(x, y): ...
+
+result = identity(f)
+reveal_type(result)  # E: revealed type: (int, str) -> bool
+out_a = result(1, "ok")
+reveal_type(out_a)  # E: revealed type: bool
+result("x", "ok")  # E: Argument `Literal['x']` is not assignable to parameter with type `int`
+result(1, 1)  # E: Argument `Literal[1]` is not assignable to parameter with type `str`
+"#,
+);
+
 // Regression tests for https://github.com/facebook/pyrefly/issues/2105
 // Overloaded callable protocol passed to higher-order function with ParamSpec.
 // The solver commits to one overload branch too early and rejects valid calls.
