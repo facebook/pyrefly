@@ -646,7 +646,7 @@ impl Solver {
     /// expressions so that all-literal SizeExpr trees fold to single literals.
     pub fn finish_function_return(&self, mut t: Type) -> Type {
         self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), false, None);
-        t = self.finalize_callable_residuals_at_boundary(t);
+        t = self.finalize_callable_residuals_preserving_class_targs_at_boundary(t);
         self.erase_unsolved_variables(&mut t);
         self.simplify_mut(&mut t);
         // After variable expansion, dimension expressions may have all-literal operands
@@ -721,7 +721,12 @@ impl Solver {
     ///
     /// TODO(stroxler): See if this can be simplified or otherwise made clearer at the top of the
     /// stack, including after overload support gets added and after optimizations.
-    fn finalize_callable_residuals_mut(&self, ty: &mut Type, callable_slot: bool) -> (bool, bool) {
+    fn finalize_callable_residuals_mut(
+        &self,
+        ty: &mut Type,
+        callable_slot: bool,
+        preserve_class_targs: bool,
+    ) -> (bool, bool) {
         match ty {
             Type::CallableResidual(residual) => {
                 if !callable_slot {
@@ -739,8 +744,12 @@ impl Solver {
                 match &mut callable.params {
                     Params::List(params) => {
                         for param in params.items_mut() {
-                            let (param_changed, param_consumed) =
-                                self.finalize_callable_residuals_mut(param.as_type_mut(), true);
+                            let (param_changed, param_consumed) = self
+                                .finalize_callable_residuals_mut(
+                                    param.as_type_mut(),
+                                    true,
+                                    preserve_class_targs,
+                                );
                             changed |= param_changed;
                             consumed_residual |= param_consumed;
                         }
@@ -750,20 +759,27 @@ impl Solver {
                             let prefix_ty = match prefix_param {
                                 PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
                             };
-                            let (prefix_changed, prefix_consumed) =
-                                self.finalize_callable_residuals_mut(prefix_ty, true);
+                            let (prefix_changed, prefix_consumed) = self
+                                .finalize_callable_residuals_mut(
+                                    prefix_ty,
+                                    true,
+                                    preserve_class_targs,
+                                );
                             changed |= prefix_changed;
                             consumed_residual |= prefix_consumed;
                         }
                         let (paramspec_changed, paramspec_consumed) =
-                            self.finalize_callable_residuals_mut(p, true);
+                            self.finalize_callable_residuals_mut(p, true, preserve_class_targs);
                         changed |= paramspec_changed;
                         consumed_residual |= paramspec_consumed;
                     }
                     Params::Ellipsis | Params::Materialization => {}
                 }
-                let (ret_changed, ret_consumed) =
-                    self.finalize_callable_residuals_mut(&mut callable.ret, true);
+                let (ret_changed, ret_consumed) = self.finalize_callable_residuals_mut(
+                    &mut callable.ret,
+                    true,
+                    preserve_class_targs,
+                );
                 changed |= ret_changed;
                 consumed_residual |= ret_consumed;
                 if consumed_residual {
@@ -778,12 +794,16 @@ impl Solver {
                     (changed, false)
                 }
             }
+            Type::ClassType(_) if preserve_class_targs && !callable_slot => (false, false),
             _ => {
                 let mut changed = false;
                 let mut consumed_residual = false;
                 ty.recurse_mut(&mut |inner| {
-                    let (inner_changed, inner_consumed) =
-                        self.finalize_callable_residuals_mut(inner, callable_slot);
+                    let (inner_changed, inner_consumed) = self.finalize_callable_residuals_mut(
+                        inner,
+                        callable_slot,
+                        preserve_class_targs,
+                    );
                     changed |= inner_changed;
                     consumed_residual |= inner_consumed;
                 });
@@ -800,13 +820,28 @@ impl Solver {
     /// nest at most one deep; I *think* we only really need to handle generic residuals inside
     /// an overload residual, which means two passes should suffice, but it is not trivial
     /// to be certain about this.
-    fn finalize_callable_residuals_at_boundary(&self, mut ty: Type) -> Type {
+    fn finalize_callable_residuals_at_boundary_impl(
+        &self,
+        mut ty: Type,
+        preserve_class_targs: bool,
+    ) -> Type {
         for _ in 0..MAX_RESIDUAL_FINALIZE_ITERS {
-            if !self.finalize_callable_residuals_mut(&mut ty, false).0 {
+            if !self
+                .finalize_callable_residuals_mut(&mut ty, false, preserve_class_targs)
+                .0
+            {
                 return ty;
             }
         }
         self.flatten_residual_for_non_target_read(&ty)
+    }
+
+    pub(crate) fn finalize_callable_residuals_at_boundary(&self, ty: Type) -> Type {
+        self.finalize_callable_residuals_at_boundary_impl(ty, false)
+    }
+
+    fn finalize_callable_residuals_preserving_class_targs_at_boundary(&self, ty: Type) -> Type {
+        self.finalize_callable_residuals_at_boundary_impl(ty, true)
     }
 
     fn residual_read_for_query_var(

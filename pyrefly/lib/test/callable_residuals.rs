@@ -248,7 +248,6 @@ reveal_type(result)  # E: revealed type: [T](y: T) -> T
 );
 
 testcase!(
-    bug = "Residuals are flattened when going into class TArgs, so we cannot preserve generic behavior",
     test_typevar_class_field_projection_parity,
     r#"
 from typing import Callable, reveal_type
@@ -261,14 +260,14 @@ class Box[T]:
 def make_box[T](f: Callable[[T], T]) -> Box[T]: ...
 def f[S](x: S) -> S: ...
 b = make_box(f)
-reveal_type(b.fn)  # E: revealed type: (Unknown) -> Unknown
+reveal_type(b.fn)  # E: revealed type: [S](S) -> S
 called = b.fn(1)
-reveal_type(called)  # E: revealed type: Unknown
+reveal_type(called)  # E: revealed type: int
 "#,
 );
 
 testcase!(
-    bug = "Residuals are flattened when going into class TArgs, so we cannot preserve generic behavior",
+    bug = "Wrapper.__call__ with P.args / P.kwargs does not preserve generic behavior yet",
     test_callable_class_wrapper,
     r#"
 from typing import Callable, reveal_type
@@ -286,13 +285,13 @@ def wrap[**P, R](f: Callable[P, R]) -> Wrapper[P, R]:
 def f[S](x: S) -> S: ...
 wrapper = wrap(f)
 reveal_type(wrapper)  # E: revealed type: Wrapper[[x: Unknown], Unknown]
+reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
 result = wrapper(1)
 reveal_type(result)  # E: revealed type: Unknown
 "#,
 );
 
 testcase!(
-    bug = "Residuals are flattened when going into class TArgs, so we cannot preserve generic behavior",
     test_class_field_with_bare_residual,
     r#"
 from typing import Callable, reveal_type
@@ -306,7 +305,8 @@ class Container[**P, R]:
 def make_container[**P, R](f: Callable[P, R]) -> Container[P, R]: ...
 def f[S](x: S) -> S: ...
 c = make_container(f)
-reveal_type(c.fn)  # E: revealed type: (x: Unknown) -> Unknown
+reveal_type(c.fn)  # E: revealed type: [R](x: R) -> R
+# This is expected - a bare residual targ in a class field should flatten on read
 reveal_type(c.x)  # E: revealed type: Unknown
 "#,
 );
