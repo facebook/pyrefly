@@ -143,3 +143,30 @@ reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
 x: C[int] = c2(1)
 "#,
 );
+
+testcase!(
+    bug = "Generic return type not wrapped correctly through ParamSpec",
+    test_paramspec_wrap_generic_return,
+    r#"
+from typing import Callable, Awaitable, reveal_type
+def wrap[**P, T](f: Callable[P, T]) -> Callable[P, Awaitable[T]]: ...
+def identity_fn[X](x: X) -> X: ...
+
+result = wrap(identity_fn)
+reveal_type(result)  # E: revealed type: (x: Unknown) -> Awaitable[Unknown]
+"#,
+);
+
+testcase!(
+    bug = "Generic behavior not respected across Concatenate",
+    test_concatenate_strip_first,
+    r#"
+from typing import Callable, Concatenate, Any, reveal_type
+def strip_first[**P, T](
+    f: Callable[Concatenate[Any, P], T]
+) -> Callable[P, T]: ...
+def two_arg[S](x: int, y: S) -> S: ...
+result = strip_first(two_arg)
+reveal_type(result)  # E: revealed type: [T](y: Unknown) -> T
+"#,
+);
