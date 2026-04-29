@@ -1590,7 +1590,7 @@ impl Solver {
                     };
                     *e = if let Some(bound) = solved_bound {
                         Variable::Answer(bound)
-                    } else if q.is_type_var()
+                    } else if (q.is_type_var() || q.is_param_spec())
                         && let Some(ResidualIdentity { target_vars, .. }) = residual_candidate
                     {
                         Variable::ResidualAnswer {
