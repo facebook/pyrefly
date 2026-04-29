@@ -28,6 +28,7 @@ mod hover;
 mod implementation;
 mod inlay_hint;
 mod io;
+mod move_symbol_new_file;
 mod no_config_warnings;
 mod notebook_code_action;
 mod notebook_completion;
