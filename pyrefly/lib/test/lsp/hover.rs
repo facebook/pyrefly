@@ -397,6 +397,29 @@ foo(x=1, y=2)
 }
 
 #[test]
+fn hover_on_dataclass_constructor_keyword_shows_field_type() {
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Test:
+    foo: int
+
+Test(foo=1)
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("foo: int"),
+        "Expected dataclass constructor keyword hover to show field type, got: {report}"
+    );
+    assert!(
+        !report.contains("(class) Test") && !report.contains("Test: int"),
+        "Keyword hover should not be labeled as the class, got: {report}"
+    );
+}
+
+#[test]
 fn hover_returns_none_for_docstring_literals() {
     let code = r#"
 def foo():
