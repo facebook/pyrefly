@@ -224,6 +224,9 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn class_def(&mut self, mut x: StmtClassDef, parent: &NestingContext) {
+        if x.name.id.is_empty() {
+            return;
+        }
         let synthesized_base_classes = self.prescan_synthesized_bases(&mut x, parent);
         self.class_def_inner(x, parent, synthesized_base_classes);
     }

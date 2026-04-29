@@ -778,6 +778,10 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
+        // This is to handle "def" with no func name after
+        if x.name.id.is_empty() {
+            return;
+        }
         let func_name = x.name.clone();
         let mut def_idx =
             self.declare_current_idx(Key::Definition(ShortIdentifier::new(&func_name)));
