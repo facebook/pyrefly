@@ -206,23 +206,6 @@ reveal_type(out)  # E: revealed type: str
 );
 
 testcase!(
-    bug = "Generic class constructors don't work with ParamSpec",
-    test_param_spec_generic_constructor,
-    r#"
-from typing import Callable, reveal_type
-def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
-  return x
-class C[T]:
-  x: T
-  def __init__(self, x: T) -> None:
-    self.x = x
-c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
-x: C[int] = c2(1)
-"#,
-);
-
-testcase!(
     test_paramspec_wrap_generic_return,
     r#"
 from typing import Callable, Awaitable, reveal_type
@@ -343,5 +326,45 @@ c = Container(f)
 reveal_type(c.fn)  # E: revealed type: [R](x: R) -> R
 # This is expected - a bare residual targ in a class field should flatten on read
 reveal_type(c.x)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    bug = "Generic class constructors don't work with ParamSpec",
+    test_param_spec_generic_constructor,
+    r#"
+from typing import Callable, reveal_type
+def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
+  return x
+class C[T]:
+  x: T
+  def __init__(self, x: T) -> None:
+    self.x = x
+c2 = identity(C)
+reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
+x: C[int] = c2(1)
+"#,
+);
+
+testcase!(
+    bug = "Constructor identity still erases ParamSpec/return generics to Ellipsis/Unknown (and/or partial types)",
+    test_callable_class_constructor_identity,
+    r#"
+from typing import Callable, reveal_type
+
+def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
+    return x
+
+class Wrapper[**P, R]:
+    fn: Callable[P, R]
+    def __init__(self, fn: Callable[P, R]) -> None:
+        self.fn = fn
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
+        return self.fn(*args, **kwargs)
+
+ctor = identity(Wrapper)
+reveal_type(ctor)  # E: revealed type: (fn: (...) -> Unknown) -> Wrapper[Ellipsis, Unknown]
+identity2 = ctor(identity)
+reveal_type(identity2.__call__)  # E: revealed type: (Wrapper[Ellipsis, Unknown], ...) -> Unknown
 "#,
 );
