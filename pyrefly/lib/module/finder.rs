@@ -18,6 +18,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::suggest::best_suggestion;
+use regex::Regex;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
@@ -35,6 +36,70 @@ use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
 use crate::state::state::TransactionTimingCounters;
+
+/// Maximum number of bytes read from an `__init__.py` when checking for the
+/// `pkgutil.extend_path` marker. The conventional spellings live on the first
+/// one or two lines, so a small bounded read is sufficient and avoids loading
+/// large `__init__.py` files into memory just to classify them.
+const PKGUTIL_DETECTION_MAX_BYTES: usize = 4096;
+
+#[allow(clippy::doc_overindented_list_items)]
+/// Matches the `__path__ = ...extend_path(...` assignment used by pkgutil-style
+/// legacy namespace packages, in any of its common spellings:
+///   __path__ = extend_path(__path__, __name__)
+///   __path__ = pkgutil.extend_path(__path__, __name__)
+///   __path__ = __import__('pkgutil').extend_path(__path__, __name__)
+///
+/// The pattern is anchored at the start of a (possibly indented) line and
+/// disallows `#` and newlines between `=` and `extend_path`, which rules out
+/// matches inside line comments and accidental multi-line spans. `\b` before
+/// `extend_path` prevents matching identifiers that merely end in
+/// `extend_path` (e.g. `_extend_path`).
+///
+/// Known limitations:
+/// - A call split across multiple physical lines, e.g.
+///     __path__ = (
+///         pkgutil.extend_path(__path__, __name__)
+///     )
+///   will not match. This spelling is rare; we accept the false negative to
+///   keep detection a single regex pass without a Python parser.
+/// - The same line of text appearing inside a triple-quoted string literal
+///   would still match. This is rare enough in practice that we accept the
+///   false positive (treating the package as a LegacyNamespacePackage only
+///   broadens the search, it does not break correctness).
+static PKGUTIL_EXTEND_PATH_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s*__path__\s*=\s*[^#\n]*\bextend_path\s*\(").unwrap());
+
+/// Returns `true` if the given `__init__.py` file contains the `pkgutil.extend_path`
+/// call that marks it as a legacy namespace package.
+///
+/// Detection uses a regex rather than AST parsing to avoid the performance cost of
+/// parsing every `__init__.py` encountered during module discovery. Only the
+/// first `PKGUTIL_DETECTION_MAX_BYTES` of the file are read — by convention the
+/// `extend_path` boilerplate appears at the top of the file.
+///
+/// Note: pyrefly's search root ordering may not exactly match Python's `sys.path`
+/// ordering in all configurations, so in rare cases a different `__init__.py` may be
+/// selected as the primary package entry point than what Python would choose at runtime.
+fn is_pkgutil_namespace(init_path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(init_path) else {
+        return false;
+    };
+    let mut buf = [0u8; PKGUTIL_DETECTION_MAX_BYTES];
+    let mut total = 0;
+    while total < buf.len() {
+        match file.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(_) => return false,
+        }
+    }
+    // `from_utf8_lossy` replaces invalid bytes with U+FFFD, which cannot match
+    // the regex — safe whether or not the 4 KiB cut splits a multi-byte char.
+    let contents = String::from_utf8_lossy(&buf[..total]);
+    PKGUTIL_EXTEND_PATH_PATTERN.is_match(&contents)
+}
 
 /// Time a filesystem stat operation and record to timing counters.
 /// Slow = >1ms, suggesting EdenFS remote fetch.
@@ -61,15 +126,20 @@ enum FindResult {
     SingleFilePyiModule(PathBuf),
     /// Found a single-file .py module. The path must not point to an __init__ file.
     SingleFilePyModule(PathBuf),
-    /// Found regular packages. First path must point to an __init__ file.
-    /// Second path indicates where to continue search next. It should always point to the parent of the __init__ file.
-    /// The ordering of packages should be the same as the order they're found
-    /// in the `includes`.
+    /// Found a regular package. The first field points to its `__init__` file; the
+    /// second field is the directory containing that file, used as the sole root for
+    /// subsequent submodule searches. Regular packages are "greedy": the first one
+    /// found in the search path claims the package name exclusively.
     RegularPackage(PathBuf, PathBuf),
-    /// Found a namespace package.
-    /// The path component indicates where to continue search next. It may contain more than one directories as the namespace package
-    /// may span across multiple search roots.
-    NamespacePackage(Vec1<PathBuf>),
+    /// Found a legacy namespace package — a regular package whose `__init__` file
+    /// calls `pkgutil.extend_path`. The first field is the winning `__init__` path
+    /// (from the highest-priority root); the second field accumulates every
+    /// same-named directory across all search roots, matching the runtime behavior
+    /// of `extend_path`, which extends `__path__` to include all such directories.
+    LegacyNamespacePackage(PathBuf, Vec1<PathBuf>),
+    /// Found an implicit namespace package (no `__init__` file anywhere).
+    /// The paths cover every same-named directory found across all search roots.
+    ImplicitNamespacePackage(Vec1<PathBuf>),
     /// Found a compiled Python file (.pyc, .pyx, .pyd). Represents some kind of
     /// compiled module, whether that's bytecode, C extension, or DLL.
     /// Compiled modules lack source and type info, and are
@@ -99,15 +169,20 @@ impl FindResult {
     /// are not compared.
     fn best_result(a: FindResult, b: FindResult) -> Self {
         match (&a, &b) {
-            (FindResult::RegularPackage(..), _) => a,
-            (_, FindResult::RegularPackage(..)) => b,
+            // RegularPackage and LegacyNamespacePackage (LNP) share the top tier: both carry a
+            // concrete `__init__.py` and resolve to `FileSystem(init_path)`. Tying them lets
+            // the prefer-`a` approach keep sys.path order ("first concrete-init wins") when
+            // fallback roots are folded in. Promoting RegularPackage above LNP would let a
+            // later root's RegularPackage override an earlier LNP, inverting that order.
+            (FindResult::RegularPackage(..), _) | (FindResult::LegacyNamespacePackage(..), _) => a,
+            (_, FindResult::RegularPackage(..)) | (_, FindResult::LegacyNamespacePackage(..)) => b,
             (FindResult::SingleFilePyiModule(_), _) => a,
             (_, FindResult::SingleFilePyiModule(_)) => b,
             (FindResult::SingleFilePyModule(_), _) => a,
             (_, FindResult::SingleFilePyModule(_)) => b,
             (FindResult::CompiledModule(_), _) => a,
             (_, FindResult::CompiledModule(_)) => b,
-            (FindResult::NamespacePackage(_), _) => a,
+            (FindResult::ImplicitNamespacePackage(_), _) => a,
         }
     }
 
@@ -117,10 +192,11 @@ impl FindResult {
         match self {
             FindResult::SingleFilePyiModule(path)
             | FindResult::SingleFilePyModule(path)
-            | FindResult::RegularPackage(path, _) => {
+            | FindResult::RegularPackage(path, _)
+            | FindResult::LegacyNamespacePackage(path, _) => {
                 FindingOrError::new_finding(ModulePath::filesystem(path))
             }
-            FindResult::NamespacePackage(roots) => {
+            FindResult::ImplicitNamespacePackage(roots) => {
                 // TODO(grievejia): Preserving all info in the list instead of dropping all but the first one.
                 FindingOrError::new_finding(ModulePath::namespace(roots.first().clone()))
             }
@@ -159,10 +235,16 @@ fn find_one_part_in_root(
     let dir_exists = timed_stat(timing, || candidate_dir.is_dir());
 
     if dir_exists {
-        // Check if `name` corresponds to a regular package.
+        // Check if `name` corresponds to a regular or legacy namespace package.
         for candidate_init_suffix in candidate_init_suffixes {
             let init_path = candidate_dir.join(candidate_init_suffix);
             if timed_stat(timing, || init_path.exists()) {
+                if is_pkgutil_namespace(&init_path) {
+                    return Some(FindResult::LegacyNamespacePackage(
+                        init_path,
+                        Vec1::new(candidate_dir),
+                    ));
+                }
                 return Some(FindResult::RegularPackage(init_path, candidate_dir));
             } else if let Some(v) = phantom_paths.as_deref_mut() {
                 v.push(init_path);
@@ -215,7 +297,9 @@ fn find_one_part_in_root(
 
     // Finally check if `name` corresponds to a namespace package.
     if dir_exists {
-        return Some(FindResult::NamespacePackage(Vec1::new(candidate_dir)));
+        return Some(FindResult::ImplicitNamespacePackage(Vec1::new(
+            candidate_dir,
+        )));
     } else if let Some(v) = phantom_paths.as_deref_mut() {
         v.push(candidate_dir);
     }
@@ -242,20 +326,91 @@ fn find_one_part<'a>(
     if name == &Name::new_static("__pycache__") {
         return None;
     }
-    let mut namespace_roots = Vec::new();
+
+    // Accumulates a LegacyNamespacePackage (LNP) or ImplicitNamespacePackage (INP) once the
+    // first one is encountered. LNP "wins" over INP.  If an LNP appears after one or more INP
+    // roots, we switch into LNP mode and absorb those prior INP roots into the LNP's __path__.
+    // This mirrors `pkgutil.extend_path`'s runtime behavior, which appends every same-named
+    // directory on sys.path regardless of whether it has an __init__.py. Once LNP mode is active,
+    // later INP roots are also absorbed. RegularPackage short-circuits only when no
+    // namespace_accumulator is None.
+    let mut namespace_accumulator: Option<FindResult> = None;
+
     while let Some(root) = roots.next() {
         match find_one_part_in_root(name, root, style_filter, phantom_paths, timing) {
             None => (),
-            Some(FindResult::NamespacePackage(package)) => {
-                namespace_roots.push(package.first().clone())
+            Some(FindResult::ImplicitNamespacePackage(pkg)) => {
+                let namespace_dir = pkg.into_vec().remove(0);
+                match &mut namespace_accumulator {
+                    None => {
+                        namespace_accumulator = Some(FindResult::ImplicitNamespacePackage(
+                            Vec1::new(namespace_dir),
+                        ));
+                    }
+                    Some(FindResult::ImplicitNamespacePackage(roots)) => roots.push(namespace_dir),
+                    Some(FindResult::LegacyNamespacePackage(_, roots)) => {
+                        // LegacyNamespacePackage mode absorbs implicit namespace dirs: extend_path's runtime
+                        // semantics include every same-named directory on  sys.path, with or without __init__.py.
+                        roots.push(namespace_dir);
+                    }
+                    _ => unreachable!(
+                        "accumulator only holds LegacyNamespacePackage or ImplicitNamespacePackage"
+                    ),
+                }
             }
-            Some(result) => return Some((result, roots.cloned().collect::<Vec<_>>())),
+            Some(FindResult::LegacyNamespacePackage(init_path, init_roots)) => {
+                debug_assert_eq!(init_roots.len(), 1);
+                let init_dir = init_roots.into_vec().remove(0);
+                match &mut namespace_accumulator {
+                    None => {
+                        namespace_accumulator = Some(FindResult::LegacyNamespacePackage(
+                            init_path,
+                            Vec1::new(init_dir),
+                        ));
+                    }
+                    Some(FindResult::LegacyNamespacePackage(_, roots)) => roots.push(init_dir),
+                    Some(FindResult::ImplicitNamespacePackage(_)) => {
+                        // Switch from ImplicitNamespacePackage (INP) mode into LegacyNamespacePackage (LNP) mode,
+                        // absorbing the prior INP roots into the LNP's __path__. The new LNP's init_dir comes first
+                        // so it remains the primary winner.
+                        let prior_namespace_roots = match namespace_accumulator.take() {
+                            Some(FindResult::ImplicitNamespacePackage(rs)) => rs.into_vec(),
+                            _ => unreachable!(),
+                        };
+                        let mut combined = Vec1::new(init_dir);
+                        combined.extend(prior_namespace_roots);
+                        namespace_accumulator =
+                            Some(FindResult::LegacyNamespacePackage(init_path, combined));
+                    }
+                    _ => unreachable!(
+                        "accumulator only holds LegacyNamespacePackage or ImplicitNamespacePackage"
+                    ),
+                }
+            }
+            Some(FindResult::RegularPackage(init_path, init_dir)) => {
+                if namespace_accumulator.is_none() {
+                    // RegularPackage short-circuits when no LegacyNamespacePackage/ImplicitNamespacePackage
+                    // mode is active. It claims the package name exclusively; later roots are not searched.
+                    return Some((
+                        FindResult::RegularPackage(init_path, init_dir),
+                        roots.cloned().collect(),
+                    ));
+                }
+                // LegacyNamespacePackage or ImplicitNamespacePackage mode is active: ignore RegularPackage roots.
+            }
+            Some(result) => {
+                if namespace_accumulator.is_none() {
+                    // Single-file or compiled module with no LegacyNamespacePackage/ImplicitNamespacePackage
+                    // mode active: short-circuit and let find_module_components consider the  remaining roots
+                    // in case a higher-priority result lives there.
+                    return Some((result, roots.cloned().collect::<Vec<_>>()));
+                }
+                // LegacyNamespacePackage or ImplicitNamespacePackage mode is active: ignore non-package results.
+            }
         }
     }
-    match Vec1::try_from_vec(namespace_roots) {
-        Err(_) => None,
-        Ok(namespace_roots) => Some((FindResult::NamespacePackage(namespace_roots), vec![])),
-    }
+
+    namespace_accumulator.map(|result| (result, vec![]))
 }
 
 /// Finds the first package (regular, single file, or namespace) in search roots. Returns None if no module is found.
@@ -325,7 +480,7 @@ fn find_one_part_prefix<'a>(
     // Add namespace packages to results
     for (name, roots) in namespace_roots {
         if let Ok(namespace_roots) = Vec1::try_from_vec(roots) {
-            results.push((FindResult::NamespacePackage(namespace_roots), name));
+            results.push((FindResult::ImplicitNamespacePackage(namespace_roots), name));
         }
     }
 
@@ -362,16 +517,20 @@ fn continue_find_module(
                 break;
             }
             Some(FindResult::RegularPackage(_, next_root)) => {
+                // Regular packages search only their single directory for the next component.
                 current_result = find_one_part(
                     part,
-                    [next_root].iter(),
+                    iter::once(&next_root),
                     style_filter,
                     phantom_paths,
                     timing,
                 )
                 .map(|x| x.0);
             }
-            Some(FindResult::NamespacePackage(next_roots)) => {
+            // Both LegacyNamespacePackage and ImplicitNamespacePackage search all their accumulated
+            // roots. Cross-root best_result selection happens inside find_one_part.
+            Some(FindResult::LegacyNamespacePackage(_, next_roots))
+            | Some(FindResult::ImplicitNamespacePackage(next_roots)) => {
                 current_result =
                     find_one_part(part, next_roots.iter(), style_filter, phantom_paths, timing)
                         .map(|x| x.0);
@@ -414,7 +573,9 @@ where
     )?;
 
     match current_result {
-        FindResult::SingleFilePyiModule(_) | FindResult::RegularPackage(..) => Some(current_result),
+        FindResult::SingleFilePyiModule(_)
+        | FindResult::RegularPackage(..)
+        | FindResult::LegacyNamespacePackage(..) => Some(current_result),
         _ => Some(
             fallback_search
                 .into_iter()
@@ -511,7 +672,7 @@ fn combine_normal_and_stub_results(
                 .with_error(FindError::MissingSource(module)),
         ),
         (Some(_), Some(stub_result)) => Some(stub_result.module_path()),
-        (Some(FindResult::NamespacePackage(namespaces)), _) => {
+        (Some(FindResult::ImplicitNamespacePackage(namespaces)), _) => {
             namespaces_found.append(&mut namespaces.into_vec());
             None
         }
@@ -539,7 +700,7 @@ fn combine_normal_and_stub_results(
 /// an `Ok(None)` indicates the module wasn't found here, but could be found in another
 /// search location (`search_path`, `typeshed`, ...).
 ///
-/// If the result is a [`FindResult::NamespacePackage`], we instead add its entries to
+/// If the result is a [`FindResult::ImplicitNamespacePackage`], we instead add its entries to
 /// `namespaces_found`, since this can be overridden by a higher-priority [`FindResult`]
 /// variant later. It is the calling function's responsibility to recognize that
 /// `namespaces_found` might hold the final result if no `Ok(Some(_))` values are
@@ -638,7 +799,8 @@ fn find_module_prefixes<'a>(
                                 .map(|x| x.0);
                     }
                 }
-                Some(FindResult::NamespacePackage(next_roots)) => {
+                Some(FindResult::LegacyNamespacePackage(_, next_roots))
+                | Some(FindResult::ImplicitNamespacePackage(next_roots)) => {
                     if is_last {
                         results = find_one_part_prefix(part, next_roots.iter());
                         break;
@@ -1245,7 +1407,78 @@ mod tests {
     }
 
     #[test]
-    fn test_find_regular_package_early_return() {
+    fn test_find_regular_package_zero_instances_found() {
+        // When no root contains the package at all, find_module returns None.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::dir("search_root0", vec![])]);
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                [root.join("search_root0")].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_regular_package_one_instance_found() {
+        // A regular package found in exactly one root resolves to its __init__.py.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "search_root0",
+                vec![TestPath::dir(
+                    "a",
+                    vec![TestPath::file("__init__.py"), TestPath::file("b.py")],
+                )],
+            )],
+        );
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                [root.join("search_root0")].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // Submodule in the same root is also reachable.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                [root.join("search_root0")].iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+    }
+
+    #[test]
+    fn test_regular_package_short_circuits() {
+        // A regular package (no extend_path) claims the package name exclusively.
+        // The second root's `__init__.py` and its submodules are unreachable.
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(
@@ -1267,10 +1500,44 @@ mod tests {
                 ),
             ],
         );
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+        // `a` resolves to the first root's __init__.py.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // `a.b` is reachable (in root0).
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+        // `a.c` is NOT reachable: root0 is a regular package and claims `a` exclusively.
         assert_eq!(
             find_module(
                 ModuleName::from_str("a.c"),
-                [root.join("search_root0"), root.join("search_root1")].iter(),
+                roots.iter(),
                 &mut vec![],
                 None,
                 None,
@@ -1278,11 +1545,415 @@ mod tests {
                 &mut None,
                 None,
             ),
-            // We won't find `a.c` because when searching for package `a`, we've already
-            // committed to `search_root0/a/` as the path to search next for `c`. And there's
-            // no `c.py` in `search_root0/a/`.
             None
         );
+    }
+
+    #[test]
+    fn test_regular_package_short_circuits_over_namespace() {
+        // A regular package in root0 short-circuits even when root1 has only a namespace
+        // directory. Submodules in root1 are not reachable.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("__init__.py"), TestPath::file("b.py")],
+                    )],
+                ),
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir("a", vec![TestPath::file("c.py")])],
+                ),
+            ],
+        );
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // `a.c` is NOT reachable: root0's regular package owns `a` exclusively.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.c"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            ),
+            None
+        );
+    }
+
+    const PKGUTIL_INIT: &str =
+        "from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n";
+
+    #[test]
+    fn test_legacy_namespace_package_basic() {
+        // A legacy namespace package (extend_path in __init__.py) makes submodules
+        // in all same-named directories across search roots reachable.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("__init__.py"), TestPath::file("b.py")],
+                    )],
+                ),
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("__init__.py"), TestPath::file("c.py")],
+                    )],
+                ),
+            ],
+        );
+        // Write the pkgutil boilerplate into both __init__.py files.
+        std::fs::write(root.join("search_root0/a/__init__.py"), PKGUTIL_INIT).unwrap();
+        std::fs::write(root.join("search_root1/a/__init__.py"), PKGUTIL_INIT).unwrap();
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+        // `a` resolves to the first root's __init__.py.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // `a.b` is reachable from root0.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+        // `a.c` is also reachable: extend_path merges all same-named directories.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.c"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
+        );
+    }
+
+    #[test]
+    fn test_legacy_namespace_package_then_regular_package() {
+        // Once `find_one_part` enters LegacyNamespacePackage (LNP) mode
+        // (root0 has an extend_path __init__.py), a *regular* package in
+        // a later root must NOT take over the resolution. The LNP keeps
+        // the winning __init__ from root0 and the RegularPackage's
+        // submodules are unreachable.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("__init__.py"), TestPath::file("b.py")],
+                    )],
+                ),
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("__init__.py"), TestPath::file("c.py")],
+                    )],
+                ),
+            ],
+        );
+        // root0's __init__.py is an LegacyNamespacePackage; root1's is a plain regular package.
+        std::fs::write(root.join("search_root0/a/__init__.py"), PKGUTIL_INIT).unwrap();
+        std::fs::write(root.join("search_root1/a/__init__.py"), "").unwrap();
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+        // `a` resolves to the LegacyNamespacePackage's __init__.py from root0.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.py")
+            ))
+        );
+        // `a.b` is reachable (root0).
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+        // `a.c` is NOT reachable: once in LegacyNamespacePackage (LNP) mode, the regular package in
+        // root1 is ignored and its directory is not added to the LNP path.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.c"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_legacy_namespace_package_pyi_init() {
+        // An `__init__.pyi` containing extend_path text is also classified
+        // as LegacyNamespacePackage — the regex match is by content, not filename. This pins
+        // current behavior: stub files don't execute at runtime, so this is
+        // a slight overshoot, but the alternative (filename-based skip) would
+        // miss the real-world case of inline-stubbed legacy namespace packages.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::dir(
+                        "a",
+                        vec![TestPath::file("__init__.pyi"), TestPath::file("b.py")],
+                    )],
+                ),
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir("a", vec![TestPath::file("c.py")])],
+                ),
+            ],
+        );
+        std::fs::write(root.join("search_root0/a/__init__.pyi"), PKGUTIL_INIT).unwrap();
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+        // `a` resolves to the .pyi file in root0.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/a/__init__.pyi")
+            ))
+        );
+        // `a.b` is reachable from root0.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.b"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root0/a/b.py")))
+        );
+        // `a.c` from root1 is reachable: LegacyNamespacePackage absorbs the ImplicitNamespacePackage dir in root1.
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("a.c"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("search_root1/a/c.py")))
+        );
+    }
+
+    #[test]
+    fn test_is_pkgutil_namespace_detection() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Standard two-line form.
+        let init1 = root.join("init1.py");
+        std::fs::write(
+            &init1,
+            "from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n",
+        )
+        .unwrap();
+        assert!(is_pkgutil_namespace(&init1));
+
+        // One-liner import form.
+        let init2 = root.join("init2.py");
+        std::fs::write(
+            &init2,
+            "__path__ = __import__('pkgutil').extend_path(__path__, __name__)\n",
+        )
+        .unwrap();
+        assert!(is_pkgutil_namespace(&init2));
+
+        // Qualified name form.
+        let init3 = root.join("init3.py");
+        std::fs::write(
+            &init3,
+            "import pkgutil\n__path__ = pkgutil.extend_path(__path__, __name__)\n",
+        )
+        .unwrap();
+        assert!(is_pkgutil_namespace(&init3));
+
+        // Regular __init__.py (no extend_path).
+        let init4 = root.join("init4.py");
+        std::fs::write(&init4, "from . import foo\n__all__ = ['foo']\n").unwrap();
+        assert!(!is_pkgutil_namespace(&init4));
+
+        // Empty __init__.py.
+        let init5 = root.join("init5.py");
+        std::fs::write(&init5, "").unwrap();
+        assert!(!is_pkgutil_namespace(&init5));
+
+        // extend_path appearing inside a `#` comment line is not detected.
+        let init_comment = root.join("init_comment.py");
+        std::fs::write(
+            &init_comment,
+            "# __path__ = pkgutil.extend_path(__path__, __name__)\n",
+        )
+        .unwrap();
+        assert!(!is_pkgutil_namespace(&init_comment));
+
+        // An inline `#` comment between `=` and `extend_path` rules out a match
+        // (the regex disallows `#` between `=` and `extend_path`).
+        let init_inline_comment = root.join("init_inline_comment.py");
+        std::fs::write(
+            &init_inline_comment,
+            "__path__ = pkgutil. # commented out\n    extend_path(__path__, __name__)\n",
+        )
+        .unwrap();
+        assert!(!is_pkgutil_namespace(&init_inline_comment));
+
+        // Identifiers that merely end in `extend_path` are not matched.
+        let init_suffix = root.join("init_suffix.py");
+        std::fs::write(
+            &init_suffix,
+            "__path__ = mymod._extend_path(__path__, __name__)\n",
+        )
+        .unwrap();
+        assert!(!is_pkgutil_namespace(&init_suffix));
+
+        // A multi-line `extend_path` call (parenthesized assignment that
+        // breaks across lines between `=` and `extend_path`) is a known
+        // limitation — we accept the false negative.
+        let init_multiline = root.join("init_multiline.py");
+        std::fs::write(
+            &init_multiline,
+            "__path__ = (\n    pkgutil.extend_path(__path__, __name__)\n)\n",
+        )
+        .unwrap();
+        assert!(!is_pkgutil_namespace(&init_multiline));
+
+        // A trailing inline comment after the call still matches — the regex
+        // only needs to see through the opening paren.
+        let init_trailing_comment = root.join("init_trailing_comment.py");
+        std::fs::write(
+            &init_trailing_comment,
+            "__path__ = pkgutil.extend_path(__path__, __name__)  # legacy ns\n",
+        )
+        .unwrap();
+        assert!(is_pkgutil_namespace(&init_trailing_comment));
+
+        // Indented `__path__` (e.g. assigned in a conditional) still matches.
+        let init_indented = root.join("init_indented.py");
+        std::fs::write(
+            &init_indented,
+            "if True:\n    __path__ = pkgutil.extend_path(__path__, __name__)\n",
+        )
+        .unwrap();
+        assert!(is_pkgutil_namespace(&init_indented));
+
+        // The `extend_path` call must appear within the first
+        // `PKGUTIL_DETECTION_MAX_BYTES` of the file. Anything past that
+        // boundary is invisible to detection — accept the false negative
+        // since real-world `__init__.py` files put the call at the top.
+        let init_truncated = root.join("init_truncated.py");
+        let mut padding = String::with_capacity(PKGUTIL_DETECTION_MAX_BYTES + 128);
+        for _ in 0..(PKGUTIL_DETECTION_MAX_BYTES / 4) {
+            padding.push_str("# x\n");
+        }
+        padding.push_str("__path__ = pkgutil.extend_path(__path__, __name__)\n");
+        std::fs::write(&init_truncated, &padding).unwrap();
+        assert!(!is_pkgutil_namespace(&init_truncated));
     }
 
     #[test]
