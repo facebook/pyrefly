@@ -1874,6 +1874,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                 }
+                Some(CalleeKind::Function(FunctionKind::SqlAlchemyMappedColumn)) => self
+                    .call_sqlalchemy_mapped_column(
+                        ty.clone(),
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range,
+                        x,
+                        hint,
+                        errors,
+                    ),
                 None if matches!(
                     ty,
                     Type::Type(box Type::SpecialForm(SpecialForm::TypeForm))
