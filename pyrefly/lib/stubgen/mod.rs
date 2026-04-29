@@ -254,4 +254,265 @@ class C:
             actual.trim(),
         );
     }
+
+    #[test]
+    fn test_stubgen_dataclass_field_strips_metadata() {
+        let input = r#"from dataclasses import dataclass, field
+
+@dataclass
+class A:
+    n: int = field(default=1, metadata={"a": 1}, repr=True)
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from dataclasses import dataclass, field
+
+
+@dataclass
+class A:
+    n: int = field(default=1)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// Non-literal `field(...)` RHS is re-emitted in the stub with typing-relevant kwargs only
+    /// (dropping e.g. `metadata`).
+    #[test]
+    fn test_stubgen_dataclass_field_strips_field_call() {
+        let input = r#"from dataclasses import dataclass, field
+
+@dataclass
+class A:
+    name: str | None = field(default=None)
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from dataclasses import dataclass, field
+
+
+@dataclass
+class A:
+    name: str | None = field(default=None)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// `default_factory` and other whitelisted dataclass `field` kwargs are kept; `metadata` is
+    /// dropped.
+    #[test]
+    fn test_stubgen_dataclass_field_retains_default_factory() {
+        let input = r#"from dataclasses import dataclass, field
+
+@dataclass
+class A:
+    items: list[str] = field(default_factory=list, metadata={"k": 1})
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from dataclasses import dataclass, field
+
+
+@dataclass
+class A:
+    items: list[str] = field(default_factory=list)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// Same for Pydantic: `default_factory` is kept; validation kwargs such as `min_length` are
+    /// not typing-relevant for the stub and are dropped.
+    #[test]
+    fn test_stubgen_pydantic_field_retains_default_factory() {
+        let input = r#"from pydantic import BaseModel, Field
+
+class A(BaseModel):
+    items: list[str] = Field(default_factory=list, min_length=0)
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from pydantic import BaseModel, Field
+
+
+class A(BaseModel):
+    items: list[str] = Field(default_factory=list)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// `default_factory` that is not a simple name/attribute (e.g. a `lambda` or a call) is
+    /// replaced with `lambda: ...` in the stub.
+    #[test]
+    fn test_stubgen_dataclass_field_default_factory_complex_uses_placeholder() {
+        let input = r#"from dataclasses import dataclass, field
+
+@dataclass
+class A:
+    x: list[int] = field(default_factory=lambda: [1, 2, 3])
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from dataclasses import dataclass, field
+
+
+@dataclass
+class A:
+    x: list[int] = field(default_factory=lambda: ...)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    #[test]
+    fn test_stubgen_pydantic_field_default_factory_complex_uses_placeholder() {
+        let input = r#"import functools
+from pydantic import BaseModel, Field
+
+class A(BaseModel):
+    x: list[int] = Field(default_factory=functools.partial(list, [0]))
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"import functools
+from pydantic import BaseModel, Field
+
+
+class A(BaseModel):
+    x: list[int] = Field(default_factory=lambda: ...)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// Same for Pydantic `Field(...)`: keep a reduced call for type checking.
+    #[test]
+    fn test_stubgen_pydantic_field_strips_field_call() {
+        let input = r#"from pydantic import BaseModel, Field
+
+class A(BaseModel):
+    x: int = Field(default=0)
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from pydantic import BaseModel, Field
+
+
+class A(BaseModel):
+    x: int = Field(default=0)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// Required: first positional is `...`. With default stub config, `description=` is dropped.
+    #[test]
+    fn test_stubgen_pydantic_field_required_strips_description() {
+        let input = r#"from pydantic import BaseModel, Field
+
+class A(BaseModel):
+    u: int = Field(..., description="required")
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from pydantic import BaseModel, Field
+
+
+class A(BaseModel):
+    u: int = Field(...)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// When `ExtractConfig::include_docstrings` is true, Pydantic `Field` keeps `description` and
+    /// `title` (same flag as class/function docstrings).
+    #[test]
+    fn test_stubgen_pydantic_field_retains_description_with_include_docstrings() {
+        let input = r#"from pydantic import BaseModel, Field
+
+class A(BaseModel):
+    u: int = Field(..., description="required", title="T")
+"#;
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: true,
+        };
+        let actual = run_stubgen_with_config(input, &config);
+        let expected = r#"from pydantic import BaseModel, Field
+
+
+class A(BaseModel):
+    u: int = Field(..., description="required", title="T")
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// A bare `field()` call (no `default=`) is preserved; there is no literal to simplify to.
+    #[test]
+    fn test_stubgen_dataclass_field_bare_preserved() {
+        let input = r#"from dataclasses import dataclass, field
+
+@dataclass
+class A:
+    name: str = field()
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from dataclasses import dataclass, field
+
+
+@dataclass
+class A:
+    name: str = field()
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// Mix of required fields, `field()` with no default, `field(..., kw_only=True)`, and literals.
+    /// Non-typing `field` kwargs (e.g. `metadata=`) are dropped from the printed stub.
+    #[test]
+    fn test_stubgen_dataclass_mixed_field_defaults() {
+        let input = r#"from dataclasses import dataclass, field
+
+@dataclass
+class Mixed:
+    required: int
+    literal_default: str = "x"
+    field_with_default: int = field(default=0)
+    field_with_none: str | None = field(default=None)
+    field_no_default: int = field()
+    field_ellipsis: int = field(..., kw_only=True)
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from dataclasses import dataclass, field
+
+
+@dataclass
+class Mixed:
+    required: int
+    literal_default: str = "x"
+    field_with_default: int = field(default=0)
+    field_with_none: str | None = field(default=None)
+    field_no_default: int = field()
+    field_ellipsis: int = field(..., kw_only=True)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
+
+    /// Same as `test_stubgen_dataclass_mixed_field_defaults` for Pydantic `Field` (strip
+    /// `description`, etc., keep `default=`, `...` positionals, and a bare `Field()`).
+    #[test]
+    fn test_stubgen_pydantic_mixed_field_defaults() {
+        let input = r#"from pydantic import BaseModel, Field
+
+class Mixed(BaseModel):
+    required: int
+    literal_default: int = 7
+    field_with_default: int = Field(default=0)
+    field_with_none: str | None = Field(default=None)
+    field_bare: int = Field()
+    field_ellipsis: int = Field(..., description="req")
+    field_ellipsis_only: int = Field(...)
+"#;
+        let actual = run_stubgen(input);
+        let expected = r#"from pydantic import BaseModel, Field
+
+
+class Mixed(BaseModel):
+    required: int
+    literal_default: int = 7
+    field_with_default: int = Field(default=0)
+    field_with_none: str | None = Field(default=None)
+    field_bare: int = Field()
+    field_ellipsis: int = Field(...)
+    field_ellipsis_only: int = Field(...)
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
+    }
 }

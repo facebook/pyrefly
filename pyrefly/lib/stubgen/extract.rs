@@ -18,9 +18,13 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_graph::index::Idx;
 use pyrefly_types::callable::Param;
+use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::display::TypeDisplayContext;
+use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::types::Type;
+use starlark_map::Hashed;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Stmt;
@@ -32,7 +36,10 @@ use ruff_text_size::TextRange;
 
 use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::binding::binding::BindingClass;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::export::definitions::Definitions;
@@ -125,6 +132,15 @@ pub fn extract_module_stub(
 
     let dunder_all = resolve_dunder_all(&ast.body, &module_info);
 
+    let class_field_by_def_and_name: HashMap<(ClassDefIndex, Name), Idx<KeyClassField>> =
+        bindings
+            .keys::<KeyClassField>()
+            .map(|idx| {
+                let k = bindings.idx_to_key(idx);
+                ((k.0, k.1.clone()), idx)
+            })
+            .collect();
+
     let mut ctx = ExtractionContext {
         bindings: &bindings,
         answers: &answers,
@@ -134,6 +150,8 @@ pub fn extract_module_stub(
         uses_self: false,
         function_map: &function_map,
         dunder_all: &dunder_all,
+        class_field_by_def_and_name,
+        class_def_index_stack: Vec::new(),
     };
 
     let items = extract_stmts(&ast.body, &mut ctx, false);
@@ -156,6 +174,9 @@ struct ExtractionContext<'a> {
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
     dunder_all: &'a Option<HashSet<Name>>,
+    class_field_by_def_and_name: HashMap<(ClassDefIndex, Name), Idx<KeyClassField>>,
+    /// Innermost class is at the end (nested `class` bodies).
+    class_def_index_stack: Vec<ClassDefIndex>,
 }
 
 fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) -> Vec<StubItem> {
@@ -534,7 +555,14 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
+    let def_index = class_def_index_for_class_def(ctx, class_def);
+    if let Some(d) = def_index {
+        ctx.class_def_index_stack.push(d);
+    }
     let body = extract_stmts(&class_def.body, ctx, true);
+    if def_index.is_some() {
+        ctx.class_def_index_stack.pop();
+    }
 
     Some(StubClass {
         name: name.to_owned(),
@@ -561,10 +589,27 @@ fn extract_ann_assign(
 
     let annotation = source_text(ctx.module_info, ann_assign.annotation.range()).to_owned();
 
-    let value = ann_assign
-        .value
-        .as_deref()
-        .and_then(|v| simple_value_text(v, ctx.module_info));
+    let value = ann_assign.value.as_deref().and_then(|v| {
+        simple_value_text(v, ctx.module_info)
+            .or_else(|| {
+                if in_class {
+                    type_stub_stripped_field_specifier_call(
+                        v,
+                        ctx.module_info,
+                        ctx.config.include_docstrings,
+                    )
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if in_class {
+                    class_body_default_ellipsis_from_solved_class_field(ctx, ann_assign)
+                } else {
+                    None
+                }
+            })
+    });
 
     Some(StubVariable {
         name: name.to_owned(),
@@ -628,6 +673,162 @@ fn simple_value_text(expr: &Expr, module_info: &Module) -> Option<String> {
         }
         Expr::EllipsisLiteral(_) => Some("...".to_owned()),
         _ => None,
+    }
+}
+
+/// dataclass `field` / Pydantic `Field` calls are re-emitted in stubs with a reduced keyword
+/// set so `kw_only`, `init`, and defaults are preserved for type checkers, while
+/// `metadata` / (when docstrings are off) `description` and other runtime-only options are
+/// dropped. For `default_factory=`, only simple callable references (names and `a.b` chains) are
+/// kept; `lambda` bodies, calls, and other complex expressions are replaced with `lambda: ...`.
+/// When [ExtractConfig::include_docstrings] is set, Pydantic `Field` keeps `description` and
+/// `title` in the reduced call (schema doc strings).
+fn type_stub_stripped_field_specifier_call(
+    expr: &Expr,
+    module: &Module,
+    include_docstrings: bool,
+) -> Option<String> {
+    let Expr::Call(call) = expr else {
+        return None;
+    };
+    if call.arguments.args.iter().any(|a| a.is_starred_expr())
+        || call
+            .arguments
+            .keywords
+            .iter()
+            .any(|kw| kw.arg.is_none())
+    {
+        return None;
+    }
+    let kind = field_specifier_kind(&call.func)?;
+    let mut parts: Vec<String> = Vec::new();
+    for arg in &call.arguments.args {
+        parts.push(source_text(module, arg.range()).to_owned());
+    }
+    for kw in &call.arguments.keywords {
+        let name = kw.arg.as_ref()?.as_str();
+        if field_specifier_keyword_retained(
+            kind,
+            name,
+            include_docstrings,
+        ) {
+            let value_str = if name == "default_factory" {
+                default_factory_stub_value(&kw.value, module)
+            } else {
+                source_text(module, kw.value.range()).to_owned()
+            };
+            parts.push(format!("{}={}", name, value_str));
+        }
+    }
+    Some(format!(
+        "{}({})",
+        source_text(module, call.func.as_ref().range()),
+        parts.join(", ")
+    ))
+}
+
+fn field_specifier_keyword_retained(
+    kind: FieldSpecifierKind,
+    name: &str,
+    include_docstrings: bool,
+) -> bool {
+    match kind {
+        FieldSpecifierKind::Dataclass => {
+            matches!(name, "default" | "default_factory" | "init" | "kw_only")
+        }
+        FieldSpecifierKind::Pydantic => {
+            matches!(name, "default" | "default_factory" | "alias" | "validation_alias" | "init")
+                || (include_docstrings && matches!(name, "description" | "title"))
+        }
+    }
+}
+
+/// A simple reference to a callable (`list`, `dict`, `m.nested.fn`) is kept in the stub; a
+/// `lambda` body, a call, or any other non-trivial expression is replaced with `lambda: ...` so
+/// the stub does not echo large or nested runtime logic.
+fn default_factory_stub_value(expr: &Expr, module: &Module) -> String {
+    if is_simple_callable_ref(expr) {
+        return source_text(module, expr.range()).to_owned();
+    }
+    "lambda: ...".to_owned()
+}
+
+/// Unqualified name or a chain of attributes (`collections.deque`) with no calls or literals.
+fn is_simple_callable_ref(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(_) => true,
+        Expr::Attribute(a) => is_simple_callable_ref(&a.value),
+        _ => false,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FieldSpecifierKind {
+    /// `field` (typically `from dataclasses import field` or `dataclasses.field`).
+    Dataclass,
+    /// `Field` (Pydantic or similar); distinguish by callee name `Field` vs `field`.
+    Pydantic,
+}
+
+fn field_specifier_kind(func: &Expr) -> Option<FieldSpecifierKind> {
+    match func {
+        Expr::Name(n) if n.id.as_str() == "field" => Some(FieldSpecifierKind::Dataclass),
+        Expr::Name(n) if n.id.as_str() == "Field" => Some(FieldSpecifierKind::Pydantic),
+        Expr::Attribute(a) if a.attr.as_str() == "field" => Some(FieldSpecifierKind::Dataclass),
+        Expr::Attribute(a) if a.attr.as_str() == "Field" => Some(FieldSpecifierKind::Pydantic),
+        _ => None,
+    }
+}
+
+/// When the RHS is not a simple literal and not a stripped `field`/`Field` call, still emit `= ...`
+/// if the solved class field’s `__init__` has a default (e.g. custom descriptors, or `*`-spread
+/// field calls we could not reprint).
+fn class_body_default_ellipsis_from_solved_class_field(
+    ctx: &ExtractionContext,
+    ann_assign: &ruff_python_ast::StmtAnnAssign,
+) -> Option<String> {
+    let def_index = ctx.class_def_index_stack.last().copied()?;
+    let name = match ann_assign.target.as_ref() {
+        Expr::Name(n) => n.id.clone(),
+        _ => return None,
+    };
+    let idx = ctx.class_field_by_def_and_name.get(&(def_index, name))?;
+    let class_field = ctx.answers.get_idx(*idx)?;
+    let kws = class_field.as_ref().dataclass_flags_of(ctx.answers.heap());
+    if !dataclass_init_param_has_default_for_stub(&kws) {
+        return None;
+    }
+    Some("...".to_owned())
+}
+
+fn class_def_index_for_class_def(
+    ctx: &ExtractionContext,
+    class_def: &StmtClassDef,
+) -> Option<ClassDefIndex> {
+    let key = KeyClass(ShortIdentifier::new(&class_def.name));
+    let class_idx = ctx
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&key))?;
+    match ctx.bindings.get(class_idx) {
+        BindingClass::ClassDef(cb) => Some(cb.def_index),
+        BindingClass::FunctionalClassDef(def_index, ..) => Some(*def_index),
+    }
+}
+
+/// Aligned with `get_dataclass_init`’s `default.is_some()` part of `has_default` (see
+/// `dataclass.rs`), not the full `has_default` expression: we do **not** include
+/// `init_by_name && init_by_alias` because that disjunct is a Pydantic-ism for emitting two
+/// `__init__` parameters (name and alias) and is not a reliable signal that a **single** field
+/// line in a stub should carry `= ...`.
+fn dataclass_init_param_has_default_for_stub(kws: &DataclassFieldKeywords) -> bool {
+    if !kws.init {
+        return false;
+    }
+    match &kws.default {
+        None => false,
+        // `ty` is `&Type` when matching on `&Option<Type>`.
+        Some(ty) if *ty == Type::Ellipsis => false,
+        Some(_) => true,
     }
 }
 

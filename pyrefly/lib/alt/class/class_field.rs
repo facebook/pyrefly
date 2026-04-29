@@ -1091,7 +1091,7 @@ impl ClassField {
         }
     }
 
-    fn dataclass_flags_of(&self, heap: &TypeHeap) -> DataclassFieldKeywords {
+    pub(crate) fn dataclass_flags_of(&self, heap: &TypeHeap) -> DataclassFieldKeywords {
         match &self.0 {
             ClassFieldInner::Property { .. } => DataclassFieldKeywords::new(),
             // Descriptors are always initialized in the class body (otherwise they wouldn't
