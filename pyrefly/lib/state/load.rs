@@ -84,6 +84,20 @@ pub struct Load {
 }
 
 impl Load {
+    fn load_open_filesystem_path(
+        path: &Path,
+        memory_lookup: &MemoryFilesLookup,
+    ) -> Option<Arc<FileContents>> {
+        if let Some(contents) = memory_lookup.get(path) {
+            return Some(Arc::clone(contents));
+        }
+        let canonical_path = path.canonicalize().ok()?;
+        if canonical_path == path {
+            return None;
+        }
+        memory_lookup.get(&canonical_path).map(Arc::clone)
+    }
+
     /// Return the code for this module, optional notebook cell mapping, and whether there was an error while loading (a self-error).
     pub fn load_from_path(
         path: &ModulePath,
@@ -91,7 +105,13 @@ impl Load {
         timing: Option<&TransactionTimingCounters>,
     ) -> (FileContents, Option<anyhow::Error>) {
         let res = match path.details() {
-            ModulePathDetails::FileSystem(path) => Self::load_from_filesystem(path, timing),
+            ModulePathDetails::FileSystem(path) => {
+                if let Some(contents) = Self::load_open_filesystem_path(path, memory_lookup) {
+                    Ok((*contents).clone())
+                } else {
+                    Self::load_from_filesystem(path, timing)
+                }
+            }
             ModulePathDetails::Namespace(_) => Ok(FileContents::from_source("".to_owned())),
             ModulePathDetails::Memory(path) => memory_lookup
                 .get(path)
