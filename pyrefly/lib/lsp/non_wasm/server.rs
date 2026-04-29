@@ -334,7 +334,6 @@ use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
-use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::notebook::LspNotebook;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
@@ -4481,6 +4480,37 @@ impl Server {
             let event = sub_task_telemetry.new_task(TelemetryEventKind::CodeAction(name), start);
             sub_task_telemetry.finish_task(event, None);
         };
+        macro_rules! push_local_code_actions {
+            ($refactors:expr) => {{
+                for action in $refactors {
+                    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                    for (module, edit_range, new_text) in action.edits {
+                        let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
+                            module,
+                            range: edit_range,
+                        }) else {
+                            continue;
+                        };
+                        changes.entry(lsp_location.uri).or_default().push(TextEdit {
+                            range: lsp_location.range,
+                            new_text,
+                        });
+                    }
+                    if changes.is_empty() {
+                        continue;
+                    }
+                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                        title: action.title,
+                        kind: Some(action.kind),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(changes),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }));
+                }
+            }};
+        }
 
         if allow_quickfix {
             let start = Instant::now();
@@ -4551,6 +4581,13 @@ impl Server {
                 ));
             }
             record_code_action_telemetry("quickfix", start);
+            let start = Instant::now();
+            if let Some(refactors) =
+                transaction.implement_abstract_members_code_actions(&handle, range)
+            {
+                push_local_code_actions!(refactors);
+            }
+            record_code_action_telemetry("implement_abstract_members", start);
         }
         if allow_fix_all {
             let start = Instant::now();
@@ -4590,40 +4627,11 @@ impl Server {
             return Ok((!actions.is_empty()).then_some(actions));
         }
         if allow_refactor {
-            let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
-                for action in refactors {
-                    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-                    for (module, edit_range, new_text) in action.edits {
-                        let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
-                            module,
-                            range: edit_range,
-                        }) else {
-                            continue;
-                        };
-                        changes.entry(lsp_location.uri).or_default().push(TextEdit {
-                            range: lsp_location.range,
-                            new_text,
-                        });
-                    }
-                    if changes.is_empty() {
-                        continue;
-                    }
-                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                        title: action.title,
-                        kind: Some(action.kind),
-                        edit: Some(WorkspaceEdit {
-                            changes: Some(changes),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }));
-                }
-            };
             macro_rules! timed_refactor_action {
                 ($name:expr, $call:expr) => {{
                     let start = Instant::now();
                     if let Some(refactors) = $call {
-                        push_refactor_actions(refactors);
+                        push_local_code_actions!(refactors);
                     }
                     record_code_action_telemetry($name, start);
                 }};
