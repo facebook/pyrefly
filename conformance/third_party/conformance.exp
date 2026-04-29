@@ -3633,13 +3633,24 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class9",
-      "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class9",
+      "concise_description": "revealed type: [T](x: list[T], y: list[T]) -> Class9",
+      "description": "revealed type: [T](x: list[T], y: list[T]) -> Class9",
       "line": 195,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
       "stop_line": 195
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Argument `list[str]` is not assignable to parameter `y` with type `list[int]`",
+      "description": "Argument `list[str]` is not assignable to parameter `y` with type `list[int]`",
+      "line": 197,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 197
     }
   ],
   "constructors_consistency.py": [],

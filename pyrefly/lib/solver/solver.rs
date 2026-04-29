@@ -779,7 +779,7 @@ impl Solver {
                 let mut consumed_residual = false;
                 ty.recurse_mut(&mut |inner| {
                     let (inner_changed, inner_consumed) =
-                        self.finalize_callable_residuals_mut(inner, false);
+                        self.finalize_callable_residuals_mut(inner, callable_slot);
                     changed |= inner_changed;
                     consumed_residual |= inner_consumed;
                 });
