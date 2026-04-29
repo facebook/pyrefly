@@ -2040,6 +2040,91 @@ def non_literal_arg(x: int | str) -> None:
 );
 
 testcase!(
+    test_narrow_in_typed_collections,
+    r#"
+from typing import Literal, assert_type
+
+LitA = Literal["a"]
+lit_dict: dict[LitA, int] = {"a": 1}
+lit_tuple: tuple[LitA] = ("a",)
+lit_list: list[LitA] = ["a"]
+lit_set: set[LitA] = {"a"}
+lit_frozenset: frozenset[LitA] = frozenset(("a",))
+
+def test(key: str) -> None:
+    if key in lit_dict:
+        assert_type(key, LitA)
+        assert_type(lit_dict[key], int)
+    if key in lit_tuple:
+        assert_type(key, LitA)
+    if key in lit_list:
+        assert_type(key, LitA)
+    if key in lit_set:
+        assert_type(key, LitA)
+    if key in lit_frozenset:
+        assert_type(key, LitA)
+    if key in frozenset(("a",)):
+        assert_type(key, LitA)
+"#,
+);
+
+testcase!(
+    test_narrow_in_does_not_widen,
+    r#"
+from typing import Any, Literal, Mapping, assert_type
+
+list_any: list[Any] = [1]
+list_object: list[object] = [1]
+set_any: set[Any] = {1}
+set_object: set[object] = {1}
+dict_any: dict[Any, int] = {1: 1}
+dict_object: dict[object, int] = {1: 1}
+mapping_any: Mapping[Any, int] = {1: 1}
+mapping_object: Mapping[object, int] = {1: 1}
+
+def test_list(x: Literal[1] | str) -> None:
+    if x in list_any:
+        assert_type(x, Literal[1] | str)
+    if x in list_object:
+        assert_type(x, Literal[1] | str)
+
+def test_set(x: Literal[1] | str) -> None:
+    if x in set_any:
+        assert_type(x, Literal[1] | str)
+    if x in set_object:
+        assert_type(x, Literal[1] | str)
+
+def test_dict(x: Literal[1] | str) -> None:
+    if x in dict_any:
+        assert_type(x, Literal[1] | str)
+    if x in dict_object:
+        assert_type(x, Literal[1] | str)
+
+def test_mapping(x: Literal[1] | str) -> None:
+    if x in mapping_any:
+        assert_type(x, Literal[1] | str)
+    if x in mapping_object:
+        assert_type(x, Literal[1] | str)
+"#,
+);
+
+testcase!(
+    test_in_abstract_mapping_narrows_key,
+    r#"
+from typing import Mapping, assert_type
+
+def parse_resource_id() -> tuple[str, str] | tuple[None, None]: ...
+
+def lookup_resource(registry: Mapping[str, str]) -> str | None:
+    kind, _obj_id = parse_resource_id()
+    if kind not in registry:
+        return None
+    assert_type(kind, str)
+    return registry[kind]
+"#,
+);
+
+testcase!(
     test_narrow_len,
     r#"
 from typing import assert_type, Never, NamedTuple
