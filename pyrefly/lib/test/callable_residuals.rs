@@ -246,3 +246,67 @@ result = strip_first(two_arg)
 reveal_type(result)  # E: revealed type: [T](y: T) -> T
 "#,
 );
+
+testcase!(
+    bug = "Residuals are flattened when going into class TArgs, so we cannot preserve generic behavior",
+    test_typevar_class_field_projection_parity,
+    r#"
+from typing import Callable, reveal_type
+
+class Box[T]:
+    fn: Callable[[T], T]
+    def __init__(self, fn: Callable[[T], T]) -> None:
+        self.fn = fn
+
+def make_box[T](f: Callable[[T], T]) -> Box[T]: ...
+def f[S](x: S) -> S: ...
+b = make_box(f)
+reveal_type(b.fn)  # E: revealed type: (Unknown) -> Unknown
+called = b.fn(1)
+reveal_type(called)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    bug = "Residuals are flattened when going into class TArgs, so we cannot preserve generic behavior",
+    test_callable_class_wrapper,
+    r#"
+from typing import Callable, reveal_type
+
+class Wrapper[**P, R]:
+    fn: Callable[P, R]
+    def __init__(self, fn: Callable[P, R]) -> None:
+        self.fn = fn
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
+        return self.fn(*args, **kwargs)
+
+def wrap[**P, R](f: Callable[P, R]) -> Wrapper[P, R]:
+    return Wrapper(f)
+
+def f[S](x: S) -> S: ...
+wrapper = wrap(f)
+reveal_type(wrapper)  # E: revealed type: Wrapper[[x: Unknown], Unknown]
+result = wrapper(1)
+reveal_type(result)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
+    bug = "Residuals are flattened when going into class TArgs, so we cannot preserve generic behavior",
+    test_class_field_with_bare_residual,
+    r#"
+from typing import Callable, reveal_type
+
+class Container[**P, R]:
+    fn: Callable[P, R]
+    x: R
+    def __init__(self, fn: Callable[P, R]) -> None:
+        self.fn = fn
+
+def make_container[**P, R](f: Callable[P, R]) -> Container[P, R]: ...
+def f[S](x: S) -> S: ...
+c = make_container(f)
+reveal_type(c.fn)  # E: revealed type: (x: Unknown) -> Unknown
+reveal_type(c.x)  # E: revealed type: Unknown
+"#,
+);
