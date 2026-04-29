@@ -2212,6 +2212,17 @@ impl Server {
                         self.record_completion_mru(&params);
                         self.send_response(new_response(x.id, Ok(params)));
                     }
+                } else if let Some(params) = as_request::<ResolveCompletionItem>(&x) {
+                    if let Some(params) = self
+                        .extract_request_params_or_send_err_response::<ResolveCompletionItem>(
+                            params, &x.id,
+                        )
+                    {
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(transaction.resolve_completion_item(params)),
+                        ));
+                    }
                 } else if let Some(params) = as_request::<DocumentHighlightRequest>(&x) {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<DocumentHighlightRequest>(
