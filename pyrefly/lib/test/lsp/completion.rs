@@ -1462,6 +1462,51 @@ Completion Results:
 }
 
 #[test]
+fn completion_demotes_previously_matched_enum_members() {
+    let code = r#"
+from enum import StrEnum, auto
+
+class A(StrEnum):
+    AA = auto()
+    BB = auto()
+
+def f(a: A):
+    match a:
+        case A.AA:
+            ...
+        case A.
+#              ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        |state, handle, position| {
+            let mut report = String::new();
+            for item in state
+                .transaction()
+                .completion(handle, position, ImportFormat::Absolute, true, None)
+                .into_iter()
+                .filter(|item| matches!(item.label.as_str(), "AA" | "BB"))
+            {
+                report.push_str(&item.label);
+                report.push('\n');
+            }
+            report
+        },
+    );
+
+    let bb_index = report.find("BB\n");
+    let aa_index = report.find("AA\n");
+    assert!(
+        bb_index.is_some() && aa_index.is_some(),
+        "Expected completions for AA and BB."
+    );
+    assert!(
+        bb_index.unwrap() < aa_index.unwrap(),
+        "Expected the unmatched enum member to sort first."
+    );
+}
+
+#[test]
 fn completion_literal_union_alias() {
     let code = r#"
 from typing import Literal, Union
