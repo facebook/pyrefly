@@ -179,6 +179,11 @@ mod tests {
     }
 
     #[test]
+    fn test_stubgen_dataclasses() {
+        assert_stubgen_snapshot("dataclasses");
+    }
+
+    #[test]
     fn test_stubgen_dunder_all() {
         assert_stubgen_snapshot("dunder_all");
     }
