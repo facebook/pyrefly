@@ -257,9 +257,8 @@ class Box[T]:
     def __init__(self, fn: Callable[[T], T]) -> None:
         self.fn = fn
 
-def make_box[T](f: Callable[[T], T]) -> Box[T]: ...
 def f[S](x: S) -> S: ...
-b = make_box(f)
+b = Box(f)
 reveal_type(b.fn)  # E: revealed type: [S](S) -> S
 called = b.fn(1)
 reveal_type(called)  # E: revealed type: int
@@ -268,6 +267,27 @@ reveal_type(called)  # E: revealed type: int
 
 testcase!(
     test_callable_class_wrapper,
+    r#"
+from typing import Callable, reveal_type
+
+class Wrapper[**P, R]:
+    fn: Callable[P, R]
+    def __init__(self, fn: Callable[P, R]) -> None:
+        self.fn = fn
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
+        return self.fn(*args, **kwargs)
+
+def f[S](x: S) -> S: ...
+wrapper = Wrapper(f)
+reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+result = wrapper(1)
+reveal_type(result)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_callable_class_wrapper_with_helper,
     r#"
 from typing import Callable, reveal_type
 
@@ -291,6 +311,23 @@ reveal_type(result)  # E: revealed type: int
 );
 
 testcase!(
+    bug = "Need better display for callback protocol residuals in class targs",
+    test_callable_class_wrapper_display_without_field,
+    r#"
+from typing import Callable, reveal_type
+
+class Wrapper[**P, R]:
+    def __init__(self, fn: Callable[P, R]) -> None: ...
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def f[S](x: S) -> S: ...
+wrapper = Wrapper(f)
+reveal_type(wrapper)  # E: revealed type: Wrapper[[x: Unknown], Unknown]
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+"#,
+);
+
+testcase!(
     test_class_field_with_bare_residual,
     r#"
 from typing import Callable, reveal_type
@@ -301,9 +338,8 @@ class Container[**P, R]:
     def __init__(self, fn: Callable[P, R]) -> None:
         self.fn = fn
 
-def make_container[**P, R](f: Callable[P, R]) -> Container[P, R]: ...
 def f[S](x: S) -> S: ...
-c = make_container(f)
+c = Container(f)
 reveal_type(c.fn)  # E: revealed type: [R](x: R) -> R
 # This is expected - a bare residual targ in a class field should flatten on read
 reveal_type(c.x)  # E: revealed type: Unknown
