@@ -2705,6 +2705,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::inline_parameter::inline_parameter_code_actions(self, handle, selection)
     }
 
+    pub fn method_object_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::method_object::method_object_code_actions(self, handle, selection)
+    }
+
     pub fn safe_delete_code_actions(
         &mut self,
         handle: &Handle,
