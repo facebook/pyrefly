@@ -131,12 +131,11 @@ from typing import Callable, reveal_type
 def identity[**P, T](x: Callable[P, T]) -> Callable[P, T]:
     return x
 result = identity(identity)
-reveal_type(result)  # E: revealed type: [P, T](x: [P, T](ParamSpec(P)) -> T) -> [P, T](ParamSpec(P)) -> T
+reveal_type(result)  # E: revealed type: [P, T](x: (ParamSpec(P)) -> T) -> (ParamSpec(P)) -> T
 "#,
 );
 
 testcase!(
-    bug = "Applying identity(identity) keeps stale quantified binders on concrete callables",
     test_param_spec_identity_of_identity_behavior,
     r#"
 from typing import Callable, reveal_type
@@ -146,7 +145,7 @@ def f(x: int, y: str) -> str:
     return y
 result = identity(identity)
 lifted = result(f)
-reveal_type(lifted)  # E: revealed type: [P, T](x: int, y: str) -> str
+reveal_type(lifted)  # E: revealed type: (x: int, y: str) -> str
 out = lifted(1, "ok")
 reveal_type(out)  # E: revealed type: str
 "#,

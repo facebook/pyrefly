@@ -1424,16 +1424,27 @@ impl Type {
     pub fn subst_mut_fn(&mut self, mp: &mut dyn FnMut(&Quantified) -> Option<Type>) {
         // We are looking up Quantified in a map, and Quantified may contain a Quantified within it.
         // Therefore, to make sure we still get matches, work top-down (not using `transform`).
-        fn f(ty: &mut Type, mp: &mut dyn FnMut(&Quantified) -> Option<Type>) {
+        fn f(
+            ty: &mut Type,
+            mp: &mut dyn FnMut(&Quantified) -> Option<Type>,
+            shadowed: &mut Vec<Quantified>,
+        ) {
             if let Type::Quantified(x) = ty {
-                if let Some(w) = mp(x) {
+                if !shadowed.contains(x)
+                    && let Some(w) = mp(x)
+                {
                     *ty = w;
                 }
+            } else if let Type::Forall(forall) = ty {
+                let old_len = shadowed.len();
+                shadowed.extend(forall.tparams.iter().cloned());
+                ty.recurse_mut(&mut |x| f(x, mp, shadowed));
+                shadowed.truncate(old_len);
             } else {
-                ty.recurse_mut(&mut |x| f(x, mp));
+                ty.recurse_mut(&mut |x| f(x, mp, shadowed));
             }
         }
-        f(self, mp);
+        f(self, mp, &mut Vec::new());
     }
 
     pub fn subst_mut(&mut self, mp: &SmallMap<&Quantified, &Type>) {

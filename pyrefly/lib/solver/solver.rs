@@ -767,9 +767,13 @@ impl Solver {
                 changed |= ret_changed;
                 consumed_residual |= ret_consumed;
                 if consumed_residual {
-                    let promoted = self.promote_callable_to_forall((**callable).clone());
-                    *ty = promoted;
-                    (true, true)
+                    if callable_slot {
+                        (changed, true)
+                    } else {
+                        let promoted = self.promote_callable_to_forall((**callable).clone());
+                        *ty = promoted;
+                        (true, true)
+                    }
                 } else {
                     (changed, false)
                 }
