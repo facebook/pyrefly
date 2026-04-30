@@ -643,6 +643,12 @@ impl FlowInfo {
                     initial_value: None,
                 } => InitializedInFlow::No,
                 FlowStyle::PossiblyUninitialized => InitializedInFlow::Conditionally,
+                FlowStyle::InitializedIfGuardTruthy {
+                    termination_keys, ..
+                } if termination_keys.is_empty() => InitializedInFlow::Conditionally,
+                FlowStyle::InitializedIfGuardTruthy {
+                    termination_keys, ..
+                } => InitializedInFlow::DeferredCheck(termination_keys.clone()),
                 _ => InitializedInFlow::Yes,
             })
     }
@@ -682,6 +688,15 @@ pub enum FlowStyle {
     ClassDef,
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
+    /// The name was defined only on the truthy branch of `if <guard>:` (no else).
+    /// Treated as initialized inside a later `if <guard>:` block, as long as `guard`
+    /// still has `guard_value_idx` (not reassigned). `termination_keys` is the
+    /// `MaybeInitialized` fallback used when the guard doesn't match.
+    InitializedIfGuardTruthy {
+        guard: Name,
+        guard_value_idx: Idx<Key>,
+        termination_keys: Vec<Idx<Key>>,
+    },
     /// The name may or may not be initialized depending on whether certain branches
     /// terminate (have `Never` type). The termination keys are checked at solve time;
     /// if all of them have `Never` type, the name is considered initialized.
@@ -720,15 +735,26 @@ impl FlowStyle {
                 //
                 // Treating it as Other reduces false positives at the expense of
                 // some false negatives.
-                (FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized, _)
-                | (_, FlowStyle::Uninitialized | FlowStyle::PossiblyUninitialized) => {
-                    match merge_style {
-                        MergeStyle::BoolOp => {
-                            merged = FlowStyle::Other;
-                        }
-                        _ => return FlowStyle::PossiblyUninitialized,
+                //
+                // `InitializedIfGuardTruthy` degrades to `PossiblyUninitialized` on
+                // further merges: we can no longer prove the guard pattern holds.
+                (
+                    FlowStyle::Uninitialized
+                    | FlowStyle::PossiblyUninitialized
+                    | FlowStyle::InitializedIfGuardTruthy { .. },
+                    _,
+                )
+                | (
+                    _,
+                    FlowStyle::Uninitialized
+                    | FlowStyle::PossiblyUninitialized
+                    | FlowStyle::InitializedIfGuardTruthy { .. },
+                ) => match merge_style {
+                    MergeStyle::BoolOp => {
+                        merged = FlowStyle::Other;
                     }
-                }
+                    _ => return FlowStyle::PossiblyUninitialized,
+                },
                 // Two MaybeInitialized: combine termination keys from both branches.
                 // Each branch independently needs its keys to be Never for that path
                 // to be initialized, so we collect all keys.
@@ -792,6 +818,7 @@ impl FlowStyle {
             | FlowStyle::Other => self,
             FlowStyle::Uninitialized
             | FlowStyle::PossiblyUninitialized
+            | FlowStyle::InitializedIfGuardTruthy { .. }
             | FlowStyle::MaybeInitialized { .. } => FlowStyle::Other,
         }
     }
@@ -2057,6 +2084,65 @@ impl Scopes {
     /// name is uninitialized in the current scope, or is not in scope at all).
     pub fn current_flow_idx(&self, name: &Name) -> Option<Idx<Key>> {
         Some(self.current().flow.get_info(name)?.value()?.idx)
+    }
+
+    /// Snapshot the names in the current flow.
+    pub fn current_flow_names(&self) -> SmallSet<Name> {
+        self.current().flow.info.keys().cloned().collect()
+    }
+
+    /// For names introduced by the just-finished `if <guard>:` (i.e. not in
+    /// `pre_fork_names`), upgrade `PossiblyUninitialized`/`MaybeInitialized` to
+    /// `InitializedIfGuardTruthy`. Preserves any `MaybeInitialized` termination keys
+    /// as the fallback when the guard doesn't match.
+    pub fn upgrade_to_guarded(
+        &mut self,
+        guard: &Name,
+        guard_value_idx: Idx<Key>,
+        pre_fork_names: &SmallSet<Name>,
+    ) {
+        for (name, info) in self.current_mut().flow.info.iter_mut() {
+            if pre_fork_names.contains(name) {
+                continue;
+            }
+            let Some(value) = info.value_mut() else {
+                continue;
+            };
+            let termination_keys = match &value.style {
+                FlowStyle::PossiblyUninitialized => Vec::new(),
+                FlowStyle::MaybeInitialized(keys) => keys.clone(),
+                _ => continue,
+            };
+            value.style = FlowStyle::InitializedIfGuardTruthy {
+                guard: guard.clone(),
+                guard_value_idx,
+                termination_keys,
+            };
+        }
+    }
+
+    /// Clear `InitializedIfGuardTruthy` entries whose guard matches `narrowed_guard`
+    /// and whose recorded `guard_value_idx` still equals the guard's current flow
+    /// value idx (i.e. the guard hasn't been reassigned).
+    pub fn clear_matching_truthy_guard(&mut self, narrowed_guard: &Name) {
+        let Some(current_idx) = self.current_flow_idx(narrowed_guard) else {
+            return;
+        };
+        for info in self.current_mut().flow.info.values_mut() {
+            let Some(value) = info.value_mut() else {
+                continue;
+            };
+            if let FlowStyle::InitializedIfGuardTruthy {
+                guard,
+                guard_value_idx,
+                ..
+            } = &value.style
+                && guard == narrowed_guard
+                && *guard_value_idx == current_idx
+            {
+                value.style = FlowStyle::Other;
+            }
+        }
     }
 
     /// Get the flow idx for `name` in the current fork's **base** flow (the flow captured
