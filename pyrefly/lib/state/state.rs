@@ -48,6 +48,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::no_hash::BuildNoHash;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::small_map1::SmallMap1;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::task_heap::TaskHeap;
@@ -81,6 +82,7 @@ use crate::alt::answers_solver::CalcId;
 use crate::alt::answers_solver::ThreadState;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyExportedKey;
+use crate::binding::binding::ChangedExport;
 use crate::binding::binding::Exported;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
@@ -119,6 +121,7 @@ use crate::state::errors::sorted_backslash_continuation_ranges;
 use crate::state::errors::sorted_multi_line_string_ranges;
 use crate::state::load::FileContents;
 use crate::state::load::Load;
+use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
 use crate::state::loader::LoaderFindCache;
 use crate::state::memory::MemoryFiles;
@@ -172,6 +175,8 @@ pub struct ModuleDeps {
     pub classes: SmallSet<ClassDefIndex>,
     /// Which type aliases do we depend on?
     pub type_aliases: SmallSet<TypeAliasIndex>,
+    /// Do we depend on Django reverse relations for the module?
+    pub django_relations: bool,
 }
 
 /// Per-module change tracking. Represents what changed in a module's exports.
@@ -183,12 +188,13 @@ pub struct ModuleDeps {
 pub struct ModuleChanges(pub ModuleDeps);
 
 // A single dependency, passed during lookup. Can be merged into ModuleDeps.
+#[derive(Debug, Clone)]
 pub enum ModuleDep {
     // Depend on the existence of a module
     Exists,
     // Depend on the TypeEq result of an exported key
     Key(AnyExportedKey),
-    // Depend on the existence of an exported name, not necessarily it's type
+    // Depend on the existence of an exported name, not necessarily its type
     // Currently unused, but we should use this in LookupExport
     #[allow(unused)]
     NameExists(Name),
@@ -215,7 +221,7 @@ impl ModuleChanges {
             AnyExportedKey::KeyExport(k) => {
                 self.0.names.entry(k.0).or_default();
             }
-            // Classes and type aliases don't distinguish between existence and change.
+            // Classes, type aliases, and django relations don't distinguish between existence and change.
             _ => self.add_key(key),
         }
     }
@@ -238,6 +244,9 @@ impl ModuleChanges {
     /// more impactful than a type/metadata-only change.
     pub fn overlaps(&self, other: &ModuleChanges) -> bool {
         if self.0.wildcard || other.0.wildcard {
+            return true;
+        }
+        if self.0.django_relations && other.0.django_relations {
             return true;
         }
         for (name, self_dep) in &self.0.names {
@@ -276,6 +285,9 @@ impl ModuleDeps {
             }
             AnyExportedKey::KeyTypeAlias(k) => {
                 self.type_aliases.insert(k.0);
+            }
+            AnyExportedKey::KeyDjangoRelations(_) => {
+                self.django_relations = true;
             }
             AnyExportedKey::KeyTParams(KeyTParams(c))
             | AnyExportedKey::KeyClassBaseType(KeyClassBaseType(c))
@@ -330,6 +342,7 @@ impl ModuleDeps {
         self.classes.extend(other.classes);
         self.type_aliases.extend(other.type_aliases);
         self.wildcard |= other.wildcard;
+        self.django_relations |= other.django_relations;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -337,6 +350,7 @@ impl ModuleDeps {
             && !self.wildcard
             && self.classes.is_empty()
             && self.type_aliases.is_empty()
+            && !self.django_relations
     }
 
     /// Check if these dependencies are affected by the given change.
@@ -368,6 +382,9 @@ impl ModuleDeps {
                 }
             }
         }
+        if self.django_relations && changed.0.django_relations {
+            return true;
+        }
         if self.classes.iter().any(|c| changed.0.classes.contains(c)) {
             return true;
         }
@@ -375,8 +392,39 @@ impl ModuleDeps {
             .iter()
             .any(|t| changed.0.type_aliases.contains(t))
     }
+
+    /// Check if a single changed export matches this dependency.
+    /// Used by both `should_invalidate` and `propagate_exports`.
+    fn matches_change(&self, change: &ChangedExport) -> bool {
+        match change {
+            ChangedExport::Name(name) => self.names.get(name).is_some_and(|d| d.type_),
+            ChangedExport::NameExistence(name) => self.names.contains_key(name),
+            ChangedExport::ClassDefIndex(idx) => self.classes.contains(idx),
+            ChangedExport::TypeAliasIndex(idx) => self.type_aliases.contains(idx),
+            ChangedExport::Metadata(name) => self.names.get(name).is_some_and(|d| d.metadata),
+            ChangedExport::DjangoRelations => self.django_relations,
+        }
+    }
 }
 
+impl AnyExportedKey {
+    /// Convert this exported key to a `ModuleDep`.
+    /// The dependency is tracked at the exported-key level and normalized by `ModuleDeps::add_key`.
+    pub fn to_module_dep(&self) -> ModuleDep {
+        ModuleDep::Key(self.clone())
+    }
+}
+
+/// Represents a resolved or failed import.
+#[derive(Debug, Clone)]
+enum ImportResolution {
+    /// Successfully resolved import - maps module name to handle(s) with optional dependency tracking.
+    /// `None` means the import was resolved for caching only (used during Exports phase).
+    /// `Some(ModuleDep)` means the import is tracked for fine-grained invalidation (used during Solutions phase).
+    Resolved(SmallMap1<Handle, ModuleDep>),
+    /// Failed import - stores the error for incremental invalidation.
+    Failed(FindError),
+}
 /// `ModuleData` is a snapshot of `ArcId<ModuleDataMut>` in the main state.
 /// The snapshot is readonly most of the times. It will only be overwritten with updated information
 /// from `Transaction` when we decide to commit a `Transaction` into the main state.
@@ -2754,6 +2802,22 @@ impl<'a> LookupExport for TransactionHandle<'a> {
 }
 
 impl<'a> LookupAnswer for TransactionHandle<'a> {
+    fn modules(&self) -> SmallSet<ModuleName> {
+        let mut res = self
+            .transaction
+            .data
+            .updated_modules
+            .iter_unordered()
+            .map(|x| x.0.module())
+            .collect::<SmallSet<_>>();
+        for handle in self.transaction.readable.modules.keys() {
+            if self.transaction.data.updated_modules.get(handle).is_none() {
+                res.insert(handle.module());
+            }
+        }
+        res
+    }
+
     fn get<K: Solve<Self> + Exported>(
         &self,
         module: ModuleName,
