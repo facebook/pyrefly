@@ -169,6 +169,7 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
+use crate::types::types::CalleeKind;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
 use crate::types::types::TParams;
@@ -5300,7 +5301,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None,
                             );
                             let arg = CallArg::ty(&ty, range);
-                            ty = self.call_infer(
+                            let decorated_ty = self.call_infer(
                                 call_target,
                                 &[arg],
                                 &[],
@@ -5310,8 +5311,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None,
                                 None,
                             );
-                            if self.untype_opt(ty.clone(), range, errors).is_some() {
+                            let decorator_result_is_callable = matches!(
+                                decorated_ty.callee_kind(),
+                                Some(CalleeKind::Callable | CalleeKind::Function(_))
+                            );
+                            if decorator_result_is_callable
+                                || self
+                                    .untype_opt(decorated_ty.clone(), range, errors)
+                                    .is_some()
+                            {
                                 ty = self.heap.mk_class_def(cls.dupe());
+                            } else {
+                                ty = decorated_ty;
                             }
                         }
                     }
@@ -6199,33 +6210,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
-            }
-            // Special case: integer literals in type argument or TypeVar default context with
-            // native tensor shapes. These can be used for Dim-bounded parameters
-            // (e.g., LinearLayer[6, 9]) or TypeVar defaults (e.g., class Conv2d[..., S = 1]).
-            // We convert them directly to Type::Size to distinguish from Literal[6].
-            Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. })
-                if matches!(
-                    type_form_context,
-                    TypeFormContext::TypeArgument | TypeFormContext::TypeVarDefault
-                ) && self.solver().tensor_shapes =>
-            {
-                match value {
-                    ruff_python_ast::Number::Int(i) => {
-                        if let Some(n) = i.as_i64() {
-                            Type::Size(SizeExpr::Literal(n))
-                        } else {
-                            // Integer too large to fit in i64, fall back to error
-                            let inferred_ty = self.expr_infer(x, errors);
-                            self.untype(inferred_ty, x.range(), errors)
-                        }
-                    }
-                    _ => {
-                        // For non-integer numbers (float, complex), fall through to the generic path
-                        let inferred_ty = self.expr_infer(x, errors);
-                        self.untype(inferred_ty, x.range(), errors)
-                    }
-                }
             }
             Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => {
                 let key = Key::BoundName(ShortIdentifier::expr_name(name));
