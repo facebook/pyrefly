@@ -178,6 +178,49 @@ greeter("hi")
 }
 
 #[test]
+fn hover_preserves_type_aliases_in_function_signatures() {
+    let code = r#"
+from typing import TypeAlias
+
+Messages: TypeAlias = list[str]
+type Payloads = list[str]
+
+def func(msgs: Messages) -> None:
+    # Leading body trivia must not make hover fall back to resolved types.
+    pass
+
+def handle(payloads: Payloads) -> None:
+    pass
+
+func
+#^
+handle
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("def func(msgs: Messages) -> None: ..."),
+        "Expected hover to preserve the legacy alias name, got: {report}"
+    );
+    assert!(
+        report.contains("def handle(payloads: Payloads) -> None: ..."),
+        "Expected hover to preserve the scoped alias name, got: {report}"
+    );
+    assert!(
+        !report.contains("def func(msgs: list[str]) -> None: ..."),
+        "Expected hover not to expand the alias, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_inline_ignore_comment() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore
