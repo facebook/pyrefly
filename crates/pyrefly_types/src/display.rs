@@ -606,6 +606,9 @@ impl<'a> TypeDisplayContext<'a> {
                 CallableResidualKind::Generic { quantified } => {
                     self.fmt_helper_generic(&quantified.as_gradual_type(), is_toplevel, output)
                 }
+                CallableResidualKind::Overload { .. } => {
+                    write!(output, "<overload residual>")
+                }
             },
             Type::Function(box Function {
                 signature,

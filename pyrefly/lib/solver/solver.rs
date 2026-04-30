@@ -121,6 +121,39 @@ struct ResidualIdentity {
     target_vars: SmallSet<Var>,
 }
 
+/// Full per-branch capture used transiently during overload probing.
+/// Decomposed into per-var results by `record_overload_residuals_for_witness`.
+#[derive(Clone, Debug)]
+pub(crate) struct OverloadBranchCapture {
+    branch_index: usize,
+    values: SmallMap<Var, Variable>,
+}
+
+/// Shared context for an overload capture event. Arc'd to avoid duplication across vars.
+#[derive(Clone, Debug)]
+struct OverloadResidualWitness {
+    #[expect(dead_code, reason = "Read during overload finishing (not yet wired)")]
+    identity: ResidualIdentity,
+}
+
+/// Per-var, per-branch capture at solver level.
+#[derive(Clone, Debug)]
+struct OverloadVarBranchCapture {
+    #[expect(dead_code, reason = "Read during overload finishing (not yet wired)")]
+    branch_index: usize,
+    #[expect(dead_code, reason = "Read during overload finishing (not yet wired)")]
+    value: Variable,
+}
+
+/// Per-var overload residual, stored on `Variable::Quantified`.
+#[derive(Clone, Debug)]
+struct OverloadResidualForVar {
+    #[expect(dead_code, reason = "Read during overload finishing (not yet wired)")]
+    witness: Arc<OverloadResidualWitness>,
+    #[expect(dead_code, reason = "Read during overload finishing (not yet wired)")]
+    branches: Vec<OverloadVarBranchCapture>,
+}
+
 #[derive(Clone, Debug)]
 enum Variable {
     /// A "partial type" (terminology borrowed from mypy) for an empty container.
@@ -147,6 +180,8 @@ enum Variable {
         /// Residual candidates captured during subset checks.
         /// Kept separate from concrete bounds to avoid accidental coupling.
         residuals: Vec<ResidualIdentity>,
+        /// Overload residual candidates captured during overload dispatch.
+        overload_residuals: Vec<OverloadResidualForVar>,
     },
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
@@ -180,6 +215,7 @@ impl Display for Variable {
                 quantified: q,
                 bounds: _,
                 residuals: _,
+                overload_residuals: _,
             } => {
                 let label = if matches!(self, Variable::PartialQuantified(_)) {
                     "PartialQuantified"
@@ -680,6 +716,9 @@ impl Solver {
                     CallableResidualKind::Generic { quantified } => {
                         *inner = quantified.as_gradual_type();
                     }
+                    CallableResidualKind::Overload { .. } => {
+                        *inner = Type::any_implicit();
+                    }
                 }
             }
         });
@@ -709,8 +748,12 @@ impl Solver {
     }
 
     fn generic_residual_quantified(&self, residual: &CallableResidual) -> Quantified {
-        let CallableResidualKind::Generic { quantified } = &residual.kind;
-        quantified.clone()
+        match &residual.kind {
+            CallableResidualKind::Generic { quantified } => quantified.clone(),
+            CallableResidualKind::Overload { .. } => {
+                unreachable!("generic_residual_quantified called on overload residual")
+            }
+        }
     }
 
     /// Finalize callable residuals after a substitution (either a return type or a class field)
@@ -1324,6 +1367,7 @@ impl Solver {
                     quantified: (*q).clone(),
                     bounds: Bounds::new(),
                     residuals: Vec::new(),
+                    overload_residuals: Vec::new(),
                 },
             );
         }
@@ -1651,6 +1695,53 @@ impl Solver {
         }
     }
 
+    /// Record per-var overload residuals from full branch captures.
+    /// Decomposes each branch's full capture into per-var entries.
+    #[expect(
+        dead_code,
+        reason = "Called when overload capture call sites are wired"
+    )]
+    pub(crate) fn record_overload_residuals_for_witness(
+        &self,
+        witness: &ResidualWitnessContext,
+        branch_captures: Vec<OverloadBranchCapture>,
+    ) {
+        let shared_witness = Arc::new(OverloadResidualWitness {
+            identity: witness.identity.clone(),
+        });
+        let lock = self.variables.lock();
+        for &var in witness
+            .origin_vars
+            .iter()
+            .chain(witness.deferred_vars.iter())
+        {
+            let mut variable = lock.get_mut(var);
+            if let Variable::Quantified {
+                overload_residuals, ..
+            } = &mut *variable
+            {
+                let branches: Vec<OverloadVarBranchCapture> = branch_captures
+                    .iter()
+                    .filter_map(|capture| {
+                        capture
+                            .values
+                            .get(&var)
+                            .map(|value| OverloadVarBranchCapture {
+                                branch_index: capture.branch_index,
+                                value: value.clone(),
+                            })
+                    })
+                    .collect();
+                if !branches.is_empty() {
+                    overload_residuals.push(OverloadResidualForVar {
+                        witness: shared_witness.clone(),
+                        branches,
+                    });
+                }
+            }
+        }
+    }
+
     fn merge_residual_candidates(
         left: &mut Vec<ResidualIdentity>,
         right: &mut Vec<ResidualIdentity>,
@@ -1697,6 +1788,7 @@ impl Solver {
                     quantified: q,
                     bounds,
                     residuals,
+                    overload_residuals: _,
                 } => {
                     if let Some(e) = self.instantiation_errors.read().get(&v) {
                         err.push(e.clone());
@@ -1757,6 +1849,7 @@ impl Solver {
                         quantified: param.clone(),
                         bounds: Bounds::new(),
                         residuals: Vec::new(),
+                        overload_residuals: Vec::new(),
                     },
                 );
             }
@@ -2766,16 +2859,27 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 quantified: _,
                                 bounds: v1_bounds,
                                 residuals: v1_residuals,
+                                overload_residuals: v1_overload_residuals,
                             },
                             Variable::Quantified {
                                 quantified: _,
                                 bounds: v2_bounds,
                                 residuals: v2_residuals,
+                                overload_residuals: v2_overload_residuals,
                             },
                         ) => {
                             v1_bounds.extend(mem::take(v2_bounds));
                             *v2_bounds = v1_bounds.clone();
                             Solver::merge_residual_candidates(v1_residuals, v2_residuals);
+                            // Invariant for not-yet-used plumbing: overload candidates are still empty.
+                            // Keep this loud until overload merge semantics are implemented.
+                            debug_assert!(
+                                v1_overload_residuals.is_empty()
+                                    && v2_overload_residuals.is_empty(),
+                                "unexpected overload_residuals before overload capture is enabled",
+                            );
+                            v1_overload_residuals.extend(mem::take(v2_overload_residuals));
+                            *v2_overload_residuals = v1_overload_residuals.clone();
                         }
                         (
                             Variable::Quantified {

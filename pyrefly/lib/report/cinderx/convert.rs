@@ -346,6 +346,9 @@ pub(crate) fn type_to_structured(
             CallableResidualKind::Generic { quantified } => {
                 type_to_structured(&quantified.as_gradual_type(), table, pending_class_traits)
             }
+            CallableResidualKind::Overload { .. } => {
+                type_to_structured(&Type::any_implicit(), table, pending_class_traits)
+            }
         },
         Type::Function(box f) => {
             let defining_func = {

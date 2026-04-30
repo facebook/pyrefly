@@ -164,6 +164,7 @@ impl TypeConverter<'_> {
                 CallableResidualKind::Generic { quantified } => {
                     self.convert(&quantified.as_gradual_type())
                 }
+                CallableResidualKind::Overload { .. } => self.convert(&PyreflyType::any_implicit()),
             },
 
             // --- Unions ---
