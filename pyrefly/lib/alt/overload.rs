@@ -850,14 +850,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // from the hint should not influence overload selection. If there are call errors, we
         // try again without a hint in case we can still match this overload.
         let (call_errors, specialization_errors, res, expected_types) = try_call(hint);
-        let (call_errors, specialization_errors, res, expected_types) = if tparams.is_some()
-            && hint.is_some()
-            && call_errors.len() + specialization_errors.len() > 0
-        {
-            try_call(None)
-        } else {
-            (call_errors, specialization_errors, res, expected_types)
-        };
+        let (call_errors, specialization_errors, res, expected_types) =
+            if tparams.is_some() && hint.is_some() && !call_errors.is_empty() {
+                try_call(None)
+            } else {
+                (call_errors, specialization_errors, res, expected_types)
+            };
 
         CalledOverload {
             func: callable,
