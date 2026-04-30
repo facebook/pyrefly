@@ -366,25 +366,37 @@ impl CallArgPreEval<'_> {
         match self {
             Self::Type(ty, done) => {
                 *done = true;
-                solver.check_type(ty, hint, range, call_errors, tcc);
-                Some((*ty).clone())
+                let arg_ty = (*ty).clone();
+                let ok = solver.check_type(&arg_ty, hint, range, call_errors, tcc);
+                if ok {
+                    solver.warn_if_string_as_iterable(&arg_ty, hint, range, call_errors);
+                }
+                Some(arg_ty)
             }
             Self::Expr(x, done) => {
                 *done = true;
-                Some(solver.expr_with_separate_check_errors(
-                    x,
-                    Some((hint, call_errors, tcc)),
-                    arg_errors,
-                ))
+                let (got, ok) =
+                    solver.check_expr_argument(x, hint, range, arg_errors, call_errors, tcc);
+                if ok {
+                    solver.warn_if_string_as_iterable(&got, hint, range, call_errors);
+                }
+                Some(got)
             }
             Self::Star(ty, done) => {
                 *done = vararg;
-                solver.check_type(ty, hint, range, call_errors, tcc);
-                Some(ty.clone())
+                let arg_ty = ty.clone();
+                let ok = solver.check_type(&arg_ty, hint, range, call_errors, tcc);
+                if ok {
+                    solver.warn_if_string_as_iterable(&arg_ty, hint, range, call_errors);
+                }
+                Some(arg_ty)
             }
             Self::Fixed(tys, i) => {
                 let arg_ty = tys[*i].clone();
-                solver.check_type(&arg_ty, hint, range, call_errors, tcc);
+                let ok = solver.check_type(&arg_ty, hint, range, call_errors, tcc);
+                if ok {
+                    solver.warn_if_string_as_iterable(&arg_ty, hint, range, call_errors);
+                }
                 *i += 1;
                 Some(arg_ty)
             }
@@ -475,6 +487,82 @@ impl<'a> PosParam<'a> {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn check_expr_argument(
+        &self,
+        expr: &Expr,
+        hint: &Type,
+        range: TextRange,
+        arg_errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+    ) -> (Type, bool) {
+        if hint.is_any() {
+            return (
+                self.expr_infer_type_info_with_hint(expr, None, arg_errors)
+                    .into_ty(),
+                false,
+            );
+        }
+        let got = self.expr_infer_type_info_with_hint(
+            expr,
+            Some(HintRef::new(hint, Some(call_errors))),
+            arg_errors,
+        );
+        let ok = self.check_type(got.ty(), hint, range, call_errors, tcc);
+        (got.into_ty(), ok)
+    }
+
+    fn warn_if_string_as_iterable(
+        &self,
+        got: &Type,
+        want: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if got.is_error() || got.is_any() || want.is_any() {
+            return;
+        }
+        let got_is_str = matches!(got, Type::ClassType(cls) if cls.is_builtin("str"));
+        if !got_is_str {
+            return;
+        }
+        let want_is_iterable_str = match want {
+            Type::ClassType(cls) => {
+                let cls_object = cls.class_object();
+                let iterable = self.stdlib.iterable(Type::any_implicit());
+                let sequence = self.stdlib.sequence(Type::any_implicit());
+                let is_iterable =
+                    cls_object == iterable.class_object() || cls_object == sequence.class_object();
+                if !is_iterable {
+                    return;
+                }
+                matches!(
+                    cls.targs().as_slice(),
+                    [elem] if matches!(elem, Type::ClassType(elem_cls) if elem_cls.is_builtin("str"))
+                )
+            }
+            _ => false,
+        };
+        if !want_is_iterable_str {
+            return;
+        }
+        let got_display = self
+            .for_display(self.stdlib.str().clone().to_type())
+            .deterministic_printing();
+        let want_display = self.for_display(want.clone()).deterministic_printing();
+        errors.add(
+            range,
+            ErrorInfo::Kind(ErrorKind::StringAsIterable),
+            vec1![
+                format!(
+                    "Passing `{}` to `{}` treats the string as an iterable of characters",
+                    got_display, want_display
+                ),
+                "Did you mean to pass an iterable of strings?".to_owned(),
+            ],
+        );
+    }
+
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
             CallArg::Star(x, _) => {
@@ -1100,16 +1188,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .with_context(context.map(|ctx| ctx()))
                     };
                     let arg_ty = match kw.value {
-                        TypeOrExpr::Expr(x) => self.expr_with_separate_check_errors(
-                            x,
-                            hint.map(|ty| (ty, call_errors, tcc)),
-                            arg_errors,
-                        ),
+                        TypeOrExpr::Expr(x) => {
+                            if let Some(hint) = hint {
+                                let (got, ok) = self.check_expr_argument(
+                                    x,
+                                    hint,
+                                    x.range(),
+                                    arg_errors,
+                                    call_errors,
+                                    tcc,
+                                );
+                                if ok {
+                                    self.warn_if_string_as_iterable(
+                                        &got,
+                                        hint,
+                                        kw.range,
+                                        call_errors,
+                                    );
+                                }
+                                got
+                            } else {
+                                self.expr_infer_type_info_with_hint(x, None, arg_errors)
+                                    .into_ty()
+                            }
+                        }
                         TypeOrExpr::Type(x, range) => {
                             if let Some(hint) = &hint
                                 && !hint.is_any()
                             {
-                                self.check_type(x, hint, range, call_errors, tcc);
+                                let ok = self.check_type(x, hint, range, call_errors, tcc);
+                                if ok {
+                                    self.warn_if_string_as_iterable(x, hint, range, call_errors);
+                                }
                             }
                             (*x).clone()
                         }
