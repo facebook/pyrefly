@@ -2520,6 +2520,11 @@ impl Binding {
             Binding::Module(_) => Some(SymbolKind::Module),
             Binding::TypeAlias(_) => Some(SymbolKind::TypeAlias),
             Binding::TypeAliasRef(_) => Some(SymbolKind::TypeAlias),
+            // A receiver-constrained class assignment is class-shaped (the
+            // visible result is whichever class the receiver-compatibility
+            // decision chose), so present it as a class in IDE metadata
+            // rather than a constant/variable assignment.
+            Binding::NameAssign(x) if x.receiver_idx.is_some() => Some(SymbolKind::Class),
             Binding::NameAssign(x) if x.name.as_str() == x.name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }

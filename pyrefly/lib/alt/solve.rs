@@ -4451,7 +4451,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::LoopPhi(default, ks) => self.binding_to_type_info_loop_phi(*default, ks),
             Binding::NameAssign(x) => {
-                self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
+                // Receiver-constrained class assignments behave like
+                // annotated names: the implicit class receiver pins the
+                // visible type, and any RHS-derived dict-literal facets
+                // would either contradict the receiver or describe a
+                // value that the receiver fallback discards. Skip the
+                // facet walk and use the bare solved type.
+                if x.receiver_idx.is_some() {
+                    TypeInfo::of_ty(self.binding_to_type(binding, errors))
+                } else {
+                    self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
+                }
             }
             Binding::AssignToAttribute(x) => self.binding_to_type_info_assign_to_attribute(
                 &x.attr,

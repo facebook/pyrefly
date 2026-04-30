@@ -1165,6 +1165,13 @@ impl<'a> BindingsBuilder<'a> {
                     idx = *inner_idx;
                 }
                 Binding::NameAssign(x) => {
+                    // Receiver-constrained class assignments rebind a
+                    // class-shaped name; the receiver semantics keep the
+                    // visible identity, so a rebind RHS like `Optional`
+                    // does not alias this name to the special export.
+                    if x.receiver_idx.is_some() {
+                        return None;
+                    }
                     return self.as_special_export_inner(&x.expr, visited_names, visited_keys);
                 }
                 Binding::Import(x) => {

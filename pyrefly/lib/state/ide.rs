@@ -223,6 +223,18 @@ fn create_intermediate_definition_from(
                     special_export: None,
                 }));
             }
+            // A receiver-constrained class assignment is a same-scope
+            // rebind whose visible result is class-shaped. The first patch
+            // resolves navigation/metadata through the original class
+            // receiver: even on a compatible refining write, jumping to
+            // definition from the LHS lands on the original class, since
+            // that is the binding the receiver semantics treat as the
+            // canonical identity for future writes. (The refined RHS class
+            // is still reachable by hovering or jumping from the RHS
+            // expression itself.)
+            Binding::NameAssign(na) if let Some(receiver_idx) = na.receiver_idx => {
+                current_binding = bindings.get(receiver_idx);
+            }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {
                     location: def_key.range(),
