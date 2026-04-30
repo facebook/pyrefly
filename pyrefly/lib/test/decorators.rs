@@ -741,6 +741,51 @@ assert_type(r, int)
     "#,
 );
 
+testcase!(
+    test_class_decorator_rebinds_class_value,
+    r#"
+class ActorHandle[T]:
+    def remote(self) -> T: ...
+    def options(self, num_cpus: int) -> "ActorHandle[T]": ...
+
+def remote[T](cls: type[T]) -> ActorHandle[T]:
+    return ActorHandle()
+
+@remote
+class Worker:
+    def compute(self) -> int:
+        return 42
+
+Worker.remote()
+Worker.options(num_cpus=2)
+"#,
+);
+
+testcase!(
+    test_class_decorator_preserves_class_for_unknown_or_callable_return,
+    r#"
+from typing import Any, Callable, assert_type
+
+def unknown_return[T](cls: type[T]) -> Any: ...
+def callable_return[T](cls: type[T]) -> Callable[[], T]: ...
+
+@unknown_return
+class UnknownDecorated:
+    def method(self) -> int:
+        return 1
+
+@callable_return
+class CallableDecorated:
+    def method(self) -> int:
+        return 2
+
+assert_type(UnknownDecorated, type[UnknownDecorated])
+assert_type(UnknownDecorated().method(), int)
+assert_type(CallableDecorated, type[CallableDecorated])
+assert_type(CallableDecorated().method(), int)
+"#,
+);
+
 fn env_numba() -> TestEnv {
     let mut env = TestEnv::one_with_path(
         "numba",
