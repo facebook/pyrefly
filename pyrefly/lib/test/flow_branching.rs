@@ -2547,6 +2547,308 @@ def f(a: bool, c: bool) -> int:
 );
 
 testcase!(
+    test_guarded_initialization_deleted,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    del b  # E:
+    if a:
+        return b  # E:
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: deleting `a` should invalidate `b`'s guard",
+    test_guarded_initialization_guard_deleted,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    del a
+    if a:  # E:
+        return b  # E:
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: deleting `a` in a branch should invalidate `b`'s guard",
+    test_guarded_initialization_guard_deleted_in_branch,
+    r#"
+def f(a: bool, cond: bool) -> int:
+    if a:
+        b = 3
+    if cond:
+        del a
+    if a:  # E:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "after `del b` in a branch the variable is reported as definitely uninitialized rather than possibly uninitialized when the deletion merges with a guarded definition",
+    test_guarded_initialization_guarded_var_deleted_in_branch,
+    r#"
+def f(a: bool, cond: bool) -> int:
+    if a:
+        b = 3
+    if cond:
+        del b  # E: `b` may be uninitialized
+    if a:
+        return b  # E: `b` is uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_guard_reassigned_in_branch,
+    r#"
+def f(a: bool, c: bool, cond: bool) -> int:
+    if a:
+        b = 3
+    if cond:
+        pass
+    else:
+        a = c
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: outer `if c:` does not break the inner `if a:` correlation",
+    test_guarded_initialization_guard_from_inner_branch,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if c:
+        if a:
+            b = 3
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "should detect `d` requires both `a` and `c` truthy, but only checks `a`",
+    test_guarded_initialization_nested_fork,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+        if c:
+            d = 4
+    if a:
+        return d
+    return 0
+    "#,
+);
+
+// Mimics the xarray pattern: variable defined in one branch of an if/elif/else
+// (else raises), then redefined in a subsequent non-exhaustive `if`.
+testcase!(
+    bug = "terminated branch in nested fork loses termination info for MaybeInitialized",
+    test_guarded_initialization_with_maybe_initialized,
+    r#"
+from typing import NoReturn
+def raises() -> NoReturn:
+    raise ValueError()
+def f(a: bool, b: bool) -> int:
+    if a:
+        ncol = 1
+    elif b:
+        pass
+    else:
+        raises()
+    if not a:
+        ncol = 2
+    return ncol  # E: `ncol` may be uninitialized
+    "#,
+);
+
+testcase!(
+    bug = "loop interaction: should suppress the inner `print(b)` error since both ifs use the same guard",
+    test_guarded_initialization_used_inside_loop,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    for i in range(10):
+        if a:
+            print(b)  # E: `b` may be uninitialized
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_inside_loop,
+    r#"
+def f(a: bool, cond: bool) -> int:
+    while cond:
+        if a:
+            b = 3
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_before_loop,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    for i in range(10):
+        pass
+    if a:
+        return b
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: augmented assign to `a` should invalidate `b`'s guard",
+    test_guarded_initialization_guard_augmented_assign,
+    r#"
+def f(a: list[int]) -> int:
+    if a:
+        b = 3
+    a += [1]
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "should detect that `a.clear()` may mutate `a` and invalidate `b`'s guard",
+    test_guarded_initialization_guard_mutated_by_method_call,
+    r#"
+def f(a: list[int]) -> int:
+    if a:
+        b = 3
+    a.clear()
+    if a:
+        return b
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "should detect that `a.pop()` may mutate `a` and invalidate `b`'s guard",
+    test_guarded_initialization_guard_mutated_in_expression,
+    r#"
+def f(a: list[int]) -> int:
+    if a:
+        b = 3
+    x = a.pop()
+    if a:
+        return b
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_unguarded_use,
+    r#"
+def f(a: bool) -> None:
+    if a:
+        b = 3
+    print(b)  # E: `b` may be uninitialized
+    "#,
+);
+
+testcase!(
+    bug = "clearing the guard inside the satisfying block is lost in the merge dedup",
+    test_guarded_initialization_unguarded_after_guarded,
+    r#"
+def f(a: bool) -> None:
+    if a:
+        b = 3
+    if a:
+        print(b)
+    print(b)
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_one_reassigned_before_satisfy,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+        c = 4
+    c = 99
+    if a:
+        return b + c
+    return 0
+    "#,
+);
+
+testcase!(
+    bug = "reassigning `a` inside the satisfying block should invalidate the later guard",
+    test_guarded_initialization_guard_reassigned_inside_block,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+    if a:
+        a = c
+        x = b
+    if a:
+        return b
+    return 0
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_self_guard,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        a = False
+    if a:
+        return 1
+    return 0
+    "#,
+);
+
+testcase!(
+    bug = "deleted-then-reguarded names are not re-guarded",
+    test_guarded_initialization_delete_then_reguard,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    del b  # E:
+    if a:
+        b = 4
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 0
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_negated_guard,
+    r#"
+def f(a: bool) -> int:
+    if not a:
+        b = 3
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
     bug = "false positive: b is always initialized when a > 0 at both sites",
     test_guarded_initialization_complex_condition,
     r#"
