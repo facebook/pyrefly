@@ -60,14 +60,6 @@ impl ErrorDisplayConfig {
         self.0.iter().map(|(&k, &s)| (k, s))
     }
 
-    /// Merge another config's error codes into this one.
-    /// Codes from `other` override codes in `self`.
-    pub fn merge_from(&mut self, other: &ErrorDisplayConfig) {
-        for (&kind, &severity) in &other.0 {
-            self.0.insert(kind, severity);
-        }
-    }
-
     /// Merge user overrides on top of `self` (the preset base), ensuring that
     /// user-level settings win even when they target a parent kind or a
     /// deprecated alias whose children/canonical form the preset sets directly.
