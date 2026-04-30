@@ -286,6 +286,8 @@ pub(crate) enum IdentifierContext {
         base_range: TextRange,
         /// The range of the entire expression.
         range: TextRange,
+        /// Whether the attribute is being loaded, assigned to, or deleted.
+        expr_context: ExprContext,
     },
     /// An identifier appeared as the name of a keyword argument.
     /// ex: `x` in `f(x=1)`. We also store some info about the callee `f` so
@@ -339,6 +341,28 @@ pub(crate) enum IdentifierContext {
     /// An identifier appeared in a `global` or `nonlocal` statement.
     /// ex: `x` in `global x` or `nonlocal x`.
     MutableCapture,
+}
+
+impl IdentifierContext {
+    pub(crate) fn is_write(&self) -> bool {
+        matches!(
+            self,
+            IdentifierContext::Expr(ExprContext::Store | ExprContext::Del)
+                | IdentifierContext::Attribute {
+                    expr_context: ExprContext::Store | ExprContext::Del,
+                    ..
+                }
+                | IdentifierContext::ImportedModule { .. }
+                | IdentifierContext::ImportedName { .. }
+                | IdentifierContext::FunctionDef { .. }
+                | IdentifierContext::MethodDef { .. }
+                | IdentifierContext::ClassDef { .. }
+                | IdentifierContext::Parameter
+                | IdentifierContext::TypeParameter
+                | IdentifierContext::ExceptionHandler
+                | IdentifierContext::PatternMatch(_)
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -495,6 +519,7 @@ impl IdentifierWithContext {
             context: IdentifierContext::Attribute {
                 base_range: attr.value.range(),
                 range: attr.range(),
+                expr_context: attr.ctx,
             },
         }
     }

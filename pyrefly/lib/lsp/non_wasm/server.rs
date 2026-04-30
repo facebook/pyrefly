@@ -69,6 +69,7 @@ use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
+use lsp_types::DocumentHighlightKind;
 use lsp_types::DocumentHighlightParams;
 use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
@@ -4733,7 +4734,18 @@ impl Server {
                 .find_local_references(&handle, position, true)
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
-                    kind: None,
+                    kind: Some(
+                        if transaction
+                            .identifier_at(&handle, range.start())
+                            .expect("local references should point at identifiers")
+                            .context
+                            .is_write()
+                        {
+                            DocumentHighlightKind::WRITE
+                        } else {
+                            DocumentHighlightKind::READ
+                        },
+                    ),
                 }),
         ))
     }
