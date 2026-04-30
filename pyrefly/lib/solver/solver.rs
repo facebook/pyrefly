@@ -1331,6 +1331,21 @@ impl Solver {
         t
     }
 
+    /// Normalize a type for export-like boundaries that must not leak solver-internal
+    /// placeholders such as callable residuals.
+    ///
+    /// This expands already-solved vars while leaving unfinished vars in place; boundary
+    /// reads must be non-forcing.
+    ///
+    /// This is the canonical boundary normalization entry point used by report/query
+    /// surfaces and other serialization/display-adjacent consumers.
+    pub fn for_export_boundary(&self, mut t: Type) -> Type {
+        self.expand_vars_mut(&mut t);
+        t = self.finalize_callable_residuals_at_boundary(t);
+        self.simplify_mut(&mut t);
+        t
+    }
+
     /// Generate a fresh variable based on code that is unspecified inside a container,
     /// e.g. `[]` with an unknown type of element.
     /// The `range` parameter is the location of the empty container literal.
@@ -1960,7 +1975,8 @@ impl Solver {
         v
     }
 
-    pub fn for_display(&self, mut t: Type) -> Type {
+    pub fn for_display(&self, t: Type) -> Type {
+        let mut t = t;
         self.expand_with_limit(&mut t, TYPE_LIMIT, &VarRecurser::new(), true, None);
         t = self.finalize_callable_residuals_at_boundary(t);
         self.simplify_mut(&mut t);
