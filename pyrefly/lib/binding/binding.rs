@@ -1978,6 +1978,9 @@ pub struct NameAssign {
     pub expr: Box<Expr>,
     pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     pub is_in_function_scope: bool,
+    /// If the current flow has active narrows, this key resolves to `Never`
+    /// whenever those narrows make the branch impossible.
+    pub flow_narrow_exhaustive: Option<Idx<Key>>,
     pub first_use: FirstUse,
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.

@@ -56,6 +56,8 @@ use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BranchInfo;
+use crate::binding::binding::ExhaustiveBinding;
+use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
@@ -1353,6 +1355,34 @@ impl<'a> BindingsBuilder<'a> {
             narrow_entries.push((idx, Box::new(op.clone()), *range));
         }
         narrow_entries
+    }
+
+    pub fn current_flow_narrow_exhaustive_key(&mut self, range: TextRange) -> Option<Idx<Key>> {
+        let narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)> = self
+            .scopes
+            .current_flow_narrow_idxs()
+            .into_iter()
+            .filter_map(|idx| {
+                let Some(Binding::Narrow(initial_idx, op, _)) = self.idx_to_binding(idx) else {
+                    return None;
+                };
+                let Key::Narrow(key) = self.idx_to_key(idx) else {
+                    return None;
+                };
+                Some((*initial_idx, op.clone(), key.1))
+            })
+            .collect();
+        if narrow_entries.is_empty() {
+            None
+        } else {
+            Some(self.insert_binding(
+                Key::Exhaustive(ExhaustivenessKind::IfElif, range),
+                Binding::Exhaustive(Box::new(ExhaustiveBinding {
+                    kind: ExhaustivenessKind::IfElif,
+                    narrow_entries,
+                })),
+            ))
+        }
     }
 
     /// Defer creation of a BoundName binding until after AST traversal.

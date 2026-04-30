@@ -521,6 +521,7 @@ impl<'a> BindingsBuilder<'a> {
             self.scopes.flow_style_for_name(&name.id),
             Some(FlowStyle::Uninitialized)
         );
+        let is_new_binding_in_flow = self.scopes.current_flow_idx(&name.id).is_none();
         let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
@@ -560,6 +561,11 @@ impl<'a> BindingsBuilder<'a> {
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
+                flow_narrow_exhaustive: if is_new_binding_in_flow {
+                    self.current_flow_narrow_exhaustive_key(name.range)
+                } else {
+                    None
+                },
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
             }))
