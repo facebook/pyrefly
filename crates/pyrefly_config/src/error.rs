@@ -31,20 +31,26 @@ impl ErrorDisplayConfig {
 
     /// Gets the severity for the given `ErrorKind`. Checks in order:
     /// 1. Explicit override for this kind
-    /// 2. Override for the parent kind (sub-kind relationship)
-    /// 3. Override for a deprecated alias
+    /// 2. Override for a deprecated alias of this kind
+    /// 3. Override for the parent kind (sub-kind relationship)
     /// 4. Default severity for this kind
+    ///
+    /// The deprecated alias is checked before the parent because the alias
+    /// refers to the same specific error kind as `self` — just under its
+    /// old name. A user setting the old name is being more specific than
+    /// someone setting the parent kind, so the alias should refine on top
+    /// of any parent configuration.
     pub fn severity(&self, kind: ErrorKind) -> Severity {
         if let Some(&severity) = self.0.get(&kind) {
             return severity;
         }
-        if let Some(parent) = kind.parent_kind()
-            && let Some(&severity) = self.0.get(&parent)
+        if let Some(alias) = kind.deprecated_alias()
+            && let Some(&severity) = self.0.get(&alias)
         {
             return severity;
         }
-        if let Some(alias) = kind.deprecated_alias()
-            && let Some(&severity) = self.0.get(&alias)
+        if let Some(parent) = kind.parent_kind()
+            && let Some(&severity) = self.0.get(&parent)
         {
             return severity;
         }
@@ -222,6 +228,22 @@ mod tests {
         let config = ErrorDisplayConfig::new(HashMap::from([
             (ErrorKind::BadParamNameOverride, Severity::Ignore),
             (ErrorKind::BadOverrideParamName, Severity::Error),
+        ]));
+        assert_eq!(
+            config.severity(ErrorKind::BadOverrideParamName),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_severity_deprecated_alias_overrides_parent() {
+        // The deprecated alias is more specific than the parent — a user
+        // setting `bad-param-name-override = "error"` is targeting the same
+        // specific error kind as `bad-override-param-name`, so it should
+        // refine on top of any `bad-override` parent setting.
+        let config = ErrorDisplayConfig::new(HashMap::from([
+            (ErrorKind::BadOverride, Severity::Ignore),
+            (ErrorKind::BadParamNameOverride, Severity::Error),
         ]));
         assert_eq!(
             config.severity(ErrorKind::BadOverrideParamName),
