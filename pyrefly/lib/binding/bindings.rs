@@ -1138,7 +1138,11 @@ impl<'a> BindingsBuilder<'a> {
             | FlowStyle::Import(..)
             | FlowStyle::ImportAs(_)
             | FlowStyle::FunctionDef { .. }
-            | FlowStyle::ClassDef
+            // A non-pristine `ClassDef` (a same-scope reassignment of a name
+            // originally introduced by a class definition) still binds the
+            // name to a class-shaped value, so it is not itself a
+            // special-export alias for typing constructs like `TypeVar`.
+            | FlowStyle::ClassDef { .. }
             | FlowStyle::LoopRecursion => None,
         }
     }

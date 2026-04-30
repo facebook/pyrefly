@@ -559,6 +559,18 @@ struct FlowInfo {
 /// - Loop recursion bindings in cases where a name was narrowed above a loop; we
 ///   don't know whether the name might be assigned in the loop so we have to assume
 ///   so; in that case we use `FlowStyle::LoopRecursion`
+///
+/// Invariant for the class-bearing style: `idx` is always the most recent
+/// binding key for the name (used to look up the current visible value),
+/// while `FlowStyle::ClassDef { class_idx, .. }` carries the canonical class
+/// identity that future same-scope writes should treat as their implicit
+/// receiver. The two idxs may differ: for example, after `class Real: ...`
+/// followed by `Real = Dummy`, the value `idx` points at the `Real = Dummy`
+/// assignment binding, but `class_idx` still points at the original
+/// `class Real` definition so subsequent writes are still checked against it.
+/// The `pristine` bit on that style records whether `idx` is still the
+/// original class definition (`true`) or a reassignment of the name
+/// (`false`).
 #[derive(Debug, Clone)]
 struct FlowValue {
     idx: Idx<Key>,
@@ -678,8 +690,22 @@ pub enum FlowStyle {
         has_return_annotation: bool,
         is_overload: bool,
     },
-    /// Am I a class definition?
-    ClassDef,
+    /// Am I a name carrying class identity? `class_idx` is the `Idx<Key>` of
+    /// the class's `class_object` binding — the canonical class identity that
+    /// future same-scope writes to this name should use as their implicit
+    /// receiver.
+    ///
+    /// `pristine` records whether the visible binding (i.e. the `idx` on the
+    /// surrounding `FlowValue`) is the original `Binding::ClassDef` itself:
+    /// - `true`: the visible binding is the original class definition.
+    /// - `false`: the name has been reassigned in the same scope; the visible
+    ///   binding is a `Binding::NameAssign` that was checked against
+    ///   `class_idx` as its receiver. The style is sticky across both
+    ///   compatible writes (where the visible type may refine to the RHS
+    ///   class) and incompatible writes (where the visible type falls back
+    ///   to the receiver), so subsequent writes keep checking against the
+    ///   original receiver.
+    ClassDef { class_idx: Idx<Key>, pristine: bool },
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
     /// The name may or may not be initialized depending on whether certain branches
@@ -735,6 +761,24 @@ impl FlowStyle {
                 (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
                     keys.extend(other_keys);
                 }
+                // Class-bearing styles stay sticky only when their canonical
+                // class identity matches. The `pristine` bit AND-merges: if
+                // any reachable branch saw a reassignment, the merged value
+                // is no longer pristine. Differing `class_idx` payloads fall
+                // back to `Other`: two genuinely distinct classes cannot be
+                // merged into a single canonical identity.
+                (
+                    FlowStyle::ClassDef {
+                        class_idx: l_idx,
+                        pristine: l_pristine,
+                    },
+                    FlowStyle::ClassDef {
+                        class_idx: r_idx,
+                        pristine: r_pristine,
+                    },
+                ) if *l_idx == r_idx => {
+                    *l_pristine = *l_pristine && r_pristine;
+                }
                 // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
                 // keys since those paths still need verification at solve time.
                 (FlowStyle::MaybeInitialized(keys), _) => {
@@ -786,13 +830,27 @@ impl FlowStyle {
             | FlowStyle::ImportAs(_)
             | FlowStyle::MergeableImport(_)
             | FlowStyle::FunctionDef { .. }
-            | FlowStyle::ClassDef
+            | FlowStyle::ClassDef { .. }
             | FlowStyle::ClassField { .. }
             | FlowStyle::LoopRecursion
             | FlowStyle::Other => self,
             FlowStyle::Uninitialized
             | FlowStyle::PossiblyUninitialized
             | FlowStyle::MaybeInitialized { .. } => FlowStyle::Other,
+        }
+    }
+
+    /// Returns the canonical class-object idx for a flow style that should
+    /// behave as if it has an implicit class-typed receiver, or `None` if the
+    /// style is not class-bearing.
+    ///
+    /// This is the entry point for deciding whether a same-scope assignment
+    /// should be bound as a receiver-constrained `NameAssign`.
+    #[allow(dead_code)] // called by the next patch once `bind_single_name_assign` consults it
+    pub fn canonical_class_receiver_idx(&self) -> Option<Idx<Key>> {
+        match self {
+            FlowStyle::ClassDef { class_idx, .. } => Some(*class_idx),
+            _ => None,
         }
     }
 }
@@ -2588,7 +2646,16 @@ impl Scopes {
                         definition: value.idx,
                         has_return_annotation: *has_return_annotation,
                     },
-                    FlowStyle::ClassDef => ClassFieldDefinition::NestedClass {
+                    // Only treat pristine class definitions as nested classes.
+                    // A non-pristine `ClassDef` carries the class identity for
+                    // receiver checking but its visible binding is a
+                    // `Binding::NameAssign`, so it must not become a nested
+                    // class. (This case is unreachable in current code because
+                    // class-body assignments always produce `ClassField`, but
+                    // the pattern is restricted here so that lifting that
+                    // restriction in a follow-up does not silently promote
+                    // rebound names to nested-class semantics.)
+                    FlowStyle::ClassDef { pristine: true, .. } => ClassFieldDefinition::NestedClass {
                         definition: value.idx,
                     },
                     FlowStyle::ClassField {

@@ -445,7 +445,10 @@ impl<'a> BindingsBuilder<'a> {
                 class_indices.class_idx,
                 decorators.clone().into_boxed_slice(),
             ),
-            FlowStyle::ClassDef,
+            FlowStyle::ClassDef {
+                class_idx: class_indices.class_object_idx,
+                pristine: true,
+            },
         );
 
         // Insert a `KeyTParams` / `BindingTParams` pair, but only if there is at least
@@ -988,7 +991,10 @@ impl<'a> BindingsBuilder<'a> {
                 &class_name,
                 class_object,
                 Binding::ClassDef(class_indices.class_idx, Box::new([])),
-                FlowStyle::ClassDef,
+                FlowStyle::ClassDef {
+                    class_idx: class_indices.class_object_idx,
+                    pristine: true,
+                },
             );
         } else {
             self.insert_binding_current(
