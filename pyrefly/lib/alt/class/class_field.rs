@@ -242,9 +242,22 @@ pub enum ClassFieldInitialization {
     /// If this is a dataclass field, DataclassFieldKeywords stores the field's
     /// dataclass flags (which are options that control how fields behave).
     ClassBody(Option<Box<DataclassFieldKeywords>>),
-    /// This field is initialized in a method. Note that this applies only if the field is not
-    /// declared anywhere else.
+    /// This field is initialized in an instance method (e.g. `self.x = 1`).
+    ///
+    /// Note that this applies only if the field is not declared anywhere else.
+    ///
+    /// At runtime, this creates an instance attribute. Therefore:
+    /// 1. It is not visible when accessed on the class object (e.g. `Class.x` yields a no-access error).
+    /// 2. It is ignored by dataclass field extraction (unless also declared in the class body).
     Method,
+    /// This field is initialized in a class method (e.g. `cls.x = 1` inside `@classmethod`).
+    ///
+    /// Note that this applies only if the field is not declared anywhere else.
+    ///
+    /// At runtime, this creates a class attribute. Therefore:
+    /// 1. It is visible when accessed on the class object (e.g. `Class.x` is valid).
+    /// 2. It is ignored by dataclass field extraction (unless also declared in the class body).
+    ClassMethod,
     /// The field is not initialized at the point where it is declared. This usually means that the
     /// field is instance-only and is declared but not initialized in the class body.
     Uninitialized,
@@ -259,6 +272,7 @@ impl Display for ClassFieldInitialization {
         match self {
             Self::ClassBody(_) => write!(f, "initialized on class body"),
             Self::Method => write!(f, "initialized in method"),
+            Self::ClassMethod => write!(f, "initialized in class method"),
             Self::Uninitialized => write!(f, "initialized on instances"),
             Self::Magic => {
                 write!(f, "not initialized on class body/method")
@@ -741,6 +755,7 @@ impl ClassField {
             ClassFieldInner::ClassAttribute { ty, .. } => match self.initialization() {
                 ClassFieldInitialization::ClassBody(_) => Some(ty),
                 ClassFieldInitialization::Method
+                | ClassFieldInitialization::ClassMethod
                 | ClassFieldInitialization::Uninitialized
                 | ClassFieldInitialization::Magic => None,
             },
@@ -846,6 +861,7 @@ impl ClassField {
             ClassFieldInner::ClassAttribute {
                 initialization:
                     ClassFieldInitialization::Method
+                    | ClassFieldInitialization::ClassMethod
                     | ClassFieldInitialization::Uninitialized
                     | ClassFieldInitialization::Magic,
                 ..
@@ -1113,6 +1129,7 @@ impl ClassField {
                     kws
                 }
                 ClassFieldInitialization::Method
+                | ClassFieldInitialization::ClassMethod
                 | ClassFieldInitialization::Uninitialized
                 | ClassFieldInitialization::Magic => DataclassFieldKeywords::new(),
             },
@@ -1668,7 +1685,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
 
                 let initialization = match method.instance_or_class {
-                    MethodSelfKind::Class => ClassFieldInitialization::ClassBody(None),
+                    MethodSelfKind::Class => ClassFieldInitialization::ClassMethod,
                     MethodSelfKind::Instance => ClassFieldInitialization::Method,
                 };
                 let (mut value_ty, annotation, is_inherited) = self.analyze_class_field_value(
@@ -3821,7 +3838,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<WithDefiningClass<Arc<ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
             let field = self.get_non_synthesized_field_from_current_class_only(cls, name)?;
-            if field.initialization() == ClassFieldInitialization::Method {
+            if field.initialization() == ClassFieldInitialization::Method
+                || field.initialization() == ClassFieldInitialization::ClassMethod
+            {
                 // This parent happens to assign to the field in a method but doesn't define it.
                 None
             } else {
