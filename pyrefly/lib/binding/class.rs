@@ -6,6 +6,7 @@
  */
 
 use std::mem;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe as _;
@@ -68,6 +69,7 @@ use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyVarianceCheck;
+use crate::binding::binding::MethodDefinedAttribute;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -398,7 +400,8 @@ impl<'a> BindingsBuilder<'a> {
 
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
-        for (name, (definition, range)) in field_definitions.into_iter_hashed() {
+        for (name, (definition, range, method_assignments)) in field_definitions.into_iter_hashed()
+        {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
             {
@@ -434,6 +437,7 @@ impl<'a> BindingsBuilder<'a> {
                 name: name.into_key(),
                 range,
                 definition,
+                method_assignments: Arc::from(method_assignments.into_boxed_slice()),
             };
             self.insert_binding(key_field, binding);
         }
@@ -915,6 +919,7 @@ impl<'a> BindingsBuilder<'a> {
                     name: member_name,
                     range,
                     definition,
+                    method_assignments: Arc::from([] as [MethodDefinedAttribute; 0]),
                 },
             );
         }

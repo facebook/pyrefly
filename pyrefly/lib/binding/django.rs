@@ -12,6 +12,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
+use crate::binding::binding::MethodDefinedAttribute;
 use crate::binding::bindings::BindingsBuilder;
 
 const PRIMARY_KEY: Name = Name::new_static("primary_key");
@@ -78,12 +79,15 @@ impl<'a> BindingsBuilder<'a> {
     /// (primary_key, ForeignKey, choices).
     pub fn extract_django_fields_from_class_body(
         &self,
-        field_definitions: &SmallMap<Name, (ClassFieldDefinition, TextRange)>,
+        field_definitions: &SmallMap<
+            Name,
+            (ClassFieldDefinition, TextRange, Vec<MethodDefinedAttribute>),
+        >,
     ) -> DjangoFieldInfo {
         let mut primary_key_field = None;
         let mut foreign_key_fields = Vec::new();
         let mut fields_with_choices = Vec::new();
-        for (name, (definition, _range)) in field_definitions.iter() {
+        for (name, (definition, _range, _method_assignments)) in field_definitions.iter() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
             {
