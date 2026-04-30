@@ -13,7 +13,11 @@ use itertools::Itertools;
 use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
+use pyrefly_types::callable::Required;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_output::OutputWithLocations;
+use pyrefly_types::type_output::TypeOutput;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
@@ -32,6 +36,7 @@ use crate::alt::call::TargetWithTParams;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::callable::ExpectedArgument;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
@@ -53,8 +58,8 @@ struct CalledOverload<'f> {
     ctor_targs: Option<TArgs>,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
-    /// Maps each argument's source range to the parameter type it was matched against.
-    expected_types: HashMap<TextRange, Type>,
+    /// Maps each argument's source range to the parameter it was matched against.
+    expected_types: HashMap<TextRange, ExpectedArgument>,
 }
 
 impl CalledOverload<'_> {
@@ -433,24 +438,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
                 "Possible overloads:".to_owned(),
             ];
+            let empty_expected_types = HashMap::new();
             for overload in &overloads {
-                let suffix = if overload.1.signature == closest_overload.func.1.signature {
-                    " [closest match]"
-                } else {
-                    ""
-                };
-                let signature = match self_obj {
+                let is_closest = overload.1.signature == closest_overload.func.1.signature;
+                let suffix = if is_closest { " [closest match]" } else { "" };
+                let (signature, param_index_offset) = match self_obj {
                     Some(_) => overload
                         .1
                         .signature
                         .split_first_param(&mut Owner::new())
-                        .map(|(_, signature)| signature)
-                        .unwrap_or_else(|| overload.1.signature.clone()),
-                    None => overload.1.signature.clone(),
+                        .map(|(_, signature)| (signature, 1))
+                        .unwrap_or_else(|| (overload.1.signature.clone(), 0)),
+                    None => (overload.1.signature.clone(), 0),
                 };
-                let signature = self
-                    .solver()
-                    .for_display(self.heap.mk_callable_from(signature));
+                let expected_types = if is_closest {
+                    &closest_overload.expected_types
+                } else {
+                    &empty_expected_types
+                };
+                let signature = self.format_overload_signature_for_call(
+                    &signature,
+                    expected_types,
+                    param_index_offset,
+                    &args,
+                    &keywords,
+                );
                 msg.push(format!("{signature}{suffix}"));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
@@ -613,7 +625,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let mut param_types = matched_overloads
                         .iter()
-                        .filter_map(|o| o.expected_types.get(&arg_range));
+                        .filter_map(|o| o.expected_types.get(&arg_range).map(|e| &e.ty));
                     let Some(first) = param_types.next() else {
                         // If we can't find the expected type, be conservative and assume there may be multiple.
                         return true;
@@ -852,5 +864,126 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             specialization_errors,
             expected_types,
         }
+    }
+
+    /// Format an overload signature, showing only the parameters used in the call.
+    fn format_overload_signature_for_call(
+        &self,
+        signature: &Callable,
+        expected_types: &HashMap<TextRange, ExpectedArgument>,
+        param_index_offset: usize,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+    ) -> String {
+        let full_signature = || {
+            format!(
+                "{}",
+                self.solver()
+                    .for_display(self.heap.mk_callable_from(signature.clone()))
+            )
+        };
+        let Params::List(params) = &signature.params else {
+            return full_signature();
+        };
+
+        let missing_required_by_count = || {
+            let has_unknown_args = args.iter().any(|arg| matches!(arg, CallArg::Star(..)))
+                || keywords.iter().any(|kw| kw.arg.is_none());
+            let provided = args
+                .iter()
+                .filter(|arg| matches!(arg, CallArg::Arg(_)))
+                .count()
+                + keywords.iter().filter(|kw| kw.arg.is_some()).count();
+            !has_unknown_args && signature.arg_counts().overall.min > provided
+        };
+
+        if expected_types.is_empty() {
+            let mut display = full_signature();
+            if missing_required_by_count() {
+                display.push_str(" [missing required arguments]");
+            }
+            return display;
+        }
+
+        let used_param_indices: Vec<_> = expected_types
+            .values()
+            .filter_map(|expected| {
+                expected
+                    .param_index
+                    .and_then(|index| index.checked_sub(param_index_offset))
+            })
+            .collect();
+        let mut elements = Vec::new();
+        let mut named_posonly = false;
+        let mut kwonly = false;
+        let mut in_omitted = false;
+        let mut missing_required = false;
+        let format_param = |param: &Param| -> String {
+            let ctx = TypeDisplayContext::new(&[]);
+            let mut output = OutputWithLocations::new(&ctx);
+            let _ = param.fmt_with_type(&mut output, &|ty, out| {
+                let display_ty = self.solver().for_display(ty.clone());
+                out.write_type(&display_ty)
+            });
+            output
+                .parts()
+                .iter()
+                .map(|(part, _)| part.as_str())
+                .collect::<String>()
+        };
+        let push_ellipsis = |parts: &mut Vec<String>| {
+            if parts.last().map(|s| s.as_str()) != Some("...") {
+                parts.push("...".to_owned());
+            }
+        };
+
+        for (index, param) in params.items().iter().enumerate() {
+            let required = matches!(param, Param::PosOnly(_, _, Required::Required))
+                || matches!(param, Param::Pos(_, _, Required::Required))
+                || matches!(param, Param::KwOnly(_, _, Required::Required));
+            let used = used_param_indices.contains(&index);
+            let include = used || required;
+
+            if !include {
+                in_omitted = true;
+                continue;
+            }
+            missing_required |= required && !used;
+
+            if named_posonly && !matches!(param, Param::PosOnly(Some(_), _, _)) {
+                elements.push("/".to_owned());
+                named_posonly = false;
+            }
+            if in_omitted {
+                push_ellipsis(&mut elements);
+                in_omitted = false;
+            }
+            if !kwonly && matches!(param, Param::KwOnly(..)) {
+                elements.push("*".to_owned());
+                kwonly = true;
+            }
+            elements.push(format_param(param));
+
+            if matches!(param, Param::PosOnly(Some(_), _, _)) {
+                named_posonly = true;
+            }
+        }
+
+        if named_posonly {
+            elements.push("/".to_owned());
+        }
+        if in_omitted {
+            push_ellipsis(&mut elements);
+        }
+        if elements.is_empty() {
+            elements.push("...".to_owned());
+        }
+
+        let ret_display = format!("{}", self.solver().for_display(signature.ret.clone()));
+        let mut display = format!("({}) -> {}", elements.join(", "), ret_display);
+        if missing_required {
+            display.push_str(" [missing required arguments]");
+        }
+        display
     }
 }

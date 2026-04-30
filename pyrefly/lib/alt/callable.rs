@@ -58,6 +58,19 @@ use crate::types::quantified::Quantified;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
+/// The parameter type an argument was matched against.
+#[derive(Clone)]
+pub struct ExpectedArgument {
+    pub ty: Type,
+    pub param_index: Option<usize>,
+}
+
+impl ExpectedArgument {
+    fn new(ty: Type, param_index: Option<usize>) -> Self {
+        Self { ty, param_index }
+    }
+}
+
 /// Structure to turn TypeOrExprs into Types.
 /// This is used to avoid re-inferring types for arguments multiple types.
 ///
@@ -575,13 +588,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         // If Some, records parameter-name → argument-type bindings (for meta-shape inference).
         bound_args: &mut Option<HashMap<String, Type>>,
-    ) -> HashMap<TextRange, Type> {
+    ) -> HashMap<TextRange, ExpectedArgument> {
         fn record(bound: &mut Option<HashMap<String, Type>>, name: &Name, ty: Type) {
             if let Some(map) = bound.as_mut() {
                 map.insert(name.to_string(), ty);
             }
         }
-        let mut expected_types: HashMap<TextRange, Type> = HashMap::new();
+        let mut expected_types: HashMap<TextRange, ExpectedArgument> = HashMap::new();
         // We want to work mostly with references, but some things are taken from elsewhere,
         // so have some owners to capture them.
         let param_list_owner = Owner::new();
@@ -608,10 +621,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Creates a reversed copy of the parameters that we iterate through from back to front,
         // so that we can easily peek at and pop from the end.
-        let mut rparams: Vec<&Param> = params.items().iter().rev().collect::<Vec<_>>();
+        let mut rparams: Vec<(usize, &Param)> =
+            params.items().iter().enumerate().rev().collect::<Vec<_>>();
         let mut num_positional_params: usize = 0;
         let mut extra_positional_args: Vec<TextRange> = Vec::new();
-        let mut seen_names: SmallMap<&Name, &Type> = SmallMap::new();
+        let mut seen_names: SmallMap<&Name, (&Type, Option<usize>)> = SmallMap::new();
         let mut extra_arg_pos: Option<TextRange> = None;
         let mut unpacked_vararg: Option<(Option<&Name>, &Type)> = None;
         let mut unpacked_vararg_matched_args: Vec<CallArgPreEval<'_>> = Vec::new();
@@ -622,7 +636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Returns `Err(q)` when the Var resolved to a quantified ParamSpec `q`
         // (forwarding case), meaning the caller should validate that the
         // remaining args are `*P.args` / `**P.kwargs` and stop matching.
-        let var_to_rparams = |var| -> Result<Vec<&Param>, Box<Quantified>> {
+        let var_to_rparams = |var| -> Result<Vec<(usize, &Param)>, Box<Quantified>> {
             let ps = match self.solver().force_var(var) {
                 Type::ParamSpecValue(ps) => ps,
                 Type::Any(_) | Type::Ellipsis => ParamList::everything(),
@@ -646,13 +660,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::everything()
                 }
             };
-            Ok(param_list_owner.push(ps).items().iter().rev().collect())
+            Ok(param_list_owner
+                .push(ps)
+                .items()
+                .iter()
+                .enumerate()
+                .rev()
+                .collect())
         };
         for arg in self_arg.iter().chain(args.iter()) {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
-                let param = if let Some(p) = rparams.last() {
-                    PosParam::new(p)
+                let param = if let Some((index, p)) = rparams.last() {
+                    PosParam::new(p).map(|param| (*index, param))
                 } else if let Some(var) = paramspec {
                     // We've run out of parameters but haven't finished matching arguments. If we
                     // have a ParamSpec Var, it may contribute more parameters; force it and tack
@@ -682,11 +702,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None
                 };
                 match param {
-                    Some(PosParam {
-                        ty,
-                        name,
-                        kind: kind @ (PosParamKind::PositionalOnly | PosParamKind::Positional),
-                    }) => {
+                    Some((
+                        param_index,
+                        PosParam {
+                            ty,
+                            name,
+                            kind: kind @ (PosParamKind::PositionalOnly | PosParamKind::Positional),
+                        },
+                    )) => {
                         // For unknown-length star args, stop consuming positional parameters
                         // when we reach a one that has a corresponding keyword argument.
                         // This is unsound, but prevents false positive "multiple values" errors.
@@ -704,9 +727,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             // Remember names of positional parameters to detect duplicates.
                             // We ignore positional-only parameters because they can't be passed in by name.
-                            seen_names.insert(name, ty);
+                            seen_names.insert(name, (ty, Some(param_index)));
                         }
-                        expected_types.insert(arg.range(), ty.clone());
+                        expected_types.insert(
+                            arg.range(),
+                            ExpectedArgument::new(ty.clone(), Some(param_index)),
+                        );
                         let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
@@ -724,24 +750,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             record(bound_args, name, ty);
                         }
                     }
-                    Some(PosParam {
-                        ty,
-                        name,
-                        kind: PosParamKind::Unpacked,
-                    }) => {
+                    Some((
+                        param_index,
+                        PosParam {
+                            ty,
+                            name,
+                            kind: PosParamKind::Unpacked,
+                        },
+                    )) => {
                         // Store args that get matched to an unpacked *args param
                         // Matched args are typechecked separately later
-                        expected_types.insert(arg.range(), ty.clone());
+                        expected_types.insert(
+                            arg.range(),
+                            ExpectedArgument::new(ty.clone(), Some(param_index)),
+                        );
                         unpacked_vararg = Some((name, ty));
                         unpacked_vararg_matched_args.push(arg_pre.clone());
                         arg_pre.post_skip();
                     }
-                    Some(PosParam {
-                        ty,
-                        name,
-                        kind: PosParamKind::Variadic,
-                    }) => {
-                        expected_types.insert(arg.range(), ty.clone());
+                    Some((
+                        param_index,
+                        PosParam {
+                            ty,
+                            name,
+                            kind: PosParamKind::Variadic,
+                        },
+                    )) => {
+                        expected_types.insert(
+                            arg.range(),
+                            ExpectedArgument::new(ty.clone(), Some(param_index)),
+                        );
                         let arg_ty = arg_pre.post_check(
                             self,
                             callable_name,
@@ -891,11 +929,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // parameters and `typing.Callable`s have unnamed ones.
         let mut missing_unnamed_posonly: usize = 0;
         let mut missing_named_posonly: SmallSet<&Name> = SmallSet::new();
-        let mut kwparams: OrderedMap<&Name, (&Type, bool)> = OrderedMap::new();
+        let mut kwparams: OrderedMap<&Name, (&Type, bool, Option<usize>)> = OrderedMap::new();
         let mut kwargs: Option<(Option<&Name>, &Type)> = None;
         let mut kwargs_is_unpack: bool = false;
         loop {
-            let p = match rparams.pop() {
+            let (param_index, p) = match rparams.pop() {
                 Some(p) => p,
                 None if let Some(var) = paramspec => {
                     // We've reached the end of our regular parameter list. Now check if we have more parameters from a ParamSpec.
@@ -942,7 +980,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Param::Varargs(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
-                    kwparams.insert(name, (ty, required == &Required::Required));
+                    kwparams.insert(
+                        name,
+                        (ty, required == &Required::Required, Some(param_index)),
+                    );
                 }
                 Param::Kwargs(name, Type::Unpack(box Type::TypedDict(typed_dict))) => {
                     self.typed_dict_fields(typed_dict)
@@ -950,7 +991,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .for_each(|(name, field)| {
                             kwparams.insert(
                                 name_owner.push(name),
-                                (type_owner.push(field.ty), field.required),
+                                (type_owner.push(field.ty), field.required, None),
                             );
                         });
                     if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict) {
@@ -988,7 +1029,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Type::TypedDict(typed_dict) = ty {
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
-                            let mut hint = kwargs.as_ref().map(|(_, ty)| *ty);
+                            let mut hint = kwargs.as_ref().map(|(_, ty)| (*ty, None));
                             if let Some(ty) = seen_names.get(name) {
                                 error(
                                     call_errors,
@@ -997,13 +1038,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     format!("Multiple values for argument `{name}`"),
                                 );
                                 hint = Some(*ty);
-                            } else if let Some((ty, _)) = kwparams.get(name) {
-                                seen_names.insert(name, *ty);
-                                hint = Some(*ty)
+                            } else if let Some((ty, _, param_index)) = kwparams.get(name) {
+                                seen_names.insert(name, (*ty, *param_index));
+                                hint = Some((*ty, *param_index))
                             } else if kwargs.is_none() && !kwargs_is_unpack {
                                 unexpected_keyword_error(name, kw.range);
                             }
-                            if let Some(want) = &hint {
+                            if let Some((want, _)) = &hint {
                                 self.check_type(&field.ty, want, kw.range, call_errors, &|| {
                                     TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
                                         Some(name.clone()),
@@ -1066,7 +1107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Some(id) => {
-                    let mut hint = kwargs.as_ref().map(|(_, ty)| *ty);
+                    let mut hint = kwargs.as_ref().map(|(_, ty)| (*ty, None));
                     let mut has_matching_param = false;
                     if let Some(ty) = seen_names.get(&id.id) {
                         error(
@@ -1077,15 +1118,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         hint = Some(*ty);
                         has_matching_param = true;
-                    } else if let Some((ty, _)) = kwparams.get(&id.id) {
-                        seen_names.insert(&id.id, *ty);
-                        hint = Some(*ty);
+                    } else if let Some((ty, _, param_index)) = kwparams.get(&id.id) {
+                        seen_names.insert(&id.id, (*ty, *param_index));
+                        hint = Some((*ty, *param_index));
                         has_matching_param = true;
                     } else if kwargs.is_none() {
                         unexpected_keyword_error(&id.id, id.range);
                     }
-                    if let Some(expected) = hint {
-                        expected_types.insert(kw.range, expected.clone());
+                    if let Some((expected, param_index)) = hint {
+                        expected_types.insert(
+                            kw.range,
+                            ExpectedArgument::new(expected.clone(), param_index),
+                        );
                     }
                     let tcc: &dyn Fn() -> TypeCheckContext = &|| {
                         TypeCheckContext::of_kind(if has_matching_param {
@@ -1102,11 +1146,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let arg_ty = match kw.value {
                         TypeOrExpr::Expr(x) => self.expr_with_separate_check_errors(
                             x,
-                            hint.map(|ty| (ty, call_errors, tcc)),
+                            hint.map(|(ty, _)| (ty, call_errors, tcc)),
                             arg_errors,
                         ),
                         TypeOrExpr::Type(x, range) => {
-                            if let Some(hint) = &hint
+                            if let Some((hint, _)) = &hint
                                 && !hint.is_any()
                             {
                                 self.check_type(x, hint, range, call_errors, tcc);
@@ -1148,7 +1192,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             extra_posargs_iter.next();
         }
         let mut extra_posargs_matched = 0;
-        for (name, (want, required)) in kwparams.iter() {
+        for (name, (want, required, _)) in kwparams.iter() {
             if !seen_names.contains_key(name) {
                 if splat_kwargs.is_empty() && *required {
                     if let Some(arg_range) = extra_posargs_iter.next() {
@@ -1285,7 +1329,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (
         Type,
         Vec<TypeVarSpecializationError>,
-        HashMap<TextRange, Type>,
+        HashMap<TextRange, ExpectedArgument>,
     ) {
         self.callable_infer_with_hint(
             hint,
@@ -1327,7 +1371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> (
         Type,
         Vec<TypeVarSpecializationError>,
-        HashMap<TextRange, Type>,
+        HashMap<TextRange, ExpectedArgument>,
     ) {
         // Look up meta-shape early so we can conditionally collect bound args.
         // Only consult the registry when tensor_shapes is enabled to avoid
