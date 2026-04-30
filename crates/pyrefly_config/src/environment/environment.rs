@@ -131,7 +131,39 @@ impl PythonEnvironment {
             );
         }
 
-        let script = "\
+        let mut command = Command::new(interpreter);
+        command.arg("-c");
+        command.arg(Self::query_script());
+
+        Self::get_env_from_command(command, interpreter.display().to_string())
+    }
+
+    /// Query the environment that `uv` would create for a PEP 723 script.
+    pub fn get_env_from_uv_script(script: &Path) -> anyhow::Result<PythonEnvironment> {
+        let Some(script_dir) = script.parent() else {
+            return Err(anyhow!(
+                "Unable to query PEP 723 environment for `{}` because it has no parent directory",
+                script.display()
+            ));
+        };
+
+        let mut command = Command::new("uv");
+        command.arg("run");
+        command.arg("--directory");
+        command.arg(script_dir);
+        command.arg("--no-project");
+        command.arg("--isolated");
+        command.arg("--with-requirements");
+        command.arg(script);
+        command.arg("python");
+        command.arg("-c");
+        command.arg(Self::query_script());
+
+        Self::get_env_from_command(command, format!("uv PEP 723 script {}", script.display()))
+    }
+
+    fn query_script() -> &'static str {
+        "\
 import json, sys, sysconfig
 platform = sys.platform
 v = sys.version_info
@@ -139,26 +171,24 @@ version = '{}.{}.{}'.format(v.major, v.minor, v.micro)
 stdlib_paths = [p for p in [sysconfig.get_path('stdlib')] if p is not None]
 site_package_path = [p for p in sys.path if p != '' and '.zip' not in p and not p.endswith('/lib-dynload') and p not in stdlib_paths]
 print(json.dumps({'python_platform': platform, 'python_version': version, 'site_package_path': site_package_path, 'stdlib_paths': stdlib_paths}))
-";
+"
+    }
 
-        let mut command = Command::new(interpreter);
-        command.arg("-c");
-        command.arg(script);
-
+    fn get_env_from_command(
+        mut command: Command,
+        command_description: String,
+    ) -> anyhow::Result<PythonEnvironment> {
         let python_info = command.output()?;
 
         let stdout = String::from_utf8(python_info.stdout).with_context(|| {
-            format!(
-                "while parsing Python interpreter (`{}`) stdout for environment configuration",
-                interpreter.display()
-            )
+            format!("while parsing `{command_description}` stdout for environment configuration")
         })?;
         if !python_info.status.success() {
             let stderr = String::from_utf8(python_info.stderr)
                 .unwrap_or("<Failed to parse STDOUT from UTF-8 string>".to_owned());
             return Err(anyhow::anyhow!(
-                "Unable to query interpreter {} for environment info:\nSTDOUT: {}\nSTDERR: {}",
-                interpreter.display(),
+                "Unable to query {} for environment info:\nSTDOUT: {}\nSTDERR: {}",
+                command_description,
                 stdout,
                 stderr
             ));

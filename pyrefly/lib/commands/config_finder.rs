@@ -16,6 +16,8 @@ use pyrefly_config::base::ConfigBase;
 use pyrefly_config::config::DirectoryRelativeFallbackSearchPathCache;
 use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_config::config::GENERATED_FILE_CONFIG_OVERRIDE;
+use pyrefly_config::environment::environment::PythonEnvironment;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
@@ -136,6 +138,90 @@ pub fn default_config_finder_with_overrides(
     )
 }
 
+struct Pep723ScriptOverrides {
+    cache: Arc<Mutex<SmallMap<(PathBuf, String), ArcId<ConfigFile>>>>,
+    query_environment: Arc<dyn Fn(&Path) -> anyhow::Result<PythonEnvironment> + Send + Sync>,
+}
+
+impl Pep723ScriptOverrides {
+    fn new(
+        query_environment: Arc<dyn Fn(&Path) -> anyhow::Result<PythonEnvironment> + Send + Sync>,
+    ) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(SmallMap::new())),
+            query_environment,
+        }
+    }
+
+    fn override_config(
+        &self,
+        path: &ModulePath,
+        config: ArcId<ConfigFile>,
+    ) -> anyhow::Result<ArcId<ConfigFile>> {
+        let Some(script_path) = Self::script_path(path) else {
+            return Ok(config);
+        };
+        let Some(metadata) = Self::read_pep723_metadata(script_path)? else {
+            return Ok(config);
+        };
+
+        let cache_key = (script_path.to_path_buf(), metadata);
+        if let Some(config) = self.cache.lock().get(&cache_key) {
+            return Ok(config.dupe());
+        }
+
+        let mut script_environment = (self.query_environment)(script_path)?;
+        // Preserve explicit user-specified site-package paths such as `typings/`,
+        // while replacing interpreter-derived environment data with the script's.
+        script_environment.site_package_path = config.python_environment.site_package_path.clone();
+
+        let mut config = config.as_ref().clone();
+        config.interpreters.disable_query();
+        config.python_environment = script_environment;
+
+        let config = ArcId::new(config);
+        self.cache.lock().insert(cache_key, config.dupe());
+        Ok(config)
+    }
+
+    fn script_path(path: &ModulePath) -> Option<&Path> {
+        match path.details() {
+            ModulePathDetails::FileSystem(path) | ModulePathDetails::Memory(path) => Some(path),
+            ModulePathDetails::Namespace(_)
+            | ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_)
+            | ModulePathDetails::BundledThirdParty(_) => None,
+        }
+    }
+
+    fn read_pep723_metadata(path: &Path) -> anyhow::Result<Option<String>> {
+        let contents = std::fs::read_to_string(path)?;
+        Ok(Self::extract_pep723_metadata(&contents))
+    }
+
+    fn extract_pep723_metadata(contents: &str) -> Option<String> {
+        let mut metadata = Vec::new();
+        let mut in_script_block = false;
+
+        for line in contents.lines() {
+            match line.trim_start() {
+                "# /// script" if !in_script_block => {
+                    in_script_block = true;
+                    metadata.push(line);
+                }
+                "# ///" if in_script_block => {
+                    metadata.push(line);
+                    return Some(metadata.join("\n"));
+                }
+                _ if in_script_block => metadata.push(line),
+                _ => {}
+            }
+        }
+
+        None
+    }
+}
+
 /// Create a standard `ConfigFinder`, using the provided [`ConfigConfigurer`] to finalize
 /// the config before caching/returning it.
 ///
@@ -151,6 +237,8 @@ pub fn standard_config_finder(
     };
     let configure2 = configure.dupe();
     let configure3 = configure.dupe();
+    let pep723_script_overrides =
+        Pep723ScriptOverrides::new(Arc::new(PythonEnvironment::get_env_from_uv_script));
 
     // A cache where path `p` maps to config file with `search_path = [p]`. If we can find the root.
     let cache_one: Arc<Mutex<SmallMap<PathBuf, ArcId<ConfigFile>>>> =
@@ -168,10 +256,12 @@ pub fn standard_config_finder(
         let cache_one = cache_one.dupe();
         let cache_parents = cache_parents.dupe();
         let cache_ancestors = cache_ancestors.dupe();
+        let pep723_script_overrides = pep723_script_overrides.cache.dupe();
         Box::new(move || {
             cache_one.lock().clear();
             cache_parents.lock().clear();
             cache_ancestors.clear();
+            pep723_script_overrides.lock().clear();
             GENERATED_FILE_CONFIG_OVERRIDE.write().clear();
         })
     };
@@ -195,6 +285,16 @@ pub fn standard_config_finder(
             let (config, validation_errors) =
                 configure.configure(file.parent(), file_config, parse_errors);
             (config, validation_errors)
+        }),
+        Box::new(move |_, path, config| {
+            pep723_script_overrides
+                .override_config(path, config)
+                .map_err(|err| {
+                    err.context(format!(
+                        "While resolving PEP 723 metadata for `{}`",
+                        path.as_path().display()
+                    ))
+                })
         }),
         // Fall back to using a default config, but let's see if we can make the `search_path` somewhat useful
         // based on a few heuristics.
@@ -274,12 +374,16 @@ pub fn standard_config_finder(
 mod tests {
 
     use std::ops::Deref as _;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     use pretty_assertions::assert_eq;
     use pyrefly_config::args::ConfigOverrideArgs;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_name::ModuleNameWithKind;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::sys_info::PythonPlatform;
+    use pyrefly_python::sys_info::PythonVersion;
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
@@ -322,6 +426,106 @@ mod tests {
         ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
             (self.0)(root, config, errors)
         }
+    }
+
+    #[test]
+    fn test_extract_pep723_metadata() {
+        let contents = "\
+# /// script
+# requires-python = \">=3.12\"
+# dependencies = [\"click\"]
+# ///
+print('hello')
+";
+
+        assert_eq!(
+            Pep723ScriptOverrides::extract_pep723_metadata(contents),
+            Some(
+                [
+                    "# /// script",
+                    "# requires-python = \">=3.12\"",
+                    "# dependencies = [\"click\"]",
+                    "# ///",
+                ]
+                .join("\n")
+            )
+        );
+        assert_eq!(
+            Pep723ScriptOverrides::extract_pep723_metadata("print('hello')"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_pep723_override_preserves_explicit_site_packages_and_caches() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let script_path = root.join("script.py");
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::file_with_contents(
+                "script.py",
+                "\
+# /// script
+# requires-python = \">=3.12\"
+# dependencies = [\"click\"]
+# ///
+import click
+",
+            )],
+        );
+
+        let query_count = Arc::new(AtomicUsize::new(0));
+        let query_count_for_closure = Arc::clone(&query_count);
+        let overrides = Pep723ScriptOverrides::new(Arc::new(move |_| {
+            query_count_for_closure.fetch_add(1, Ordering::Relaxed);
+            Ok(PythonEnvironment {
+                python_platform: Some(PythonPlatform::windows()),
+                python_version: Some(PythonVersion::new(3, 12, 5)),
+                site_package_path: Some(vec![]),
+                interpreter_site_package_path: vec![PathBuf::from("/tmp/site-packages")],
+                interpreter_stdlib_path: vec![PathBuf::from("/tmp/stdlib")],
+            })
+        }));
+
+        let mut config = ConfigFile::default();
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.python_environment.site_package_path = Some(vec![PathBuf::from("/tmp/typings")]);
+        let config = ArcId::new(config);
+        let module_path = ModulePath::filesystem(script_path.clone());
+
+        let overridden = overrides
+            .override_config(&module_path, config.dupe())
+            .unwrap();
+        let cached = overrides.override_config(&module_path, config).unwrap();
+
+        assert_eq!(query_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            overridden.search_path().cloned().collect::<Vec<_>>(),
+            vec![root.to_path_buf()]
+        );
+        assert_eq!(
+            overridden.python_environment.site_package_path,
+            Some(vec![PathBuf::from("/tmp/typings")])
+        );
+        assert_eq!(
+            overridden.python_environment.interpreter_site_package_path,
+            vec![PathBuf::from("/tmp/site-packages")]
+        );
+        assert_eq!(
+            overridden.python_environment.interpreter_stdlib_path,
+            vec![PathBuf::from("/tmp/stdlib")]
+        );
+        assert_eq!(
+            overridden.python_environment.python_version,
+            Some(PythonVersion::new(3, 12, 5))
+        );
+        assert_eq!(
+            overridden.python_environment.python_platform,
+            Some(PythonPlatform::windows())
+        );
+        assert!(overridden.interpreters.skip_interpreter_query);
+        assert_eq!(overridden, cached);
     }
 
     #[test]
