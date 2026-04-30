@@ -120,7 +120,9 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
+        let test_clone = test.clone();
         self.insert_binding(Key::Anon(test_range), Binding::Expr(None, Box::new(test)));
+        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test_clone));
         if let Some(mut msg_expr) = msg {
             let mut base = self.scopes.clone_current_flow();
             // Negate the narrowing of the test expression when typechecking
