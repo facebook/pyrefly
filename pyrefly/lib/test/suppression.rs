@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::state::require::Require;
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -290,6 +292,21 @@ testcase!(
 x: int = \
     "a" + \
     2
+"#,
+);
+
+testcase!(
+    test_pyrefly_suppression_implicit_string_concat,
+    TestEnv::new().with_run_require(Require::Errors),
+    r#"
+from typing import Any
+
+def test(d: dict[str, Any] | str) -> None:
+    x = (
+        # pyrefly: ignore [bad-index]
+        f"{d['foo']}\n"
+        f"{d['bar']}"
+    )
 "#,
 );
 
