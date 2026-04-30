@@ -2399,6 +2399,38 @@ def f(a: A):
 );
 
 testcase!(
+    test_promote_literalstring_method_attribute,
+    r#"
+from typing import Literal, assert_type
+
+class SessionMiddleware:
+    def __init__(
+        self, same_site: Literal["lax", "strict", "none"] = "lax", domain: str | None = None
+    ) -> None:
+        self.security_flags = "httponly; samesite=" + same_site
+        if domain is not None:
+            self.security_flags += f"; domain={domain}"
+
+def f(middleware: SessionMiddleware):
+    assert_type(middleware.security_flags, str)
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_addition_of_explicit_literal_strings,
+    r#"
+from typing import LiteralString, assert_type
+
+class C:
+    def __init__(self, x: LiteralString, y: LiteralString) -> None:
+        self.z = x + y
+
+def f(c: C):
+    assert_type(c.z, LiteralString)
+    "#,
+);
+
+testcase!(
     test_top_level_anonymous_typeddict,
     r#"
 from typing import NotRequired, TypedDict
