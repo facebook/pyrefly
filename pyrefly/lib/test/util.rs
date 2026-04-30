@@ -108,8 +108,8 @@ pub struct TestEnv {
     implicitly_defined_attribute_error: bool,
     implicit_any_error: bool,
     unannotated_return_error: bool,
-    unannotated_parameter_error: bool,
-    unannotated_attribute_error: bool,
+    implicit_any_parameter_error: bool,
+    implicit_any_attribute_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
@@ -138,8 +138,8 @@ impl TestEnv {
             implicitly_defined_attribute_error: false,
             implicit_any_error: false,
             unannotated_return_error: false,
-            unannotated_parameter_error: false,
-            unannotated_attribute_error: false,
+            implicit_any_parameter_error: false,
+            implicit_any_attribute_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
@@ -243,8 +243,8 @@ impl TestEnv {
         self
     }
 
-    pub fn enable_unannotated_attribute_error(mut self) -> Self {
-        self.unannotated_attribute_error = true;
+    pub fn enable_implicit_any_attribute_error(mut self) -> Self {
+        self.implicit_any_attribute_error = true;
         self
     }
 
@@ -253,8 +253,8 @@ impl TestEnv {
         self
     }
 
-    pub fn enable_unannotated_parameter_error(mut self) -> Self {
-        self.unannotated_parameter_error = true;
+    pub fn enable_implicit_any_parameter_error(mut self) -> Self {
+        self.implicit_any_parameter_error = true;
         self
     }
 
@@ -389,14 +389,14 @@ impl TestEnv {
         if self.implicit_any_error {
             errors.set_error_severity(ErrorKind::ImplicitAny, Severity::Error);
         }
-        if self.unannotated_attribute_error {
-            errors.set_error_severity(ErrorKind::UnannotatedAttribute, Severity::Error);
+        if self.implicit_any_attribute_error {
+            errors.set_error_severity(ErrorKind::ImplicitAnyAttribute, Severity::Error);
         }
         if self.unannotated_return_error {
             errors.set_error_severity(ErrorKind::UnannotatedReturn, Severity::Error);
         }
-        if self.unannotated_parameter_error {
-            errors.set_error_severity(ErrorKind::UnannotatedParameter, Severity::Error);
+        if self.implicit_any_parameter_error {
+            errors.set_error_severity(ErrorKind::ImplicitAnyParameter, Severity::Error);
         }
         if self.implicit_abstract_class_error {
             errors.set_error_severity(ErrorKind::ImplicitAbstractClass, Severity::Error);

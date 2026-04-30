@@ -161,8 +161,6 @@ impl Preset {
             Preset::Strict => {
                 let errors = HashMap::from([
                     (ErrorKind::ImplicitAny, Severity::Error),
-                    (ErrorKind::UnannotatedParameter, Severity::Error),
-                    (ErrorKind::UnannotatedAttribute, Severity::Error),
                     (ErrorKind::MissingOverrideDecorator, Severity::Error),
                     (ErrorKind::UnusedIgnore, Severity::Error),
                 ]);

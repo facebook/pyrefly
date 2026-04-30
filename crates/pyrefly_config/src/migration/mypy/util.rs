@@ -117,7 +117,7 @@ pub fn make_error_config(
             errors.insert(ErrorKind::RedundantCast.to_string(), Severity::Warn);
         }
         if disallow_untyped_defs || disallow_incomplete_defs || strict {
-            errors.insert(ErrorKind::UnannotatedParameter.to_string(), Severity::Error);
+            errors.insert(ErrorKind::ImplicitAnyParameter.to_string(), Severity::Error);
             errors.insert(ErrorKind::UnannotatedReturn.to_string(), Severity::Error);
         }
         if disallow_any_generics || strict {
@@ -162,7 +162,11 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
             "name-defined" => add(severity, ErrorKind::UnknownName),
             "used-before-def" | "possibly-undefined" => add(severity, ErrorKind::UnboundName),
             "valid-type" => add(severity, ErrorKind::InvalidAnnotation),
-            "type-arg" | "no-untyped-def" => add(severity, ErrorKind::ImplicitAny),
+            "type-arg" => add(severity, ErrorKind::ImplicitAnyTypeArgument),
+            "no-untyped-def" => {
+                add(severity, ErrorKind::ImplicitAnyParameter);
+                add(severity, ErrorKind::UnannotatedReturn);
+            }
             "metaclass" => add(severity, ErrorKind::InvalidInheritance),
             "override" => add(severity, ErrorKind::BadOverride),
             "mutable-override" => add(severity, ErrorKind::BadOverrideMutableAttribute),

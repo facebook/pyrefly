@@ -2330,14 +2330,21 @@ output-format = "omit-errors"
 
         let errors = config.root.errors.as_ref().unwrap();
         assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
-        assert_eq!(
-            errors.severity(ErrorKind::UnannotatedParameter),
-            Severity::Error
-        );
-        assert_eq!(
-            errors.severity(ErrorKind::UnannotatedAttribute),
-            Severity::Error
-        );
+        // Setting `implicit-any` cascades to every sub-kind via parent_kind,
+        // so strict mode covers parameters, attributes, type arguments, and
+        // empty containers without listing them individually.
+        for kind in [
+            ErrorKind::ImplicitAnyParameter,
+            ErrorKind::ImplicitAnyAttribute,
+            ErrorKind::ImplicitAnyTypeArgument,
+            ErrorKind::ImplicitAnyEmptyContainer,
+        ] {
+            assert_eq!(
+                errors.severity(kind),
+                Severity::Error,
+                "strict should enable {kind:?} via the implicit-any parent"
+            );
+        }
         assert_eq!(
             errors.severity(ErrorKind::MissingOverrideDecorator),
             Severity::Error

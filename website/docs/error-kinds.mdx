@@ -512,15 +512,88 @@ The default severity of this diagnostic is `ignore`.
 
 ## implicit-any
 
-This error is emitted when Pyrefly infers an implicit `Any` type in your code for type variables or generic parameters that cannot be determined. This is common in gradually-typed code, but reduces type safety so we provide this error for users that want to enforce fully-typed codebases.
+Umbrella error code for cases where Pyrefly infers an implicit `Any`. Suppressing or enabling `implicit-any` cascades to every sub-kind below — useful when you want to surface (or silence) all implicit-`Any` cases without listing them individually.
 
-Typically, it can be fixed by providing explicit type arguments or default values for type variables.
+Most concrete diagnostics are emitted under one of the more specific sub-kinds:
+- [`implicit-any-attribute`](#implicit-any-attribute)
+- [`implicit-any-empty-container`](#implicit-any-empty-container)
+- [`implicit-any-parameter`](#implicit-any-parameter)
+- [`implicit-any-type-argument`](#implicit-any-type-argument)
+
+The default severity of this diagnostic is `ignore`.
+
+## implicit-any-attribute
+
+An attribute is implicitly inferred to be `Any | None` (or `tuple[Any, ...]`) because it was assigned `None` or `()` in a method without an explicit type annotation. Add an annotation so the attribute's type is determined at the assignment site rather than leaking `Any` into downstream uses.
+
+This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
 
 The default severity of this diagnostic is `ignore`.
 
 ```python
-# this only errors when first-use inference is disabled
-x = []  # error: infers list[Any]
+class C:
+    def __init__(self):
+        self.a = None    # implicit-any-attribute (type: None | Any)
+        self.b = ()      # implicit-any-attribute (type: tuple[Any, ...])
+
+# Fix:
+class C:
+    a: int | None
+    b: tuple[int, ...]
+    def __init__(self):
+        self.a = None
+        self.b = ()
+```
+
+## implicit-any-empty-container
+
+An empty container literal (`[]`, `{}`) couldn't be inferred from context and was pinned to a container of `Any`. Provide a type annotation, initialize with a non-empty value, or use the value in a way that lets Pyrefly infer its element type.
+
+This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+x = []  # implicit-any-empty-container — type: list[Any]
+
+# Fix:
+x: list[int] = []
+# or
+x = [1, 2, 3]
+```
+
+## implicit-any-parameter
+
+A function parameter has no type annotation, so Pyrefly treats it as `Any`. Add an annotation. The `self` and `cls` parameters of methods are excluded from this check.
+
+This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+def f(x):  # implicit-any-parameter — `x` has type `Any`
+    return x + 1
+
+# Fix:
+def f(x: int) -> int:
+    return x + 1
+```
+
+## implicit-any-type-argument
+
+A generic class, type alias, or special form (`tuple`, `Callable`, `type`) was used without explicit type arguments, so Pyrefly defaulted the missing type parameters to `Any`. Provide explicit arguments, or declare a default for the relevant type variable.
+
+This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+def f(xs: list) -> tuple:  # implicit-any-type-argument on both `list` and `tuple`
+    return tuple(xs)
+
+# Fix:
+def f(xs: list[int]) -> tuple[int, ...]:
+    return tuple(xs)
 ```
 
 ## implicit-import
@@ -1283,36 +1356,11 @@ The default severity of this diagnostic is `info`.
 
 ## unannotated-attribute
 
-This error is raised when a class attribute is missing a type annotation and is initialized with the `None` literal. Without an explicit annotation, Pyrefly infers the type as `Any | None`, which reduces type safety. To fix it, add an explicit type annotation to the attribute.
-
-The default severity of this diagnostic is `ignore`.
-
-```python
-class MyClass:
-    # error: This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.
-    value = None
-
-# Fixed version:
-class MyClass:
-    value: int | None = None
-```
+Deprecated: this error code has been renamed to [implicit-any-attribute](#implicit-any-attribute). The old name is still accepted in suppression comments and configuration for backwards compatibility.
 
 ## unannotated-parameter
 
-This error is raised when a function parameter is missing a type annotation. This helps enforce fully-typed codebases by ensuring all parameters have explicit types. To fix it, add a type annotation to the parameter.
-
-Note: The `self` and `cls` parameters are excluded from this check as they are implicitly typed.
-
-The default severity of this diagnostic is `ignore`.
-
-```python
-def process_data(x: int, y):  # error: `process_data` is missing an annotation for parameter `y`
-    return x + y
-
-# Fixed version:
-def process_data(x: int, y: int) -> int:
-    return x + y
-```
+Deprecated: this error code has been renamed to [implicit-any-parameter](#implicit-any-parameter). The old name is still accepted in suppression comments and configuration for backwards compatibility.
 
 ## unannotated-protocol-member
 

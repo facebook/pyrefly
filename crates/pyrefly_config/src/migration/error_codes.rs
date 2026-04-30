@@ -254,7 +254,7 @@ mod tests {
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
 
         assert_eq!(
-            errors.severity(ErrorKind::UnannotatedParameter),
+            errors.severity(ErrorKind::ImplicitAnyParameter),
             Severity::Error
         );
         assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Warn);
@@ -304,6 +304,11 @@ mod tests {
 
         assert!(pyrefly_cfg.root.errors.is_some());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
-        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
+        // mypy's `type-arg` is the missing-type-argument case specifically,
+        // so it maps to the more precise `implicit-any-type-argument` sub-kind.
+        assert_eq!(
+            errors.severity(ErrorKind::ImplicitAnyTypeArgument),
+            Severity::Error
+        );
     }
 }

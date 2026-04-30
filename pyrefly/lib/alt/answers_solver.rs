@@ -3156,7 +3156,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
     }
 
-    /// Add an implicit-any error for a generic entity without explicit type arguments.
+    /// Add an `implicit-any-type-argument` error for a generic entity used
+    /// without explicit type arguments.
     pub fn add_implicit_any_error(
         errors: &ErrorCollector,
         range: TextRange,
@@ -3176,7 +3177,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         errors.add(
             range,
-            ErrorInfo::Kind(ErrorKind::ImplicitAny),
+            ErrorInfo::Kind(ErrorKind::ImplicitAnyTypeArgument),
             vec1![
                 msg,
                 "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),

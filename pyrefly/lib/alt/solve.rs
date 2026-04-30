@@ -4810,7 +4810,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match self.solver().pin_placeholder_type(var, pin_partial_types) {
                 Some(PinError::ImplicitPartialContained(container_range)) => errors.add(
                     container_range,
-                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    ErrorInfo::Kind(ErrorKind::ImplicitAnyEmptyContainer),
                     vec1![
                         "Cannot infer type of empty container; it will be treated as containing `Any`".to_owned(),
                         "Consider adding a type annotation or initializing with a non-empty value".to_owned(),

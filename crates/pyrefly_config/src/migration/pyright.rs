@@ -365,11 +365,11 @@ impl RuleOverrides {
         );
         add(
             self.report_unknown_parameter_type,
-            ErrorKind::UnannotatedParameter,
+            ErrorKind::ImplicitAnyParameter,
         );
         add(
             self.report_missing_parameter_type,
-            ErrorKind::UnannotatedParameter,
+            ErrorKind::ImplicitAnyParameter,
         );
         add(self.report_unknown_argument_type, ErrorKind::ImplicitAny);
         add(self.report_unknown_variable_type, ErrorKind::ImplicitAny);
