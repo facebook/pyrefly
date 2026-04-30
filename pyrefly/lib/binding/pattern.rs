@@ -213,11 +213,17 @@ impl<'a> BindingsBuilder<'a> {
                                             Some(idx) => idx,
                                             Option::None => {
                                                 // More patterns than tuple elements, skip narrowing
-                                                narrow_ops.and_all(self.bind_pattern(
-                                                    MatchSubject::None,
-                                                    x,
-                                                    key_for_subpattern,
-                                                ));
+                                                for (name, (op, range)) in self
+                                                    .bind_pattern(
+                                                        MatchSubject::None,
+                                                        x,
+                                                        key_for_subpattern,
+                                                    )
+                                                    .0
+                                                {
+                                                    let subject = NarrowingSubject::Name(name);
+                                                    narrow_ops.and_for_subject(&subject, op, range);
+                                                }
                                                 continue;
                                             }
                                         }
@@ -238,11 +244,13 @@ impl<'a> BindingsBuilder<'a> {
                                 }
                                 _ => MatchSubject::None,
                             };
-                            narrow_ops.and_all(self.bind_pattern(
-                                subject_for_subpattern,
-                                x,
-                                key_for_subpattern,
-                            ));
+                            for (name, (op, range)) in self
+                                .bind_pattern(subject_for_subpattern, x, key_for_subpattern)
+                                .0
+                            {
+                                let subject = NarrowingSubject::Name(name);
+                                narrow_ops.and_for_subject(&subject, op, range);
+                            }
                         }
                     }
                 }
@@ -599,11 +607,13 @@ impl<'a> BindingsBuilder<'a> {
             // shadow outer variables. When there is no narrowing subject
             // (e.g. `match make_color():`), drop all narrows so that alias
             // names don't resolve against unrelated outer variables.
-            new_narrow_ops.0.retain(|name, _| {
-                match_subject
-                    .as_single()
-                    .as_ref()
-                    .is_some_and(|s| name == s.name())
+            new_narrow_ops.0.retain(|name, _| match &match_subject {
+                MatchSubject::Single(subject) => name == subject.name(),
+                MatchSubject::Tuple(subjects) => subjects
+                    .iter()
+                    .flatten()
+                    .any(|subject| name == subject.name()),
+                MatchSubject::None => false,
             });
             negated_prev_ops.and_all(new_narrow_ops.negate());
             self.stmts(body, parent);

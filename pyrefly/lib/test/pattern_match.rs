@@ -727,6 +727,27 @@ def test_sequence_after_none(seq_or_none: list[int] | None):
 );
 
 testcase!(
+    test_match_tuple_subject_narrowing_after_none,
+    r#"
+from typing import assert_type
+
+def test(a: list[int] | None, b: list[int] | None) -> None:
+    match a, b:
+        case None, None:
+            pass
+        case _, None:
+            assert_type(a, list[int])
+            assert_type(b, None)
+        case None, _:
+            assert_type(a, None)
+            assert_type(b, list[int])
+        case _:
+            assert_type(a, list[int])
+            assert_type(b, list[int])
+"#,
+);
+
+testcase!(
     test_match_mapping_before_none,
     r#"
 from typing import Any, assert_type

@@ -927,7 +927,11 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::CodeActionKind;
+
+    use super::SOURCE_FIX_ALL_PYREFLY;
     use super::format_diagnostic_message_for_markdown;
+    use super::is_fix_all_code_action_kind_requested;
 
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
@@ -967,6 +971,26 @@ mod tests {
     #[test]
     fn test_format_only_special_characters() {
         assert_eq!(format_diagnostic_message_for_markdown("***"), "\\*\\*\\*");
+    }
+
+    #[test]
+    fn test_fix_all_kind_filter_matches_supported_kinds() {
+        assert!(is_fix_all_code_action_kind_requested(
+            &CodeActionKind::SOURCE_FIX_ALL
+        ));
+        assert!(is_fix_all_code_action_kind_requested(&CodeActionKind::new(
+            SOURCE_FIX_ALL_PYREFLY,
+        )));
+    }
+
+    #[test]
+    fn test_fix_all_kind_filter_rejects_pyrefly_suffix_kinds() {
+        assert!(!is_fix_all_code_action_kind_requested(
+            &CodeActionKind::new("source.fixAll.pyrefly.foo",)
+        ));
+        assert!(!is_fix_all_code_action_kind_requested(
+            &CodeActionKind::new("source.fixAll.pyreflyyyyyy",)
+        ));
     }
 }
 
@@ -1395,7 +1419,7 @@ pub fn capabilities(
                 CodeActionKind::new("refactor.delete"),
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
-                CodeActionKind::SOURCE_FIX_ALL,
+                CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY),
             ]),
             ..Default::default()
         })),
@@ -1505,6 +1529,15 @@ pub enum ProcessEvent {
 }
 
 const PYTHON_SECTION: &str = "python";
+const SOURCE_FIX_ALL_PYREFLY: &str = "source.fixAll.pyrefly";
+
+fn is_fix_all_code_action_kind_requested(kind: &CodeActionKind) -> bool {
+    let requested = kind.as_str();
+    requested == SOURCE_FIX_ALL_PYREFLY
+        || SOURCE_FIX_ALL_PYREFLY
+            .strip_prefix(requested)
+            .is_some_and(|suffix| suffix.starts_with('.'))
+}
 
 struct TypeHierarchyTarget {
     def_index: ClassDefIndex,
@@ -4464,11 +4497,8 @@ impl Server {
         let only_kinds = params.context.only.as_ref();
         let allow_quickfix = only_kinds
             .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QUICKFIX));
-        let allow_fix_all = only_kinds.is_none_or(|kinds| {
-            kinds
-                .iter()
-                .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
-        });
+        let allow_fix_all =
+            only_kinds.is_none_or(|kinds| kinds.iter().any(is_fix_all_code_action_kind_requested));
         let allow_refactor = only_kinds.is_none_or(|kinds| {
             kinds
                 .iter()
@@ -4570,7 +4600,7 @@ impl Server {
                 if !changes.is_empty() {
                     actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                         title: "Remove all redundant casts".to_owned(),
-                        kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                        kind: Some(CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY)),
                         edit: Some(WorkspaceEdit {
                             changes: Some(changes),
                             ..Default::default()
