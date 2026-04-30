@@ -55,7 +55,7 @@ dependencies = [
  "bumpalo",
  "compact_str 0.8.0",
  "ctor",
- "dashmap",
+ "dashmap 5.5.3",
  "either",
  "futures 0.3.32",
  "hashbrown 0.14.5",
@@ -741,6 +741,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
 dependencies = [
  "cfg-if",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
  "hashbrown 0.14.5",
  "lock_api",
  "once_cell",
@@ -2211,7 +2225,7 @@ dependencies = [
  "capnp",
  "clap",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 6.1.0",
  "dupe",
  "enum-iterator",
  "faster-hex",
