@@ -62,26 +62,26 @@ impl SuppressArgs {
                     .filter(|e| e.is_unused_ignore())
                     .collect()
             } else {
-                // Run type checking to collect unused ignore errors
+                // Delegate to `check --remove-unused-ignores`, which calls
+                // collect_unused_ignore_errors directly (bypassing severity
+                // filtering) and handles removal in one step.
                 self.config_override.validate()?;
                 let (files_to_check, config_finder) = self
                     .files
                     .clone()
                     .resolve(self.config_override.clone(), wrapper.clone())?;
 
-                let check_args = CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
-                let (_, errors, _check_result) =
-                    check_args.run_once(files_to_check, config_finder, thread_count)?;
-
-                // Convert to SerializedErrors, filtering for UnusedIgnore only
-                errors
-                    .into_iter()
-                    .filter_map(|e| SerializedError::from_error(&e))
-                    .filter(|e| e.is_unused_ignore())
-                    .collect()
+                let check_args = CheckArgs::parse_from([
+                    "check",
+                    "--output-format",
+                    "omit-errors",
+                    "--remove-unused-ignores",
+                ]);
+                check_args.run_once(files_to_check, config_finder, thread_count)?;
+                return Ok(CommandExitStatus::Success);
             };
 
-            // Remove unused ignores
+            // Remove unused ignores (JSON path only)
             suppress::remove_unused_ignores_from_serialized(unused_errors);
         } else {
             // Add suppressions mode (existing behavior)
