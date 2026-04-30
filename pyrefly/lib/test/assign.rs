@@ -1234,3 +1234,301 @@ def test(x: int | None) -> None:
     assert_type(x, int | None)  # E: assert_type(int | Any, int | None) failed
 "#,
 );
+
+// ----------------------------------------------------------------------------
+// Class rebind tests: a same-scope class definition acts as an implicit receiver
+// so that incompatible writes do not change the visible binding. The model is
+// the same one we already use for explicit annotations.
+//
+// Tests below pin both: the motivating class case (currently producing wrong
+// behavior, marked with `bug`) and the annotated analogs that already work.
+// The `bug`-marked tests use `reveal_type` to record the current observable
+// behavior; the call-site errors they currently emit are noted via `# E:`.
+// ----------------------------------------------------------------------------
+
+testcase!(
+    bug = "incompatible class rebind should be suppressed; visible Real should remain type[Real]",
+    test_class_rebind_conditional_incompatible,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Dummy
+
+Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+"#,
+);
+
+testcase!(
+    test_annotated_rebind_conditional_incompatible_pins_semantics,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+# Explicit annotation already implements the model we want for class rebinds:
+# an incompatible write does not change the visible binding.
+real_cls: type[Real] = Real
+if b():
+    real_cls = Dummy  # E: `type[Dummy]` is not assignable to variable `real_cls` with type `type[Real]`
+
+real_cls("example.com", port=443)
+assert_type(real_cls, type[Real])
+"#,
+);
+
+testcase!(
+    bug = "Errored RHS still pollutes the post-join union; same limitation applies to annotated-name rebinds",
+    test_class_rebind_rhs_error,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = MissingName  # E: Could not find name `MissingName`
+
+# The errored branch contributes `Unknown` to the union, which silences the
+# call-site check below. This matches the annotated-name path's behavior;
+# ideally both would elide errored branches from the join.
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real] | Unknown
+"#,
+);
+
+testcase!(
+    test_class_rebind_self_assign,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Real
+
+Real("example.com", port=443)
+assert_type(Real, type[Real])
+"#,
+);
+
+testcase!(
+    bug = "later sequential class rebind should still be checked against the original receiver",
+    test_class_rebind_repeated_writes_in_one_flow,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+Real = Dummy
+Real = Dummy
+
+Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+reveal_type(Real)  # E: revealed type: type[Dummy]
+"#,
+);
+
+testcase!(
+    bug = "later branch-join class rebind should keep using the original receiver",
+    test_class_rebind_repeated_writes_after_join,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Dummy
+
+if b():
+    Real = Dummy
+
+Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+"#,
+);
+
+testcase!(
+    bug = "branch-defining a fresh class with the same name should not silently merge identities",
+    test_class_rebind_fresh_class_in_branch,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    class Real:
+        pass
+else:
+    Real = Dummy
+
+# Track current behavior. Whatever decision we make later, the merged result
+# must not silently collapse two distinct class identities into one.
+reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+"#,
+);
+
+testcase!(
+    bug = "compatible subclass write should follow annotated-variable semantics; later writes still checked against original receiver",
+    test_class_rebind_compatible_subclass,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class SubReal(Real):
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+Real = SubReal
+reveal_type(Real)  # E: revealed type: type[SubReal]
+
+if b():
+    Real = Dummy
+
+Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+"#,
+);
+
+testcase!(
+    test_annotated_rebind_compatible_subclass_pins_semantics,
+    r#"
+from typing import assert_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class SubReal(Real):
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+real_cls: type[Real] = Real
+real_cls = SubReal
+assert_type(real_cls, type[SubReal])
+
+if b():
+    real_cls = Dummy  # E: `type[Dummy]` is not assignable to variable `real_cls` with type `type[Real]`
+
+real_cls("example.com", port=443)
+"#,
+);
+
+testcase!(
+    bug = "Any RHS leaves an `Any` arm in the post-join union, silencing call-site checks; shared with annotated-name rebinds",
+    test_class_rebind_any_rhs,
+    r#"
+from typing import Any, reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+def f() -> Any: ...
+def b() -> bool: ...
+
+if b():
+    Real = f()
+
+# `type[Real] | Any` silences the call-site check. This already matches the
+# annotated-name path; the desired fix would narrow the gradual arm out at
+# the use site for both paths.
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real] | Any
+"#,
+);
+
+testcase!(
+    test_class_rebind_in_class_body_unchanged,
+    r#"
+class Other: ...
+
+class Container:
+    # Inside class body the rebind path is not active in this patch: it is
+    # treated as a class-field assignment, like today.
+    Real = Other
+"#,
+);
+
+testcase!(
+    bug = "Multi-target rebind of a class name bypasses receiver detection",
+    test_class_rebind_multi_target,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    # The single-target form errors here. The multi-target form silently
+    # allows the incompatible rebind, which then poisons the call site
+    # below with spurious argument errors against `Dummy.__init__`.
+    other = Real = Dummy
+
+Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+"#,
+);
+
+testcase!(
+    bug = "Unpacking rebind of a class name bypasses receiver detection",
+    test_class_rebind_unpacked,
+    r#"
+from typing import reveal_type
+
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    # The single-target form errors here. The unpacking form silently
+    # allows the incompatible rebind, which then poisons the call site
+    # below with spurious argument errors against `Dummy.__init__`.
+    Real, _ = (Dummy, 0)
+
+Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+"#,
+);

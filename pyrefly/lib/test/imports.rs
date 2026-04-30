@@ -1525,3 +1525,64 @@ def # E: Expected an identifier
 from *a # E: Expected `)` # E: Cannot find module # E: only allowed at module level # E: Expected a module name # E: Star import must be the only import # E: Expected `,`
 "#,
 );
+
+// ----------------------------------------------------------------------------
+// Cross-module class rebind tests: importers should observe whichever class
+// the visible result chose. See `assign.rs` for the same-module regressions.
+// ----------------------------------------------------------------------------
+
+fn env_class_rebind_incompatible() -> TestEnv {
+    TestEnv::one(
+        "mod",
+        r#"
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Dummy
+"#,
+    )
+}
+
+fn env_class_rebind_compatible() -> TestEnv {
+    TestEnv::one(
+        "mod",
+        r#"
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class SubReal(Real):
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+Real = SubReal
+"#,
+    )
+}
+
+testcase!(
+    bug = "after incompatible rebind in mod, importers should still see the original class type",
+    test_class_rebind_import_after_incompatible_write,
+    env_class_rebind_incompatible(),
+    r#"
+from typing import reveal_type
+from mod import Real
+reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+"#,
+);
+
+testcase!(
+    bug = "after compatible subclass rebind in mod, importers should see the refined class type",
+    test_class_rebind_import_after_compatible_write,
+    env_class_rebind_compatible(),
+    r#"
+from typing import reveal_type
+from mod import Real
+reveal_type(Real)  # E: revealed type: type[SubReal]
+Real("example.com", port=443)
+"#,
+);
