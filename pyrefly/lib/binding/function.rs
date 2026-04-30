@@ -15,6 +15,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -38,18 +39,21 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunction;
+use crate::binding::binding::BindingUndecoratedFunctionRange;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ExhaustivenessKind;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionStubOrImpl;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
-use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::ReturnExplicit;
@@ -65,9 +69,9 @@ use crate::binding::scope::Scope;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
-use crate::config::base::UntypedDefBehavior;
+use crate::config::base::InferReturnTypes;
 use crate::export::special::SpecialExport;
-use crate::types::types::Type;
+use crate::types::types::AnyStyle;
 
 struct Decorators {
     has_no_type_check: bool,
@@ -84,7 +88,7 @@ pub struct SelfAssignments {
 }
 
 /// Determine whether a function definition is annotated.
-/// Used in the `untyped-def-behavior = "skip-and-infer-returns-any"` mode.
+/// Used when `check-unannotated-defs = false` to decide whether to skip checking.
 fn is_annotated<T>(returns: &Option<T>, params: &Parameters) -> bool {
     if returns.is_some() {
         return true;
@@ -96,6 +100,10 @@ fn is_annotated<T>(returns: &Option<T>, params: &Parameters) -> bool {
     }
     false
 }
+
+/// Simple visitor to find `self.<attr>` assignments in unannotated methods.
+/// Used by `unchecked_function_body_scope` to discover instance attributes
+/// without fully analyzing the function body.
 struct SelfAttrNames<'a> {
     self_name: &'a Name,
     names: SmallMap<Name, TextRange>,
@@ -169,7 +177,7 @@ impl<'a> SelfAttrNames<'a> {
                 (
                     n,
                     InstanceAttribute(
-                        super::binding::ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
+                        ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
                         None,
                         r,
                         MethodSelfKind::Instance,
@@ -191,6 +199,7 @@ impl<'a> BindingsBuilder<'a> {
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
         method_self_kind: MethodSelfKind,
+        ignore_annotations: bool,
     ) {
         let mut self_name = None;
         for x in x.iter_non_variadic_params() {
@@ -203,6 +212,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 false,
+                ignore_annotations,
             );
         }
         if let Some(args) = &x.vararg {
@@ -212,6 +222,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 true,
+                ignore_annotations,
             );
         }
         if let Some(kwargs) = &x.kwarg {
@@ -221,6 +232,7 @@ impl<'a> BindingsBuilder<'a> {
                 undecorated_idx,
                 class_key,
                 true,
+                ignore_annotations,
             );
         }
         self.scopes
@@ -254,14 +266,15 @@ impl<'a> BindingsBuilder<'a> {
         func_name: &Identifier,
         class_key: Option<Idx<KeyClass>>,
         usage: &mut Usage,
+        parent: &NestingContext,
     ) -> (
         Option<(TextRange, Idx<KeyAnnotation>)>,
         Vec<Idx<KeyLegacyTypeParam>>,
     ) {
-        let tparams = x
-            .type_params
-            .as_mut()
-            .map(|tparams| self.type_params(tparams));
+        let tparams = x.type_params.as_mut().map(|tparams| {
+            let owner = parent.owner_path(&self.module_info, func_name.id.as_str());
+            self.type_params_with_owner(tparams, owner)
+        });
 
         let mut legacy = Some(LegacyTParamCollector::new(tparams.is_some()));
 
@@ -306,8 +319,27 @@ impl<'a> BindingsBuilder<'a> {
     ) {
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
-        self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
+        self.parameters(
+            parameters,
+            undecorated_idx,
+            class_key,
+            method_self_kind,
+            false,
+        );
         self.init_static_scope(&body, false);
+        self.seed_captured_variables();
+        if class_key.is_some() && !self.scopes.current_static_contains(&dunder::CLASS) {
+            let implicit_range = TextRange::empty(range.start());
+            let dunder_class_identifier = Identifier::new(dunder::CLASS.clone(), implicit_range);
+            self.scopes
+                .add_name_to_current_static(&dunder_class_identifier);
+            let class_object_idx = self.scopes.enclosing_class_object_idx().unwrap();
+            let idx = self.insert_binding(
+                Key::Definition(ShortIdentifier::new(&dunder_class_identifier)),
+                Binding::Forward(class_object_idx),
+            );
+            self.bind_name(&dunder_class_identifier.id, idx, FlowStyle::Other);
+        }
         self.stmts(
             body,
             &NestingContext::function(ShortIdentifier::new(func_name), parent.dupe()),
@@ -322,6 +354,10 @@ impl<'a> BindingsBuilder<'a> {
         )
     }
 
+    /// Lightweight alternative to `function_body_scope`: creates parameter
+    /// bindings but does not analyze the body statements.  Used when
+    /// `check_unannotated_defs = false` (in CLI/batch mode) or
+    /// `@no_type_check` to avoid wasted work.
     fn unchecked_function_body_scope(
         &mut self,
         parameters: &mut Box<Parameters>,
@@ -332,11 +368,18 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
         is_async: bool,
         method_self_kind: MethodSelfKind,
+        ignore_annotations: bool,
     ) -> Option<SelfAssignments> {
         // Push a scope to create the parameter keys (but do nothing else with it).
         self.scopes
             .push_function_scope(range, func_name, class_key.is_some(), is_async);
-        self.parameters(parameters, undecorated_idx, class_key, method_self_kind);
+        self.parameters(
+            parameters,
+            undecorated_idx,
+            class_key,
+            method_self_kind,
+            ignore_annotations,
+        );
         self.scopes.pop();
         // If we are in a class, use a simple visitor to find `self.<attr>` assignments.
         if class_key.is_some() {
@@ -371,19 +414,22 @@ impl<'a> BindingsBuilder<'a> {
     fn analyze_return_type(
         &mut self,
         func_name: &Identifier,
+        class_key: Option<Idx<KeyClass>>,
         is_async: bool,
         yields_and_returns: YieldsAndReturns,
         return_ann_with_range: Option<(TextRange, Idx<KeyAnnotation>)>,
         implicit_return: Option<Idx<Key>>,
         should_infer_return_type: bool,
         stub_or_impl: FunctionStubOrImpl,
-        decorators: Box<[Idx<KeyDecorator>]>,
-        body_is_trivial: bool,
-        class_metadata_key: Option<Idx<KeyClassMetadata>>,
     ) {
-        let is_generator =
-            !(yields_and_returns.yields.is_empty() && yields_and_returns.yield_froms.is_empty());
+        let is_generator = yields_and_returns.is_generator;
         let return_ann = return_ann_with_range.as_ref().map(|(_, key)| *key);
+        let implicit_dunder_new_self =
+            if func_name.id == dunder::NEW && return_ann_with_range.is_none() {
+                class_key
+            } else {
+                None
+            };
 
         // Collect the keys of explicit returns.
         let return_keys = yields_and_returns
@@ -432,47 +478,49 @@ impl<'a> BindingsBuilder<'a> {
             .into_boxed_slice();
 
         let return_type_binding = {
-            let kind = match (return_ann_with_range, implicit_return) {
-                (Some((range, annotation)), Some(implicit_return)) => {
+            let kind = match (return_ann_with_range, implicit_return, stub_or_impl) {
+                (Some((range, annotation)), Some(implicit_return), FunctionStubOrImpl::Impl) => {
                     // We have an explicit return annotation and we want to validate it.
                     ReturnTypeKind::ShouldValidateAnnotation {
                         range,
                         annotation,
-                        stub_or_impl,
-                        decorators,
                         implicit_return,
-                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                        is_generator,
                         has_explicit_return: !return_keys.is_empty(),
                     }
                 }
-                (Some((range, annotation)), None) => {
-                    // We have an explicit return annotation and we just want to trust it.
+                // We have an explicit return annotation on a stub function, so we just trust it, ignoring the implicit return.
+                (Some((range, annotation)), Some(_), FunctionStubOrImpl::Stub)
+                // We have an explicit return annotation and no implicit return.
+                | (Some((range, annotation)), None, _) => {
                     ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
                         range,
-                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                        is_generator,
                     }
                 }
-                (None, Some(implicit_return)) if should_infer_return_type => {
+                (None, Some(implicit_return), _) if should_infer_return_type => {
                     // We don't have an explicit return annotation, but we want to infer it.
                     ReturnTypeKind::ShouldInferType {
                         returns: return_keys,
                         implicit_return,
                         yields: yield_keys,
                         yield_froms: yield_from_keys,
-                        body_is_trivial,
-                        class_metadata_key,
                     }
                 }
-                (None, _) => {
+                (None, _, _) => {
                     // We don't have an explicit return annotation, or we don't want to infer return type.
                     // Just treat the return type as `Any`.
                     ReturnTypeKind::ShouldReturnAny {
-                        is_generator: !(yield_keys.is_empty() && yield_from_keys.is_empty()),
+                        is_generator,
                     }
                 }
             };
-            Binding::ReturnType(Box::new(ReturnType { kind, is_async }))
+            Binding::ReturnType(Box::new(ReturnType {
+                kind,
+                is_async,
+                implicit_dunder_new_self,
+            }))
         };
         self.insert_binding(
             Key::ReturnType(ShortIdentifier::new(func_name)),
@@ -480,12 +528,33 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
-    fn mark_as_returns_any(&mut self, func_name: &Identifier) {
+    fn mark_as_returns_any(
+        &mut self,
+        func_name: &Identifier,
+        class_key: Option<Idx<KeyClass>>,
+        is_async: bool,
+    ) {
+        // Even when body analysis is skipped, an unannotated __new__ still defaults to Self.
+        if func_name.id == dunder::NEW
+            && let Some(class_key) = class_key
+        {
+            self.insert_binding(
+                Key::ReturnType(ShortIdentifier::new(func_name)),
+                Binding::ReturnType(Box::new(ReturnType {
+                    kind: ReturnTypeKind::ShouldReturnAny {
+                        is_generator: false,
+                    },
+                    is_async,
+                    implicit_dunder_new_self: Some(class_key),
+                })),
+            );
+            return;
+        }
         self.insert_binding(
             Key::ReturnType(ShortIdentifier::new(func_name)),
             // TODO(grievejia): traverse the function body and calculate the `is_generator` flag, then
             // use ReturnTypeKind::ShouldReturnAny to get more precision here.
-            Binding::Type(Type::any_implicit()),
+            Binding::Any(AnyStyle::Implicit),
         );
     }
 
@@ -537,8 +606,12 @@ impl<'a> BindingsBuilder<'a> {
         parent: &NestingContext,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
         class_key: Option<Idx<KeyClass>>,
-        metadata_key: Option<Idx<KeyClassMetadata>>,
-    ) -> (FunctionStubOrImpl, Option<SelfAssignments>) {
+    ) -> (
+        FunctionStubOrImpl,
+        Option<PlaceholderBodyKind>,
+        bool,
+        Option<SelfAssignments>,
+    ) {
         // If the first statement in the body is a docstring, remove it
         let body_no_docstring = if let Some(s) = body.first()
             && is_docstring(s)
@@ -547,35 +620,44 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             body.as_slice()
         };
-        let body_is_trivial = match body_no_docstring {
-            [] => true,
-            [Stmt::Pass(_)] => true,
+        let body_is_ellipse = match body_no_docstring {
+            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
+            _ => false,
+        };
+        let body_is_trivial = body_is_ellipse
+            || (match body_no_docstring {
+                [] => true,
+                [Stmt::Pass(_)] => true,
+                _ => false,
+            });
+        let placeholder_body_kind = match body_no_docstring {
             // raise NotImplementedError(...)
             [
                 Stmt::Raise(StmtRaise {
-                    exc: Some(box Expr::Call(ExprCall { box func, .. })),
+                    exc: Some(box (Expr::Call(ExprCall { box func, .. }) | func)),
                     ..
                 }),
-            ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError) => true,
+            ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError) => {
+                Some(PlaceholderBodyKind::RaiseNotImplementedError)
+            }
             // return NotImplemented
             [
                 Stmt::Return(StmtReturn {
                     value: Some(box val),
                     ..
                 }),
-            ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => true,
-            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
-            _ => false,
+            ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => {
+                Some(PlaceholderBodyKind::ReturnNotImplemented)
+            }
+            _ => None,
         };
-        let body_is_ellipse = match body_no_docstring {
-            [Stmt::Expr(StmtExpr { value, .. })] if value.is_ellipsis_literal_expr() => true,
-            _ => false,
-        };
-        let stub_or_impl = if (self.scopes.is_in_protocol_class()
-            || decorators.is_abstract_method
-            || decorators.is_overload
-            || body_is_ellipse)
-            && body_is_trivial
+        // A `...` body is always interpreted as a stub function.
+        // Functions with other trivial bodies are interpreted as stubs in some contexts.
+        let stub_or_impl = if body_is_ellipse
+            || ((self.scopes.is_in_protocol_class()
+                || decorators.is_abstract_method
+                || decorators.is_overload)
+                && body_is_trivial)
         {
             FunctionStubOrImpl::Stub
         } else {
@@ -583,6 +665,7 @@ impl<'a> BindingsBuilder<'a> {
         };
         let should_report_unused_parameters = stub_or_impl == FunctionStubOrImpl::Impl
             && !body_is_trivial
+            && placeholder_body_kind.is_none()
             && !decorators.is_overload
             && !decorators.is_override
             && !decorators.is_abstract_method;
@@ -596,12 +679,13 @@ impl<'a> BindingsBuilder<'a> {
             MethodSelfKind::Instance
         };
 
-        let self_assignments = if decorators.has_no_type_check
-            || (self.untyped_def_behavior == UntypedDefBehavior::SkipAndInferReturnAny
-                && !is_annotated(&return_ann_with_range, parameters))
+        let is_unannotated =
+            !self.check_unannotated_defs && !is_annotated(&return_ann_with_range, parameters);
+        let (is_return_inferred, self_assignments) = if decorators.has_no_type_check
+            || (is_unannotated && !self.analyze_unannotated_for_ide)
         {
-            self.mark_as_returns_any(func_name);
-            self.unchecked_function_body_scope(
+            self.mark_as_returns_any(func_name, class_key, is_async);
+            let self_assignments = self.unchecked_function_body_scope(
                 parameters,
                 body,
                 range,
@@ -610,108 +694,87 @@ impl<'a> BindingsBuilder<'a> {
                 class_key,
                 is_async,
                 method_self_kind,
-            )
+                decorators.has_no_type_check,
+            );
+            (false, self_assignments)
+        } else if is_unannotated {
+            let implicit_return = Some(self.implicit_return(&body, func_name));
+            let (yields_and_returns, self_assignments, _, _) = self.function_body_scope(
+                parameters,
+                body,
+                range,
+                func_name,
+                parent,
+                undecorated_idx,
+                class_key,
+                is_async,
+                method_self_kind,
+            );
+            self.analyze_return_type(
+                func_name,
+                class_key,
+                is_async,
+                yields_and_returns,
+                return_ann_with_range,
+                implicit_return,
+                false,
+                stub_or_impl,
+            );
+            (false, self_assignments)
         } else {
-            match self.untyped_def_behavior {
-                UntypedDefBehavior::SkipAndInferReturnAny => {
-                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
-                        self.function_body_scope(
-                            parameters,
-                            body,
-                            range,
-                            func_name,
-                            parent,
-                            undecorated_idx,
-                            class_key,
-                            is_async,
-                            method_self_kind,
-                        );
-                    if should_report_unused_parameters {
-                        self.record_unused_parameters(unused_parameters);
-                        self.record_unused_variables(unused_variables);
-                    }
-                    self.analyze_return_type(
-                        func_name,
-                        is_async,
-                        yields_and_returns,
-                        return_ann_with_range,
-                        None,
-                        false, // this disables return type inference
-                        stub_or_impl,
-                        decorators.decorators.clone(),
-                        body_is_trivial,
-                        metadata_key,
-                    );
-                    self_assignments
-                }
-                UntypedDefBehavior::CheckAndInferReturnAny => {
-                    let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
-                        self.function_body_scope(
-                            parameters,
-                            body,
-                            range,
-                            func_name,
-                            parent,
-                            undecorated_idx,
-                            class_key,
-                            is_async,
-                            method_self_kind,
-                        );
-                    if should_report_unused_parameters {
-                        self.record_unused_parameters(unused_parameters);
-                        self.record_unused_variables(unused_variables);
-                    }
-                    self.analyze_return_type(
-                        func_name,
-                        is_async,
-                        yields_and_returns,
-                        return_ann_with_range,
-                        Some(implicit_return),
-                        false, // this disables return type inference
-                        stub_or_impl,
-                        decorators.decorators.clone(),
-                        body_is_trivial,
-                        metadata_key,
-                    );
-                    self_assignments
-                }
-                UntypedDefBehavior::CheckAndInferReturnType => {
-                    let implicit_return = self.implicit_return(&body, func_name);
-                    let (yields_and_returns, self_assignments, unused_parameters, unused_variables) =
-                        self.function_body_scope(
-                            parameters,
-                            body,
-                            range,
-                            func_name,
-                            parent,
-                            undecorated_idx,
-                            class_key,
-                            is_async,
-                            method_self_kind,
-                        );
-                    if should_report_unused_parameters {
-                        self.record_unused_parameters(unused_parameters);
-                        self.record_unused_variables(unused_variables);
-                    }
-                    self.analyze_return_type(
-                        func_name,
-                        is_async,
-                        yields_and_returns,
-                        return_ann_with_range,
-                        Some(implicit_return),
-                        true,
-                        stub_or_impl,
-                        decorators.decorators.clone(),
-                        body_is_trivial,
-                        metadata_key,
-                    );
-                    self_assignments
-                }
+            // Compute implicit_return: in this branch the body is always fully analyzed,
+            // so we can always determine whether there's an implicit return.
+            let implicit_return = Some(self.implicit_return(&body, func_name));
+            let (yields_and_returns, self_assignments, unused_parameters, unused_variables) = self
+                .function_body_scope(
+                    parameters,
+                    body,
+                    range,
+                    func_name,
+                    parent,
+                    undecorated_idx,
+                    class_key,
+                    is_async,
+                    method_self_kind,
+                );
+            if should_report_unused_parameters {
+                self.record_unused_parameters(unused_parameters);
+                self.record_unused_variables(unused_variables);
             }
+            let should_infer = match self.infer_return_types {
+                InferReturnTypes::Checked => true,
+                InferReturnTypes::Annotated => is_annotated(&return_ann_with_range, parameters),
+                InferReturnTypes::Never => false,
+            };
+            self.analyze_return_type(
+                func_name,
+                class_key,
+                is_async,
+                yields_and_returns,
+                return_ann_with_range,
+                implicit_return,
+                should_infer,
+                stub_or_impl,
+            );
+            // Mirror the `ReturnTypeKind::ShouldInferType` arm in `analyze_return_type`:
+            // we infer iff there's no return annotation and inference was requested.
+            // `implicit_return` is always `Some` in this branch. We additionally
+            // exclude unannotated `__new__`, whose effective return type is
+            // overridden to `Self` at solve time (see `implicit_dunder_new_self`),
+            // not the body-inferred type — so callers should not treat the
+            // visible return as derived from the body.
+            let is_implicit_dunder_new = func_name.id == dunder::NEW && class_key.is_some();
+            let is_return_inferred =
+                should_infer && return_ann_with_range.is_none() && !is_implicit_dunder_new;
+            (is_return_inferred, self_assignments)
         };
 
-        (stub_or_impl, self_assignments)
+        (
+            stub_or_impl,
+            placeholder_body_kind,
+            is_return_inferred,
+            self_assignments,
+        )
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
@@ -719,8 +782,16 @@ impl<'a> BindingsBuilder<'a> {
         let mut def_idx =
             self.declare_current_idx(Key::Definition(ShortIdentifier::new(&func_name)));
 
+        let func_def_index = self.func_def_index();
+
         let undecorated_idx =
             self.idx_for_promise(KeyUndecoratedFunction(ShortIdentifier::new(&func_name)));
+
+        // Map FuncDefIndex to ShortIdentifier for reverse lookup.
+        self.insert_binding(
+            KeyUndecoratedFunctionRange(func_def_index),
+            BindingUndecoratedFunctionRange(ShortIdentifier::new(&func_name)),
+        );
 
         // Get preceding function definition, if any. Used for building an overload type.
         let (function_idx, pred_idx) = self.create_function_index(&func_name);
@@ -732,39 +803,44 @@ impl<'a> BindingsBuilder<'a> {
 
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
-            self.function_header(&mut x, &func_name, class_key, def_idx.usage());
+            self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
-        let (stub_or_impl, self_assignments) = self.function_body(
-            &mut x.parameters,
-            mem::take(&mut x.body),
-            &decorators,
-            x.range,
-            x.is_async,
-            return_ann_with_range,
-            &func_name,
-            parent,
-            undecorated_idx,
-            class_key,
-            metadata_key,
-        );
+        let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
+            .function_body(
+                &mut x.parameters,
+                mem::take(&mut x.body),
+                &decorators,
+                x.range,
+                x.is_async,
+                return_ann_with_range,
+                &func_name,
+                parent,
+                undecorated_idx,
+                class_key,
+            );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
         self.scopes.pop();
         self.scopes
             .record_self_assignments_if_applicable(self_assignments);
+        let outer_funcs = parent.ancestor_function_path(&self.module_info);
         let undecorated_idx = self.insert_binding_idx(
             undecorated_idx,
             BindingUndecoratedFunction {
+                def_index: func_def_index,
                 def: FunctionDefData::new(x),
                 stub_or_impl,
+                placeholder_body_kind,
+                is_return_inferred,
                 class_key,
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 module_style: self.module_info.path().style(),
+                outer_funcs,
             },
         );
 
@@ -798,9 +874,9 @@ impl<'a> BindingsBuilder<'a> {
 /// * Return Some(xs) to say this set might be the last expression.
 fn function_last_expressions<'a>(
     x: &'a [Stmt],
-    sys_info: &SysInfo,
+    sys_info: SysInfo,
 ) -> Option<Vec<(LastStmt, &'a Expr)>> {
-    fn f<'a>(sys_info: &SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
+    fn f<'a>(sys_info: SysInfo, x: &'a [Stmt], res: &mut Vec<(LastStmt, &'a Expr)>) -> Option<()> {
         fn loop_body_has_break_statement(statement: &Stmt, has_break: &mut bool) {
             match statement {
                 Stmt::Break(_) => {
@@ -824,15 +900,19 @@ fn function_last_expressions<'a>(
                 f(sys_info, &x.body, res)?;
             }
             Stmt::While(x) => {
-                // Infinite loops with no breaks cannot fall through
-                if sys_info.evaluate_bool(&x.test) != Some(true) {
-                    return None;
-                }
+                let test_value = sys_info.evaluate_bool(&x.test);
+                // Only scan for breaks when the body is reachable.
                 let mut has_break = false;
-                x.body
-                    .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
-                if has_break {
+                if test_value != Some(false) {
+                    x.body
+                        .visit(&mut |stmt| loop_body_has_break_statement(stmt, &mut has_break));
+                }
+                if test_value == Some(true) && !has_break {
+                    // Infinite loop with no break never falls through.
+                } else if has_break || x.orelse.is_empty() {
                     return None;
+                } else {
+                    f(sys_info, &x.orelse, res)?;
                 }
             }
             Stmt::For(x) => {
@@ -846,13 +926,25 @@ fn function_last_expressions<'a>(
             }
             Stmt::If(x) => {
                 let mut last_test = None;
+                let mut any_branch_processed = false;
                 for (test, body) in sys_info.pruned_if_branches(x) {
+                    any_branch_processed = true;
                     last_test = test;
                     f(sys_info, body, res)?;
                 }
-                if last_test.is_some() {
-                    // The final `if` can fall through, so the `if` itself might be the last statement.
+                if !any_branch_processed {
+                    // All branches were pruned, so the code falls through
                     return None;
+                }
+                if last_test.is_some() {
+                    // The if/elif chain has no else clause, so it's not syntactically exhaustive.
+                    // But it might be type-exhaustive. Add a LastStmt::Exhaustive entry so we can check
+                    // at solve time. We use the test expression as a placeholder; the actual
+                    // exhaustiveness check uses the if range to find the Exhaustive binding.
+                    res.push((
+                        LastStmt::Exhaustive(ExhaustivenessKind::IfElif, x.range),
+                        &x.test,
+                    ));
                 }
             }
             Stmt::Try(x) => {
@@ -889,10 +981,13 @@ fn function_last_expressions<'a>(
                 }
                 if !syntactically_exhaustive {
                     // The match is not syntactically exhaustive, but might be type-exhaustive.
-                    // Add a LastStmt::Match entry so we can check at solve time.
+                    // Add a LastStmt::Exhaustive entry so we can check at solve time.
                     // We use the subject expression as a placeholder; the actual exhaustiveness
-                    // check uses the match range to find the MatchExhaustive binding.
-                    res.push((LastStmt::Match(x.range), x.subject.as_ref()));
+                    // check uses the match range to find the Exhaustive binding.
+                    res.push((
+                        LastStmt::Exhaustive(ExhaustivenessKind::Match, x.range),
+                        x.subject.as_ref(),
+                    ));
                 }
             }
             _ => return None,

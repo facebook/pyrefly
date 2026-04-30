@@ -1,4 +1,5 @@
 [env]
+CONFIG_DOC_PATH = { value = "website/docs/configuration.mdx", relative = true }
 ERROR_KINDS_DOC_PATH = { value = "website/docs/error-kinds.mdx", relative = true }
 TEST_FILES_PATH = { value = "pyrefly/lib/test/lsp/lsp_interaction/test_files", relative = true }
 PYDANTIC_TEST_PATH = { value = "pyrefly/lib/test/pydantic/third-party", relative = true }
@@ -6,3 +7,5 @@ DJANGO_TEST_PATH = { value = "pyrefly/lib/test/django/third-party", relative = t
 ATTRS_TEST_PATH = { value = "pyrefly/lib/test/attrs/third-party", relative = true }
 MARSHMALLOW_TEST_PATH = { value = "pyrefly/lib/test/marshmallow/third-party", relative = true }
 GLEAN_SNAPSHOTS_PATH = { value = "pyrefly/lib/report/glean/snapshots", relative = true }
+REPORT_TEST_PATH = { value = "pyrefly/lib/test/report/test_files", relative = true }
+STUBGEN_TEST_PATH = { value = "pyrefly/lib/test/stubgen", relative = true }

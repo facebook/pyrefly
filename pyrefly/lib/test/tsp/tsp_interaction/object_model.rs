@@ -35,6 +35,7 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Connection;
+use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default)]
@@ -131,6 +132,144 @@ impl TestTspServer {
             id,
             method: "typeServer/getSnapshot".to_owned(),
             params: serde_json::json!(null),
+            activity_key: None,
+        }));
+    }
+
+    /// Send a `typeServer/resolveImport` request.
+    pub fn resolve_import(
+        &mut self,
+        source_uri: &str,
+        name_parts: Vec<&str>,
+        leading_dots: i32,
+        snapshot: i32,
+    ) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "typeServer/resolveImport".to_owned(),
+            params: serde_json::json!({
+                "sourceUri": source_uri,
+                "moduleDescriptor": {
+                    "nameParts": name_parts,
+                    "leadingDots": leading_dots,
+                },
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
+        }));
+    }
+
+    /// Send a `typeServer/getPythonSearchPaths` request.
+    pub fn get_python_search_paths(&mut self, from_uri: &str, snapshot: i32) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: "typeServer/getPythonSearchPaths".to_owned(),
+            params: serde_json::json!({
+                "fromUri": from_uri,
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
+        }));
+    }
+
+    /// Send a `typeServer/getDeclaredType` request with a Node arg.
+    pub fn get_declared_type(&mut self, uri: &str, line: u32, character: u32, snapshot: i32) {
+        self.send_get_type_request("typeServer/getDeclaredType", uri, line, character, snapshot);
+    }
+
+    /// Send a `typeServer/getComputedType` request with a Node arg.
+    pub fn get_computed_type(&mut self, uri: &str, line: u32, character: u32, snapshot: i32) {
+        self.send_get_type_request("typeServer/getComputedType", uri, line, character, snapshot);
+    }
+
+    /// Send a `typeServer/getExpectedType` request with a Node arg.
+    pub fn get_expected_type(&mut self, uri: &str, line: u32, character: u32, snapshot: i32) {
+        self.send_get_type_request("typeServer/getExpectedType", uri, line, character, snapshot);
+    }
+
+    /// Shared helper for getDeclaredType/getComputedType/getExpectedType.
+    fn send_get_type_request(
+        &mut self,
+        method: &str,
+        uri: &str,
+        line: u32,
+        character: u32,
+        snapshot: i32,
+    ) {
+        let id = self.next_request_id();
+        self.send_message(Message::Request(Request {
+            id,
+            method: method.to_owned(),
+            params: serde_json::json!({
+                "arg": {
+                    "uri": uri,
+                    "range": {
+                        "start": { "line": line, "character": character },
+                        "end": { "line": line, "character": character },
+                    },
+                },
+                "snapshot": snapshot,
+            }),
+            activity_key: None,
+        }));
+    }
+
+    /// Returns the `vscode-notebook-cell:` URI for a notebook cell.
+    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> Url {
+        let root = self.get_root_or_panic();
+        let file_uri = Url::from_file_path(root.join(file_name)).unwrap();
+        Url::parse(&format!(
+            "vscode-notebook-cell://{}#{}",
+            file_uri.path(),
+            cell_name
+        ))
+        .unwrap()
+    }
+
+    /// Open a notebook document with the given cell contents.
+    /// Each string becomes a separate code cell. The notebook is
+    /// registered via `notebookDocument/didOpen` so the server tracks
+    /// the cell URIs in `open_notebook_cells`.
+    pub fn open_notebook(&self, file_name: &str, cell_contents: Vec<&str>) {
+        let root = self.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+
+        let mut cells = Vec::new();
+        let mut cell_text_documents = Vec::new();
+
+        for (i, text) in cell_contents.iter().enumerate() {
+            let cell_uri = self.cell_uri(file_name, &format!("cell{}", i + 1));
+            cells.push(serde_json::json!({
+                "kind": 2,
+                "document": cell_uri,
+            }));
+            cell_text_documents.push(serde_json::json!({
+                "uri": cell_uri,
+                "languageId": "python",
+                "version": 1,
+                "text": *text,
+            }));
+        }
+
+        self.send_message(Message::Notification(Notification {
+            method: "notebookDocument/didOpen".to_owned(),
+            params: serde_json::json!({
+                "notebookDocument": {
+                    "uri": notebook_uri,
+                    "notebookType": "jupyter-notebook",
+                    "version": 1,
+                    "metadata": {
+                        "language_info": {
+                            "name": "python"
+                        }
+                    },
+                    "cells": cells,
+                },
+                "cellTextDocuments": cell_text_documents,
+            }),
             activity_key: None,
         }));
     }
@@ -330,6 +469,58 @@ impl TestTspClient {
             }
         }
     }
+
+    /// Receive messages until a Response is found, skipping any Notification
+    /// or Request messages. Returns the Response.
+    pub fn receive_response_skip_notifications(&self) -> Response {
+        loop {
+            match self.receiver.recv_timeout(self.timeout) {
+                Ok(msg) => {
+                    eprintln!(
+                        "client<---server {}",
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                    );
+                    if let Message::Response(resp) = msg {
+                        return resp;
+                    }
+                    // Skip notifications and requests
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("Timeout waiting for response (skipping notifications)");
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("Channel disconnected while waiting for response");
+                }
+            }
+        }
+    }
+
+    /// Receive messages until a Notification with the given method is found,
+    /// skipping any other messages. Returns the notification params.
+    pub fn expect_notification(&self, method: &str) -> serde_json::Value {
+        loop {
+            match self.receiver.recv_timeout(self.timeout) {
+                Ok(msg) => {
+                    eprintln!(
+                        "client<---server {}",
+                        serde_json::to_string(&JsonRpcMessage::from_message(msg.clone())).unwrap()
+                    );
+                    if let Message::Notification(ref n) = msg
+                        && n.method == method
+                    {
+                        return n.params.clone();
+                    }
+                    // Skip non-matching messages
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("Timeout waiting for notification '{method}'");
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("Channel disconnected waiting for notification '{method}'");
+                }
+            }
+        }
+    }
 }
 
 pub struct TspInteraction {
@@ -341,11 +532,13 @@ impl TspInteraction {
     pub fn new() -> Self {
         init_test();
 
-        let (conn_server, conn_client) = Connection::memory();
+        let ((conn_server, server_reader), (conn_client, _client_reader)) = Connection::memory();
+        let client_receiver = conn_client.channel_receiver().clone();
 
         let args = TspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
             workspace_indexing_limit: 0,
+            transport: "stdio".to_owned(),
         };
 
         let args = args.clone();
@@ -356,14 +549,21 @@ impl TspInteraction {
 
         // Spawn the server thread and store its handle
         let thread_handle = thread::spawn(move || {
-            run_tsp(conn_server, args, &NoTelemetry)
-                .map(|_| ())
-                .map_err(|e| std::io::Error::other(e.to_string()))
+            run_tsp(
+                conn_server,
+                server_reader,
+                args,
+                &NoTelemetry,
+                None,
+                TEST_THREAD_COUNT,
+            )
+            .map(|_| ())
+            .map_err(|e| std::io::Error::other(e.to_string()))
         });
 
         server.server_thread = Some(thread_handle);
 
-        let client = TestTspClient::new(conn_client.receiver);
+        let client = TestTspClient::new(client_receiver);
 
         Self { server, client }
     }
@@ -400,4 +600,31 @@ impl TspInteraction {
         self.server.root = Some(root.clone());
         self.client.root = Some(root);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared test helpers
+// ---------------------------------------------------------------------------
+
+/// Create a minimal `pyproject.toml` so pyrefly recognises the directory as a
+/// project root.
+pub fn write_pyproject(dir: &std::path::Path) {
+    let content = r#"[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "test-project"
+version = "1.0.0"
+"#;
+    std::fs::write(dir.join("pyproject.toml"), content).unwrap();
+}
+
+/// Send a `typeServer/getSnapshot` request and return the current snapshot
+/// value from the TSP server.
+pub fn get_current_snapshot(tsp: &mut TspInteraction, expected_id: i32) -> i32 {
+    tsp.server.get_snapshot();
+    let resp = tsp.client.receive_response_skip_notifications();
+    assert_eq!(resp.id, RequestId::from(expected_id));
+    serde_json::from_value(resp.result.unwrap()).unwrap()
 }

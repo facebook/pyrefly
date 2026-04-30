@@ -6,11 +6,13 @@
  */
 
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use compact_str::CompactString;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::uniques::Unique;
@@ -25,6 +27,7 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::param_spec::ParamSpec;
+use crate::quantified::QuantifiedIdentity;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
 
@@ -44,6 +47,9 @@ pub struct TypeEqCtx {
     param_spec: SmallMap<ParamSpec, ParamSpec>,
     type_var: SmallMap<TypeVar, TypeVar>,
     type_var_tuple: SmallMap<TypeVarTuple, TypeVarTuple>,
+    /// Alpha-equivalence mapping for Quantified binders: LHS identity → RHS identity.
+    /// First pairing wins; subsequent occurrences must match.
+    quantified_identity: SmallMap<QuantifiedIdentity, QuantifiedIdentity>,
 }
 
 impl TypeEq for Unique {
@@ -58,6 +64,23 @@ impl TypeEq for Unique {
                 Entry::Occupied(e) => e.get() == other,
                 Entry::Vacant(e) => {
                     e.insert(*other);
+                    true
+                }
+            }
+        }
+    }
+}
+
+impl TypeEq for QuantifiedIdentity {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        if self == other {
+            // Identical identities — trivially alpha-equivalent; avoid polluting the map.
+            true
+        } else {
+            match ctx.quantified_identity.entry(self.clone()) {
+                Entry::Occupied(e) => e.get() == other,
+                Entry::Vacant(e) => {
+                    e.insert(other.clone());
                     true
                 }
             }
@@ -147,8 +170,11 @@ impl TypeEq for String {}
 impl TypeEq for CompactString {}
 impl TypeEq for str {}
 
+impl<T> TypeEq for PhantomData<T> {}
+
 impl TypeEq for Name {}
 impl TypeEq for ModuleName {}
+impl TypeEq for ModulePath {}
 impl TypeEq for TextRange {}
 impl TypeEq for ShortIdentifier {}
 
@@ -281,7 +307,8 @@ impl<T: TypeEq> TypeEq for SmallSet<T> {
 #[cfg(test)]
 mod tests {
     use pyrefly_derive::TypeEq;
-    use pyrefly_util::uniques::UniqueFactory;
+    use pyrefly_python::module_name::ModuleName;
+    use ruff_text_size::TextRange;
 
     use super::*;
     use crate::callable::Callable;
@@ -290,12 +317,15 @@ mod tests {
     use crate::callable::Function;
     use crate::callable::FunctionKind;
     use crate::callable::ParamList;
+    use crate::heap::TypeHeap;
+    use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::Forallable;
-    use crate::types::TParam;
     use crate::types::TParams;
     use crate::types::Type;
 
@@ -317,6 +347,13 @@ mod tests {
 
     #[derive(TypeEq, PartialEq, Eq, Debug)]
     struct Generic<T>(T);
+
+    #[derive(TypeEq, PartialEq, Eq, Debug)]
+    enum WithLifetime<'t> {
+        #[allow(dead_code)]
+        Unused(std::marker::PhantomData<&'t ()>),
+        Value(i32),
+    }
 
     #[test]
     fn test_type_eq() {
@@ -362,15 +399,26 @@ mod tests {
         );
         assert!(Generic(1).type_eq(&Generic(1), &mut ctx));
         assert!(!Generic(1).type_eq(&Generic(2), &mut ctx));
+
+        assert!(WithLifetime::Value(1).type_eq(&WithLifetime::Value(1), &mut ctx));
+        assert!(!WithLifetime::Value(1).type_eq(&WithLifetime::Value(2), &mut ctx));
+        assert!(
+            !WithLifetime::Value(1)
+                .type_eq(&WithLifetime::Unused(std::marker::PhantomData), &mut ctx)
+        );
     }
 
     #[test]
     fn test_equal_forall() {
-        let uniques = UniqueFactory::new();
+        let heap = TypeHeap::new();
 
-        fn mk_function(uniques: &UniqueFactory) -> Type {
+        fn mk_function(heap: &TypeHeap, ordinal: u32) -> Type {
             let q = Quantified::new(
-                uniques.fresh(),
+                QuantifiedIdentity::new(
+                    ModuleName::from_str("__test__"),
+                    AnchorIndex::new(TextRange::default(), ordinal),
+                    QuantifiedOrigin::Pep695,
+                ),
                 Name::new_static("test"),
                 QuantifiedKind::TypeVar,
                 None,
@@ -378,12 +426,10 @@ mod tests {
                 PreInferenceVariance::Invariant,
             );
 
-            let tparams = TParams::new(vec![TParam {
-                quantified: q.clone(),
-            }]);
+            let tparams = TParams::new(vec![q.clone()]);
 
             Forallable::Function(Function {
-                signature: Callable::list(ParamList::everything(), q.clone().to_type()),
+                signature: Callable::list(ParamList::everything(), q.clone().to_type(heap)),
                 metadata: FuncMetadata {
                     kind: FunctionKind::Overload,
                     flags: FuncFlags::default(),
@@ -392,8 +438,8 @@ mod tests {
             .forall(Arc::new(tparams))
         }
 
-        let a = mk_function(&uniques);
-        let b = mk_function(&uniques);
+        let a = mk_function(&heap, 0);
+        let b = mk_function(&heap, 1);
         assert_eq!(a, a);
         assert_ne!(a, b);
 

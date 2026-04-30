@@ -13,6 +13,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_words;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprFString;
@@ -28,6 +29,8 @@ use crate::stdlib::Stdlib;
 use crate::types::Type;
 
 assert_words!(Lit, 3);
+
+static LITERAL_STR_MAX_SIZE: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -55,13 +58,25 @@ pub enum Lit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(Visit, VisitMut, TypeEq)]
+#[derive(Visit, TypeEq)]
 pub struct LitEnum {
     pub class: ClassType,
     pub member: Name,
     /// Raw type assigned to name in class def.
     /// We store the raw type so we can return it when the value or _value_ attribute is accessed.
+    /// NOTE: Intentionally excluded from VisitMut so that type transformations like
+    /// `promote_implicit_literals` don't mutate this metadata field, which must remain
+    /// stable for `.value` resolution.
     pub ty: Type,
+}
+
+/// Manual VisitMut that skips the `ty` field. The `ty` is semantic metadata for `.value`
+/// resolution and must not be mutated by recursive type transformations (e.g. literal promotion).
+/// We still recurse into `class` so that type arguments on generic enums are visited.
+impl VisitMut<Type> for LitEnum {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        self.class.visit_mut(f);
+    }
 }
 
 impl Display for Lit {
@@ -100,6 +115,8 @@ impl Lit {
     pub fn negate(&self) -> Option<Type> {
         match self {
             Lit::Int(x) => Some(Lit::Int(x.negate()).to_implicit_type()),
+            Lit::Bool(true) => Some(LitInt::new(-1).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(0).to_implicit_type()),
             _ => None,
         }
     }
@@ -121,12 +138,17 @@ impl Lit {
                 let x = x.invert();
                 Some(Lit::Int(x).to_implicit_type())
             }
+            Lit::Bool(true) => Some(LitInt::new(-2).to_implicit_type()),
+            Lit::Bool(false) => Some(LitInt::new(-1).to_implicit_type()),
             _ => None,
         }
     }
 
-    pub fn from_string_literal(x: &ExprStringLiteral) -> Self {
-        Lit::Str(x.value.to_str().into())
+    pub fn from_string_literal(x: &ExprStringLiteral) -> Option<Self> {
+        if x.value.len() > LITERAL_STR_MAX_SIZE {
+            return None;
+        }
+        Some(Lit::Str(x.value.to_str().into()))
     }
 
     pub fn from_bytes_literal(x: &ExprBytesLiteral) -> Self {

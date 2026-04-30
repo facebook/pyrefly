@@ -73,6 +73,34 @@ class E(B):
 );
 
 testcase!(
+    test_override_classvar_with_nested_class,
+    r#"
+from typing import ClassVar
+
+class Endpoint: ...
+
+class Base:
+    endpoint_cls: ClassVar[type[Endpoint]] = Endpoint
+
+class Child(Base):
+    class endpoint_cls(Endpoint): ...
+"#,
+);
+
+testcase!(
+    test_override_nested_class_with_classvar,
+    r#"
+from typing import ClassVar
+
+class Base:
+    class endpoint_cls: ...
+
+class Child(Base):
+    endpoint_cls: ClassVar[type[Base.endpoint_cls]] = type("endpoint_cls", (Base.endpoint_cls,), {})
+"#,
+);
+
+testcase!(
     test_override_final_var,
     r#"
 from typing import Final
@@ -215,10 +243,11 @@ class Derived(Base):
 testcase!(
     test_override_parameter_kinds,
     r#"
-from typing import assert_type, override
+from typing import assert_type, override, Any
 
 class Base:
     def g(self, /, x: int, *args: str, y: bool, **kwargs: float) -> None: ...
+    def method(self, a: int, /, *args: Any, k: str, **kwargs: Any) -> None: ...
 
 class Derived(Base):
     @override
@@ -227,6 +256,76 @@ class Derived(Base):
         assert_type(args, tuple[str, ...])
         assert_type(y, bool)
         assert_type(kwargs, dict[str, float])
+    @override
+    def method(self, a: float, /, b: int, *, k: str, m: str) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_basic,
+    r#"
+from typing import override, Any
+
+class GradualBase:
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+
+class Child(GradualBase):
+    @override
+    def method1(self) -> None: ...
+
+class Base:
+    def method1(self) -> None: ...
+
+class GradualChild(Base):
+    @override
+    def method1(self, a: int, /, *args: Any, k: int, **kwargs: Any) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_abstract,
+    r#"
+from abc import ABC, abstractmethod
+from typing import Any
+
+class Processor(ABC):
+    @abstractmethod
+    def process(self, *args: Any, **kwargs: Any) -> Any:
+        pass
+
+class ConcreteProcessor(Processor):
+    def process(self, data: str, count: int = 1) -> str:
+        return data * count
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_parent_overload,
+    r#"
+from argparse import ArgumentParser as BaseArgumentParser
+from typing import Any
+
+class ArgumentParser(BaseArgumentParser):
+    def add_subparsers(self, *args: Any, **kwargs: Any):
+        return super().add_subparsers(*args, **kwargs)
+    "#,
+);
+
+testcase!(
+    test_override_parameter_gradual_child_overload,
+    r#"
+from typing import overload, Any
+class Base:
+    def test(self, *args: Any, **kwargs: Any):
+        pass
+
+class Child(Base):
+    @overload
+    def test(self, x: int): pass
+    @overload
+    def test(self, x: str): pass
+    def test(self, x):
+        pass
     "#,
 );
 
@@ -720,7 +819,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `BoundMethod[B, (self: B, x: TA2) -> None]`, which is not assignable to `BoundMethod[B, (self: B, x: TA1) -> None]`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -736,7 +835,7 @@ class Foo:
 class Bar(Foo):
     x = 1
 
-assert_type(Bar.x, Any | None)
+assert_type(Bar.x, int)
 assert_type(Foo.x, Any | None)
 def test(x: type[Foo]):
     assert_type(x.x, Any | None)
@@ -755,6 +854,22 @@ class Child1(Parent):
 
 class Child2(Parent):
     y = "hello"
+    "#,
+);
+
+testcase!(
+    test_unannotated_empty_tuple_attribute_override,
+    r#"
+from typing import Any, Literal, assert_type
+
+class Foo:
+    x = ()
+
+class Bar(Foo):
+    x = ("feature_x",)
+
+assert_type(Foo.x, tuple[Any, ...])
+assert_type(Bar.x, tuple[Literal['feature_x']])
     "#,
 );
 
@@ -879,7 +994,7 @@ class A:
 class B(A):
     x = 1
 def f(b: B):
-    assert_type(b.x, int | None)
+    assert_type(b.x, int)
     "#,
 );
 
@@ -906,13 +1021,37 @@ class D(C):
     x = [B()]
 
 def f(d: D):
-    assert_type(d.x, list[A])
+    assert_type(d.x, list[B])
+    "#,
+);
+
+testcase!(
+    test_class_variable_override_with_subclass,
+    r#"
+class Request:
+    @classmethod
+    def make(cls) -> "Request":
+        return cls()
+
+class FormRequest(Request):
+    @classmethod
+    def from_response(cls) -> "FormRequest":
+        return cls()
+
+class BaseTest:
+    request_class = Request
+
+class MyTest(BaseTest):
+    request_class = FormRequest
+
+    def test(self) -> None:
+        self.request_class.from_response()
     "#,
 );
 
 // Tests for MissingOverrideDecorator (strict override enforcement)
 testcase!(
-    test_missing_override_decorator,
+    test_missing_override_decorator_method,
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"
 class Base:
@@ -1000,7 +1139,7 @@ class Base:
     x: int
 
 class Derived(Base):
-    x: int  # E: Class member `Derived.x` overrides a member in a parent class but is missing an `@override` decorator
+    x: int
     "#,
 );
 
@@ -1042,4 +1181,590 @@ class Base:
 class Derived(Base):
     def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
     "#,
+);
+
+testcase!(
+    test_missing_override_decorator_instance_attribute,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class A:
+    def __init__(self):
+        self.a = 1
+
+class B(A):
+    def __init__(self):
+        self.a = 2  # OK - instance attribute, not a method override
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_nested_class,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+# Nested classes cannot have the @override decorator applied to them.
+class A:
+    class C: pass
+
+class B(A):
+    class C(A.C): pass  # OK - nested class, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classvar,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import ClassVar
+
+# ClassVars cannot have the @override decorator applied to them.
+class A:
+    x: ClassVar[int]
+
+class B(A):
+    x: ClassVar[int]  # OK - ClassVar, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_raise_not_implemented_infers_never_but_allows_override,
+    r#"
+from typing import Never, assert_type
+
+class A:
+    def foo(self):
+        raise NotImplementedError()
+
+assert_type(A().foo(), Never)
+
+class B(A):
+    def foo(self) -> int:
+        return 1
+"#,
+);
+
+// Explicit `-> Never` is a real user annotation: the override-relaxation
+// only fires when the parent's return was inferred from the placeholder
+// body, so an annotated `-> Never` parent vs. a child returning a concrete
+// type is still a real override violation.
+testcase!(
+    test_explicit_never_annotation_checked_for_override,
+    r#"
+from typing import Never, assert_type
+
+class A:
+    def foo(self) -> Never:
+        raise NotImplementedError()
+
+assert_type(A().foo(), Never)
+
+class B(A):
+    def foo(self) -> int:  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_bad_parameter_override_with_never_return,
+    r#"
+class A:
+    def f(self, x: int):
+        raise NotImplementedError()
+class B(A):
+    def f(self, x: str):  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_callable_returning_never_checked_for_override_consistency,
+    r#"
+from typing import Any, Callable, Never, assert_type
+
+class A:
+    f: Callable[[Any], Never]
+
+class B(A):
+    f: Callable[[Any], int]  # E: overrides parent class `A` in an inconsistent manner
+    "#,
+);
+
+// The next block tests override consistency for placeholder bodies (i.e. function
+// bodies that consist of nothing but `raise NotImplementedError(...)`) in three
+// decorated forms (`@property`, `async def`, `@cached_property`) plus negative
+// discriminator cases. The plain-method form is covered by
+// `test_raise_not_implemented_infers_never_but_allows_override` above.
+
+testcase!(
+    test_property_raise_not_implemented_allows_override,
+    r#"
+class A:
+    @property
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self):
+        return "azure"
+    "#,
+);
+
+testcase!(
+    test_async_def_raise_not_implemented_allows_override,
+    r#"
+class A:
+    async def aload(self):
+        raise NotImplementedError()
+
+class B(A):
+    async def aload(self):
+        return {}
+    "#,
+);
+
+testcase!(
+    test_property_setter_raise_not_implemented_allows_override,
+    r#"
+class A:
+    @property
+    def foo(self) -> int:
+        raise NotImplementedError()
+    @foo.setter
+    def foo(self, value: int):
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self) -> int:
+        return 1
+    @foo.setter
+    def foo(self, value: int):
+        pass
+    "#,
+);
+
+testcase!(
+    test_cached_property_raise_not_implemented_allows_override,
+    r#"
+from functools import cached_property
+
+class A:
+    @cached_property
+    def dtype(self):
+        raise NotImplementedError()
+
+class B(A):
+    @cached_property
+    def dtype(self):
+        return "float64"
+    "#,
+);
+
+// Explicit `-> Never` is a real user annotation: the override-relaxation only
+// fires when the parent's return was inferred from the placeholder body, so
+// an annotated `-> Never` parent vs. a child returning a concrete type is
+// still a real override violation.
+testcase!(
+    test_property_explicit_never_annotation_checked_for_override,
+    r#"
+from typing import Never
+
+class A:
+    @property
+    def foo(self) -> Never:
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self) -> int:  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_async_def_explicit_never_annotation_checked_for_override,
+    r#"
+from typing import Never
+
+class A:
+    async def aload(self) -> Never:
+        raise NotImplementedError()
+
+class B(A):
+    async def aload(self) -> int:  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+// Override-consistency is a structural subset check on the attribute type.
+// Async-ness is encoded in the return shape (`Coroutine[Any, Any, T]`), so
+// the relaxation must preserve the async wrapper — collapsing an inferred
+// async-placeholder return to bare `Any` would silently let a sync child
+// override an async parent, which is a real shape mismatch.
+testcase!(
+    test_async_def_placeholder_parent_sync_child_checked_for_override,
+    r#"
+class A:
+    async def aload(self):
+        raise NotImplementedError()
+
+class B(A):
+    def aload(self):  # E: overrides parent class `A` in an inconsistent manner
+        return {}
+    "#,
+);
+
+// Unannotated `__new__` is special-cased to return `Self`, not the body-
+// inferred `Never`. The placeholder relaxation must not fire here, otherwise
+// a child `__new__` with an incompatible return would be silently accepted.
+testcase!(
+    test_dunder_new_placeholder_parent_checked_for_override,
+    r#"
+from typing import override
+
+class A:
+    def __new__(cls):
+        raise NotImplementedError()
+
+class B(A):
+    @override
+    def __new__(cls) -> int:  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_annotated_int_raise_not_implemented_checked_for_override,
+    r#"
+class A:
+    def foo(self) -> int:
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_property_annotated_int_raise_not_implemented_checked_for_override,
+    r#"
+class A:
+    @property
+    def foo(self) -> int:
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_annotated_return_not_implemented_checked_for_override,
+    r#"
+class A:
+    def foo(self) -> int:
+        return NotImplemented
+
+class B(A):
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_property_annotated_return_not_implemented_checked_for_override,
+    r#"
+class A:
+    @property
+    def foo(self) -> int:
+        return NotImplemented
+
+class B(A):
+    @property
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_sync_def_coroutine_never_return_checked_for_override_consistency,
+    r#"
+from typing import Any, Coroutine, Never
+
+class A:
+    def f(self) -> Coroutine[Any, Any, Never]:
+        raise NotImplementedError()
+
+class B(A):
+    def f(self) -> Coroutine[Any, Any, int]:  # E: overrides parent class `A` in an inconsistent manner
+        ...
+    "#,
+);
+
+testcase!(
+    test_override_method_without_self,
+    r#"
+class A:
+    def foo() -> int:
+        return 42
+
+class B(A):
+    def foo() -> int:
+        return 100
+    "#,
+);
+
+testcase!(
+    test_override_str_subclass_with_optional_param,
+    r#"
+class MyString(str):
+    def upper(self, locale: str = "en") -> str:
+        return super().upper()
+    "#,
+);
+
+testcase!(
+    bug = "We raise 2 inconsistent-overload errors where pyright raises 1. We should investigate this.",
+    test_override_all_parent_overloads_inapplicable,
+    r#"
+from typing import overload, LiteralString
+
+class Base(str):
+    @overload
+    def method(self: LiteralString) -> LiteralString: ...  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    @overload
+    def method(self: LiteralString, x: int) -> LiteralString: ...  # E: Overload return type `LiteralString` is not assignable to implementation return type `Self@Base`
+    def method(self, x=None):
+        return self
+
+class Child(Base):
+    def method(self, x: int = 0) -> str:
+        return str(self)
+    "#,
+);
+
+testcase!(
+    test_override_generic_overload_with_inapplicable_self,
+    r#"
+from typing import overload
+
+class Parent:
+    @overload
+    def method[T](self: "Narrow", x: T) -> T: ...
+    @overload
+    def method(self, x: int) -> int: ...
+    def method(self, x):
+        return x
+
+class Narrow(Parent):
+    pass
+
+class Child(Parent):
+    def method(self, x: int) -> int:
+        return x
+    "#,
+);
+
+testcase!(
+    test_override_generic_overload_with_inapplicable_cls,
+    r#"
+from typing import overload
+
+class Parent[T]:
+    @classmethod
+    @overload
+    def make(cls: type["Narrow"], x: T) -> T: ...
+    @classmethod
+    @overload
+    def make(cls, x: int) -> int: ...
+    @classmethod
+    def make(cls, x):
+        return x
+
+class Narrow(Parent[int]):
+    pass
+
+class Child(Parent[int]):
+    @classmethod
+    def make(cls, x: int) -> int:
+        return x
+    "#,
+);
+
+testcase!(
+    test_override_init_with_decorator,
+    r#"
+from typing import override
+
+class Parent:
+    def __init__(self, x: int) -> None:
+        pass
+
+class Child(Parent):
+    @override
+    def __init__(self, x: str) -> None: # E: Class member `Child.__init__` overrides parent class `Parent` in an inconsistent manner
+        pass
+    "#,
+);
+
+testcase!(
+    test_override_init_without_decorator,
+    r#"
+class Parent:
+    def __init__(self, x: int) -> None:
+        pass
+
+class Child(Parent):
+    def __init__(self, x: str) -> None:
+        pass
+    "#,
+);
+
+testcase!(
+    test_override_init_compatible,
+    r#"
+from typing import override
+
+class Parent:
+    def __init__(self, x: int) -> None:
+        pass
+
+class Child(Parent):
+    @override
+    def __init__(self, x: int) -> None:
+        pass
+    "#,
+);
+
+testcase!(
+    test_override_mutable_attribute,
+    r#"
+class A:
+    p: int | str
+
+class B(A):
+    p: int  # E: Class member `B.p` overrides parent class `A` in an inconsistent manner
+ "#,
+);
+
+testcase!(
+    test_override_mutable_attribute_suppressed_by_parent_kind,
+    r#"
+class A:
+    p: int | str
+
+class B(A):
+    p: int  # pyrefly: ignore[bad-override]
+ "#,
+);
+
+testcase!(
+    test_override_mutable_attribute_suppressed_by_own_kind,
+    r#"
+class A:
+    p: int | str
+
+class B(A):
+    p: int  # pyrefly: ignore[bad-override-mutable-attribute]
+ "#,
+);
+
+// When a decorator returns a scalar type (not a callable), the decorated method
+// becomes a plain mutable attribute. Overriding it with a narrowed type should
+// be bad-override-mutable-attribute (suppressible with bad-override), not a
+// generic bad-override.
+testcase!(
+    test_override_decorated_method_returning_scalar,
+    r#"
+from typing import Callable, TypeVar
+
+F = TypeVar("F", bound=Callable[..., object])
+
+def returns_int(f: F) -> int:
+    return 0
+
+class Base:
+    @returns_int
+    def x(self) -> str:
+        return ""
+
+class ChildSame(Base):
+    x: int  # OK, same type
+
+class ChildNarrowed(Base):
+    x: bool  # E: Class member `ChildNarrowed.x` overrides parent class `Base` in an inconsistent manner
+
+class ChildNarrowedSuppressed(Base):
+    x: bool  # pyrefly: ignore[bad-override-mutable-attribute]
+ "#,
+);
+
+// Overriding a readwrite property with a plain attribute that narrows the type
+// is a mutable attribute override error: the parent's setter accepts A, but the
+// child's ReadWrite(B) only accepts B.
+testcase!(
+    test_override_readwrite_property_to_attr_narrowed,
+    r#"
+class A: ...
+class B(A): ...
+
+class Base:
+    @property
+    def p(self) -> A:
+        return A()
+
+    @p.setter
+    def p(self, value: A) -> None:
+        pass
+
+class ChildNarrowed(Base):
+    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(self: ChildNarrowed, value: A) -> None`, the property setter for `Base.p`
+
+class ChildSuppressed(Base):
+    p: B  # pyrefly: ignore[bad-override-mutable-attribute]
+
+class ChildSameType(Base):
+    p: A  # OK, same type
+
+# Widening: p: object fails on the getter covariance check (object is not a
+# subtype of A), even though the setter check would pass.
+class ChildWidened(Base):
+    p: object  # E: Class member `ChildWidened.p` overrides parent class `Base` in an inconsistent manner
+
+# Property-to-property override with narrowed setter.
+class ChildPropertyNarrowedSetter(Base):
+    @property
+    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(self: ChildPropertyNarrowedSetter, value: B) -> None`, which is not assignable from `(self: ChildPropertyNarrowedSetter, value: A) -> None`, the property setter for `Base.p`
+        return A()
+    @p.setter
+    def p(self, value: B) -> None:
+        pass
+ "#,
+);
+
+testcase!(
+    test_param_name_override_suppressed_by_parent_kind,
+    r#"
+class A:
+    def f(self, x: int):
+        pass
+class B(A):
+    def f(self, x1: int):  # pyrefly: ignore[bad-override]
+        pass
+ "#,
+);
+
+testcase!(
+    test_param_name_override_suppressed_by_deprecated_alias,
+    r#"
+class A:
+    def f(self, x: int):
+        pass
+class B(A):
+    def f(self, x1: int):  # pyrefly: ignore[bad-param-name-override]
+        pass
+ "#,
 );

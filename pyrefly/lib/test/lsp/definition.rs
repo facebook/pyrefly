@@ -18,7 +18,10 @@ use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
-    let defs = state.transaction().goto_definition(handle, position);
+    let defs = state
+        .transaction()
+        .goto_definition(handle, position)
+        .unwrap_or_default();
     if !defs.is_empty() {
         defs.into_iter()
             .map(
@@ -374,7 +377,7 @@ fn exception_handler_name_test() {
     let code = r#"
 def test(flag: bool) -> None:
   try:
-    1 / 0
+    raise Exception()
   except Exception as e:
 #                     ^
     pass
@@ -978,7 +981,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-173 | class Path(PurePath):
+182 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1220,13 +1223,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+3632 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3618 |     def __getitem__(self, key: _KT, /) -> _VT:
+3632 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),
@@ -1418,7 +1421,6 @@ Definition Result:
     );
 }
 
-// todo(kylei) go-to definition on x should go to the definition
 #[test]
 fn global_keyword() {
     let code = r#"
@@ -1433,7 +1435,33 @@ def test():
 # main.py
 4 |     global x
                ^
-Definition Result: None
+Definition Result:
+2 | x = 5
+    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn nonlocal_keyword() {
+    let code = r#"
+def outer():
+    x = 5
+    def inner():
+        nonlocal x
+        #        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |         nonlocal x
+                     ^
+Definition Result:
+3 |     x = 5
+        ^
 "#
         .trim(),
         report.trim(),
@@ -1466,6 +1494,99 @@ Definition Result:
 
 
 # foo.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_entry_definition_test() {
+    let pkg = r#"
+from pkg.bar import Bar
+
+class Baz:
+    pass
+
+__all__ = (
+    "Bar",
+#    ^
+    "Baz",
+#    ^
+)
+"#;
+    let bar = r#"
+class Bar:
+    pass
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("pkg", pkg), ("pkg.bar", bar)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+8 |     "Bar",
+         ^
+Definition Result:
+2 | class Bar:
+          ^^^
+
+10 |     "Baz",
+          ^
+Definition Result:
+4 | class Baz:
+          ^^^
+
+
+# pkg.bar.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn string_literal_not_in_dunder_all() {
+    let pkg = r#"
+class Foo:
+    pass
+
+x = "Foo"
+#    ^
+
+__all__ = ["Foo"]
+"#;
+    let report = get_batched_lsp_operations_report(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+5 | x = "Foo"
+         ^
+Definition Result: None
+
+
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_all_nonexistent_symbol() {
+    let pkg = r#"
+__all__ = ["NonExistent"]
+#            ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("pkg", pkg)], get_test_report);
+    assert_eq!(
+        r#"
+# pkg.py
+2 | __all__ = ["NonExistent"]
+                 ^
+Definition Result:
+2 | __all__ = ["NonExistent"]
+               ^^^^^^^^^^^^^
+
+
 "#
         .trim(),
         report.trim(),
@@ -2015,7 +2136,6 @@ y = f"hello {f()}"
 
 #[test]
 fn goto_def_in_fstring_format_specifier() {
-    // TODO(T253793958): Fix go-to-definition in format string specifiers.
     let code = r#"
 def f() -> int:
     return 0
@@ -2026,7 +2146,397 @@ y = f"hello {x:{f()}}"
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     assert!(
-        report.contains("Definition Result:") && report.contains("None"),
+        report.contains("def f()"),
         "Expected definition to jump to function f, got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_target() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 | result = [x for x in items]
+                    ^
+Definition Result:
+3 | result = [x for x in items]
+                    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_usage() {
+    let code = r#"
+items = [1, 2, 3]
+result = [x for x in items]
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    // Go-to-def on the usage `x` should jump to the target `x` (the iteration variable)
+    assert_eq!(
+        r#"
+# main.py
+3 | result = [x for x in items]
+              ^
+Definition Result:
+3 | result = [x for x in items]
+                    ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_target_x() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#                    ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_target_y() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#                       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_usage_y() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+               ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_list_comprehension_tuple_unpacking_usage_x() {
+    let code = r#"
+result = [(y, x) for x, y in [(1, 2)]]
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                  ^
+Definition Result:
+2 | result = [(y, x) for x, y in [(1, 2)]]
+                         ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_call_same_module() {
+    let code = r#"
+class Bar:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+Bar("hello")
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 | Bar("hello")
+      ^
+Definition Result:
+3 |     def __init__(self, name: str) -> None:
+            ^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_call_cross_module() {
+    let class_code = r#"
+class Foo:
+    def __init__(self, x: int) -> None:
+        self.x = x
+"#;
+    let code = r#"
+from .foo_mod import Foo
+Foo(1)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("foo_mod", class_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | Foo(1)
+      ^
+Definition Result:
+3 |     def __init__(self, x: int) -> None:
+            ^^^^^^^^
+
+
+# foo_mod.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_inherits_init_from_base() {
+    let base_code = r#"
+class Base:
+    def __init__(self, x: int) -> None:
+        self.x = x
+"#;
+    let code = r#"
+from .base_mod import Base
+
+class Child(Base):
+    pass
+
+Child(1)
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("base_mod", base_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+7 | Child(1)
+       ^
+Definition Result:
+3 |     def __init__(self, x: int) -> None:
+            ^^^^^^^^
+
+
+# base_mod.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_with_new_only() {
+    let code = r#"
+class Singleton:
+    _instance = None
+    def __new__(cls) -> "Singleton":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+Singleton()
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | Singleton()
+         ^
+Definition Result:
+4 |     def __new__(cls) -> "Singleton":
+            ^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_with_both_init_and_new() {
+    let code = r#"
+class MyClass:
+    def __new__(cls) -> "MyClass":
+        return super().__new__(cls)
+    def __init__(self) -> None:
+        self.x = 1
+
+MyClass()
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | MyClass()
+       ^
+Definition Result:
+5 |     def __init__(self) -> None:
+            ^^^^^^^^
+Definition Result:
+3 |     def __new__(cls) -> "MyClass":
+            ^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_via_module_attribute() {
+    let class_code = r#"
+class Foo:
+    def __init__(self, x: int) -> None:
+        self.x = x
+"#;
+    let code = r#"
+import foo_mod
+foo_mod.Foo(1)
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code), ("foo_mod", class_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | foo_mod.Foo(1)
+            ^
+Definition Result:
+3 |     def __init__(self, x: int) -> None:
+            ^^^^^^^^
+
+
+# foo_mod.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_callable_instance() {
+    let code = r#"
+class Adder:
+    def __call__(self, x: int) -> int:
+        return x + 1
+
+adder = Adder()
+adder(5)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+7 | adder(5)
+      ^
+Definition Result:
+3 |     def __call__(self, x: int) -> int:
+            ^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_non_constructor_call_goes_to_function() {
+    let code = r#"
+def foo(x: int) -> int:
+    return x
+
+foo(1)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 | foo(1)
+      ^
+Definition Result:
+2 | def foo(x: int) -> int:
+        ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_class_name_without_call_goes_to_class() {
+    let code = r#"
+class Baz:
+    def __init__(self) -> None:
+        pass
+
+x = Baz
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 | x = Baz
+        ^
+Definition Result:
+2 | class Baz:
+          ^^^
+"#
+        .trim(),
+        report.trim(),
     );
 }

@@ -17,12 +17,15 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use super::extract_shared::is_member_stmt;
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::member_name_from_stmt;
+use super::extract_shared::needs_pass_after_removal;
 use super::extract_shared::prepare_insertion_text;
-use super::extract_shared::reindent_block;
+use super::extract_shared::reindent_statement;
 use super::extract_shared::selection_anchor;
+use super::extract_shared::statement_removal_range;
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
@@ -186,13 +189,6 @@ fn find_member_in_class<'a>(
     None
 }
 
-fn is_member_stmt(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
-    )
-}
-
 fn class_has_member_named(class_def: &StmtClassDef, name: &str) -> bool {
     class_def
         .body
@@ -305,7 +301,7 @@ fn build_insertion_edit(
     let (target_indent, insert_range, replaces_pass) =
         target_insertion_point(target_class, source)?;
     let member_text =
-        member_text_for_target(source, member_stmt.range(), member_indent, &target_indent);
+        reindent_statement(source, member_stmt.range(), member_indent, &target_indent);
     let insert_text = if replaces_pass {
         member_text
     } else {
@@ -323,7 +319,7 @@ fn build_removal_edit(
 ) -> Option<(pyrefly_python::module::Module, TextRange, String)> {
     let source = module_info.contents();
     let removal_range = statement_removal_range(source, member_stmt)?;
-    let removal_text = if needs_pass_after_removal(origin_class, member_stmt) {
+    let removal_text = if needs_pass_after_removal(&origin_class.body, member_stmt.range()) {
         format!("{member_indent}pass\n")
     } else {
         String::new()
@@ -374,39 +370,4 @@ fn replaceable_pass_stmt(class_def: &StmtClassDef) -> Option<&Stmt> {
         Stmt::Pass(_) => Some(only_stmt),
         _ => None,
     }
-}
-
-/// Determine whether removing `member_stmt` would leave an empty class body.
-fn needs_pass_after_removal(class_def: &StmtClassDef, member_stmt: &Stmt) -> bool {
-    let mut non_docstring = class_def
-        .body
-        .iter()
-        .filter(|stmt| !is_docstring_stmt(stmt));
-    let only_stmt = non_docstring.next();
-    non_docstring.next().is_none()
-        && only_stmt.is_some_and(|stmt| stmt.range() == member_stmt.range())
-}
-
-/// Remove the full statement line, including leading indent and trailing newline.
-fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
-    let (_, line_start) = line_indent_and_start(source, stmt.range().start())?;
-    let line_end = line_end_position(source, stmt.range().end());
-    Some(TextRange::new(line_start, line_end))
-}
-
-/// Reindent the member block so it aligns with the target class indentation.
-fn member_text_for_target(
-    source: &str,
-    range: TextRange,
-    from_indent: &str,
-    to_indent: &str,
-) -> String {
-    let start = range.start().to_usize().min(source.len());
-    let end = range.end().to_usize().min(source.len());
-    let raw = if start < end { &source[start..end] } else { "" };
-    let mut text = reindent_block(raw, from_indent, to_indent);
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
 }

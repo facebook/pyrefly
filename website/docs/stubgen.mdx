@@ -1,0 +1,57 @@
+---
+title: Stub Generation
+description: Generate .pyi stub files from Python source files with Pyrefly stubgen.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pyrefly Stubgen
+
+:::warning Experimental
+This feature is experimental and under active development. The output format and behavior may change in future releases.
+:::
+
+Pyrefly can generate `.pyi` [stub files](https://typing.readthedocs.io/en/latest/guides/writing_stubs.html) from Python source files using static analysis. Stub files provide type information for modules without requiring the source code to be fully annotated.
+
+Unlike mypy's stubgen, Pyrefly operates entirely through static analysis — it does not inspect code at runtime.
+
+## Usage
+
+```
+pyrefly stubgen path/to/file.py
+# or
+pyrefly stubgen path/to/directory/
+```
+
+By default, generated stubs are written to the `out/` directory, mirroring the source directory structure.
+
+## Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o, --output-dir` | `out` | Output directory for generated `.pyi` files |
+| `--include-private` | off | Include names with a single leading underscore |
+| `--include-docstrings` | off | Preserve docstrings in generated stubs |
+
+## What gets included
+
+Stubgen extracts the public API of each module:
+
+- **Functions and methods** — signatures with parameter types, defaults, and return types
+- **Classes** — base classes, decorators, attributes, and methods
+- **Variables** — module-level and class-level variables with type annotations
+- **Imports** — preserved from source
+- **Type aliases** — preserved from source
+
+Private names (single leading underscore) are excluded by default. Dunder names (`__init__`, `__repr__`, etc.) are always included.
+
+## Type resolution
+
+Pyrefly uses its type checker to resolve types for declarations that lack explicit annotations. When a type cannot be resolved, it is annotated as `Incomplete` from `_typeshed`, following the convention used by typeshed stubs.
+
+Source annotations are always preferred over inferred types when both are available.

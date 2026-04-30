@@ -320,7 +320,6 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
 );
 
 testcase!(
-    bug = "classmethod bound object w/o targs is default-instantiated, solves T to Any",
     test_bound_classmethod_explicit_targs,
     r#"
 from typing import assert_type
@@ -333,7 +332,7 @@ class A[T]:
         return cls(x)
 
 assert_type(A[int].m(0), A[int])
-assert_type(A.m(0), A[int]) # TODO # E: assert_type(A[Any], A[int]) failed
+assert_type(A.m(0), A[int])
 
 def test_typevar_bounds[T: A[int]](x: type[T]):
     assert_type(x.m(0), A[int])
@@ -522,6 +521,16 @@ C().f(0)    # E: Argument `Literal[0]` is not assignable to parameter `x` with t
     "#,
 );
 
+testcase!(
+    test_bad_bound_on_self,
+    r#"
+class C:
+    def f[T: int](self: T) -> T:
+        return self
+C().f()  # E: `C` is not assignable to upper bound `int`
+    "#,
+);
+
 // Make sure we treat `callable_attr` as a bare instance attribute, not a bound method.
 testcase!(
     test_callable_instance_only_attribute,
@@ -606,7 +615,7 @@ def f2(c: Callable[[C, int], None]):
 f1(C.f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(int) -> None`
 f1(C().f)
 f2(C.f)
-f2(C().f)  # E: Argument `BoundMethod[C, (self: C, x: int) -> None]` is not assignable to parameter `c` with type `(C, int) -> None`
+f2(C().f)  # E: Argument `(self: C, x: int) -> None` is not assignable to parameter `c` with type `(C, int) -> None`
     "#,
 );
 
@@ -774,6 +783,26 @@ class Meta(type):
 class C(metaclass=Meta):
     pass
 assert_type(C.x, int)
+    "#,
+);
+
+testcase!(
+    test_metaclass_property_precedence,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    @property
+    def f(cls) -> str:
+        return "1"
+
+class C(metaclass=Meta):
+    @property
+    def f(self) -> str:
+        return type(self).f
+
+# C.f should resolve to the metaclass property, returning str
+assert_type(C.f, str)
     "#,
 );
 
@@ -1107,6 +1136,74 @@ class C2[R]:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2204
+testcase!(
+    test_generic_function_assigned_to_attribute,
+    r#"
+from typing import reveal_type, assert_type
+def f[T](x: T) -> T:
+    return x
+
+class C:
+    def m[U](self, x: U) -> U:
+        return x
+
+class D:
+    def __init__(self, c: C):
+        self.f = f
+        self.g = c.m
+        self.h = C.m
+
+def test(o: D):
+    reveal_type(o.f) # E: [T](x: T) -> T
+    assert_type(o.f(1), int)
+
+    reveal_type(o.g) # E: [U](self: C, x: U) -> U
+    assert_type(o.g(1), int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2812
+testcase!(
+    test_bound_overload_assigned_to_attribute,
+    r#"
+from typing import assert_type
+
+class ThemeStack:
+    def __init__(self) -> None:
+        self._entries: list[dict[str, str]] = [{}]
+        self.get = self._entries[-1].get
+
+def test(stack: ThemeStack) -> None:
+    assert_type(stack.get("theme"), str | None)
+    assert_type(stack.get("theme", "fallback"), str)
+"#,
+);
+
+testcase!(
+    test_generic_function_as_closure_default_arg,
+    r#"
+import bisect
+
+class Worker:
+    def __init__(self) -> None:
+        self.heartbeats: list[float] = []
+        self.event = self._create_event_handler()
+
+    def _create_event_handler(self):
+        heartbeats = self.heartbeats
+
+        def event(
+            timestamp: float | None = None,
+            insort = bisect.insort,
+        ) -> None:
+            if timestamp is not None:
+                insort(heartbeats, timestamp)
+
+        return event
+"#,
+);
+
 testcase!(
     test_attr_unknown,
     r#"
@@ -1136,7 +1233,7 @@ class C:
         if orig_func is None:
             return super().__new__(cls)
 def f():
-    with C():  # E: `NoneType` has no attribute `__enter__`  # E: `NoneType` has no attribute `__exit__`
+    with C():
         pass
     "#,
 );
@@ -1645,6 +1742,23 @@ assert_type(A.f(0), int)
 );
 
 testcase!(
+    test_parametrized_class_init_call,
+    r#"
+from typing import reveal_type
+
+class Foo[T]:
+    def __init__(self, /) -> None:
+        pass
+
+class Bar[S](Foo[S]):
+    def __init__(self, /) -> None:
+        Foo[S].__init__(self)
+
+Foo[int].__init__(Foo[int]())
+    "#,
+);
+
+testcase!(
     test_invalid_augmented_assign_in_init,
     r#"
 class C:
@@ -1756,8 +1870,20 @@ testcase!(
     r#"
 from typing import ClassVar, Final
 class C:
-    x: ClassVar[Final[int]] = 42
+    x: ClassVar[Final[int]] = 42  # E: `Final` may not be nested inside `ClassVar`
 C.x = 43  # E: This field is marked as Final
+    "#,
+);
+
+testcase!(
+    test_classvar_final_nesting,
+    r#"
+from typing import ClassVar, Final
+class C:
+    x: Final[ClassVar[int]] = 1  # E: `ClassVar` may not be nested inside `Final`
+    y: ClassVar[Final[int]] = 2  # E: `Final` may not be nested inside `ClassVar`
+    z: Final[int] = 3
+    w: ClassVar[int] = 4
     "#,
 );
 
@@ -2010,7 +2136,7 @@ testcase!(
     r#"
 from typing import Never, assert_type, reveal_type
 def f() -> type[Never]: ...
-reveal_type(f().mro) # E: BoundMethod[type, (self: type) -> list[type[Any]]]
+reveal_type(f().mro) # E: (self: type) -> list[type[Any]]
 assert_type(f().wut, Never)
     "#,
 );
@@ -2284,7 +2410,8 @@ class A:
         self.y = {"x": 0} if check else 42
 def f(a: A):
     x: TD = a.x
-    y: TD | int = a.y
+    # anoynmous typed dicts are promoted away when unioned
+    y: dict[str, int] | int = a.y
     "#,
 );
 
@@ -2313,4 +2440,32 @@ class B(A[None]):
         if not foo:
             pass
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/417
+testcase!(
+    test_classmethod_inherited_no_missing_attribute,
+    r#"
+class Base:
+    @classmethod
+    def from_pretrained(cls, name: str) -> "Base":
+        return cls()
+
+class Derived(Base):
+    pass
+
+Derived.from_pretrained("model")
+"#,
+);
+
+testcase!(
+    test_classmethod_vararg_does_not_bind_self,
+    r#"
+class C:
+    @classmethod
+    def create(*args, **kwargs): ...
+
+C.create(42)
+C.create(a=42)
+"#,
 );

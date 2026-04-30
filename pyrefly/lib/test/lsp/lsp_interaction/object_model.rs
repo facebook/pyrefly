@@ -10,13 +10,17 @@ use std::iter::once;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::thread::{self};
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Error;
+use crossbeam_channel::Receiver;
 use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::Sender;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
 use lsp_types::CompletionList;
@@ -26,7 +30,6 @@ use lsp_types::ConfigurationParams;
 use lsp_types::HoverContents;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::RegistrationParams;
-use lsp_types::UnregistrationParams;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeConfiguration;
 use lsp_types::notification::DidChangeNotebookDocument;
@@ -44,6 +47,7 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::CodeActionRequest;
 use lsp_types::request::Completion;
 use lsp_types::request::DocumentDiagnosticRequest;
+use lsp_types::request::DocumentHighlightRequest;
 use lsp_types::request::FoldingRangeRequest;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::GotoImplementation;
@@ -51,34 +55,42 @@ use lsp_types::request::GotoTypeDefinition;
 use lsp_types::request::HoverRequest;
 use lsp_types::request::Initialize;
 use lsp_types::request::InlayHintRequest;
+use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::References;
 use lsp_types::request::RegisterCapability;
+use lsp_types::request::Rename;
 use lsp_types::request::Request as _;
 use lsp_types::request::SemanticTokensFullRequest;
 use lsp_types::request::SemanticTokensRangeRequest;
 use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
-use lsp_types::request::UnregisterCapability;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
+use lsp_types::request::WorkspaceSymbolRequest;
 use pretty_assertions::assert_eq;
+use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
+use pyrefly::commands::lsp::run_lsp;
+use pyrefly::lsp::non_wasm::external_provider::NoExternalProvider;
+use pyrefly::lsp::non_wasm::module_helpers::ThriftRemapper;
+use pyrefly::lsp::non_wasm::protocol::JsonRpcMessage;
+use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly::lsp::non_wasm::protocol::Notification;
+use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly::lsp::non_wasm::protocol::Response;
+use pyrefly::lsp::non_wasm::server::Connection;
+use pyrefly::lsp::wasm::provide_type::ProvideType;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::lock::FinishHandle;
 use pyrefly_util::telemetry::NoTelemetry;
+use pyrefly_util::telemetry::Telemetry;
+use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::thread_pool::ThreadCount;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::commands::lsp::IndexingMode;
-use crate::commands::lsp::LspArgs;
-use crate::commands::lsp::run_lsp;
-use crate::lsp::non_wasm::protocol::JsonRpcMessage;
-use crate::lsp::non_wasm::protocol::Message;
-use crate::lsp::non_wasm::protocol::Notification;
-use crate::lsp::non_wasm::protocol::Request;
-use crate::lsp::non_wasm::protocol::Response;
-use crate::lsp::non_wasm::server::Connection;
-use crate::lsp::wasm::provide_type::ProvideType;
-use crate::test::util::init_test;
+use crate::init::TEST_THREAD_COUNT;
+use crate::init::init_test;
 
 #[derive(Debug)]
 pub enum LspMessageError {
@@ -124,7 +136,7 @@ pub struct InitializeSettings {
 }
 
 pub struct ClientRequestHandle<'a, R: lsp_types::request::Request> {
-    id: RequestId,
+    pub(crate) id: RequestId,
     client: &'a TestClient,
     _type: PhantomData<R>,
 }
@@ -294,7 +306,7 @@ impl TestClient {
         self.conn
             .as_ref()
             .unwrap()
-            .receiver
+            .channel_receiver()
             .recv_timeout(self.recv_timeout)
     }
 
@@ -588,6 +600,13 @@ impl TestClient {
         }))
     }
 
+    pub fn send_workspace_symbol(
+        &self,
+        query: &str,
+    ) -> ClientRequestHandle<'_, WorkspaceSymbolRequest> {
+        self.send_request(json!({ "query": query }))
+    }
+
     pub fn inlay_hint(
         &self,
         file: &'static str,
@@ -635,6 +654,7 @@ impl TestClient {
     }
 
     /// Send a file creation event notification
+    #[allow(dead_code)]
     pub fn file_created(&self, file: &str) {
         let path = self.get_root_or_panic().join(file);
         self.send_notification::<DidChangeWatchedFiles>(json!({
@@ -726,7 +746,7 @@ impl TestClient {
     pub fn expect_message<T>(
         &self,
         description: &str,
-        matcher: impl Fn(Message) -> Option<Result<T, LspMessageError>>,
+        mut matcher: impl FnMut(Message) -> Option<Result<T, LspMessageError>>,
     ) -> Result<T, LspMessageError> {
         loop {
             match self.recv_timeout() {
@@ -893,6 +913,36 @@ impl TestClient {
                             .iter()
                             .any(|d| d.message.contains(message))
                     {
+                        Some(Ok(()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Wait for a publishDiagnostics notification for the given file path, regardless of error count.
+    #[allow(dead_code)]
+    pub fn expect_publish_diagnostics_for_file(
+        &self,
+        path: PathBuf,
+    ) -> Result<(), LspMessageError> {
+        self.expect_message(
+            &format!(
+                "publishDiagnostics notification for file: {}",
+                path.display()
+            ),
+            |msg| {
+                if let Message::Notification(x) = msg
+                    && x.method == PublishDiagnostics::METHOD
+                {
+                    let params =
+                        serde_json::from_value::<PublishDiagnosticsParams>(x.params).unwrap();
+                    if params.uri.to_file_path().unwrap() == path {
                         Some(Ok(()))
                     } else {
                         None
@@ -1127,43 +1177,29 @@ impl TestClient {
 
     /// Expect a file watcher registration request.
     /// Validates that the request is specifically registering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_register(&self) -> Result<(), LspMessageError> {
-        let params: RegistrationParams =
+    /// Returns a handle to send the response.
+    pub fn expect_file_watcher_register(
+        &self,
+    ) -> Result<ServerRequestHandle<'_, RegisterCapability>, LspMessageError> {
+        let (id, params): (RequestId, RegistrationParams) =
             self.expect_message(&format!("Request {}", RegisterCapability::METHOD), |msg| {
                 if let Message::Request(x) = msg
                     && x.method == RegisterCapability::METHOD
                 {
-                    Some(Ok(serde_json::from_value(x.params).unwrap()))
+                    Some(Ok((
+                        x.id.clone(),
+                        serde_json::from_value(x.params).unwrap(),
+                    )))
                 } else {
                     None
                 }
             })?;
         assert!(params.registrations.iter().any(|x| x.id == "FILEWATCHER"));
-        Ok(())
-    }
-
-    /// Expect a file watcher unregistration request.
-    /// Validates that the request is specifically unregistering the file watcher (ID: "FILEWATCHER").
-    pub fn expect_file_watcher_unregister(&self) -> Result<(), LspMessageError> {
-        let params: UnregistrationParams = self.expect_message(
-            &format!("Request {}", UnregisterCapability::METHOD),
-            |msg| {
-                if let Message::Request(x) = msg
-                    && x.method == UnregisterCapability::METHOD
-                {
-                    Some(Ok(serde_json::from_value(x.params).unwrap()))
-                } else {
-                    None
-                }
-            },
-        )?;
-        assert!(
-            params
-                .unregisterations
-                .iter()
-                .any(|x| x.id == "FILEWATCHER")
-        );
-        Ok(())
+        Ok(ServerRequestHandle {
+            id,
+            client: self,
+            _type: PhantomData,
+        })
     }
 
     #[expect(dead_code)]
@@ -1219,27 +1255,157 @@ pub struct LspInteraction {
     pub client: TestClient,
 }
 
+/// A recorded telemetry event capturing the event payload, processing duration,
+/// and stringified error (if any). Used by [`TestTelemetry`] to broadcast events
+/// to test subscribers.
+#[expect(dead_code)]
+pub struct RecordedTelemetryEvent {
+    pub event: TelemetryEvent,
+    pub process: Duration,
+    pub error: Option<String>,
+}
+
+/// A [`Telemetry`] implementation that broadcasts each recorded event to all
+/// subscribed receivers via crossbeam channels. Tests call [`subscribe`] to
+/// obtain a [`Receiver`] they can `recv_timeout` on to wait for specific events.
+///
+/// # Example: timing event durations
+///
+/// ```ignore
+/// let telemetry = TestTelemetry::new();
+/// let rx = telemetry.subscribe();
+/// let interaction = LspInteraction::new_with_args(args, telemetry);
+///
+/// // ... trigger an LSP operation ...
+///
+/// let event = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+/// assert!(event.process < Duration::from_secs(5), "operation too slow: {:?}", event.process);
+/// ```
+///
+/// # Example: waiting for a specific event before proceeding
+///
+/// ```ignore
+/// let telemetry = TestTelemetry::new();
+/// let rx = telemetry.subscribe();
+/// let interaction = LspInteraction::new_with_args(args, telemetry);
+///
+/// // .. wait for a sourcedb rebuild to complete before opening a file ...
+///
+/// while !matches!(
+///     rx.recv_timeout(Duration::from_secs(10)).unwrap().event.kind,
+///     TelemetryEventKind::SourceDbRebuild,
+/// ) {}
+///
+/// interaction.did_open(uri, contents).unwrap();
+/// ```
+pub struct TestTelemetry {
+    subscribers: Mutex<Vec<Sender<Arc<RecordedTelemetryEvent>>>>,
+}
+
+impl TestTelemetry {
+    pub fn new() -> Self {
+        Self {
+            subscribers: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Register a new subscriber. Returns a [`Receiver`] that will receive all
+    /// future [`RecordedTelemetryEvent`]s wrapped in [`Arc`].
+    pub fn subscribe(&self) -> Receiver<Arc<RecordedTelemetryEvent>> {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        self.subscribers
+            .lock()
+            .expect("TestTelemetry subscribers lock poisoned")
+            .push(sender);
+        receiver
+    }
+}
+
+impl Telemetry for TestTelemetry {
+    fn record_event(&self, event: TelemetryEvent, process: Duration, error: Option<&Error>) {
+        let recorded = Arc::new(RecordedTelemetryEvent {
+            event,
+            process,
+            error: error.map(|e| e.to_string()),
+        });
+        let mut subscribers = self
+            .subscribers
+            .lock()
+            .expect("TestTelemetry subscribers lock poisoned");
+        // Send to all subscribers, dropping any that have disconnected.
+        subscribers.retain(|sender| sender.send(recorded.clone()).is_ok());
+    }
+
+    fn surface(&self) -> Option<String> {
+        None
+    }
+
+    fn agent_session_id(&self) -> Option<String> {
+        None
+    }
+
+    fn agent_invocation_id(&self) -> Option<String> {
+        None
+    }
+}
+
 impl LspInteraction {
     pub fn new() -> Self {
         Self::new_with_indexing_mode(IndexingMode::None)
     }
 
     pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
+        let args = LspArgs {
+            indexing_mode,
+            workspace_indexing_limit: 50,
+            build_system_blocking: false,
+            enable_external_references: false,
+        };
+        Self::new_with_args(args, NoTelemetry, None, None)
+    }
+
+    pub fn new_with_thrift_remapper(thrift_remapper: Option<ThriftRemapper>) -> Self {
+        let args = LspArgs {
+            indexing_mode: IndexingMode::None,
+            workspace_indexing_limit: 50,
+            build_system_blocking: false,
+            enable_external_references: false,
+        };
+        Self::new_with_args(args, NoTelemetry, None, thrift_remapper)
+    }
+
+    /// Create an `LspInteraction` with custom [`LspArgs`] and a custom
+    /// [`Telemetry`] implementation. The telemetry value is moved into the
+    /// spawned server thread.
+    pub fn new_with_args<T: Telemetry + 'static>(
+        args: LspArgs,
+        telemetry: T,
+        thread_count: Option<ThreadCount>,
+        thrift_remapper: Option<ThriftRemapper>,
+    ) -> Self {
         init_test();
 
-        let (conn_client, conn_server) = Connection::memory();
+        let thread_count = thread_count.unwrap_or(TEST_THREAD_COUNT);
+
+        let ((conn_client, _client_reader), (conn_server, server_reader)) = Connection::memory();
 
         let finish_handle = Arc::new(FinishHandle::new());
         let finish_server = finish_handle.clone();
 
-        // Spawn the server thread notify when finished
+        // Spawn the server thread and notify when finished.
         thread::spawn(move || {
-            let args = LspArgs {
-                indexing_mode,
-                workspace_indexing_limit: 50,
-                build_system_blocking: false,
-            };
-            let _ = run_lsp(conn_server, args, None, &NoTelemetry);
+            let _ = run_lsp(
+                conn_server,
+                server_reader,
+                args,
+                None,
+                None,
+                thrift_remapper,
+                &telemetry,
+                Arc::new(NoExternalProvider),
+                None,
+                thread_count,
+            );
             finish_server.notify_finished();
         });
 
@@ -1249,16 +1415,32 @@ impl LspInteraction {
     }
 
     pub fn initialize(&self, settings: InitializeSettings) -> Result<(), LspMessageError> {
+        let scope_uris: Vec<Url> = settings
+            .workspace_folders
+            .as_ref()
+            .map(|folders| folders.iter().map(|(_, uri)| uri.clone()).collect())
+            .unwrap_or_default();
+        let file_watch = settings.file_watch;
+
         self.client
             .send_initialize(self.client.get_initialize_params(&settings));
         self.client.expect_any_message()?;
         self.client.send_initialized();
-        if let Some(settings) = settings.configuration {
-            self.client.expect_any_message()?;
-            self.client.send_response::<WorkspaceConfiguration>(
-                RequestId::from(1),
-                settings.unwrap_or(json!([])),
-            );
+
+        // Handle file watcher registration if enabled.
+        // This must come before configuration request handling because the server
+        // sends client/registerCapability before workspace/configuration.
+        if file_watch {
+            self.client
+                .expect_file_watcher_register()?
+                .send_response(json!(null));
+        }
+
+        if let Some(config) = settings.configuration {
+            let scope_uri_refs: Vec<&Url> = scope_uris.iter().collect();
+            self.client
+                .expect_configuration_request(Some(scope_uri_refs))?
+                .send_configuration_response(config.unwrap_or(json!([])));
         }
         Ok(())
     }
@@ -1275,6 +1457,26 @@ impl LspInteraction {
         self.client.root = Some(root);
     }
 
+    pub fn create_notebook_cell(
+        &self,
+        file_name: &str,
+        cell_number: usize,
+        cell_contents: &str,
+    ) -> (Value, Value) {
+        let cell_uri = self.cell_uri(file_name, &format!("cell{}", cell_number + 1));
+        let cell = json!({
+            "kind": 2,
+            "document": cell_uri,
+        });
+        let doc = json!({
+            "uri": cell_uri,
+            "languageId": "python",
+            "version": 1,
+            "text": *cell_contents
+        });
+        (cell, doc)
+    }
+
     /// Opens a notebook document with the given cell contents.
     /// Each string in `cell_contents` becomes a separate code cell in the notebook.
     pub fn open_notebook(&self, file_name: &str, cell_contents: Vec<&str>) {
@@ -1286,17 +1488,9 @@ impl LspInteraction {
         let mut cell_text_documents = Vec::new();
 
         for (i, text) in cell_contents.iter().enumerate() {
-            let cell_uri = self.cell_uri(file_name, &format!("cell{}", i + 1));
-            cells.push(json!({
-                "kind": 2,
-                "document": cell_uri,
-            }));
-            cell_text_documents.push(json!({
-                "uri": cell_uri,
-                "languageId": "python",
-                "version": 1,
-                "text": *text
-            }));
+            let (cell, doc) = self.create_notebook_cell(file_name, i, text);
+            cells.push(cell);
+            cell_text_documents.push(doc);
         }
 
         self.client
@@ -1418,6 +1612,66 @@ impl LspInteraction {
         line: u32,
         col: u32,
     ) -> ClientRequestHandle<'_, GotoDefinition> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            }
+        }))
+    }
+
+    /// Sends a type definition request for a notebook cell at the specified position
+    pub fn type_definition_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, GotoTypeDefinition> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            }
+        }))
+    }
+
+    /// Sends a document highlight request for a notebook cell at the specified position
+    pub fn document_highlight_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, DocumentHighlightRequest> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            }
+        }))
+    }
+
+    /// Sends a go-to-implementation request for a notebook cell at the specified position
+    pub fn implementation_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, GotoImplementation> {
         let cell_uri = self.cell_uri(file_name, cell_name);
         self.client.send_request(json!({
             "textDocument": {
@@ -1572,6 +1826,97 @@ impl LspInteraction {
                 "diagnostics": []
             }
         }))
+    }
+
+    /// Sends a provide_type request for a notebook cell at the specified position
+    pub fn provide_type_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, ProvideType> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "positions": [{
+                "line": line,
+                "character": col
+            }]
+        }))
+    }
+
+    /// Sends a prepare rename request for a notebook cell at the specified position
+    pub fn prepare_rename_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+    ) -> ClientRequestHandle<'_, PrepareRenameRequest> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            }
+        }))
+    }
+
+    /// Sends a rename request for a notebook cell at the specified position
+    pub fn rename_cell(
+        &self,
+        file_name: &str,
+        cell_name: &str,
+        line: u32,
+        col: u32,
+        new_name: &str,
+    ) -> ClientRequestHandle<'_, Rename> {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        self.client.send_request(json!({
+            "textDocument": {
+                "uri": cell_uri
+            },
+            "position": {
+                "line": line,
+                "character": col
+            },
+            "newName": new_name
+        }))
+    }
+
+    /// Sends a typeErrorDisplayStatus request for a notebook cell and returns the status string.
+    pub fn type_error_display_status_cell(&self, file_name: &str, cell_name: &str) -> String {
+        let cell_uri = self.cell_uri(file_name, cell_name);
+        let id = self.client.next_request_id();
+        self.client.send_message(Message::Request(Request {
+            id: id.clone(),
+            method: "pyrefly/textDocument/typeErrorDisplayStatus".to_owned(),
+            params: json!({
+                "uri": cell_uri
+            }),
+            activity_key: None,
+        }));
+        self.client
+            .expect_message(
+                "Response for pyrefly/textDocument/typeErrorDisplayStatus",
+                |msg| {
+                    if let Message::Response(x) = msg
+                        && x.id == id
+                    {
+                        let result: String = serde_json::from_value(x.result.unwrap()).unwrap();
+                        Some(Ok(result))
+                    } else {
+                        None
+                    }
+                },
+            )
+            .unwrap()
     }
 
     /// Testing helper: Sets a flag on the server to prevent the next recheck from committing.

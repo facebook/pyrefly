@@ -1,0 +1,13 @@
+from typing import Any, Generic, TypeVar
+
+T = TypeVar("T")
+
+class Factory(Generic[T]):
+    @classmethod
+    def create(cls, **kwargs: Any) -> T: ...
+    @classmethod
+    def build(cls, **kwargs: Any) -> T: ...
+    @classmethod
+    def create_batch(cls, size: int, **kwargs: Any) -> list[T]: ...
+    @classmethod
+    def build_batch(cls, size: int, **kwargs: Any) -> list[T]: ...

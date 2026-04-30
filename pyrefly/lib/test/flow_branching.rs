@@ -320,6 +320,50 @@ except x2 as e7:
 );
 
 testcase!(
+    test_exception_handler_dynamic_tuple,
+    r#"
+from typing import assert_type
+
+class Exception1(Exception): pass
+class Exception2(Exception): pass
+
+# Dynamic tuple from tuple() constructor call
+error_list = [Exception1, Exception2]
+dynamic_errors = tuple(error_list)
+try:
+    pass
+except dynamic_errors as e1:
+    assert_type(e1, Exception1 | Exception2)
+
+# Union-typed parameter: single exception class or tuple of exception classes
+def handle(
+    errors: type[Exception] | tuple[type[Exception], ...],
+    value: str,
+) -> int:
+    try:
+        return int(value)
+    except errors as e2:
+        assert_type(e2, Exception)
+        return 0
+"#,
+);
+
+testcase!(
+    test_exception_handler_star_unpacking,
+    r#"
+import sys
+from typing import assert_type
+
+EXTRA_ERRORS: tuple[type[Exception], ...] = (RuntimeError,) if sys.version_info < (3, 13) else ()
+
+try:
+    pass
+except (ValueError, *EXTRA_ERRORS) as e:
+    assert_type(e, ValueError | Exception)
+"#,
+);
+
+testcase!(
     test_exception_group_handler,
     r#"
 from typing import reveal_type
@@ -332,9 +376,9 @@ try:
 except* int as e1:  # E: Invalid exception class
     reveal_type(e1)  # E: revealed type: ExceptionGroup[int]
 except* Exception as e2:
-    reveal_type(e2)  # E: revealed type: ExceptionGroup[Exception]
+    reveal_type(e2)  # E: revealed type: ExceptionGroup
 except* ExceptionGroup as e3:  # E: Exception handler annotation in `except*` clause may not extend `BaseExceptionGroup`
-    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup[Exception]]
+    reveal_type(e3)  # E: ExceptionGroup[ExceptionGroup]
 except* (Exception1, Exception2) as e4:
     reveal_type(e4)  # E: ExceptionGroup[Exception1 | Exception2]
 except* Exception1 as e5:
@@ -529,7 +573,7 @@ def fun(x: A | B | C) -> None:
 testcase!(
     test_match_class,
     r#"
-from typing import assert_type
+from typing import assert_type, assert_never
 
 class Foo:
     x: int
@@ -552,21 +596,36 @@ def fun(foo: Foo, bar: Bar, baz: Baz) -> None:
         case Foo(a, b):
             assert_type(a, int)
             assert_type(b, str)
+        case _:
+            assert_never(foo)
+    match foo:
         case Foo(x = b, y = a):
             assert_type(a, str)
             assert_type(b, int)
+        case _:
+            assert_never(foo)
+    match foo:
         case Foo(a, b, c):  # E: Cannot match positional sub-patterns in `Foo`\n  Index 2 out of range for `__match_args__`
             pass
+        case _:
+            assert_never(foo)
     match bar:
         case Bar(1):  # E: Object of class `Bar` has no attribute `__match_args__`
             pass
         case Bar(a):  # E: Object of class `Bar` has no attribute `__match_args__`
             pass
+        case _:
+            assert_never(bar)
+    match bar:
         case Bar(x = a):
             assert_type(a, int)
+        case _:
+            assert_never(bar)
     match baz:
         case Baz(1):  # E: Expected literal string in `__match_args__`
             pass
+        case _:
+            assert_never(baz)  # E: Argument `Baz` is not assignable to parameter `arg` with type `Never`
 "#,
 );
 
@@ -601,7 +660,7 @@ testcase!(
     bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
-from typing import assert_type, Literal
+from typing import assert_type, assert_never, Literal
 
 class Foo:
     x: int
@@ -619,14 +678,6 @@ def test(x: Foo | Bar) -> None:
             assert_type(x, Foo)
             assert_type(x.x, int)
             assert_type(x.y, str)
-        case Foo(a, b):
-            assert_type(x, Foo)
-            assert_type(a, int)
-            assert_type(b, str)
-        case Foo(x = b, y = a):
-            assert_type(x, Foo)
-            assert_type(a, str)
-            assert_type(b, int)
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
@@ -634,11 +685,29 @@ def test(x: Foo | Bar) -> None:
         case Bar("bar"):
             assert_type(x, Bar)
             assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+
+def test_keyword_irrefutable(x: Foo | Bar) -> None:
+    match x:
+        case Foo(x = b, y = a):
+            assert_type(x, Foo)
+            assert_type(a, str)
+            assert_type(b, int)
         case Bar(a) as b:
             assert_type(x, Bar)
             assert_type(b, Bar)
             assert_type(a, str)
             assert_type(b, Bar)
+        case _:
+            assert_never(x)
+
+def test_positional(x: Foo | Bar) -> None:
+    match x:
+        case Foo(1, "a"):
+            pass
+        case Foo(a, b):
+            assert_type(x, Foo)
+            assert_type(a, int)
+            assert_type(b, str)
 "#,
 );
 
@@ -994,7 +1063,6 @@ except as r: # E: Parse error: Expected one or more exception types
 );
 
 testcase!(
-    bug = "We unsoundly merge narrows dropping missing flow. See the incorrect reveal_type(y) result.",
     test_narrows_in_flow_merge_when_not_in_base_flow,
     r#"
 from typing import reveal_type
@@ -1010,10 +1078,8 @@ def f():
     elif isinstance(x, C):
         assert isinstance(y, C)
         pass
-    # We get this case right, but for a brittle reason: we negate the tests in the base flow.
-    reveal_type(x)  # E: revealed type: A | B | C
-    # The negation trick doesn't work here, and we get an incorrect narrow.
-    reveal_type(y)  # E: revealed type: B | C
+    reveal_type(x)  # E: revealed type: A
+    reveal_type(y)  # E: revealed type: A
 "#,
 );
 
@@ -1102,26 +1168,322 @@ def f():
 );
 
 testcase!(
-    bug = "We approximate flow for tests in a lossy way - the first test actually runs in the base flow",
     test_walrus_on_first_branch_of_if,
     r#"
 def condition() -> bool: ...
-def f() -> bool:
+def f1() -> bool:
     if (b := condition()):
         pass
-    # In our approximation, `b` is defined in the branch but actually the test always evaluates
-    return b  # E: `b` may be uninitialized
+    return b
+
+def f2() -> bool:
+    if (a := condition()) and condition() and (b := condition()):
+        return b
+    return a
+
+def f3() -> bool:
+    if (a := condition()) and (b := condition()):
+        return b
+    return a
     "#,
 );
 
+// When a variable is PossiblyUninitialized (defined in only one branch of an
+// if/else) and then redefined via walrus in a BoolOp, the PossiblyUninitialized
+// from the short-circuit branch poisons the BoolOp merge via the early return in
+// FlowStyle::merged (line that matches PossiblyUninitialized), bypassing the
+// BoolOp laxness. Inside the if-body all `and` operands succeeded, so the walrus
+// must have executed and the variable is definitely initialized.
 testcase!(
+    test_walrus_in_boolop_after_possibly_uninitialized,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+
+def f1(x: bool) -> None:
+    if x:
+        viewer = 1
+    # viewer is PossiblyUninitialized here
+    if condition() and (viewer := get()):
+        print(viewer)
+
+def f2(x: bool) -> None:
+    """Same pattern but the first definition is in the else branch."""
+    if x:
+        pass
+    else:
+        if condition() and (viewer := get()):
+            pass
+    # viewer is PossiblyUninitialized here
+    if condition() and (viewer := get()):
+        print(viewer)
+
+def f3(x: bool) -> None:
+    """Three-way and chain, matching the real-world pattern."""
+    if x:
+        pass
+    else:
+        viewer = 1
+    if get() and get() and (viewer := get()):
+        print(viewer)
+    "#,
+);
+
+// Short-circuit prevents `value := v` from executing when the lhs is `False`.
+// However, processing the test before the fork applies BoolOp lax semantics, so
+// `value` appears maybe-initialized — a known false negative from BoolOp laxness.
+// This is the same trade-off as test_walrus_names_in_bool_op_straight_line.
+testcase!(
+    bug = "BoolOp laxness causes false negative for walrus in short-circuit context, see #1251",
     test_false_and_walrus,
     r#"
 def f(v):
     if False and (value := v):
         print(value)
     else:
-        print(value)  # E: `value` is uninitialized
+        print(value)
+    "#,
+);
+
+// Regression tests for https://github.com/facebook/pyrefly/issues/2382
+// Walrus operator in ternary test expression
+
+testcase!(
+    test_walrus_in_ternary_else_branch,
+    r#"
+def f(i: float) -> int:
+    return a if (a := round(i)) - 1 else a + 1
+    "#,
+);
+
+testcase!(
+    test_walrus_in_ternary_only_in_else,
+    r#"
+def f(x: int) -> int:
+    return 0 if (y := x) > 0 else y
+    "#,
+);
+
+// x is narrowed to int in the body (is not None) and
+// the else branch returns 0 (int), so the return type is int. No error.
+testcase!(
+    test_walrus_in_ternary_with_narrowing,
+    r#"
+from typing import assert_type
+def get() -> int | None: ...
+def f() -> int:
+    return x if (x := get()) is not None else 0
+    "#,
+);
+
+testcase!(
+    test_walrus_ternary_truthiness_narrowing,
+    r#"
+from typing import assert_type
+def get() -> str | None: ...
+def f() -> str:
+    return x if (x := get()) else "default"
+    "#,
+);
+
+testcase!(
+    test_walrus_in_ternary_short_circuit,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f1() -> int:
+    return x if condition() and (x := get()) else 0  # no error
+# BoolOp merging uses lax handling, so `x` is treated as defined even though
+# `x := get()` may not execute. This is a known false negative from BoolOp laxness.
+def f2() -> int:
+    return x if condition() or (x := get()) else 0  # false negative
+def f3() -> int:
+    return x if condition() and (x := get()) else x  # false negative
+    "#,
+);
+
+// Walrus in outer ternary test: `a` should be visible in both branches.
+// Currently this works because truthiness narrowing on `a` adds it to the
+// else flow, masking the uninitialized status.
+testcase!(
+    test_walrus_in_nested_ternary_outer,
+    r#"
+def f(v: int) -> int:
+    return (a if a > 0 else -a) if (a := v) else -a
+    "#,
+);
+
+testcase!(
+    test_walrus_in_nested_ternary_inner,
+    r#"
+def condition() -> bool: ...
+def get() -> int: ...
+def f() -> int:
+    return (b if (b := get()) > 0 else 0) if condition() else -1
+    "#,
+);
+
+// Regression tests for https://github.com/facebook/pyrefly/issues/2382
+// Walrus operator in if-statement test conditions
+
+// The first `if` test always evaluates, so walrus bindings should be in base flow.
+testcase!(
+    test_walrus_in_if_basic,
+    r#"
+def f(a: int) -> int:
+    if (x := a) > 0:
+        pass
+    return x
+    "#,
+);
+
+testcase!(
+    test_walrus_in_if_both_branches,
+    r#"
+def f(a: int) -> int:
+    if (x := a) > 0:
+        result = x + 1
+    else:
+        result = x - 1
+    return result
+    "#,
+);
+
+testcase!(
+    test_walrus_in_if_with_narrowing,
+    r#"
+def get() -> int | None: ...
+def f() -> int:
+    if (x := get()) is not None:
+        return x
+    return 0
+    "#,
+);
+
+// elif condition only executes if the first `if` was False — walrus may not run.
+testcase!(
+    bug = "In order to fix false positives, we handled narrows differently in if/elif and introduced a false negative here",
+    test_walrus_in_elif,
+    r#"
+def condition() -> bool: ...
+def f() -> bool:
+    if condition():
+        pass
+    elif (x := condition()):
+        pass
+    return x  # False negative: x winds up getting applied as if it were in the base flow due to the negative narrow
+    "#,
+);
+
+// When the `if` branch raises, the elif condition must execute before
+// reaching code after the if/elif block, so the walrus is always assigned.
+testcase!(
+    test_walrus_in_elif_with_raise,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (_bar := bar()) > 1:
+        raise AssertionError()
+    print(_bar)
+    "#,
+);
+
+// The walrus assignment should propagate to the base flow so the
+// merge does not falsely report "may be uninitialized".
+testcase!(
+    test_walrus_in_elif_targeting_declared_local,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    x: int
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_multiple_elif,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        raise AssertionError()
+    elif (y := bar()) > 2:
+        raise AssertionError()
+    print(x)
+    print(y)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_elif_with_else,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if not foo():
+        raise AssertionError()
+    elif (x := bar()) > 1:
+        pass
+    else:
+        pass
+    print(x)
+    "#,
+);
+
+// the walrus may not execute, so x should be possibly-uninitialized.
+testcase!(
+    bug = "Should report x as possibly uninitialized since the if branch does not terminate",
+    test_walrus_in_elif_preceding_if_no_terminate,
+    r#"
+def foo() -> bool:
+    return True
+
+def bar() -> int:
+    return 1
+
+def f() -> None:
+    if foo():
+        pass
+    elif (x := bar()) > 1:
+        pass
+    print(x)  # should be an error: x may be uninitialized
+    "#,
+);
+
+testcase!(
+    test_walrus_in_if_no_else,
+    r#"
+def f(a: int) -> int:
+    if (x := a) > 0:
+        return x
+    return x
     "#,
 );
 
@@ -1489,7 +1851,7 @@ def f(x: str | None):
 testcase!(
     test_noreturn_all_branches_terminate,
     r#"
-from typing import assert_type, NoReturn
+from typing import assert_type, NoReturn, Never
 
 def raises() -> NoReturn:
     raise Exception()
@@ -1499,10 +1861,7 @@ def f(x: int | str):
         raises()
     else:
         raises()
-    # All branches terminate with a NoReturn call; when Pyrefly
-    # encounters this it just ignores the NoReturn and goes ahead
-    # producing the union.
-    assert_type(x, int | str)
+    assert_type(x, Never)
 "#,
 );
 
@@ -1561,4 +1920,609 @@ def f(x: int) -> str:
         raises()
     return y
 "#,
+);
+
+testcase!(
+    test_if_elif_enum_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    elif c == Color.BLUE:
+        return "cool"
+"#,
+);
+
+testcase!(
+    test_if_elif_isinstance_exhaustive,
+    r#"
+def f(x: int | str) -> str:
+    if isinstance(x, int):
+        return "int"
+    elif isinstance(x, str):
+        return "str"
+"#,
+);
+
+testcase!(
+    test_if_elif_non_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    # Missing Color.BLUE case - should always error
+"#,
+);
+
+testcase!(
+    test_if_elif_with_else_trivially_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(c: Color) -> str:
+    if c == Color.RED:
+        return "warm"
+    elif c == Color.GREEN:
+        return "natural"
+    else:
+        return "cool"
+"#,
+);
+
+testcase!(
+    test_if_elif_literal_union_exhaustive,
+    r#"
+from typing import Literal
+
+def f(x: Literal["a", "b", "c"]) -> str:
+    if x == "a":
+        return "first"
+    elif x == "b":
+        return "second"
+    elif x == "c":
+        return "third"
+"#,
+);
+
+testcase!(
+    test_if_elif_mixed_narrowing,
+    r#"
+def f(x: int | None) -> str:
+    if x is None:
+        return "none"
+    elif isinstance(x, int):
+        return "int"
+"#,
+);
+
+testcase!(
+    test_if_elif_bool_exhaustive,
+    r#"
+def f(x: bool) -> str:
+    if x:
+        return "true"
+    elif not x:
+        return "false"
+"#,
+);
+
+testcase!(
+    test_if_elif_multiple_subjects,
+    r#"
+def f(x: int | str, y: int | str) -> str:  # E: Function declared to return `str`, but one or more paths are missing an explicit `return`
+    if isinstance(x, int):
+        return "x is int"
+    elif isinstance(y, str):
+        return "y is str"
+    # Different subjects in different branches - cannot determine exhaustiveness
+"#,
+);
+
+testcase!(
+    test_if_elif_mixed_subjects_one_exhaustive,
+    r#"
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def f(x: Color, y: int | str) -> str:
+    if x == Color.RED:
+        return "red"
+    elif isinstance(y, int):
+        return "y is int"
+    elif x == Color.GREEN:
+        return "green"
+    elif x == Color.BLUE:
+        return "blue"
+"#,
+);
+
+// Regression test for the first example bug reported in https://github.com/facebook/pyrefly/issues/1286
+testcase!(
+    test_match_can_narrow_union_to_never_in_wildcard,
+    r#"
+from typing import assert_never
+class A:...
+class B:...
+
+def go(mdl:A|B):
+    match mdl:
+        case A():
+            print('A')
+        case B():
+            print('B')
+        case _:
+            assert_never(mdl)
+    "#,
+);
+
+testcase!(
+    test_match_keyword_wildcard_pattern_is_irrefutable,
+    r#"
+from dataclasses import dataclass
+from typing import assert_never
+
+@dataclass
+class A: ...
+
+@dataclass
+class B:
+    x: int
+
+T = A | B
+
+def test(x: T):
+    match x:
+        case A(): ...
+        case B(x=_): ...
+        case _:
+            assert_never(x)
+    "#,
+);
+
+testcase!(
+    test_match_exhausts_literal_type,
+    r#"
+from typing import Literal, assert_never
+
+type A = Literal['A']
+
+class C:
+    def __init__(self, a: A) -> None:
+        self.a = a
+
+    def f(self) -> None:
+        match self.a:
+            case 'A':
+                pass
+            case ever:
+                assert_never(ever)
+    "#,
+);
+
+// Regression test for the third example bug reported in https://github.com/facebook/pyrefly/issues/1286
+testcase!(
+    test_enum_exhaustive_match_and_uninitialized_local,
+    r#"
+from enum import IntEnum
+
+class Rating(IntEnum):
+    Again = 1
+    Hard = 2
+    Good = 3
+    Easy = 4
+
+def foo()->Rating:
+    ...
+
+x = foo()
+match x:
+    case Rating.Again:
+        y = 1
+    case Rating.Easy | Rating.Good | Rating.Hard:
+        y = 2
+print(y)
+    "#,
+);
+
+// Issue #2406: NoReturn in except block should make variable always initialized
+testcase!(
+    test_noreturn_try_except_simple,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main() -> None:
+    try:
+        node = 1
+    except Exception:
+        foo()
+    print(node)
+"#,
+);
+
+testcase!(
+    test_noreturn_try_except_if_nested,
+    r#"
+from typing import NoReturn
+
+def foo() -> NoReturn:
+    raise ValueError('')
+
+def main(resolve: bool) -> None:
+    try:
+        node = 1
+    except Exception as exc:
+        foo()
+    if resolve:
+        try:
+            node = 2
+        except Exception:
+            foo()
+    print(node)
+"#,
+);
+
+// for https://github.com/facebook/pyrefly/issues/1840
+testcase!(
+    test_exhaustive_flow_no_fall_through,
+    r#"
+import types
+from dataclasses import dataclass
+from typing import Any, TypeIs, assert_never
+
+
+def is_instance_union_aware[T](
+    value: Any, target_type: type[T] | tuple[type[T], ...]
+) -> TypeIs[T]: ...
+
+def test_is_instance_union_aware():
+    @dataclass
+    class C0:
+        f_common: int
+        f_0: int
+
+    @dataclass
+    class C1:
+        f_common: int
+        f_1: int
+
+    @dataclass
+    class C2:
+        f_common: int
+        f_2: int
+
+    def compute_1(obj: C0 | C1 | C2) -> int:
+        if is_instance_union_aware(obj, C0 | C1):
+            return obj.f_common
+        return obj.f_2 + obj.f_common
+
+    def compute_2(obj: C0 | C1 | C2) -> int:
+        if is_instance_union_aware(obj, C0 | C1):
+            return obj.f_common
+        if is_instance_union_aware(obj, C2):
+            return obj.f_2 + obj.f_common
+        assert_never(obj)
+
+    assert compute_1(C1(f_common=1, f_1=2)) == 3
+    assert compute_2(C1(f_common=4, f_1=5)) == 9
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1896
+testcase!(
+    test_exhaustive_flow_no_early_return_narrow,
+    r#"
+import dataclasses as dc
+from typing import assert_type
+
+@dc.dataclass(frozen=True)
+class Success:
+    value: int
+
+@dc.dataclass(frozen=True)
+class Error:
+    message: str
+
+Result = Success | Error | None
+
+def get_result() -> Result:
+    return Success(value=42)
+
+def use_success(s: Success) -> int:
+    return s.value
+
+def demo_pyre_narrowing_failure() -> int:
+    result = get_result()
+    match result:
+        case Error() as err:
+            return -1
+        case None:
+            return 0
+        case _:
+            success = result
+    assert_type(success, Success)
+    return use_success(success)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2261
+testcase!(
+    test_walrus_in_if_with_is_none,
+    r#"
+def fun(**kwargs):
+    if x := kwargs.get("x") is None:
+        x = "a"
+    print(x)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1397
+testcase!(
+    test_walrus_in_chained_if_re_match,
+    r#"
+from re import compile
+
+interface_re = compile(r"^foo")
+ipv4_re = compile(r"bar$")
+line = str()
+
+if match := interface_re.match(line):
+    pass
+
+if line and (match := ipv4_re.search(line)):
+    print(match)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1397
+testcase!(
+    test_walrus_in_negated_if_with_isinstance,
+    r#"
+from typing import Any
+
+def test(thing: Any) -> None:
+    if not (items := getattr(thing, "items")):
+        return
+    if not isinstance(items, tuple|list):
+        items = (items,)
+    for item in items:
+        print(item)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1397
+testcase!(
+    test_walrus_bool_in_if,
+    r#"
+def f() -> None:
+    if a := True:
+        print(a)
+    print(a)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/913
+testcase!(
+    test_walrus_in_method_call_chain,
+    r#"
+import pathlib
+
+def f(mod: str, stubs_path: pathlib.Path):
+    _, *submods = mod.split(".")
+    if (path := stubs_path.joinpath(*submods, "__init__.pyi")).is_file():
+        return path
+    assert submods, path
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/913
+testcase!(
+    test_walrus_in_comparison,
+    r#"
+def check():
+    if (y := 2) <= 1:
+        return
+    print(y)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/913
+testcase!(
+    test_walrus_with_and_condition,
+    r#"
+def f(v):
+    x: int
+    if (x := v) and v:
+        print(x)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/913
+testcase!(
+    test_walrus_in_compound_and_condition,
+    r#"
+def hello(x: int, y: int) -> int | None:
+    if x == 5 and (z := x + y) == 7:
+        return z
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/913
+testcase!(
+    test_walrus_with_none_reassignment,
+    r#"
+d: dict[str, str] = {}
+def func(key: str) -> str:
+    if (name := d.get(key)) is None:
+        name = 'missing'
+    d[key] = name
+    return name
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/913
+testcase!(
+    test_walrus_in_loop_with_narrowing,
+    r#"
+from typing import assert_type
+d1 = {0: '0', 1:'1', 3:'3'}
+d2 = {'0': 0, '1': 1, '2': 2, '3':3}
+for x in range(10):
+    if not (y := d1.get(x)):
+        continue
+    assert_type(y, str)
+    if (z := d2[y]) < 2:
+        assert_type(z, int)
+        continue
+    assert_type(z, int)
+    "#,
+);
+
+// When a variable is defined inside `if a:` and used inside a subsequent
+// `if a:`, the variable is guaranteed to be initialized because the same
+// condition guards both the definition and the use.
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_basic,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    c = 5
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_negated_condition,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    if not a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_unrelated_condition,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+    if c:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b and c are always initialized when a is truthy",
+    test_guarded_initialization_multiple_variables,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+        c = 4
+    if a:
+        return b + c  # E: `b` may be uninitialized  # E: `c` may be uninitialized
+    return 0
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_with_intermediate_statements,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    x = 5
+    y = x + 1
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_annotation_then_guarded_assign,
+    r#"
+def f(a: bool) -> int:
+    b: int
+    if a:
+        b = 3
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_repeated_use,
+    r#"
+def f(a: bool) -> None:
+    if a:
+        b = 3
+    if a:
+        print(b)  # E: `b` may be uninitialized
+    if a:
+        print(b)
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_guard_reassigned,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+    a = c
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a > 0 at both sites",
+    test_guarded_initialization_complex_condition,
+    r#"
+def f(a: int) -> int:
+    if a > 0:
+        b = 3
+    if a > 0:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
 );

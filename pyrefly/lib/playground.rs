@@ -34,6 +34,7 @@ use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
+use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
@@ -248,7 +249,7 @@ impl Playground {
         let config = ArcId::new(config);
         let config_finder = ConfigFinder::new_constant(config.dupe());
 
-        let state = State::new(config_finder);
+        let state = State::new(config_finder, ThreadCount::default());
         let config_finder_for_self = ConfigFinder::new_constant(config.dupe());
 
         Ok(Self {
@@ -348,7 +349,7 @@ impl Playground {
         let config = ArcId::new(config);
         let new_config_finder = ConfigFinder::new_constant(config.dupe());
 
-        self.state = State::new(new_config_finder);
+        self.state = State::new(new_config_finder, ThreadCount::default());
         self.config_finder = ConfigFinder::new_constant(config.dupe());
 
         if self.handles.contains_key("sandbox.py") {
@@ -368,6 +369,7 @@ impl Playground {
             transaction,
             &handles,
             Require::Everything,
+            None,
             None,
         );
         Some(format!(
@@ -396,6 +398,7 @@ impl Playground {
                 &handles,
                 Require::Everything,
                 None,
+                None,
             );
 
             if self.handles.contains_key(&filename) {
@@ -415,30 +418,32 @@ impl Playground {
         let transaction = self.state.transaction();
 
         for (filename, handle) in &self.handles {
-            let file_errors = transaction
-                .get_errors([handle])
-                .collect_errors()
-                .shown
-                .into_map(|e| {
-                    let range = e.display_range();
-                    Diagnostic {
-                        start_line: range.start.line_within_file().get() as i32,
-                        start_col: range.start.column().get() as i32,
-                        end_line: range.end.line_within_file().get() as i32,
-                        end_col: range.end.column().get() as i32,
-                        message_header: e.msg_header().to_owned(),
-                        message_details: e.msg_details().unwrap_or("").to_owned(),
-                        kind: e.error_kind().to_name().to_owned(),
-                        // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
-                        severity: match e.severity() {
-                            Severity::Error => 8,
-                            Severity::Warn => 4,
-                            Severity::Info => 2,
-                            Severity::Ignore => 1,
-                        },
-                        filename: filename.clone(),
-                    }
-                });
+            let errors = transaction.get_errors([handle]);
+            let collected = errors.collect_errors();
+            let unused = errors.collect_unused_ignore_errors_for_display(&collected);
+            let mut output_errors = collected.ordinary;
+            output_errors.extend(collected.directives);
+            output_errors.extend(unused.ordinary);
+            let file_errors = output_errors.into_map(|e| {
+                let range = e.display_range();
+                Diagnostic {
+                    start_line: range.start.line_within_file().get() as i32,
+                    start_col: range.start.column().get() as i32,
+                    end_line: range.end.line_within_file().get() as i32,
+                    end_col: range.end.column().get() as i32,
+                    message_header: e.msg_header().to_owned(),
+                    message_details: e.msg_details().unwrap_or("").to_owned(),
+                    kind: e.error_kind().to_name().to_owned(),
+                    // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
+                    severity: match e.severity() {
+                        Severity::Error => 8,
+                        Severity::Warn => 4,
+                        Severity::Info => 2,
+                        Severity::Ignore => 1,
+                    },
+                    filename: filename.clone(),
+                }
+            });
             all_diagnostics.extend(file_errors);
 
             // Add unused diagnostics
@@ -594,6 +599,7 @@ impl Playground {
         };
         transaction
             .goto_definition(handle, position)
+            .unwrap_or_default()
             .into_iter()
             .map(|r| Range::new(r.module.display_range(r.range)))
             .collect()
@@ -607,7 +613,7 @@ impl Playground {
         let transaction = self.state.transaction();
         self.to_text_size(&transaction, pos)
             .map_or(Vec::new(), |position| {
-                transaction.completion(handle, position, Default::default(), false)
+                transaction.completion(handle, position, Default::default(), false, None)
             })
             .into_map(
                 |CompletionItem {

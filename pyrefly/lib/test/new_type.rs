@@ -164,6 +164,70 @@ Foo.mro()  # E: Object of class `object` has no attribute `mro`
 );
 
 testcase!(
+    test_newtype_none_is_nominal,
+    r#"
+from typing import NewType
+from types import NoneType
+
+NewNoneType = NewType("NewNoneType", NoneType)
+NewNone = NewNoneType(None)
+NewNoneType("oops")  # E: `Literal['oops']` is not assignable to parameter `_x` with type `NoneType`
+
+def test(x: int | NewNoneType) -> None:
+    pass
+
+test(None)  # E: `None` is not assignable to parameter `x` with type `NewNoneType | int`
+test(NewNone)
+test(1)
+    "#,
+);
+
+testcase!(
+    test_newtype_type_none_is_nominal,
+    r#"
+from typing import NewType
+
+# Note: `type[None]` is not the same as `types.NoneType`!
+# `type[None]` is treated like a base type of `builtins.type`.
+NewNoneType = NewType("NewNoneType", type[None])
+NewNone = NewNoneType(type(None))
+NewNoneType(None)  # E: `None` is not assignable to parameter `_x` with type `type`
+
+def test(x: int | NewNoneType) -> None:
+    pass
+
+test(None)  # E: Argument `None` is not assignable to parameter `x` with type `NewNoneType | int`
+test(NewNone)
+test(1)
+    "#,
+);
+
+testcase!(
+    test_newtype_none_alias_is_invalid,
+    r#"
+from typing import NewType
+Alias = None
+X = NewType("X", Alias)  # E: Second argument to NewType is invalid
+    "#,
+);
+
+testcase!(
+    test_newtype_final_base,
+    r#"
+from typing import NewType, final
+
+@final
+class FinalClass:
+    pass
+
+# NewType doesn't create a real subclass, so using a final class as the
+# base type is valid.
+X = NewType("X", FinalClass)
+x: X = X(FinalClass())
+    "#,
+);
+
+testcase!(
     test_tuple,
     r#"
 from typing import NewType

@@ -83,6 +83,19 @@ def f(x: str | None):
 );
 
 testcase!(
+    test_is_not_none_type,
+    r#"
+from typing import assert_type
+from types import NoneType
+def f(x: str | NoneType):
+    if x is not None:
+        assert_type(x, str)
+    else:
+        assert_type(x, None)
+    "#,
+);
+
+testcase!(
     test_if_else,
     r#"
 from typing import assert_type
@@ -143,6 +156,42 @@ def f1(x: Literal[E.X, E.Y]):
 def f2(x: E | int):
     if x is not E.X:
         assert_type(x, Literal[E.Y] | int)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_is,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x is ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x is not ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
+    "#,
+);
+
+testcase!(
+    test_ellipsis_eq,
+    r#"
+from typing import reveal_type
+from types import EllipsisType
+
+def f(x: int | EllipsisType):
+    if x == ...:
+        reveal_type(x)  # E: Ellipsis
+    else:
+        reveal_type(x)  # E: int
+    if x != ...:
+        reveal_type(x)  # E: int
+    else:
+        reveal_type(x)  # E: Ellipsis
     "#,
 );
 
@@ -649,6 +698,24 @@ def foo(x: int | None) -> None:
 );
 
 testcase!(
+    test_type_not_eq_final,
+    r#"
+from typing import assert_type
+def f(x: str | int | bool):
+    # bool is final, so we can narrow it away
+    if type(x) != bool:
+        assert_type(x, str | int)
+    else:
+        assert_type(x, bool)
+    # str is not final, so we can't narrow it away (subclasses of str are possible)
+    if type(x) != str:
+        assert_type(x, str | int | bool)
+    else:
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
     test_isinstance_union,
     r#"
 from typing import assert_type
@@ -657,6 +724,25 @@ def f(x: str | int | None):
         assert_type(x, str | int)
     else:
         assert_type(x, None)
+    "#,
+);
+
+testcase!(
+    test_isinstance_union_with_type,
+    r#"
+from typing import assert_type
+def f(x: object):
+    if isinstance(x, type | int):
+        assert_type(x, type | int)
+    isinstance(x, type | int)
+    "#,
+);
+
+testcase!(
+    test_issubclass_union_with_type,
+    r#"
+def f(cls: type):
+    issubclass(cls, type | int)
     "#,
 );
 
@@ -903,6 +989,95 @@ def g(x: object, y: type[Any]) -> None:
     if isinstance(x, y):
         assert_type(x, Any)
 "#,
+);
+
+testcase!(
+    test_isinstance_type_negative_no_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: int | str) -> None:
+    if isinstance(x, cls):
+        assert_type(x, int)
+    else:
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | str)
+"#,
+);
+
+testcase!(
+    test_isinstance_type_negative_partial_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: int | str | bytes) -> None:
+    if isinstance(x, (cls, str)):
+        assert_type(x, int | str)
+    else:
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | bytes)
+
+def g(cls: type[int], x: int | str | bytes) -> None:
+    if isinstance(x, cls | str):
+        assert_type(x, int | str)
+    else:
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | bytes)
+"#,
+);
+
+testcase!(
+    test_is_not_instance_no_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: int | str) -> None:
+    if not isinstance(x, cls):
+        # cls might be a subclass of int, so x can still be an int here
+        assert_type(x, int | str)
+    "#,
+);
+
+testcase!(
+    test_is_not_instance_alias,
+    r#"
+from typing import TypeAlias, assert_type
+
+X1 = int
+def f(x: int | str) -> None:
+    if not isinstance(x, X1):
+        assert_type(x, str)
+
+X2: TypeAlias = int
+def g(x: int | str) -> None:
+    if not isinstance(x, X2):
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_is_not_instance_of_final_class,
+    r#"
+from typing import assert_type, final
+@final
+class C: ...
+def f(cls: type[C], x: C | int):
+    if not isinstance(x, cls):
+        # Because `C` is final, we can assume that `cls` is exactly `C` and has been narrowed away
+        assert_type(x, int)
+    "#,
+);
+
+testcase!(
+    test_not_issubclass_no_narrow,
+    r#"
+from typing import assert_type
+
+def f(cls: type[int], x: type[int] | type[str]):
+    if not issubclass(x, cls):
+        # cls might be a subclass of int, so x can still be int here
+        assert_type(x, type[int] | type[str])
+    "#,
 );
 
 testcase!(
@@ -1214,6 +1389,24 @@ def test_isinstance_then_issubclass(x: object) -> None:
     # Common pattern: check if x is a class, then check if it's a subclass of Foo
     if isinstance(x, type) and issubclass(x, Foo):
         assert_type(x, type[Foo])
+    "#,
+);
+
+testcase!(
+    test_issubclass_with_metaclass_instance,
+    r#"
+class ModelBase(type):
+    pass
+
+class Model(metaclass=ModelBase):
+    pass
+
+def validate_force_insert(cls: type, force_insert: tuple[object, ...]) -> None:
+    for member in force_insert:
+        if not isinstance(member, ModelBase):
+            raise TypeError("not a model class")
+        if not issubclass(cls, member):
+            raise TypeError("not a base")
     "#,
 );
 
@@ -1542,6 +1735,22 @@ class MyTest(TestCase):
 "#,
 );
 
+testcase!(
+    test_in_mapping_narrows_key,
+    r#"
+from typing import assert_type
+
+def parse_resource_id() -> tuple[str, str] | tuple[None, None]: ...
+
+def lookup_resource(registry: dict[str, str]) -> str | None:
+    kind, _obj_id = parse_resource_id()
+    if kind not in registry:
+        return None
+    assert_type(kind, str)
+    return registry[kind]
+"#,
+);
+
 // Make sure we catch illegal arguments to isinstance and issubclass even when we aren't narrowing.
 testcase!(
     test_validate_class_object_no_narrow,
@@ -1699,6 +1908,58 @@ def test(x: Literal["foo", 1] | Color | bool | None, y: object, z: Literal["f", 
         assert_type(y, Literal[1, Color.RED, True])
     else:
         assert_type(y, object)
+
+def test_type_objects(x: type[object]) -> None:
+    if x in (int, float):
+        assert_type(x, type[int] | type[float])
+
+def test_type_objects_not_in(x: type[int] | type[float] | type[str]) -> None:
+    if x not in (int, float):
+        assert_type(x, type[int] | type[float] | type[str])
+    else:
+        assert_type(x, type[int] | type[float])
+
+def test_type_objects_in_union(x: type[int] | type[float] | type[str]) -> None:
+    if x in (int, float):
+        assert_type(x, type[int] | type[float])
+    else:
+        assert_type(x, type[int] | type[float] | type[str])
+
+def test_type_objects_mixed_with_literals(x: type[int] | type[float] | None, y: Literal[1] | type[int] | type[str]) -> None:
+    if x in (int, None):
+        assert_type(x, type[int] | None)
+    else:
+        assert_type(x, type[int] | type[float])
+    if y in (1, int):
+        assert_type(y, Literal[1] | type[int])
+    else:
+        assert_type(y, type[int] | type[str])
+"#,
+);
+
+testcase!(
+    test_narrow_in_with_metaclass,
+    r#"
+class FruitMeta(type):
+    ...
+
+class Fruit(metaclass=FruitMeta):
+    ...
+
+class Banana(Fruit):
+    ...
+
+class Grape(Fruit):
+    ...
+
+def foo(_a: FruitMeta) -> None:
+    return None
+
+def main(a: type[Fruit]) -> None:
+    if a in (Banana,):
+        foo(a)
+    if a in (Grape, Banana):
+        foo(a)
 "#,
 );
 
@@ -1719,6 +1980,62 @@ def test(x: Literal["a", "b", "c", "d"]) -> None:
     # Also test in ternary expression
     z = "yes" if x in [*y, "c"] else "no"
     assert_type(z, Literal["yes", "no"])
+"#,
+);
+
+testcase!(
+    test_narrow_in_frozenset_literal_iterable,
+    r#"
+from typing import assert_type, Literal, Never, TypedDict
+
+VALUES = dict(
+    autoremove="The following packages will be REMOVED",
+    autoclean="Del ",
+)
+
+def cleanup(operation: str | None = None) -> bool:
+    if operation not in frozenset(["autoremove", "autoclean"]):
+        raise AssertionError(f"Bad operation: {operation}")
+    return VALUES[operation] in "some output"
+
+def positive_narrowing(x: int | str) -> None:
+    if x in frozenset([1, 2]):
+        assert_type(x, Literal[1, 2])
+
+def tuple_arg(x: int | str) -> None:
+    if x in frozenset((1, 2)):
+        assert_type(x, Literal[1, 2])
+
+def set_arg(x: int | str) -> None:
+    if x in frozenset({1, 2}):
+        assert_type(x, Literal[1, 2])
+
+def set_constructor(x: int | str) -> None:
+    if x in set([1, 2]):
+        assert_type(x, Literal[1, 2])
+
+def list_constructor(x: int | str) -> None:
+    if x in list((1, 2)):
+        assert_type(x, Literal[1, 2])
+
+def tuple_constructor(x: int | str) -> None:
+    if x in tuple([1, 2]):
+        assert_type(x, Literal[1, 2])
+
+def empty_frozenset(x: int | str) -> None:
+    if x in frozenset():
+        assert_type(x, Never)
+
+def qualified_builtins_frozenset(x: int | str) -> None:
+    import builtins
+    if x in builtins.frozenset([1, 2]):
+        assert_type(x, Literal[1, 2])
+
+def non_literal_arg(x: int | str) -> None:
+    y = [1, 2]
+    if x in frozenset(y):
+        # Can't statically enumerate elements, no narrowing.
+        assert_type(x, int | str)
 "#,
 );
 
@@ -2234,6 +2551,21 @@ def f(x: int):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/1592
+testcase!(
+    test_disjoint_bases_subclasses,
+    r#"
+from typing import assert_never
+class A(str):
+    pass
+class B(int):
+    pass
+def f(a: A):
+    if isinstance(a, B):
+        assert_never(a)
+"#,
+);
+
 testcase!(
     test_literals_are_disjoint,
     r#"
@@ -2574,6 +2906,20 @@ assert_type(is_str("hello"), bool)
 );
 
 testcase!(
+    test_typeguard_bad_specialization_no_duplicate,
+    r#"
+from typing import TypeGuard
+
+def f[T: str](x: T) -> TypeGuard[T]:
+    return True
+
+def g(x: int | str):
+    if f(x):  # E: `int | str` is not assignable to upper bound `str` of type variable `T`
+        pass
+    "#,
+);
+
+testcase!(
     test_isinstance_invalid_special_form,
     r#"
 from typing import Final
@@ -2637,4 +2983,121 @@ def f(inputs: Sequence[int]):
     for x in inputs:
         assert_type(x, int)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1570
+testcase!(
+    test_narrow_not_in_dict,
+    r#"
+def example(variable: str | None) -> str:
+    str_dict = {"key": "value"}
+
+    if variable not in str_dict:
+        return "Not Found"
+
+    return variable
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/1575
+testcase!(
+    test_typevar_isinstance_narrow_else,
+    r#"
+from typing import TypeVar, assert_type, reveal_type
+
+T = TypeVar("T", int, str, float)
+
+def test(x: T) -> T:
+    if isinstance(x, (int, float)):
+        reveal_type(x)  # E: revealed type: float | int
+        return x
+    else:
+        reveal_type(x)  # E: revealed type: str
+        return x
+
+# Single constraint subtraction
+U = TypeVar("U", int, str)
+
+def test2(x: U) -> U:
+    if isinstance(x, int):
+        assert_type(x, int)
+        return x
+    else:
+        assert_type(x, str)
+        return x
+
+# All constraints matched - else branch is Never
+from typing import Never
+V = TypeVar("V", int, str)
+
+def test3(x: V) -> V:
+    if isinstance(x, (int, str)):
+        assert_type(x, int | str)
+        return x
+    else:
+        assert_type(x, Never)
+        return x
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2607
+testcase!(
+    test_narrow_sequence_to_tuple_return,
+    r#"
+from typing import Sequence
+
+def f(x: Sequence[int]) -> tuple[int, ...]:
+    if isinstance(x, tuple):
+        return x
+    return tuple(x)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2607
+testcase!(
+    test_narrow_sequence_to_tuple_assert_type,
+    r#"
+from typing import Sequence, assert_type
+
+def seq_int(x: Sequence[int]):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, ...])
+
+def seq_str(x: Sequence[str]):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[str, ...])
+"#,
+);
+
+testcase!(
+    test_narrow_to_named_tuple,
+    r#"
+from typing import NamedTuple, Sequence, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+def f(x: Sequence[int]) -> Point:
+    if isinstance(x, Point):
+        return x
+    raise ValueError
+
+def g(x: object):
+    if isinstance(x, Point):
+        assert_type(x, Point)
+        assert_type(x.x, int)
+        assert_type(x.y, str)
+"#,
+);
+
+testcase!(
+    test_narrow_concrete_tuple_to_tuple,
+    r#"
+from typing import assert_type
+
+def f(x: tuple[int, str] | int):
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, str])
+"#,
 );

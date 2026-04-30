@@ -19,7 +19,8 @@ $ echo -e "from typing import reveal_type\nreveal_type(1)" > $TMPDIR/empty.py &&
 ## No errors on our test script
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check $TEST_PY
+$ cp $TEST_PY $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py
+ INFO Loading new build system at * (glob?)
  INFO Querying Buck for source DB (glob?)
  INFO Source DB build ID: * (glob?)
  INFO Finished querying Buck for source DB (glob?)
@@ -83,5 +84,14 @@ $ python3 -m venv $TMPDIR/venv && \
 > touch $TMPDIR/pyrefly.toml && \
 > $PYREFLY check $TMPDIR/test.py
  INFO 0 errors* (glob)
+[0]
+```
+
+## We show how many warnings are hidden
+
+```scrut {output_stream: stderr}
+$ echo "x: str = 0" > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
+ INFO 0 errors (1 warning not shown)* (glob)
 [0]
 ```

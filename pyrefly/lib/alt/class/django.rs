@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::Arc;
+
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
@@ -14,6 +16,7 @@ use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::PropertyMetadata;
 use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
+use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
@@ -29,6 +32,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::enums::VALUE_PROP;
+use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::binding::binding::KeyExport;
@@ -36,6 +40,29 @@ use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
+
+pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, Arc<ClassMetadata>)]) -> bool {
+    bases_with_metadata.iter().any(|(base, base_meta)| {
+        base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
+            || base_meta
+                .enum_metadata()
+                .as_ref()
+                .is_some_and(|meta| meta.is_django)
+    })
+}
+
+/// Strip the label element from a Django enum tuple value.
+/// Django `Choices` enums use `(value, label)` tuples; this strips the last
+/// element (the label) and returns the remaining value portion.
+pub fn transform_django_enum_value(ty: Type, heap: &TypeHeap) -> Type {
+    match ty {
+        Type::Tuple(Tuple::Concrete(elements)) if elements.len() >= 2 => {
+            let value_len = elements.len() - 1;
+            heap.mk_concrete_tuple(elements.into_iter().take(value_len).collect())
+        }
+        ty => ty,
+    }
+}
 const CHOICES: Name = Name::new_static("choices");
 const LABEL: Name = Name::new_static("label");
 const LABELS: Name = Name::new_static("labels");
@@ -100,7 +127,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect();
 
                 if transformed != union.to_vec() {
-                    Some(unions(transformed))
+                    Some(unions(transformed, self.heap))
                 } else {
                     None
                 }
@@ -151,7 +178,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && let Some(call_expr) = e.as_call_expr()
             && self.is_django_field_nullable(call_expr)
         {
-            Some(self.union(maybe_narrowed_type, Type::None))
+            Some(self.union(maybe_narrowed_type, self.heap.mk_none()))
         } else {
             Some(maybe_narrowed_type)
         }
@@ -308,7 +335,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if label_types.is_empty() || label_types.len() < enum_members.len() {
             // Members without a custom label type have default label type str.
-            label_types.push(self.stdlib.str().clone().to_type());
+            label_types.push(self.heap.mk_class_type(self.stdlib.str().clone()));
         }
 
         // Also include the type of __empty__ field if it exists, since it contributes to label types
@@ -338,11 +365,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
                 .ok()
             })
-            .unwrap_or_else(Type::any_implicit);
+            .unwrap_or_else(|| self.heap.mk_any_implicit());
 
         // if value is optional, make the type optional
         let values_type = if has_empty {
-            self.union(base_value_type.clone(), Type::None)
+            self.union(base_value_type.clone(), self.heap.mk_none())
         } else {
             base_value_type
         };
@@ -350,14 +377,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut fields = SmallMap::new();
 
         let field_specs = [
-            (LABELS, self.stdlib.list(label_type.clone()).to_type()),
+            (
+                LABELS,
+                self.heap
+                    .mk_class_type(self.stdlib.list(label_type.clone())),
+            ),
             (LABEL, self.property(cls, LABEL, label_type.clone())),
-            (VALUES, self.stdlib.list(values_type.clone()).to_type()),
+            (
+                VALUES,
+                self.heap
+                    .mk_class_type(self.stdlib.list(values_type.clone())),
+            ),
             (
                 CHOICES,
-                self.stdlib
-                    .list(Type::concrete_tuple(vec![values_type, label_type]))
-                    .to_type(),
+                self.heap.mk_class_type(
+                    self.stdlib
+                        .list(self.heap.mk_concrete_tuple(vec![values_type, label_type])),
+                ),
             ),
         ];
 
@@ -370,17 +406,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn property(&self, cls: &Class, name: Name, ty: Type) -> Type {
         let signature = Callable::list(ParamList::new(vec![self.class_self_param(cls, false)]), ty);
-        let mut metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), name);
+        let mut metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), name, None);
         metadata.flags.property_metadata = Some(PropertyMetadata {
             role: PropertyRole::Getter,
-            getter: Type::any_error(),
+            getter: self.heap.mk_any_error(),
             setter: None,
             has_deleter: false,
         });
-        Type::Function(Box::new(Function {
+        self.heap.mk_function(Function {
             signature,
             metadata,
-        }))
+        })
     }
 
     /// Get the primary key field type for a Django model.
@@ -393,7 +429,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .django_model_metadata()
             .and_then(|dm| dm.custom_primary_key_field.as_ref())
         {
-            let instance_type = self.as_class_type_unchecked(model).to_type();
+            let instance_type = self.heap.mk_class_type(self.as_class_type_unchecked(model));
             let pk_type = self.attr_infer_for_type(
                 &instance_type,
                 pk_field_name,
@@ -450,7 +486,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for element in elements {
             let inner_tuple = element.as_tuple_expr()?;
             let string_lit = inner_tuple.elts.first()?.as_string_literal_expr()?;
-            choice_literals.push(Lit::from_string_literal(string_lit).to_implicit_type());
+            choice_literals.push(Lit::from_string_literal(string_lit)?.to_implicit_type());
         }
 
         if choice_literals.is_empty() {
@@ -464,11 +500,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// The method takes self and returns str.
     fn get_display_method(&self, cls: &Class, method_name: &Name) -> ClassSynthesizedField {
         let params = vec![self.class_self_param(cls, false)];
-        let ret = self.stdlib.str().clone().to_type();
-        ClassSynthesizedField::new(Type::Function(Box::new(Function {
+        let ret = self.heap.mk_class_type(self.stdlib.str().clone());
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), method_name.clone()),
-        })))
+            metadata: FuncMetadata::def(
+                self.module().dupe(),
+                cls.dupe(),
+                method_name.clone(),
+                None,
+            ),
+        }))
     }
 
     /// Returns the primary key type of the related model.
@@ -496,7 +537,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the pk type from the related model and make it nullable if needed
         let (pk_type, _) = self.get_pk_field_type(related_cls.class_object())?;
         if is_foreign_key_nullable {
-            Some(self.union(pk_type, Type::None))
+            Some(self.union(pk_type, self.heap.mk_none()))
         } else {
             Some(pk_type)
         }

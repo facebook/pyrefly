@@ -1,0 +1,4664 @@
+{
+  "timestamp": "2026-04-08T20:19:52.004301+00:00",
+  "date": "2026-04-08",
+  "type_checkers": [
+    "pyright",
+    "pyrefly",
+    "ty",
+    "mypy"
+  ],
+  "type_checker_versions": {
+    "pyright": "1.1.408",
+    "pyrefly": "0.60.0",
+    "ty": "0.0.29",
+    "mypy": "1.19.1"
+  },
+  "package_count": 53,
+  "runs_per_package": 5,
+  "warmup_runs": 1,
+  "aggregate": {
+    "pyright": {
+      "packages_tested": 53,
+      "packages_failed": 0,
+      "avg_execution_time_s": 17.54,
+      "p50_execution_time_s": 4.27,
+      "p90_execution_time_s": 53.21,
+      "p95_execution_time_s": 76.11,
+      "max_execution_time_s": 151.27,
+      "total_execution_time_s": 929.66,
+      "avg_peak_memory_mb": 1441.2,
+      "p90_peak_memory_mb": 3947.3,
+      "p95_peak_memory_mb": 4174.5,
+      "max_peak_memory_mb": 4337.4
+    },
+    "pyrefly": {
+      "packages_tested": 53,
+      "packages_failed": 0,
+      "avg_execution_time_s": 0.95,
+      "p50_execution_time_s": 0.36,
+      "p90_execution_time_s": 2.4,
+      "p95_execution_time_s": 4.25,
+      "max_execution_time_s": 4.84,
+      "total_execution_time_s": 50.19,
+      "avg_peak_memory_mb": 479.0,
+      "p90_peak_memory_mb": 904.4,
+      "p95_peak_memory_mb": 1119.4,
+      "max_peak_memory_mb": 1435.2
+    },
+    "ty": {
+      "packages_tested": 53,
+      "packages_failed": 0,
+      "avg_execution_time_s": 1.28,
+      "p50_execution_time_s": 0.35,
+      "p90_execution_time_s": 1.91,
+      "p95_execution_time_s": 3.54,
+      "max_execution_time_s": 30.56,
+      "total_execution_time_s": 67.76,
+      "avg_peak_memory_mb": 753.9,
+      "p90_peak_memory_mb": 2325.3,
+      "p95_peak_memory_mb": 2459.7,
+      "max_peak_memory_mb": 3336.0
+    },
+    "mypy": {
+      "packages_tested": 51,
+      "packages_failed": 2,
+      "avg_execution_time_s": 8.85,
+      "p50_execution_time_s": 5.0,
+      "p90_execution_time_s": 20.43,
+      "p95_execution_time_s": 25.96,
+      "max_execution_time_s": 43.53,
+      "total_execution_time_s": 451.17,
+      "avg_peak_memory_mb": 629.5,
+      "p90_peak_memory_mb": 1418.0,
+      "p95_peak_memory_mb": 1512.9,
+      "max_peak_memory_mb": 2440.6
+    }
+  },
+  "results": [
+    {
+      "package_name": "aiohttp",
+      "github_url": "https://github.com/aio-libs/aiohttp",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 2.72,
+          "peak_memory_mb": 495.42,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.59,
+            "max": 3.0,
+            "mean": 2.72,
+            "median": 2.68,
+            "stddev": 0.17
+          },
+          "peak_memory_stats": {
+            "min": 488.2,
+            "max": 498.9,
+            "mean": 495.42,
+            "median": 496.6,
+            "stddev": 4.16
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 212.9,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 210.9,
+            "max": 213.9,
+            "mean": 212.9,
+            "median": 213.3,
+            "stddev": 1.17
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 271.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 270.6,
+            "max": 273.1,
+            "mean": 271.62,
+            "median": 271.0,
+            "stddev": 1.19
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 3.06,
+          "peak_memory_mb": 327.86,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.01,
+            "max": 3.12,
+            "mean": 3.06,
+            "median": 3.03,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 326.6,
+            "max": 329.4,
+            "mean": 327.86,
+            "median": 328.0,
+            "stddev": 1.06
+          }
+        }
+      }
+    },
+    {
+      "package_name": "airflow",
+      "github_url": "https://github.com/apache/airflow",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 8.7,
+          "peak_memory_mb": 1731.12,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 8.53,
+            "max": 9.04,
+            "mean": 8.7,
+            "median": 8.65,
+            "stddev": 0.2
+          },
+          "peak_memory_stats": {
+            "min": 1716.8,
+            "max": 1740.4,
+            "mean": 1731.12,
+            "median": 1737.6,
+            "stddev": 10.6
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.52,
+          "peak_memory_mb": 828.08,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.52,
+            "max": 0.52,
+            "mean": 0.52,
+            "median": 0.52,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 824.4,
+            "max": 830.8,
+            "mean": 828.08,
+            "median": 829.8,
+            "stddev": 2.87
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.48,
+          "peak_memory_mb": 832.3,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.41,
+            "max": 0.52,
+            "mean": 0.48,
+            "median": 0.52,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 829.2,
+            "max": 836.1,
+            "mean": 832.3,
+            "median": 832.3,
+            "stddev": 2.86
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 12.87,
+          "peak_memory_mb": 847.52,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 12.34,
+            "max": 13.38,
+            "mean": 12.87,
+            "median": 12.73,
+            "stddev": 0.43
+          },
+          "peak_memory_stats": {
+            "min": 844.3,
+            "max": 849.1,
+            "mean": 847.52,
+            "median": 848.1,
+            "stddev": 1.87
+          }
+        }
+      }
+    },
+    {
+      "package_name": "ansible",
+      "github_url": "https://github.com/ansible/ansible",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 7.28,
+          "peak_memory_mb": 1000.76,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 7.19,
+            "max": 7.39,
+            "mean": 7.28,
+            "median": 7.28,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 997.0,
+            "max": 1002.5,
+            "mean": 1000.76,
+            "median": 1001.4,
+            "stddev": 2.16
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.41,
+          "peak_memory_mb": 311.76,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.41,
+            "max": 0.42,
+            "mean": 0.41,
+            "median": 0.41,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 311.1,
+            "max": 312.9,
+            "mean": 311.76,
+            "median": 311.5,
+            "stddev": 0.68
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.46,
+          "peak_memory_mb": 522.22,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.41,
+            "max": 0.53,
+            "mean": 0.46,
+            "median": 0.42,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 520.5,
+            "max": 523.9,
+            "mean": 522.22,
+            "median": 522.3,
+            "stddev": 1.22
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 5.0,
+          "peak_memory_mb": 349.32,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.88,
+            "max": 5.18,
+            "mean": 5.0,
+            "median": 4.99,
+            "stddev": 0.13
+          },
+          "peak_memory_stats": {
+            "min": 348.5,
+            "max": 350.0,
+            "mean": 349.32,
+            "median": 349.4,
+            "stddev": 0.56
+          }
+        }
+      }
+    },
+    {
+      "package_name": "black",
+      "github_url": "https://github.com/psf/black",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.72,
+          "peak_memory_mb": 445.44,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.66,
+            "max": 1.77,
+            "mean": 1.72,
+            "median": 1.74,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 444.0,
+            "max": 447.0,
+            "mean": 445.44,
+            "median": 445.2,
+            "stddev": 1.15
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 211.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 209.4,
+            "max": 212.7,
+            "mean": 211.2,
+            "median": 211.3,
+            "stddev": 1.34
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 207.5,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 205.6,
+            "max": 208.8,
+            "mean": 207.5,
+            "median": 207.8,
+            "stddev": 1.31
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 2.1,
+          "peak_memory_mb": 211.22,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.08,
+            "max": 2.18,
+            "mean": 2.1,
+            "median": 2.08,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 211.0,
+            "max": 211.6,
+            "mean": 211.22,
+            "median": 211.1,
+            "stddev": 0.24
+          }
+        }
+      }
+    },
+    {
+      "package_name": "boto3",
+      "github_url": "https://github.com/boto/boto3",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.06,
+          "peak_memory_mb": 373.92,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.03,
+            "max": 1.13,
+            "mean": 1.06,
+            "median": 1.05,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 372.7,
+            "max": 375.4,
+            "mean": 373.92,
+            "median": 373.9,
+            "stddev": 1.0
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 127.16,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 126.8,
+            "max": 128.2,
+            "mean": 127.16,
+            "median": 126.9,
+            "stddev": 0.59
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.1,
+          "peak_memory_mb": 98.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.1,
+            "median": 0.1,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 97.0,
+            "max": 100.2,
+            "mean": 98.62,
+            "median": 98.3,
+            "stddev": 1.52
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 0.83,
+          "peak_memory_mb": 114.38,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.83,
+            "max": 0.84,
+            "mean": 0.83,
+            "median": 0.83,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 113.9,
+            "max": 115.0,
+            "mean": 114.38,
+            "median": 114.0,
+            "stddev": 0.57
+          }
+        }
+      }
+    },
+    {
+      "package_name": "botocore",
+      "github_url": "https://github.com/boto/botocore",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.87,
+          "peak_memory_mb": 471.32,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.86,
+            "max": 1.88,
+            "mean": 1.87,
+            "median": 1.87,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 468.4,
+            "max": 472.6,
+            "mean": 471.32,
+            "median": 472.2,
+            "stddev": 1.77
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.31,
+          "peak_memory_mb": 199.58,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.32,
+            "mean": 0.31,
+            "median": 0.31,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 195.3,
+            "max": 205.1,
+            "mean": 199.58,
+            "median": 198.2,
+            "stddev": 3.75
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 195.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 191.5,
+            "max": 199.2,
+            "mean": 195.88,
+            "median": 195.8,
+            "stddev": 3.17
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 2.1,
+          "peak_memory_mb": 206.96,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.99,
+            "max": 2.19,
+            "mean": 2.1,
+            "median": 2.08,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 206.3,
+            "max": 207.8,
+            "mean": 206.96,
+            "median": 206.9,
+            "stddev": 0.61
+          }
+        }
+      }
+    },
+    {
+      "package_name": "celery",
+      "github_url": "https://github.com/celery/celery",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 2.88,
+          "peak_memory_mb": 764.0,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.82,
+            "max": 2.92,
+            "mean": 2.88,
+            "median": 2.91,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 762.2,
+            "max": 765.4,
+            "mean": 764.0,
+            "median": 764.0,
+            "stddev": 1.39
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.32,
+          "peak_memory_mb": 374.68,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.32,
+            "mean": 0.32,
+            "median": 0.32,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 372.7,
+            "max": 377.6,
+            "mean": 374.68,
+            "median": 373.8,
+            "stddev": 1.99
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 340.42,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 339.2,
+            "max": 343.8,
+            "mean": 340.42,
+            "median": 339.6,
+            "stddev": 1.91
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 5.51,
+          "peak_memory_mb": 517.5,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 5.41,
+            "max": 5.61,
+            "mean": 5.51,
+            "median": 5.51,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 516.5,
+            "max": 518.4,
+            "mean": 517.5,
+            "median": 517.7,
+            "stddev": 0.7
+          }
+        }
+      }
+    },
+    {
+      "package_name": "ComfyUI",
+      "github_url": "https://github.com/comfyanonymous/ComfyUI",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 11.29,
+          "peak_memory_mb": 2160.6,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 10.96,
+            "max": 11.87,
+            "mean": 11.29,
+            "median": 11.17,
+            "stddev": 0.39
+          },
+          "peak_memory_stats": {
+            "min": 2140.2,
+            "max": 2178.8,
+            "mean": 2160.6,
+            "median": 2165.4,
+            "stddev": 15.04
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.77,
+          "peak_memory_mb": 821.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.73,
+            "max": 0.84,
+            "mean": 0.77,
+            "median": 0.74,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 811.0,
+            "max": 830.8,
+            "mean": 821.2,
+            "median": 819.5,
+            "stddev": 8.72
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.58,
+          "peak_memory_mb": 1038.38,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.51,
+            "max": 0.73,
+            "mean": 0.58,
+            "median": 0.53,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 1033.6,
+            "max": 1046.9,
+            "mean": 1038.38,
+            "median": 1036.5,
+            "stddev": 5.29
+          }
+        },
+        "mypy": {
+          "ok": false,
+          "execution_time_s": 0.31,
+          "peak_memory_mb": 43.4,
+          "error_message": "Fatal error (exit code 2)",
+          "runs": 1
+        }
+      }
+    },
+    {
+      "package_name": "cryptography",
+      "github_url": "https://github.com/pyca/cryptography",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 3.11,
+          "peak_memory_mb": 633.46,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.02,
+            "max": 3.22,
+            "mean": 3.11,
+            "median": 3.12,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 629.7,
+            "max": 636.1,
+            "mean": 633.46,
+            "median": 634.0,
+            "stddev": 2.34
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.27,
+          "peak_memory_mb": 204.8,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.32,
+            "mean": 0.27,
+            "median": 0.31,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 202.0,
+            "max": 206.2,
+            "mean": 204.8,
+            "median": 205.1,
+            "stddev": 1.64
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 261.64,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 259.6,
+            "max": 263.9,
+            "mean": 261.64,
+            "median": 261.5,
+            "stddev": 1.55
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 2.73,
+          "peak_memory_mb": 302.26,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.7,
+            "max": 2.81,
+            "mean": 2.73,
+            "median": 2.71,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 301.1,
+            "max": 303.4,
+            "mean": 302.26,
+            "median": 302.3,
+            "stddev": 0.87
+          }
+        }
+      }
+    },
+    {
+      "package_name": "dask",
+      "github_url": "https://github.com/dask/dask",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 14.35,
+          "peak_memory_mb": 2072.42,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 14.07,
+            "max": 14.89,
+            "mean": 14.35,
+            "median": 14.17,
+            "stddev": 0.34
+          },
+          "peak_memory_stats": {
+            "min": 2067.2,
+            "max": 2076.8,
+            "mean": 2072.42,
+            "median": 2073.6,
+            "stddev": 4.08
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 1.21,
+          "peak_memory_mb": 759.44,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.14,
+            "max": 1.25,
+            "mean": 1.21,
+            "median": 1.24,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 751.9,
+            "max": 767.1,
+            "mean": 759.44,
+            "median": 761.2,
+            "stddev": 6.77
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.59,
+          "peak_memory_mb": 934.98,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.52,
+            "max": 0.63,
+            "mean": 0.59,
+            "median": 0.63,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 927.9,
+            "max": 939.2,
+            "mean": 934.98,
+            "median": 935.1,
+            "stddev": 4.43
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 14.61,
+          "peak_memory_mb": 856.8,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 14.41,
+            "max": 14.74,
+            "mean": 14.61,
+            "median": 14.64,
+            "stddev": 0.14
+          },
+          "peak_memory_stats": {
+            "min": 856.1,
+            "max": 858.4,
+            "mean": 856.8,
+            "median": 856.1,
+            "stddev": 1.03
+          }
+        }
+      }
+    },
+    {
+      "package_name": "django",
+      "github_url": "https://github.com/django/django",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 6.76,
+          "peak_memory_mb": 1190.58,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 6.6,
+            "max": 6.88,
+            "mean": 6.76,
+            "median": 6.78,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 1176.2,
+            "max": 1205.7,
+            "mean": 1190.58,
+            "median": 1190.4,
+            "stddev": 10.45
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.73,
+          "peak_memory_mb": 365.74,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.73,
+            "max": 0.74,
+            "mean": 0.73,
+            "median": 0.73,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 361.1,
+            "max": 372.3,
+            "mean": 365.74,
+            "median": 363.8,
+            "stddev": 4.91
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.42,
+          "peak_memory_mb": 602.82,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.42,
+            "max": 0.42,
+            "mean": 0.42,
+            "median": 0.42,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 599.9,
+            "max": 607.2,
+            "mean": 602.82,
+            "median": 602.0,
+            "stddev": 3.09
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 6.77,
+          "peak_memory_mb": 535.22,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 6.67,
+            "max": 6.94,
+            "mean": 6.77,
+            "median": 6.75,
+            "stddev": 0.1
+          },
+          "peak_memory_stats": {
+            "min": 534.9,
+            "max": 535.6,
+            "mean": 535.22,
+            "median": 535.2,
+            "stddev": 0.26
+          }
+        }
+      }
+    },
+    {
+      "package_name": "fastapi",
+      "github_url": "https://github.com/fastapi/fastapi",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.21,
+          "peak_memory_mb": 399.28,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.15,
+            "max": 1.26,
+            "mean": 1.21,
+            "median": 1.25,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 397.2,
+            "max": 400.7,
+            "mean": 399.28,
+            "median": 399.3,
+            "stddev": 1.35
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 163.14,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 162.1,
+            "max": 164.3,
+            "mean": 163.14,
+            "median": 163.2,
+            "stddev": 0.84
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 130.7,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.11,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 129.3,
+            "max": 133.4,
+            "mean": 130.7,
+            "median": 130.3,
+            "stddev": 1.6
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 3.45,
+          "peak_memory_mb": 316.04,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.42,
+            "max": 3.53,
+            "mean": 3.45,
+            "median": 3.43,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 315.6,
+            "max": 316.6,
+            "mean": 316.04,
+            "median": 316.0,
+            "stddev": 0.38
+          }
+        }
+      }
+    },
+    {
+      "package_name": "flask",
+      "github_url": "https://github.com/pallets/flask",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.15,
+          "peak_memory_mb": 401.68,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.15,
+            "max": 1.16,
+            "mean": 1.15,
+            "median": 1.15,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 400.9,
+            "max": 403.3,
+            "mean": 401.68,
+            "median": 401.4,
+            "stddev": 0.94
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 185.48,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 184.1,
+            "max": 186.7,
+            "mean": 185.48,
+            "median": 185.6,
+            "stddev": 0.97
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 151.04,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 150.5,
+            "max": 152.0,
+            "mean": 151.04,
+            "median": 150.9,
+            "stddev": 0.6
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.98,
+          "peak_memory_mb": 221.04,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.89,
+            "max": 2.08,
+            "mean": 1.98,
+            "median": 1.98,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 220.2,
+            "max": 221.7,
+            "mean": 221.04,
+            "median": 221.2,
+            "stddev": 0.59
+          }
+        }
+      }
+    },
+    {
+      "package_name": "gradio",
+      "github_url": "https://github.com/gradio-app/gradio",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 3.92,
+          "peak_memory_mb": 947.02,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.84,
+            "max": 4.15,
+            "mean": 3.92,
+            "median": 3.86,
+            "stddev": 0.13
+          },
+          "peak_memory_stats": {
+            "min": 940.4,
+            "max": 953.5,
+            "mean": 947.02,
+            "median": 948.7,
+            "stddev": 5.5
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.33,
+          "peak_memory_mb": 464.9,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.42,
+            "mean": 0.33,
+            "median": 0.31,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 458.3,
+            "max": 472.6,
+            "mean": 464.9,
+            "median": 466.8,
+            "stddev": 6.23
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.34,
+          "peak_memory_mb": 449.42,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.42,
+            "mean": 0.34,
+            "median": 0.32,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 446.0,
+            "max": 452.3,
+            "mean": 449.42,
+            "median": 449.6,
+            "stddev": 2.51
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 21.26,
+          "peak_memory_mb": 1395.32,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 20.28,
+            "max": 22.61,
+            "mean": 21.26,
+            "median": 21.03,
+            "stddev": 0.91
+          },
+          "peak_memory_stats": {
+            "min": 1393.6,
+            "max": 1396.8,
+            "mean": 1395.32,
+            "median": 1395.6,
+            "stddev": 1.28
+          }
+        }
+      }
+    },
+    {
+      "package_name": "homeassistant",
+      "github_url": "https://github.com/home-assistant/core",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 51.32,
+          "peak_memory_mb": 4163.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 48.34,
+            "max": 55.95,
+            "mean": 51.32,
+            "median": 51.06,
+            "stddev": 3.05
+          },
+          "peak_memory_stats": {
+            "min": 4122.0,
+            "max": 4185.8,
+            "mean": 4163.88,
+            "median": 4165.7,
+            "stddev": 25.88
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 2.22,
+          "peak_memory_mb": 1198.4,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.18,
+            "max": 2.29,
+            "mean": 2.22,
+            "median": 2.19,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 1193.8,
+            "max": 1205.6,
+            "mean": 1198.4,
+            "median": 1196.5,
+            "stddev": 4.52
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 2.17,
+          "peak_memory_mb": 2985.78,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.09,
+            "max": 2.19,
+            "mean": 2.17,
+            "median": 2.19,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 2980.5,
+            "max": 2994.6,
+            "mean": 2985.78,
+            "median": 2984.7,
+            "stddev": 5.33
+          }
+        },
+        "mypy": {
+          "ok": false,
+          "execution_time_s": 1.25,
+          "peak_memory_mb": 65.2,
+          "error_message": "Fatal: errors prevented further checking",
+          "runs": 1
+        }
+      }
+    },
+    {
+      "package_name": "httpcore",
+      "github_url": "https://github.com/encode/httpcore",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 0.79,
+          "peak_memory_mb": 327.18,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.73,
+            "max": 0.83,
+            "mean": 0.79,
+            "median": 0.82,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 325.6,
+            "max": 328.3,
+            "mean": 327.18,
+            "median": 327.9,
+            "stddev": 1.32
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 148.76,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 148.0,
+            "max": 149.3,
+            "mean": 148.76,
+            "median": 149.0,
+            "stddev": 0.58
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.1,
+          "peak_memory_mb": 104.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.1,
+            "median": 0.1,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 103.7,
+            "max": 106.1,
+            "mean": 104.88,
+            "median": 104.7,
+            "stddev": 0.87
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.25,
+          "peak_memory_mb": 159.3,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.25,
+            "max": 1.25,
+            "mean": 1.25,
+            "median": 1.25,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 158.8,
+            "max": 160.1,
+            "mean": 159.3,
+            "median": 158.9,
+            "stddev": 0.6
+          }
+        }
+      }
+    },
+    {
+      "package_name": "httpx",
+      "github_url": "https://github.com/encode/httpx",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.04,
+          "peak_memory_mb": 372.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.04,
+            "max": 1.05,
+            "mean": 1.04,
+            "median": 1.04,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 370.2,
+            "max": 375.0,
+            "mean": 372.88,
+            "median": 373.3,
+            "stddev": 1.78
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 178.86,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 177.8,
+            "max": 179.8,
+            "mean": 178.86,
+            "median": 179.0,
+            "stddev": 0.73
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 137.26,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 136.3,
+            "max": 137.9,
+            "mean": 137.26,
+            "median": 137.4,
+            "stddev": 0.63
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 2.1,
+          "peak_memory_mb": 218.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.08,
+            "max": 2.19,
+            "mean": 2.1,
+            "median": 2.08,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 218.2,
+            "max": 219.9,
+            "mean": 218.88,
+            "median": 218.6,
+            "stddev": 0.74
+          }
+        }
+      }
+    },
+    {
+      "package_name": "jinja2",
+      "github_url": "https://github.com/pallets/jinja",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.61,
+          "peak_memory_mb": 437.6,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.57,
+            "max": 1.67,
+            "mean": 1.61,
+            "median": 1.57,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 435.0,
+            "max": 440.4,
+            "mean": 437.6,
+            "median": 437.5,
+            "stddev": 2.03
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 182.0,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 180.3,
+            "max": 183.5,
+            "mean": 182.0,
+            "median": 182.5,
+            "stddev": 1.51
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 175.66,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 175.0,
+            "max": 176.4,
+            "mean": 175.66,
+            "median": 175.6,
+            "stddev": 0.53
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.17,
+          "peak_memory_mb": 155.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.15,
+            "max": 1.24,
+            "mean": 1.17,
+            "median": 1.15,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 155.6,
+            "max": 156.4,
+            "mean": 155.88,
+            "median": 155.8,
+            "stddev": 0.33
+          }
+        }
+      }
+    },
+    {
+      "package_name": "langchain",
+      "github_url": "https://github.com/langchain-ai/langchain",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 5.72,
+          "peak_memory_mb": 1199.56,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 5.63,
+            "max": 5.85,
+            "mean": 5.72,
+            "median": 5.64,
+            "stddev": 0.11
+          },
+          "peak_memory_stats": {
+            "min": 1191.2,
+            "max": 1203.5,
+            "mean": 1199.56,
+            "median": 1201.4,
+            "stddev": 4.91
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.58,
+          "peak_memory_mb": 546.78,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.51,
+            "max": 0.63,
+            "mean": 0.58,
+            "median": 0.62,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 541.1,
+            "max": 551.1,
+            "mean": 546.78,
+            "median": 546.2,
+            "stddev": 3.98
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.44,
+          "peak_memory_mb": 620.52,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.42,
+            "max": 0.52,
+            "mean": 0.44,
+            "median": 0.42,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 616.8,
+            "max": 625.2,
+            "mean": 620.52,
+            "median": 620.0,
+            "stddev": 3.21
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 11.92,
+          "peak_memory_mb": 911.96,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 11.72,
+            "max": 12.52,
+            "mean": 11.92,
+            "median": 11.76,
+            "stddev": 0.34
+          },
+          "peak_memory_stats": {
+            "min": 902.2,
+            "max": 914.9,
+            "mean": 911.96,
+            "median": 914.2,
+            "stddev": 5.46
+          }
+        }
+      }
+    },
+    {
+      "package_name": "langflow",
+      "github_url": "https://github.com/langflow-ai/langflow",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 4.27,
+          "peak_memory_mb": 1069.4,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.16,
+            "max": 4.43,
+            "mean": 4.27,
+            "median": 4.24,
+            "stddev": 0.1
+          },
+          "peak_memory_stats": {
+            "min": 1064.8,
+            "max": 1073.9,
+            "mean": 1069.4,
+            "median": 1070.8,
+            "stddev": 3.66
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.46,
+          "peak_memory_mb": 573.0,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.43,
+            "max": 0.53,
+            "mean": 0.46,
+            "median": 0.44,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 569.8,
+            "max": 575.0,
+            "mean": 573.0,
+            "median": 574.8,
+            "stddev": 2.57
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.39,
+          "peak_memory_mb": 541.3,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.32,
+            "max": 0.44,
+            "mean": 0.39,
+            "median": 0.42,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 538.3,
+            "max": 543.2,
+            "mean": 541.3,
+            "median": 541.7,
+            "stddev": 2.11
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 12.72,
+          "peak_memory_mb": 1036.1,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 12.66,
+            "max": 12.86,
+            "mean": 12.72,
+            "median": 12.68,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 1034.7,
+            "max": 1037.7,
+            "mean": 1036.1,
+            "median": 1035.8,
+            "stddev": 1.1
+          }
+        }
+      }
+    },
+    {
+      "package_name": "luigi",
+      "github_url": "https://github.com/spotify/luigi",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 2.56,
+          "peak_memory_mb": 729.44,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.49,
+            "max": 2.65,
+            "mean": 2.56,
+            "median": 2.58,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 727.6,
+            "max": 731.1,
+            "mean": 729.44,
+            "median": 729.3,
+            "stddev": 1.26
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.32,
+          "peak_memory_mb": 394.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.32,
+            "max": 0.33,
+            "mean": 0.32,
+            "median": 0.32,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 392.6,
+            "max": 396.6,
+            "mean": 394.62,
+            "median": 394.4,
+            "stddev": 1.52
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.22,
+          "peak_memory_mb": 334.58,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.22,
+            "mean": 0.22,
+            "median": 0.22,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 331.1,
+            "max": 336.9,
+            "mean": 334.58,
+            "median": 335.1,
+            "stddev": 2.47
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 4.5,
+          "peak_memory_mb": 409.94,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.46,
+            "max": 4.6,
+            "mean": 4.5,
+            "median": 4.47,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 409.3,
+            "max": 410.8,
+            "mean": 409.94,
+            "median": 409.7,
+            "stddev": 0.6
+          }
+        }
+      }
+    },
+    {
+      "package_name": "manim",
+      "github_url": "https://github.com/ManimCommunity/manim",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 5.98,
+          "peak_memory_mb": 1053.34,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 5.93,
+            "max": 6.04,
+            "mean": 5.98,
+            "median": 5.94,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 1041.1,
+            "max": 1075.3,
+            "mean": 1053.34,
+            "median": 1050.0,
+            "stddev": 13.18
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.52,
+          "peak_memory_mb": 375.0,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.52,
+            "max": 0.52,
+            "mean": 0.52,
+            "median": 0.52,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 370.4,
+            "max": 378.1,
+            "mean": 375.0,
+            "median": 375.8,
+            "stddev": 3.05
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.44,
+          "peak_memory_mb": 451.08,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.41,
+            "max": 0.52,
+            "mean": 0.44,
+            "median": 0.42,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 450.0,
+            "max": 453.6,
+            "mean": 451.08,
+            "median": 450.5,
+            "stddev": 1.44
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 8.76,
+          "peak_memory_mb": 631.26,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 8.55,
+            "max": 8.95,
+            "mean": 8.76,
+            "median": 8.72,
+            "stddev": 0.18
+          },
+          "peak_memory_stats": {
+            "min": 629.9,
+            "max": 632.3,
+            "mean": 631.26,
+            "median": 631.6,
+            "stddev": 1.06
+          }
+        }
+      }
+    },
+    {
+      "package_name": "markitdown",
+      "github_url": "https://github.com/microsoft/markitdown",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.19,
+          "peak_memory_mb": 415.68,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.15,
+            "max": 1.33,
+            "mean": 1.19,
+            "median": 1.15,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 413.0,
+            "max": 420.8,
+            "mean": 415.68,
+            "median": 414.0,
+            "stddev": 3.16
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 193.18,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 192.2,
+            "max": 194.0,
+            "mean": 193.18,
+            "median": 193.2,
+            "stddev": 0.66
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 196.8,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 195.1,
+            "max": 198.1,
+            "mean": 196.8,
+            "median": 196.8,
+            "stddev": 1.16
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.35,
+          "peak_memory_mb": 160.54,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.34,
+            "max": 1.37,
+            "mean": 1.35,
+            "median": 1.35,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 160.4,
+            "max": 161.1,
+            "mean": 160.54,
+            "median": 160.4,
+            "stddev": 0.31
+          }
+        }
+      }
+    },
+    {
+      "package_name": "matplotlib",
+      "github_url": "https://github.com/matplotlib/matplotlib",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 14.95,
+          "peak_memory_mb": 2101.12,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 14.66,
+            "max": 15.37,
+            "mean": 14.95,
+            "median": 14.79,
+            "stddev": 0.34
+          },
+          "peak_memory_stats": {
+            "min": 1891.4,
+            "max": 2157.1,
+            "mean": 2101.12,
+            "median": 2152.0,
+            "stddev": 117.26
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 1.15,
+          "peak_memory_mb": 667.66,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.05,
+            "max": 1.26,
+            "mean": 1.15,
+            "median": 1.15,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 664.5,
+            "max": 675.5,
+            "mean": 667.66,
+            "median": 666.3,
+            "stddev": 4.55
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.89,
+          "peak_memory_mb": 947.06,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.83,
+            "max": 0.94,
+            "mean": 0.89,
+            "median": 0.93,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 943.1,
+            "max": 951.8,
+            "mean": 947.06,
+            "median": 947.6,
+            "stddev": 3.63
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 4.28,
+          "peak_memory_mb": 409.48,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.15,
+            "max": 4.37,
+            "mean": 4.28,
+            "median": 4.25,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 408.5,
+            "max": 411.1,
+            "mean": 409.48,
+            "median": 409.2,
+            "stddev": 1.12
+          }
+        }
+      }
+    },
+    {
+      "package_name": "networkx",
+      "github_url": "https://github.com/networkx/networkx",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 8.88,
+          "peak_memory_mb": 1487.84,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 8.43,
+            "max": 9.23,
+            "mean": 8.88,
+            "median": 8.92,
+            "stddev": 0.29
+          },
+          "peak_memory_stats": {
+            "min": 1477.4,
+            "max": 1516.0,
+            "mean": 1487.84,
+            "median": 1481.9,
+            "stddev": 15.86
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.79,
+          "peak_memory_mb": 439.64,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.73,
+            "max": 0.93,
+            "mean": 0.79,
+            "median": 0.73,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 436.4,
+            "max": 441.5,
+            "mean": 439.64,
+            "median": 440.4,
+            "stddev": 2.03
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.46,
+          "peak_memory_mb": 689.56,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.41,
+            "max": 0.52,
+            "mean": 0.46,
+            "median": 0.42,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 684.6,
+            "max": 694.2,
+            "mean": 689.56,
+            "median": 691.7,
+            "stddev": 4.53
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 7.08,
+          "peak_memory_mb": 623.64,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 6.85,
+            "max": 7.3,
+            "mean": 7.08,
+            "median": 7.05,
+            "stddev": 0.16
+          },
+          "peak_memory_stats": {
+            "min": 622.5,
+            "max": 624.6,
+            "mean": 623.64,
+            "median": 623.6,
+            "stddev": 0.84
+          }
+        }
+      }
+    },
+    {
+      "package_name": "numpy",
+      "github_url": "https://github.com/numpy/numpy",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 70.9,
+          "peak_memory_mb": 3418.02,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 69.01,
+            "max": 73.6,
+            "mean": 70.9,
+            "median": 70.89,
+            "stddev": 1.89
+          },
+          "peak_memory_stats": {
+            "min": 3290.8,
+            "max": 3512.5,
+            "mean": 3418.02,
+            "median": 3416.1,
+            "stddev": 93.88
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 4.84,
+          "peak_memory_mb": 1066.76,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.49,
+            "max": 5.33,
+            "mean": 4.84,
+            "median": 4.59,
+            "stddev": 0.4
+          },
+          "peak_memory_stats": {
+            "min": 1054.2,
+            "max": 1081.1,
+            "mean": 1066.76,
+            "median": 1069.2,
+            "stddev": 10.46
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 30.56,
+          "peak_memory_mb": 2471.92,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 30.29,
+            "max": 30.74,
+            "mean": 30.56,
+            "median": 30.55,
+            "stddev": 0.17
+          },
+          "peak_memory_stats": {
+            "min": 2462.1,
+            "max": 2482.1,
+            "mean": 2471.92,
+            "median": 2474.5,
+            "stddev": 8.29
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 8.01,
+          "peak_memory_mb": 459.18,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 7.87,
+            "max": 8.14,
+            "mean": 8.01,
+            "median": 8.01,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 458.3,
+            "max": 460.2,
+            "mean": 459.18,
+            "median": 459.0,
+            "stddev": 0.69
+          }
+        }
+      }
+    },
+    {
+      "package_name": "open-webui",
+      "github_url": "https://github.com/open-webui/open-webui",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 5.73,
+          "peak_memory_mb": 1307.3,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 5.63,
+            "max": 5.79,
+            "mean": 5.73,
+            "median": 5.72,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 1301.2,
+            "max": 1315.4,
+            "mean": 1307.3,
+            "median": 1305.4,
+            "stddev": 5.87
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.46,
+          "peak_memory_mb": 751.98,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.43,
+            "max": 0.54,
+            "mean": 0.46,
+            "median": 0.44,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 735.5,
+            "max": 763.4,
+            "mean": 751.98,
+            "median": 759.6,
+            "stddev": 12.69
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.33,
+          "peak_memory_mb": 667.84,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.32,
+            "max": 0.33,
+            "mean": 0.33,
+            "median": 0.33,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 662.6,
+            "max": 673.0,
+            "mean": 667.84,
+            "median": 669.8,
+            "stddev": 4.67
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 20.43,
+          "peak_memory_mb": 1541.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 20.06,
+            "max": 20.8,
+            "mean": 20.43,
+            "median": 20.53,
+            "stddev": 0.31
+          },
+          "peak_memory_stats": {
+            "min": 1538.3,
+            "max": 1544.2,
+            "mean": 1541.62,
+            "median": 1542.0,
+            "stddev": 2.13
+          }
+        }
+      }
+    },
+    {
+      "package_name": "openai",
+      "github_url": "https://github.com/openai/openai-python",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 3.9,
+          "peak_memory_mb": 904.56,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.75,
+            "max": 4.04,
+            "mean": 3.9,
+            "median": 3.85,
+            "stddev": 0.13
+          },
+          "peak_memory_stats": {
+            "min": 900.0,
+            "max": 906.5,
+            "mean": 904.56,
+            "median": 905.0,
+            "stddev": 2.64
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.32,
+          "peak_memory_mb": 340.16,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.32,
+            "mean": 0.32,
+            "median": 0.32,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 335.8,
+            "max": 344.5,
+            "mean": 340.16,
+            "median": 340.7,
+            "stddev": 4.14
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 4.58,
+          "peak_memory_mb": 481.54,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.57,
+            "max": 4.6,
+            "mean": 4.58,
+            "median": 4.59,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 479.2,
+            "max": 484.5,
+            "mean": 481.54,
+            "median": 480.8,
+            "stddev": 2.1
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 6.27,
+          "peak_memory_mb": 465.24,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 6.21,
+            "max": 6.36,
+            "mean": 6.27,
+            "median": 6.23,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 464.5,
+            "max": 466.4,
+            "mean": 465.24,
+            "median": 465.1,
+            "stddev": 0.71
+          }
+        }
+      }
+    },
+    {
+      "package_name": "pandas",
+      "github_url": "https://github.com/pandas-dev/pandas",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 144.38,
+          "peak_memory_mb": 3986.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 141.36,
+            "max": 147.56,
+            "mean": 144.38,
+            "median": 143.96,
+            "stddev": 2.38
+          },
+          "peak_memory_stats": {
+            "min": 3888.7,
+            "max": 4038.0,
+            "mean": 3986.62,
+            "median": 4021.3,
+            "stddev": 62.28
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 1.92,
+          "peak_memory_mb": 807.04,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.87,
+            "max": 1.98,
+            "mean": 1.92,
+            "median": 1.88,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 796.9,
+            "max": 826.0,
+            "mean": 807.04,
+            "median": 804.9,
+            "stddev": 11.77
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 1.45,
+          "peak_memory_mb": 1640.68,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.44,
+            "max": 1.47,
+            "mean": 1.45,
+            "median": 1.46,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 1638.0,
+            "max": 1642.7,
+            "mean": 1640.68,
+            "median": 1641.1,
+            "stddev": 1.83
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 13.85,
+          "peak_memory_mb": 892.42,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 13.74,
+            "max": 14.04,
+            "mean": 13.85,
+            "median": 13.85,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 891.5,
+            "max": 893.4,
+            "mean": 892.42,
+            "median": 892.3,
+            "stddev": 0.82
+          }
+        }
+      }
+    },
+    {
+      "package_name": "prefect",
+      "github_url": "https://github.com/PrefectHQ/prefect",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 26.34,
+          "peak_memory_mb": 2435.02,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 25.79,
+            "max": 27.29,
+            "mean": 26.34,
+            "median": 26.24,
+            "stddev": 0.57
+          },
+          "peak_memory_stats": {
+            "min": 2422.9,
+            "max": 2475.1,
+            "mean": 2435.02,
+            "median": 2426.1,
+            "stddev": 22.45
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.76,
+          "peak_memory_mb": 911.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.76,
+            "max": 0.77,
+            "mean": 0.76,
+            "median": 0.76,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 905.6,
+            "max": 916.0,
+            "mean": 911.88,
+            "median": 912.6,
+            "stddev": 3.83
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.7,
+          "peak_memory_mb": 1299.98,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.64,
+            "max": 0.77,
+            "mean": 0.7,
+            "median": 0.66,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 1296.2,
+            "max": 1303.3,
+            "mean": 1299.98,
+            "median": 1300.2,
+            "stddev": 2.86
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 14.78,
+          "peak_memory_mb": 1056.32,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 14.68,
+            "max": 14.89,
+            "mean": 14.78,
+            "median": 14.76,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 1053.8,
+            "max": 1060.7,
+            "mean": 1056.32,
+            "median": 1055.8,
+            "stddev": 2.62
+          }
+        }
+      }
+    },
+    {
+      "package_name": "pydantic",
+      "github_url": "https://github.com/pydantic/pydantic",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 4.34,
+          "peak_memory_mb": 661.22,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.2,
+            "max": 4.53,
+            "mean": 4.34,
+            "median": 4.32,
+            "stddev": 0.13
+          },
+          "peak_memory_stats": {
+            "min": 659.0,
+            "max": 664.5,
+            "mean": 661.22,
+            "median": 660.7,
+            "stddev": 2.01
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 4.58,
+          "peak_memory_mb": 311.78,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.44,
+            "max": 4.69,
+            "mean": 4.58,
+            "median": 4.57,
+            "stddev": 0.1
+          },
+          "peak_memory_stats": {
+            "min": 308.0,
+            "max": 315.2,
+            "mean": 311.78,
+            "median": 312.4,
+            "stddev": 2.69
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.44,
+          "peak_memory_mb": 311.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.43,
+            "max": 0.44,
+            "mean": 0.44,
+            "median": 0.44,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 307.8,
+            "max": 314.3,
+            "mean": 311.2,
+            "median": 311.5,
+            "stddev": 2.54
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 5.1,
+          "peak_memory_mb": 457.44,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.94,
+            "max": 5.34,
+            "mean": 5.1,
+            "median": 5.04,
+            "stddev": 0.15
+          },
+          "peak_memory_stats": {
+            "min": 457.0,
+            "max": 457.7,
+            "mean": 457.44,
+            "median": 457.5,
+            "stddev": 0.3
+          }
+        }
+      }
+    },
+    {
+      "package_name": "pytest",
+      "github_url": "https://github.com/pytest-dev/pytest",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 4.01,
+          "peak_memory_mb": 865.92,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.97,
+            "max": 4.11,
+            "mean": 4.01,
+            "median": 3.97,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 864.7,
+            "max": 867.0,
+            "mean": 865.92,
+            "median": 865.8,
+            "stddev": 0.98
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.32,
+          "peak_memory_mb": 284.16,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.32,
+            "max": 0.33,
+            "mean": 0.32,
+            "median": 0.32,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 279.7,
+            "max": 288.5,
+            "mean": 284.16,
+            "median": 283.9,
+            "stddev": 3.15
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.22,
+          "peak_memory_mb": 355.32,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.22,
+            "mean": 0.22,
+            "median": 0.22,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 354.1,
+            "max": 356.8,
+            "mean": 355.32,
+            "median": 355.3,
+            "stddev": 1.19
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 3.64,
+          "peak_memory_mb": 356.34,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.56,
+            "max": 3.75,
+            "mean": 3.64,
+            "median": 3.62,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 355.2,
+            "max": 358.1,
+            "mean": 356.34,
+            "median": 355.8,
+            "stddev": 1.22
+          }
+        }
+      }
+    },
+    {
+      "package_name": "ray",
+      "github_url": "https://github.com/ray-project/ray",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 50.01,
+          "peak_memory_mb": 4337.42,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 48.13,
+            "max": 52.11,
+            "mean": 50.01,
+            "median": 49.54,
+            "stddev": 1.66
+          },
+          "peak_memory_stats": {
+            "min": 4249.4,
+            "max": 4395.7,
+            "mean": 4337.42,
+            "median": 4357.6,
+            "stddev": 55.23
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 2.03,
+          "peak_memory_mb": 1410.34,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.96,
+            "max": 2.07,
+            "mean": 2.03,
+            "median": 2.04,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 1404.0,
+            "max": 1424.7,
+            "mean": 1410.34,
+            "median": 1408.8,
+            "stddev": 8.39
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 1.75,
+          "peak_memory_mb": 2364.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.64,
+            "max": 1.84,
+            "mean": 1.75,
+            "median": 1.74,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 2363.4,
+            "max": 2369.5,
+            "mean": 2364.88,
+            "median": 2363.9,
+            "stddev": 2.6
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 33.86,
+          "peak_memory_mb": 1971.5,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 32.77,
+            "max": 34.92,
+            "mean": 33.86,
+            "median": 34.0,
+            "stddev": 0.81
+          },
+          "peak_memory_stats": {
+            "min": 1964.1,
+            "max": 1977.1,
+            "mean": 1971.5,
+            "median": 1974.4,
+            "stddev": 6.0
+          }
+        }
+      }
+    },
+    {
+      "package_name": "requests",
+      "github_url": "https://github.com/psf/requests",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 0.99,
+          "peak_memory_mb": 332.8,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.85,
+            "max": 1.08,
+            "mean": 0.99,
+            "median": 1.05,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 329.2,
+            "max": 335.7,
+            "mean": 332.8,
+            "median": 333.4,
+            "stddev": 2.43
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.22,
+          "peak_memory_mb": 152.52,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.22,
+            "mean": 0.22,
+            "median": 0.22,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 151.7,
+            "max": 153.3,
+            "mean": 152.52,
+            "median": 152.7,
+            "stddev": 0.66
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 102.96,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 101.9,
+            "max": 104.7,
+            "mean": 102.96,
+            "median": 102.7,
+            "stddev": 1.04
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.41,
+          "peak_memory_mb": 155.72,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.4,
+            "max": 1.47,
+            "mean": 1.41,
+            "median": 1.4,
+            "stddev": 0.03
+          },
+          "peak_memory_stats": {
+            "min": 155.4,
+            "max": 156.2,
+            "mean": 155.72,
+            "median": 155.6,
+            "stddev": 0.33
+          }
+        }
+      }
+    },
+    {
+      "package_name": "rich",
+      "github_url": "https://github.com/Textualize/rich",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 2.59,
+          "peak_memory_mb": 512.46,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.49,
+            "max": 2.79,
+            "mean": 2.59,
+            "median": 2.56,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 510.3,
+            "max": 513.3,
+            "mean": 512.46,
+            "median": 512.7,
+            "stddev": 1.24
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 171.92,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.22,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 169.6,
+            "max": 173.9,
+            "mean": 171.92,
+            "median": 172.4,
+            "stddev": 1.98
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 167.52,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.11,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 166.8,
+            "max": 168.3,
+            "mean": 167.52,
+            "median": 167.5,
+            "stddev": 0.57
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.56,
+          "peak_memory_mb": 161.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.49,
+            "max": 1.63,
+            "mean": 1.56,
+            "median": 1.59,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 160.4,
+            "max": 162.1,
+            "mean": 161.2,
+            "median": 161.1,
+            "stddev": 0.61
+          }
+        }
+      }
+    },
+    {
+      "package_name": "salt",
+      "github_url": "https://github.com/saltstack/salt",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 14.33,
+          "peak_memory_mb": 2282.48,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 14.27,
+            "max": 14.41,
+            "mean": 14.33,
+            "median": 14.33,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 2279.0,
+            "max": 2289.7,
+            "mean": 2282.48,
+            "median": 2281.1,
+            "stddev": 4.22
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 1.02,
+          "peak_memory_mb": 597.18,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.87,
+            "max": 1.18,
+            "mean": 1.02,
+            "median": 0.99,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 588.3,
+            "max": 610.8,
+            "mean": 597.18,
+            "median": 596.6,
+            "stddev": 9.08
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 1.37,
+          "peak_memory_mb": 962.72,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.2,
+            "max": 1.72,
+            "mean": 1.37,
+            "median": 1.31,
+            "stddev": 0.2
+          },
+          "peak_memory_stats": {
+            "min": 956.9,
+            "max": 971.2,
+            "mean": 962.72,
+            "median": 963.1,
+            "stddev": 5.67
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 12.3,
+          "peak_memory_mb": 757.08,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 12.19,
+            "max": 12.44,
+            "mean": 12.3,
+            "median": 12.34,
+            "stddev": 0.11
+          },
+          "peak_memory_stats": {
+            "min": 755.9,
+            "max": 758.6,
+            "mean": 757.08,
+            "median": 756.6,
+            "stddev": 1.13
+          }
+        }
+      }
+    },
+    {
+      "package_name": "scikit-learn",
+      "github_url": "https://github.com/scikit-learn/scikit-learn",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 31.85,
+          "peak_memory_mb": 2815.38,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 31.58,
+            "max": 32.25,
+            "mean": 31.85,
+            "median": 31.84,
+            "stddev": 0.25
+          },
+          "peak_memory_stats": {
+            "min": 2803.1,
+            "max": 2832.4,
+            "mean": 2815.38,
+            "median": 2808.2,
+            "stddev": 14.43
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 1.99,
+          "peak_memory_mb": 778.72,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.94,
+            "max": 2.07,
+            "mean": 1.99,
+            "median": 1.97,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 770.3,
+            "max": 795.5,
+            "mean": 778.72,
+            "median": 774.4,
+            "stddev": 9.98
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 1.68,
+          "peak_memory_mb": 1303.3,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.62,
+            "max": 1.73,
+            "mean": 1.68,
+            "median": 1.69,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 1296.1,
+            "max": 1307.6,
+            "mean": 1303.3,
+            "median": 1305.2,
+            "stddev": 4.46
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 21.35,
+          "peak_memory_mb": 1230.8,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 20.13,
+            "max": 23.5,
+            "mean": 21.35,
+            "median": 20.88,
+            "stddev": 1.28
+          },
+          "peak_memory_stats": {
+            "min": 1228.8,
+            "max": 1232.6,
+            "mean": 1230.8,
+            "median": 1230.8,
+            "stddev": 1.38
+          }
+        }
+      }
+    },
+    {
+      "package_name": "scipy",
+      "github_url": "https://github.com/scipy/scipy",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 151.27,
+          "peak_memory_mb": 3790.0,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 146.89,
+            "max": 157.55,
+            "mean": 151.27,
+            "median": 150.26,
+            "stddev": 4.34
+          },
+          "peak_memory_stats": {
+            "min": 3639.1,
+            "max": 3876.4,
+            "mean": 3790.0,
+            "median": 3796.7,
+            "stddev": 91.25
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 4.84,
+          "peak_memory_mb": 874.68,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.66,
+            "max": 5.08,
+            "mean": 4.84,
+            "median": 4.77,
+            "stddev": 0.19
+          },
+          "peak_memory_stats": {
+            "min": 859.8,
+            "max": 883.1,
+            "mean": 874.68,
+            "median": 874.9,
+            "stddev": 9.11
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 2.84,
+          "peak_memory_mb": 2451.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.71,
+            "max": 2.92,
+            "mean": 2.84,
+            "median": 2.82,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 2449.5,
+            "max": 2456.5,
+            "mean": 2451.62,
+            "median": 2451.1,
+            "stddev": 2.88
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 19.99,
+          "peak_memory_mb": 1172.76,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 19.79,
+            "max": 20.47,
+            "mean": 19.99,
+            "median": 19.86,
+            "stddev": 0.28
+          },
+          "peak_memory_stats": {
+            "min": 1171.7,
+            "max": 1175.1,
+            "mean": 1172.76,
+            "median": 1172.3,
+            "stddev": 1.37
+          }
+        }
+      }
+    },
+    {
+      "package_name": "scrapy",
+      "github_url": "https://github.com/scrapy/scrapy",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 3.77,
+          "peak_memory_mb": 870.06,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.65,
+            "max": 3.94,
+            "mean": 3.77,
+            "median": 3.75,
+            "stddev": 0.11
+          },
+          "peak_memory_stats": {
+            "min": 866.7,
+            "max": 872.8,
+            "mean": 870.06,
+            "median": 869.4,
+            "stddev": 2.65
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.31,
+          "peak_memory_mb": 270.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.31,
+            "mean": 0.31,
+            "median": 0.31,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 269.7,
+            "max": 271.5,
+            "mean": 270.62,
+            "median": 270.5,
+            "stddev": 0.73
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 370.54,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 368.8,
+            "max": 371.5,
+            "mean": 370.54,
+            "median": 370.8,
+            "stddev": 1.04
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 4.47,
+          "peak_memory_mb": 409.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.37,
+            "max": 4.58,
+            "mean": 4.47,
+            "median": 4.46,
+            "stddev": 0.1
+          },
+          "peak_memory_stats": {
+            "min": 407.9,
+            "max": 412.0,
+            "mean": 409.2,
+            "median": 408.4,
+            "stddev": 1.7
+          }
+        }
+      }
+    },
+    {
+      "package_name": "sentry-sdk",
+      "github_url": "https://github.com/getsentry/sentry-python",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 2.98,
+          "peak_memory_mb": 778.78,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.92,
+            "max": 3.03,
+            "mean": 2.98,
+            "median": 3.01,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 772.9,
+            "max": 784.8,
+            "mean": 778.78,
+            "median": 778.6,
+            "stddev": 4.68
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.32,
+          "peak_memory_mb": 393.86,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.32,
+            "mean": 0.32,
+            "median": 0.32,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 392.1,
+            "max": 395.3,
+            "mean": 393.86,
+            "median": 394.4,
+            "stddev": 1.26
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 322.66,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 320.8,
+            "max": 324.4,
+            "mean": 322.66,
+            "median": 322.7,
+            "stddev": 1.39
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 17.76,
+          "peak_memory_mb": 1417.98,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 17.57,
+            "max": 18.0,
+            "mean": 17.76,
+            "median": 17.74,
+            "stddev": 0.16
+          },
+          "peak_memory_stats": {
+            "min": 1411.6,
+            "max": 1421.6,
+            "mean": 1417.98,
+            "median": 1418.3,
+            "stddev": 3.92
+          }
+        }
+      }
+    },
+    {
+      "package_name": "setuptools",
+      "github_url": "https://github.com/pypa/setuptools",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 4.3,
+          "peak_memory_mb": 880.94,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.18,
+            "max": 4.39,
+            "mean": 4.3,
+            "median": 4.29,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 877.0,
+            "max": 883.9,
+            "mean": 880.94,
+            "median": 881.7,
+            "stddev": 2.62
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.36,
+          "peak_memory_mb": 296.76,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.31,
+            "max": 0.54,
+            "mean": 0.36,
+            "median": 0.32,
+            "stddev": 0.1
+          },
+          "peak_memory_stats": {
+            "min": 289.6,
+            "max": 299.9,
+            "mean": 296.76,
+            "median": 299.7,
+            "stddev": 4.55
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.35,
+          "peak_memory_mb": 360.34,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.22,
+            "max": 0.55,
+            "mean": 0.35,
+            "median": 0.32,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 357.9,
+            "max": 362.5,
+            "mean": 360.34,
+            "median": 360.4,
+            "stddev": 1.82
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 2.42,
+          "peak_memory_mb": 245.04,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.36,
+            "max": 2.48,
+            "mean": 2.42,
+            "median": 2.43,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 244.0,
+            "max": 246.0,
+            "mean": 245.04,
+            "median": 245.1,
+            "stddev": 0.75
+          }
+        }
+      }
+    },
+    {
+      "package_name": "sqlalchemy",
+      "github_url": "https://github.com/sqlalchemy/sqlalchemy",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 8.13,
+          "peak_memory_mb": 1384.52,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 8.01,
+            "max": 8.37,
+            "mean": 8.13,
+            "median": 8.08,
+            "stddev": 0.14
+          },
+          "peak_memory_stats": {
+            "min": 1379.7,
+            "max": 1389.5,
+            "mean": 1384.52,
+            "median": 1382.4,
+            "stddev": 4.52
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.46,
+          "peak_memory_mb": 509.76,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.42,
+            "max": 0.52,
+            "mean": 0.46,
+            "median": 0.42,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 498.4,
+            "max": 522.0,
+            "mean": 509.76,
+            "median": 506.6,
+            "stddev": 9.53
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.56,
+          "peak_memory_mb": 815.46,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.52,
+            "max": 0.62,
+            "mean": 0.56,
+            "median": 0.53,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 812.9,
+            "max": 820.3,
+            "mean": 815.46,
+            "median": 814.2,
+            "stddev": 3.15
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 4.52,
+          "peak_memory_mb": 358.78,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.15,
+            "max": 5.83,
+            "mean": 4.52,
+            "median": 4.17,
+            "stddev": 0.73
+          },
+          "peak_memory_stats": {
+            "min": 356.5,
+            "max": 362.0,
+            "mean": 358.78,
+            "median": 357.2,
+            "stddev": 2.69
+          }
+        }
+      }
+    },
+    {
+      "package_name": "starlette",
+      "github_url": "https://github.com/encode/starlette",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.77,
+          "peak_memory_mb": 483.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.77,
+            "max": 1.78,
+            "mean": 1.77,
+            "median": 1.77,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 480.4,
+            "max": 485.3,
+            "mean": 483.2,
+            "median": 483.9,
+            "stddev": 2.11
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 211.44,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 210.7,
+            "max": 212.3,
+            "mean": 211.44,
+            "median": 211.1,
+            "stddev": 0.68
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 178.88,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 178.0,
+            "max": 179.8,
+            "mean": 178.88,
+            "median": 178.7,
+            "stddev": 0.69
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 3.68,
+          "peak_memory_mb": 368.9,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.64,
+            "max": 3.73,
+            "mean": 3.68,
+            "median": 3.66,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 368.2,
+            "max": 369.6,
+            "mean": 368.9,
+            "median": 368.9,
+            "stddev": 0.57
+          }
+        }
+      }
+    },
+    {
+      "package_name": "streamlit",
+      "github_url": "https://github.com/streamlit/streamlit",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 7.49,
+          "peak_memory_mb": 1675.92,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 7.41,
+            "max": 7.63,
+            "mean": 7.49,
+            "median": 7.48,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 1656.0,
+            "max": 1694.6,
+            "mean": 1675.92,
+            "median": 1677.6,
+            "stddev": 15.5
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.5,
+          "peak_memory_mb": 587.78,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.42,
+            "max": 0.53,
+            "mean": 0.5,
+            "median": 0.52,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 585.5,
+            "max": 589.2,
+            "mean": 587.78,
+            "median": 587.8,
+            "stddev": 1.49
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.56,
+          "peak_memory_mb": 806.36,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.52,
+            "max": 0.63,
+            "mean": 0.56,
+            "median": 0.53,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 803.0,
+            "max": 809.7,
+            "mean": 806.36,
+            "median": 805.4,
+            "stddev": 2.99
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 7.53,
+          "peak_memory_mb": 625.94,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 7.38,
+            "max": 7.69,
+            "mean": 7.53,
+            "median": 7.49,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 624.7,
+            "max": 627.0,
+            "mean": 625.94,
+            "median": 626.1,
+            "stddev": 0.86
+          }
+        }
+      }
+    },
+    {
+      "package_name": "sympy",
+      "github_url": "https://github.com/sympy/sympy",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 79.9,
+          "peak_memory_mb": 4190.46,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 77.3,
+            "max": 81.21,
+            "mean": 79.9,
+            "median": 80.09,
+            "stddev": 1.57
+          },
+          "peak_memory_stats": {
+            "min": 4147.6,
+            "max": 4207.2,
+            "mean": 4190.46,
+            "median": 4198.7,
+            "stddev": 24.69
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 4.03,
+          "peak_memory_mb": 974.46,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.86,
+            "max": 4.17,
+            "mean": 4.03,
+            "median": 4.07,
+            "stddev": 0.12
+          },
+          "peak_memory_stats": {
+            "min": 943.6,
+            "max": 1027.4,
+            "mean": 974.46,
+            "median": 965.9,
+            "stddev": 31.69
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 1.6,
+          "peak_memory_mb": 2168.38,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.56,
+            "max": 1.68,
+            "mean": 1.6,
+            "median": 1.56,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 2163.7,
+            "max": 2182.8,
+            "mean": 2168.38,
+            "median": 2164.5,
+            "stddev": 8.19
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 15.54,
+          "peak_memory_mb": 1448.32,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 15.36,
+            "max": 15.83,
+            "mean": 15.54,
+            "median": 15.48,
+            "stddev": 0.18
+          },
+          "peak_memory_stats": {
+            "min": 1436.9,
+            "max": 1460.9,
+            "mean": 1448.32,
+            "median": 1447.2,
+            "stddev": 8.61
+          }
+        }
+      }
+    },
+    {
+      "package_name": "tensorflow",
+      "github_url": "https://github.com/tensorflow/tensorflow",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 53.68,
+          "peak_memory_mb": 4153.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 52.65,
+            "max": 55.23,
+            "mean": 53.68,
+            "median": 53.11,
+            "stddev": 1.18
+          },
+          "peak_memory_stats": {
+            "min": 4113.2,
+            "max": 4207.1,
+            "mean": 4153.2,
+            "median": 4151.4,
+            "stddev": 36.37
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 2.44,
+          "peak_memory_mb": 854.36,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.37,
+            "max": 2.49,
+            "mean": 2.44,
+            "median": 2.45,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 836.7,
+            "max": 873.5,
+            "mean": 854.36,
+            "median": 854.1,
+            "stddev": 14.48
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 1.95,
+          "peak_memory_mb": 2364.52,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.82,
+            "max": 2.04,
+            "mean": 1.95,
+            "median": 1.94,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 2356.0,
+            "max": 2371.0,
+            "mean": 2364.52,
+            "median": 2367.3,
+            "stddev": 6.14
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 30.57,
+          "peak_memory_mb": 1484.28,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 30.33,
+            "max": 30.77,
+            "mean": 30.57,
+            "median": 30.62,
+            "stddev": 0.19
+          },
+          "peak_memory_stats": {
+            "min": 1482.5,
+            "max": 1485.9,
+            "mean": 1484.28,
+            "median": 1484.4,
+            "stddev": 1.24
+          }
+        }
+      }
+    },
+    {
+      "package_name": "transformers",
+      "github_url": "https://github.com/huggingface/transformers",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 73.59,
+          "peak_memory_mb": 4236.36,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 68.24,
+            "max": 78.02,
+            "mean": 73.59,
+            "median": 74.06,
+            "stddev": 3.8
+          },
+          "peak_memory_stats": {
+            "min": 4193.2,
+            "max": 4297.8,
+            "mean": 4236.36,
+            "median": 4222.4,
+            "stddev": 39.62
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 3.55,
+          "peak_memory_mb": 1435.22,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.42,
+            "max": 3.62,
+            "mean": 3.55,
+            "median": 3.54,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 1406.5,
+            "max": 1480.8,
+            "mean": 1435.22,
+            "median": 1431.7,
+            "stddev": 29.1
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 5.12,
+          "peak_memory_mb": 3335.98,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.66,
+            "max": 5.39,
+            "mean": 5.12,
+            "median": 5.18,
+            "stddev": 0.28
+          },
+          "peak_memory_stats": {
+            "min": 3328.8,
+            "max": 3346.2,
+            "mean": 3335.98,
+            "median": 3334.2,
+            "stddev": 7.16
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 43.53,
+          "peak_memory_mb": 2440.64,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 42.65,
+            "max": 44.94,
+            "mean": 43.53,
+            "median": 42.93,
+            "stddev": 1.02
+          },
+          "peak_memory_stats": {
+            "min": 2437.9,
+            "max": 2443.0,
+            "mean": 2440.64,
+            "median": 2440.8,
+            "stddev": 1.96
+          }
+        }
+      }
+    },
+    {
+      "package_name": "trio",
+      "github_url": "https://github.com/python-trio/trio",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 2.84,
+          "peak_memory_mb": 606.2,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.8,
+            "max": 2.9,
+            "mean": 2.84,
+            "median": 2.82,
+            "stddev": 0.05
+          },
+          "peak_memory_stats": {
+            "min": 603.8,
+            "max": 607.9,
+            "mean": 606.2,
+            "median": 606.4,
+            "stddev": 1.52
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 252.28,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 250.6,
+            "max": 254.3,
+            "mean": 252.28,
+            "median": 252.3,
+            "stddev": 1.47
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 253.58,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 251.5,
+            "max": 255.9,
+            "mean": 253.58,
+            "median": 253.2,
+            "stddev": 1.96
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 3.97,
+          "peak_memory_mb": 361.64,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 3.84,
+            "max": 4.04,
+            "mean": 3.97,
+            "median": 4.01,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 360.4,
+            "max": 362.5,
+            "mean": 361.64,
+            "median": 362.0,
+            "stddev": 0.87
+          }
+        }
+      }
+    },
+    {
+      "package_name": "typer",
+      "github_url": "https://github.com/tiangolo/typer",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 0.93,
+          "peak_memory_mb": 336.36,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.83,
+            "max": 1.03,
+            "mean": 0.93,
+            "median": 0.94,
+            "stddev": 0.07
+          },
+          "peak_memory_stats": {
+            "min": 334.7,
+            "max": 337.1,
+            "mean": 336.36,
+            "median": 336.8,
+            "stddev": 0.99
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 149.58,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 149.0,
+            "max": 150.6,
+            "mean": 149.58,
+            "median": 149.6,
+            "stddev": 0.63
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 99.02,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 98.5,
+            "max": 100.0,
+            "mean": 99.02,
+            "median": 98.8,
+            "stddev": 0.61
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.56,
+          "peak_memory_mb": 165.28,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.55,
+            "max": 1.57,
+            "mean": 1.56,
+            "median": 1.56,
+            "stddev": 0.01
+          },
+          "peak_memory_stats": {
+            "min": 164.9,
+            "max": 165.8,
+            "mean": 165.28,
+            "median": 165.3,
+            "stddev": 0.36
+          }
+        }
+      }
+    },
+    {
+      "package_name": "urllib3",
+      "github_url": "https://github.com/urllib3/urllib3",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 2.31,
+          "peak_memory_mb": 536.66,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.18,
+            "max": 2.39,
+            "mean": 2.31,
+            "median": 2.3,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 528.3,
+            "max": 541.4,
+            "mean": 536.66,
+            "median": 540.5,
+            "stddev": 5.88
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 234.62,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 232.1,
+            "max": 235.9,
+            "mean": 234.62,
+            "median": 235.1,
+            "stddev": 1.56
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 231.08,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.2,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 227.9,
+            "max": 232.6,
+            "mean": 231.08,
+            "median": 231.5,
+            "stddev": 1.84
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 4.06,
+          "peak_memory_mb": 376.02,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 4.03,
+            "max": 4.13,
+            "mean": 4.06,
+            "median": 4.04,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 374.8,
+            "max": 377.3,
+            "mean": 376.02,
+            "median": 376.1,
+            "stddev": 1.11
+          }
+        }
+      }
+    },
+    {
+      "package_name": "uvicorn",
+      "github_url": "https://github.com/encode/uvicorn",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 1.16,
+          "peak_memory_mb": 369.56,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.13,
+            "max": 1.23,
+            "mean": 1.16,
+            "median": 1.15,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 369.0,
+            "max": 370.1,
+            "mean": 369.56,
+            "median": 369.5,
+            "stddev": 0.4
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 161.0,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 159.2,
+            "max": 162.2,
+            "mean": 161.0,
+            "median": 160.9,
+            "stddev": 1.18
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 131.4,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.1,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 130.5,
+            "max": 132.4,
+            "mean": 131.4,
+            "median": 131.5,
+            "stddev": 0.71
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 2.4,
+          "peak_memory_mb": 217.92,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 2.28,
+            "max": 2.48,
+            "mean": 2.4,
+            "median": 2.39,
+            "stddev": 0.08
+          },
+          "peak_memory_stats": {
+            "min": 217.4,
+            "max": 218.3,
+            "mean": 217.92,
+            "median": 217.8,
+            "stddev": 0.38
+          }
+        }
+      }
+    },
+    {
+      "package_name": "wheel",
+      "github_url": "https://github.com/pypa/wheel",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 0.79,
+          "peak_memory_mb": 311.7,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.73,
+            "max": 0.93,
+            "mean": 0.79,
+            "median": 0.73,
+            "stddev": 0.09
+          },
+          "peak_memory_stats": {
+            "min": 310.1,
+            "max": 313.1,
+            "mean": 311.7,
+            "median": 311.8,
+            "stddev": 1.07
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.21,
+          "peak_memory_mb": 127.78,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.21,
+            "max": 0.21,
+            "mean": 0.21,
+            "median": 0.21,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 127.0,
+            "max": 128.8,
+            "mean": 127.78,
+            "median": 127.4,
+            "stddev": 0.86
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.11,
+          "peak_memory_mb": 91.86,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.11,
+            "max": 0.11,
+            "mean": 0.11,
+            "median": 0.11,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 91.3,
+            "max": 92.4,
+            "mean": 91.86,
+            "median": 92.0,
+            "stddev": 0.42
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 1.08,
+          "peak_memory_mb": 127.24,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 1.04,
+            "max": 1.15,
+            "mean": 1.08,
+            "median": 1.04,
+            "stddev": 0.06
+          },
+          "peak_memory_stats": {
+            "min": 126.8,
+            "max": 127.5,
+            "mean": 127.24,
+            "median": 127.3,
+            "stddev": 0.27
+          }
+        }
+      }
+    },
+    {
+      "package_name": "yt-dlp",
+      "github_url": "https://github.com/yt-dlp/yt-dlp",
+      "error": null,
+      "metrics": {
+        "pyright": {
+          "ok": true,
+          "execution_time_s": 9.05,
+          "peak_memory_mb": 1476.46,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 8.79,
+            "max": 9.36,
+            "mean": 9.05,
+            "median": 9.03,
+            "stddev": 0.2
+          },
+          "peak_memory_stats": {
+            "min": 1473.1,
+            "max": 1482.0,
+            "mean": 1476.46,
+            "median": 1474.6,
+            "stddev": 3.63
+          }
+        },
+        "pyrefly": {
+          "ok": true,
+          "execution_time_s": 0.65,
+          "peak_memory_mb": 339.9,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.63,
+            "max": 0.72,
+            "mean": 0.65,
+            "median": 0.63,
+            "stddev": 0.04
+          },
+          "peak_memory_stats": {
+            "min": 334.0,
+            "max": 346.7,
+            "mean": 339.9,
+            "median": 339.9,
+            "stddev": 4.52
+          }
+        },
+        "ty": {
+          "ok": true,
+          "execution_time_s": 0.42,
+          "peak_memory_mb": 625.54,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 0.41,
+            "max": 0.42,
+            "mean": 0.42,
+            "median": 0.42,
+            "stddev": 0.0
+          },
+          "peak_memory_stats": {
+            "min": 619.5,
+            "max": 630.0,
+            "mean": 625.54,
+            "median": 626.8,
+            "stddev": 3.92
+          }
+        },
+        "mypy": {
+          "ok": true,
+          "execution_time_s": 8.13,
+          "peak_memory_mb": 461.18,
+          "runs": 5,
+          "execution_time_stats": {
+            "min": 7.98,
+            "max": 8.4,
+            "mean": 8.13,
+            "median": 8.08,
+            "stddev": 0.17
+          },
+          "peak_memory_stats": {
+            "min": 460.5,
+            "max": 462.0,
+            "mean": 461.18,
+            "median": 461.3,
+            "stddev": 0.6
+          }
+        }
+      }
+    }
+  ]
+}

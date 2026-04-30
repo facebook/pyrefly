@@ -17,6 +17,7 @@ use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 
+use crate::base::InferReturnTypes;
 use crate::base::RecursionOverflowHandler;
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
@@ -141,9 +142,24 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     use_ignore_files: Option<bool>,
+    /// Deprecated: use --check-unannotated-defs and --infer-return-types instead.
     /// Controls how Pyrefly analyzes function definitions that lack type annotations on parameters and return values.
     #[arg(long)]
     untyped_def_behavior: Option<UntypedDefBehavior>,
+    /// Whether to type check the bodies of unannotated function definitions.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    check_unannotated_defs: Option<bool>,
+    /// Controls when return types are inferred for functions without return annotations.
+    /// Values: never, annotated, checked (default).
+    /// Only applies to functions whose bodies are checked; unannotated functions
+    /// are only eligible when --check-unannotated-defs is true.
+    #[arg(long)]
+    infer_return_types: Option<InferReturnTypes>,
     /// Whether Pyrefly will respect ignore statements for other tools, e.g. `# pyright: ignore`.
     /// Equivalent to passing the names of all tools to `--enabled-ignores`.
     #[arg(
@@ -176,6 +192,31 @@ pub struct ConfigOverrideArgs {
     /// How to handle when recursion depth limit is exceeded.
     #[arg(long)]
     recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// (Experimental) Enable tensor shape type inference.
+    /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
+    #[arg(long)]
+    tensor_shapes: Option<bool>,
+    /// Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.
+    /// When false (the default), callables with `*args: Any, **kwargs: Any` are treated as
+    /// compatible with any signature (similar to `...` behavior).
+    /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    strict_callable_subtyping: Option<bool>,
+    /// Whether to use spec-compliant overload evaluation semantics.
+    /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
+    /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    spec_compliant_overloads: Option<bool>,
 }
 
 impl ConfigOverrideArgs {
@@ -296,6 +337,12 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.untyped_def_behavior {
             config.root.untyped_def_behavior = Some(*x);
         }
+        if let Some(x) = &self.check_unannotated_defs {
+            config.root.check_unannotated_defs = Some(*x);
+        }
+        if let Some(x) = &self.infer_return_types {
+            config.root.infer_return_types = Some(*x);
+        }
         match (self.permissive_ignores, &self.enabled_ignores) {
             // Special case: if the underlying config sets enabled-ignores and --permissive-ignores
             // is passed on the command-line, we overwrite enabled-ignores.
@@ -355,6 +402,15 @@ impl ConfigOverrideArgs {
         if let Some(x) = &self.recursion_overflow_handler {
             config.root.recursion_overflow_handler = Some(*x);
         }
+        if let Some(x) = &self.tensor_shapes {
+            config.root.tensor_shapes = Some(*x);
+        }
+        if let Some(x) = &self.strict_callable_subtyping {
+            config.root.strict_callable_subtyping = Some(*x);
+        }
+        if let Some(x) = &self.spec_compliant_overloads {
+            config.root.spec_compliant_overloads = Some(*x);
+        }
         let apply_error_settings = |error_config: &mut ErrorDisplayConfig| {
             for error_kind in &self.error {
                 error_config.set_error_severity(*error_kind, Severity::Error);
@@ -381,5 +437,27 @@ impl ConfigOverrideArgs {
 
     pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
         self.disable_project_excludes_heuristics
+    }
+
+    /// Set the `untyped_def_behavior` override, but only if the user hasn't
+    /// already specified one via the CLI.
+    pub fn set_untyped_def_behavior_if_unset(&mut self, behavior: UntypedDefBehavior) {
+        if self.untyped_def_behavior.is_none() {
+            self.untyped_def_behavior = Some(behavior);
+        }
+    }
+
+    /// Set `check_unannotated_defs` if not already specified via CLI.
+    pub fn set_check_unannotated_defs_if_unset(&mut self, value: bool) {
+        if self.check_unannotated_defs.is_none() {
+            self.check_unannotated_defs = Some(value);
+        }
+    }
+
+    /// Set `infer_return_types` if not already specified via CLI.
+    pub fn set_infer_return_types_if_unset(&mut self, value: InferReturnTypes) {
+        if self.infer_return_types.is_none() {
+            self.infer_return_types = Some(value);
+        }
     }
 }

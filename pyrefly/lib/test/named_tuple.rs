@@ -61,6 +61,27 @@ assert_type(Point6(1, 2).x, int)
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2874
+testcase!(
+    test_named_tuple_functional_name_mismatch,
+    r#"
+from collections import namedtuple
+from typing import Any, NamedTuple, assert_type
+
+repo_details = namedtuple(
+    "RepoDetails",  # E: Expected string literal "repo_details"
+    ("source_dir", "local_dest", "file", "age"),
+)
+typing_repo_details = NamedTuple(
+    "TypingRepoDetails",  # E: Expected string literal "typing_repo_details"
+    [("source_dir", str), ("local_dest", str), ("file", str), ("age", int)],
+)
+
+assert_type(repo_details("", "", "", 1).source_dir, Any)
+assert_type(typing_repo_details("", "", "", 1).age, int)
+    "#,
+);
+
 testcase!(
     test_named_tuple_functional_defaults_and_constructor,
     r#"
@@ -77,6 +98,86 @@ p1_3 = Point2()  # Okay
 Point3 = NamedTuple('Point3', [('x', int), ('y', int)])
 Point3(1, 2)
 Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2811
+testcase!(
+    test_inline_collections_namedtuple_constructor,
+    r#"
+import collections
+from typing import Any, assert_type
+
+device = collections.namedtuple("FakeDevice", ["type", "index"])("lazy-caster", 0)
+assert_type(device.type, Any)
+assert_type(device.index, Any)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2811
+testcase!(
+    test_inline_typing_namedtuple_constructor,
+    r#"
+from typing import NamedTuple, assert_type
+
+point = NamedTuple("Point", [("x", int), ("y", int)])(1, 2)
+assert_type(point.x, int)
+assert_type(point.y, int)
+    "#,
+);
+
+// Verify that the constructor call arguments of an inline namedtuple are type-checked.
+testcase!(
+    test_inline_typing_namedtuple_constructor_bad_args,
+    r#"
+from typing import NamedTuple
+
+point = NamedTuple("Point", [("x", int), ("y", int)])("not_int", "also_not_int")  # E: is not assignable to parameter `x`  # E: is not assignable to parameter `y`
+    "#,
+);
+
+// Namedtuple elements like `index` and `count` shadow tuple methods but are
+// not true overrides — verify no spurious BadOverride error.
+testcase!(
+    test_named_tuple_element_shadows_tuple_method,
+    r#"
+from typing import NamedTuple, assert_type
+
+class MyTuple(NamedTuple):
+    index: int
+    count: str
+
+t = MyTuple(index=1, count="a")
+assert_type(t.index, int)
+assert_type(t.count, str)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2734
+// Starred expressions in field lists can't be fully resolved statically,
+// so the namedtuple has dynamic fields. String literals alongside the
+// starred expression are still extracted as known fields.
+testcase!(
+    test_named_tuple_spread_fields_from_namedtuple,
+    r#"
+import collections
+from typing import assert_type, Any
+
+BaseFieldInfo = collections.namedtuple("BaseFieldInfo", ["name", "type_code", "size"])
+ExtendedFieldInfo = collections.namedtuple(
+    "ExtendedFieldInfo",
+    [*BaseFieldInfo._fields, "extra", "comment"],
+)
+
+# Constructor accepts any args since field positions are unknown
+info = ExtendedFieldInfo("col1", 1, 100, "extra_val", "a comment")
+# Also valid: fewer args, since we can't know which are required
+info2 = ExtendedFieldInfo("col1", 1)
+# Known fields are accessible as attributes
+assert_type(info.extra, Any)
+assert_type(info.comment, Any)
+# Unknown fields are also accessible (dynamic)
+assert_type(info.anything, Any)
     "#,
 );
 
@@ -163,8 +264,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: BoundMethod[Pair, (self: Pair) -> Iterable[int | str]]
-    reveal_type(p2.__iter__)  # E: BoundMethod[Pair2[bytes], (self: Pair2[bytes]) -> Iterable[bytes | int]]
+    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterable[int | str]
+    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterable[bytes | int]
     "#,
 );
 
@@ -373,7 +474,6 @@ class B(A):
 );
 
 testcase!(
-    bug = "The asserted type is wrong",
     test_custom_iter,
     r#"
 from typing import assert_type, Iterator, NamedTuple
@@ -382,7 +482,7 @@ class NT(NamedTuple):
     def __iter__(self) -> Iterator[str]: ...
 nt = NT(0)
 for x in nt:
-    assert_type(x, str)  # E: assert_type(int, str)
+    assert_type(x, str)
     "#,
 );
 
@@ -410,4 +510,471 @@ testcase!(
 from typing import NamedTuple
 N = NamedTuple('N', [('x', int, 'oops')])  # E: Expected (name, type) pair, got 3-tuple
     "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_collections_namedtuple,
+    r#"
+from collections import namedtuple
+from typing import Any, assert_type
+
+class Point(namedtuple("Point", ["x", "y"])):
+    pass
+
+p = Point(1, 2)
+assert_type(p.x, Any)
+assert_type(p.y, Any)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_typing_namedtuple,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple("Point", [("x", int), ("y", str)])):
+    pass
+
+p = Point(1, "hello")
+assert_type(p.x, int)
+assert_type(p.y, str)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_with_extra_methods,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple("Point", [("x", int), ("y", int)])):
+    def length_squared(self) -> int:
+        return self.x ** 2 + self.y ** 2
+
+p = Point(3, 4)
+assert_type(p.length_squared(), int)
+assert_type(p.x, int)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_string_fields,
+    r#"
+from collections import namedtuple
+from typing import Any, assert_type
+
+class Pair(namedtuple("Pair", "a b")):
+    pass
+
+p = Pair(1, 2)
+assert_type(p.a, Any)
+assert_type(p.b, Any)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_name_mismatch,
+    r#"
+from collections import namedtuple
+
+class Foo(namedtuple("Bar", ["x", "y"])):
+    pass
+
+f = Foo(1, 2)
+    "#,
+);
+
+testcase!(
+    test_named_tuple_class_inheriting_malformed,
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+
+class A(namedtuple()):  # E: Invalid expression form for base class
+    pass
+
+class B(namedtuple(42, ["x", "y"])):  # E: Invalid expression form for base class
+    pass
+
+class C(NamedTuple(42, [("x", int)])):  # E: Invalid expression form for base class
+    pass
+
+class D(namedtuple("D", 42)):  # E: Expected valid functional named tuple definition
+    pass
+
+class E(NamedTuple("E", 42)):  # E: Expected valid functional named tuple definition
+    pass
+    "#,
+);
+
+testcase!(
+    test_named_tuple_dynamic_fields,
+    r#"
+from collections import namedtuple
+from typing import assert_type, Any
+
+fields_map = (('x', int), ('y', str))
+foo1 = namedtuple('foo1', (name for name, _ in fields_map))  # E: Expected valid functional named tuple definition
+
+fields = [name for name, _ in fields_map]
+foo2 = namedtuple('foo2', fields)  # E: Expected valid functional named tuple definition
+
+instance1 = foo1()
+instance2 = foo2()
+
+# attribute access
+assert_type(instance1.x, Any)
+assert_type(instance1.anything, Any)
+assert_type(instance2.y, Any)
+
+# indexing
+assert_type(instance1[0], Any)
+assert_type(instance2[1], Any)
+    "#,
+);
+
+testcase!(
+    bug = "namedtuple + mixin is valid in CPython but we reject it",
+    test_named_tuple_base_class_call_with_mixin,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+class B(namedtuple("B", ["x"]), Mixin):  # E: Named tuples do not support multiple inheritance
+    pass
+
+b = B(1)
+assert_type(b.x, Any)
+assert_type(b.greet(), str)
+    "#,
+);
+
+testcase!(
+    bug = "only the first namedtuple base's fields should be used",
+    test_named_tuple_base_class_call_two_namedtuples,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class C(namedtuple("C1", ["x"]), namedtuple("C2", ["y"])):  # E: Named tuples do not support multiple inheritance
+    pass
+
+c = C(1)
+assert_type(c.x, Any)
+    "#,
+);
+
+testcase!(
+    bug = "only the first namedtuple base's fields should be used",
+    test_named_tuple_base_class_call_namedtuple_mixin_namedtuple,
+    r#"
+from typing import assert_type, Any
+from collections import namedtuple
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+class D(namedtuple("D1", ["x"]), Mixin, namedtuple("D2", ["y"])):  # E: Named tuples do not support multiple inheritance
+    pass
+
+d = D(1)
+assert_type(d.x, Any)
+assert_type(d.greet(), str)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/832
+testcase!(
+    test_functional_namedtuple_base_class_with_new,
+    r#"
+from collections import namedtuple
+
+class QConfig(namedtuple("QConfig", ["activation", "weight"])):
+    def __new__(cls, activation, weight):
+        return super().__new__(cls, activation, weight)
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_basic,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # should succeed — z defaults to 0
+"#,
+);
+
+testcase!(
+    test_typing_namedtuple_adjacent_defaults,
+    r#"
+from typing import NamedTuple
+Point = NamedTuple("Point", [("x", int), ("y", int), ("z", int)])
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # should succeed — z defaults to 0
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_multiple,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = (0, 0)
+p = Point(1)  # should succeed — y and z default
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_none,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = None
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_overflow,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y"])
+Point.__new__.__defaults__ = (0, 0, 0)
+p = Point()  # should succeed — all fields optional when defaults >= fields
+"#,
+);
+
+testcase!(
+    test_namedtuple_defaults_non_adjacent,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+x = 1
+Point.__new__.__defaults__ = (0,)
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_class_namedtuple_unaffected,
+    r#"
+from typing import NamedTuple
+class Point(NamedTuple):
+    x: int
+    y: int
+    z: int
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_defaults_non_literal_rhs,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+defs = (0,)
+Point.__new__.__defaults__ = defs
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_defaults_replaces_kwarg,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"], defaults=(1,))
+Point.__new__.__defaults__ = (2, 3)
+p = Point(1)  # should succeed — y and z now have defaults from __new__.__defaults__
+"#,
+);
+
+testcase!(
+    test_namedtuple_adjacent_defaults_empty_tuple,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"])
+Point.__new__.__defaults__ = ()
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_namedtuple_none_overrides_kwarg,
+    r#"
+from collections import namedtuple
+Point = namedtuple("Point", ["x", "y", "z"], defaults=(1,))
+Point.__new__.__defaults__ = None
+p = Point(1, 2)  # E: Missing argument `z` in function `Point.__new__`
+"#,
+);
+
+testcase!(
+    test_collections_namedtuple_defaults_do_not_constrain_type,
+    r#"
+from collections import namedtuple
+Query = namedtuple("Query", ["where", "sort", "group"])
+Query.__new__.__defaults__ = ({}, [("_id", 1)], "status")
+# collections.namedtuple fields are untyped — passing None for a field
+# with a string default is valid.
+q1 = Query(where={}, sort=[], group=None)
+q2 = Query(where={}, sort=[], group="custom")
+q3 = Query()
+"#,
+);
+
+testcase!(
+    test_collections_namedtuple_kwarg_defaults_do_not_constrain_type,
+    r#"
+from collections import namedtuple
+Query = namedtuple("Query", ["where", "sort", "group"], defaults=({}, [("_id", 1)], "status"))
+q1 = Query(where={}, sort=[], group=None)
+q2 = Query(where={}, sort=[], group="custom")
+q3 = Query()
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2622
+// `import collections.abc` should not break special handling of `collections.namedtuple`.
+testcase!(
+    test_named_tuple_collections_submodule_import,
+    r#"
+import collections
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// `import collections.abc` alone (without explicit `import collections`) should still
+// allow `collections.namedtuple` to work, since `import X.Y` implicitly imports `X`.
+testcase!(
+    test_named_tuple_collections_submodule_import_only,
+    r#"
+import collections.abc
+
+Point = collections.namedtuple("Point", ["x", "y"])
+p = Point(x=1, y=2)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2455
+testcase!(
+    test_named_tuple_typevar_bound,
+    r#"
+from typing import TypeVar, NamedTuple, assert_type
+
+MyCustomModelT = TypeVar(name="MyCustomModelT", bound=NamedTuple)
+
+class ImplementedModel(NamedTuple):
+    name: str
+    age: int
+
+def arbitrary_method(_name: str, _age: int, _model: type[MyCustomModelT]) -> MyCustomModelT:
+    return _model(name=_name, age=_age)  # E: Unexpected keyword argument `name` in function `tuple.__new__`  # E: Unexpected keyword argument `age` in function `tuple.__new__`
+
+o = arbitrary_method("a", 2, ImplementedModel)
+assert_type(o, ImplementedModel)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2924
+testcase!(
+    bug = "Should reject overriding reserved NamedTuple methods like _asdict and _make",
+    test_named_tuple_reserved_method_override,
+    r#"
+from typing import NamedTuple
+
+class Record(NamedTuple):
+    name: str
+    value: int
+
+    def _asdict(self) -> dict[str, object]:
+        return {}
+
+    @classmethod
+    def _make(cls, iterable: object) -> "Record":
+        return cls("", 0)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2980
+testcase!(
+    test_named_tuple_cls_field_name,
+    r#"
+from typing import NamedTuple, assert_type, Any
+from collections import namedtuple
+
+# Class syntax
+class WithCls(NamedTuple):
+    cls: int
+    value: str
+
+w = WithCls(cls=1, value="hello")
+assert_type(w.cls, int)
+
+# Functional typing.NamedTuple syntax
+WithCls2 = NamedTuple("WithCls2", [("cls", int), ("value", str)])
+w2 = WithCls2(cls=2, value="world")
+assert_type(w2.cls, int)
+
+# Functional collections.namedtuple syntax
+WithCls3 = namedtuple("WithCls3", ["cls", "value"])
+w3 = WithCls3(cls=3, value="test")
+assert_type(w3.cls, Any)
+"#,
+);
+
+testcase!(
+    test_named_tuple_final_field_names,
+    r#"
+from typing import NamedTuple, Final
+
+X: Final = "x"
+Y: Final = "y"
+N = NamedTuple("N", [(X, int), (Y, int)])
+
+N(x=3, y=4)
+N(a=1)  # E: Unexpected keyword argument `a` in function `N.__new__`  # E: Missing argument `x`  # E: Missing argument `y`
+N(x="", y="")  # E: Argument `Literal['']` is not assignable to parameter `x` with type `int`  # E: Argument `Literal['']` is not assignable to parameter `y` with type `int`
+"#,
+);
+
+testcase!(
+    test_named_tuple_final_field_names_with_starred,
+    r#"
+import collections
+from typing import Final, assert_type, Any
+
+X: Final = "extra"
+BaseFieldInfo = collections.namedtuple("BaseFieldInfo", ["name", "type_code"])
+ExtendedFieldInfo = collections.namedtuple(
+    "ExtendedFieldInfo",
+    [*BaseFieldInfo._fields, X],
+)
+
+info = ExtendedFieldInfo("col1", 1, "extra_val")
+# X resolves to "extra" as a known field
+assert_type(info.extra, Any)
+# Dynamic fields from the starred expression
+assert_type(info.anything, Any)
+"#,
+);
+
+testcase!(
+    test_named_tuple_final_field_name_shadowed,
+    r#"
+from collections import namedtuple
+from typing import Final
+
+X: Final = "x"
+
+def f(X: int) -> None:
+    N = namedtuple("N", [X])  # E: Expected a string literal
+"#,
 );

@@ -55,10 +55,18 @@ pub(crate) fn deriver(
 fn generics(
     generics: &Generics,
     trait_name: &TokenStream,
-) -> syn::Result<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
+) -> syn::Result<(
+    proc_macro2::TokenStream,
+    proc_macro2::TokenStream,
+    proc_macro2::TokenStream,
+)> {
+    let mut lifetimes = Vec::new();
     let mut ts = Vec::new();
     for param in &generics.params {
         match param {
+            GenericParam::Lifetime(l) => {
+                lifetimes.push(&l.lifetime);
+            }
             GenericParam::Type(t) if t.bounds.is_empty() => {
                 ts.push(&t.ident);
             }
@@ -70,9 +78,10 @@ fn generics(
             }
         }
     }
+    let lt = quote_spanned! { generics.span() => #(#lifetimes,)* };
     let before = quote_spanned! { generics.span() => #(#ts: #trait_name<To>),* };
-    let after = quote_spanned! { generics.span() => #(#ts),* };
-    Ok((before, after))
+    let after = quote_spanned! { generics.span() => #(#lifetimes,)* #(#ts),* };
+    Ok((lt, before, after))
 }
 
 fn derive_visit_impl(
@@ -83,7 +92,7 @@ fn derive_visit_impl(
     signature: TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
-    let (generics_before, generics_after) = generics(&input.generics, &trait_name)?;
+    let (generics_lt, generics_before, generics_after) = generics(&input.generics, &trait_name)?;
     let (body, types) = match &input.data {
         Data::Struct(data_struct) => match &data_struct.fields {
             Fields::Named(fields_named) => {
@@ -168,7 +177,7 @@ fn derive_visit_impl(
     let contains = quote! { #(<#types as #trait_name<To>>::VISIT_CONTAINS || )* false };
 
     Ok(quote! {
-        impl <To: 'static, #generics_before > #trait_name<To> for #name < #generics_after > where
+        impl <#generics_lt To, #generics_before > #trait_name<To> for #name < #generics_after > where
             #(#types : #trait_name<To>,)*
          {
             const RECURSE_CONTAINS: bool = #contains;

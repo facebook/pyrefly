@@ -1,0 +1,61 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+name: Test Pyrefly Action
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "action.yml"
+      - ".github/workflows/test_action.yml"
+  pull_request:
+    paths:
+      - "action.yml"
+      - ".github/workflows/test_action.yml"
+  workflow_dispatch:
+
+jobs:
+  test-action:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create test file with type error
+        run: |
+          cat > /tmp/test_type_error.py << 'EOF'
+          def add(x: int, y: int) -> int:
+              return x + y
+
+          result: str = add(1, 2)  # type error: int is not assignable to str
+          EOF
+
+      - name: Run Pyrefly action (expect failure)
+        id: pyrefly
+        uses: ./
+        with:
+          working-directory: /tmp
+          args: "test_type_error.py"
+        continue-on-error: true
+
+      - name: Verify type error was detected
+        run: |
+          if [ "${{ steps.pyrefly.outcome }}" != "failure" ]; then
+            echo "Expected Pyrefly to detect the type error, but it did not."
+            exit 1
+          fi
+          echo "Pyrefly correctly detected the type error."
+
+      - name: Verify error is a type error (not an install/runtime failure)
+        run: |
+          OUTPUT=$(pyrefly check --output-format=github /tmp/test_type_error.py 2>&1 || true)
+          echo "$OUTPUT"
+          if ! echo "$OUTPUT" | grep -q "::error"; then
+            echo "Expected a type error annotation (::error) in Pyrefly output."
+            exit 1
+          fi
+          echo "Confirmed: failure is from the expected type error."

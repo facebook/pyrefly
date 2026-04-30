@@ -149,10 +149,13 @@ def f(p1: P1, p2: P2, p3: P3, p4: P4):
     x4: P2 = p3  # E: `P3` is not assignable to `P2`
     x5: P3 = p1
     x6: P3 = p2
-    # setter type compatibility
-    x7: P4 = p2
+    # setter type compatibility: P2 (x: int) must accept everything the setter promises.
+    # P4 setter accepts object, but P2 only accepts int.
+    x7: P4 = p2  # E: `P2` is not assignable to `P4`
+    # P5 setter accepts str, P2 only accepts int.
     x8: P5 = p2  # E: `P2` is not assignable to `P5`
-    x9: P6 = p2  # E: `P2` is not assignable to `P6`
+    # P6 setter accepts ExtendsInt, and ExtendsInt <: int, so P2 can handle it.
+    x9: P6 = p2
 "#,
 );
 
@@ -714,6 +717,27 @@ issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overl
 );
 
 testcase!(
+    test_runtime_checkable_missing_members_do_not_overlap,
+    r#"
+from typing import Any, Generator, Iterable, Protocol, runtime_checkable
+
+def test1(a: Iterable[Any]) -> None:
+    isinstance(a, Generator)
+
+@runtime_checkable
+class P(Protocol):
+    x: int
+    y: int
+
+class C:
+    x: str
+
+def test2(x: C):
+    isinstance(x, P)
+"#,
+);
+
+testcase!(
     test_runtime_checkable_generics_no_error,
     r#"
 from typing import Protocol, runtime_checkable, TypeVar
@@ -827,7 +851,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class Functor(Protocol[T]):
+class Functor(Protocol[T]):  # E: Type variable `T` in class `Functor` is declared as invariant, but could be covariant based on its usage
     """A Functor protocol - common in functional programming."""
     def map(self, f: Callable[[T], U]) -> Functor[U]: ...
 
@@ -851,7 +875,7 @@ from typing import Generic, TypeVar, Protocol, Callable
 T = TypeVar('T')
 U = TypeVar('U')
 
-class TrickyProtocol(Protocol[T]):
+class TrickyProtocol(Protocol[T]):  # E: Type variable `T` in class `TrickyProtocol` is declared as invariant, but could be covariant based on its usage
     def recurse(self, f: Callable[[T], U]) -> "TrickyProtocol[U]": ...
     def check(self) -> T: ...
 
@@ -868,7 +892,6 @@ def test():
 );
 
 testcase!(
-    bug = "conformance: Should error on ClassVar protocol assignments with class objects",
     test_protocols_class_objects_conformance,
     r#"
 from typing import ClassVar, Protocol
@@ -892,15 +915,14 @@ class CMeta(type):
 
 class ConcreteC3(metaclass=CMeta): ...
 
-pc1: ProtoC1 = ConcreteC1  # should error
-pc3: ProtoC1 = ConcreteC2  # should error
-pc4: ProtoC2 = ConcreteC2  # should error
-pc5: ProtoC1 = ConcreteC3  # should error
+pc1: ProtoC1 = ConcreteC1  # E: `type[ConcreteC1]` is not assignable to `ProtoC1`
+pc3: ProtoC1 = ConcreteC2  # E: `type[ConcreteC2]` is not assignable to `ProtoC1`
+pc4: ProtoC2 = ConcreteC2  # E: `type[ConcreteC2]` is not assignable to `ProtoC2`
+pc5: ProtoC1 = ConcreteC3  # E: `type[ConcreteC3]` is not assignable to `ProtoC1`
 "#,
 );
 
 testcase!(
-    bug = "conformance: Protocol with self-assigned var should not require that var from implementations",
     test_protocols_definition_conformance,
     r#"
 from typing import ClassVar, Protocol, Sequence
@@ -918,8 +940,7 @@ class Concrete:
     def method(self) -> None:
         return
 
-# Bug: pyrefly makes 'temp' a required attribute even though the self.temp error was raised
-var: Template = Concrete("value", 42)  # E: `Concrete` is not assignable to `Template`
+var: Template = Concrete("value", 42)
 
 class Template2(Protocol):
     val1: ClassVar[Sequence[int]]
@@ -930,8 +951,8 @@ class Concrete2_Bad3:
 class Concrete2_Bad4:
     val1: Sequence[int] = [2]
 
-v2_bad3: Template2 = Concrete2_Bad3()  # should error: instance attr vs ClassVar
-v2_bad4: Template2 = Concrete2_Bad4()  # should error: instance attr vs ClassVar
+v2_bad3: Template2 = Concrete2_Bad3()  # E: `Concrete2_Bad3` is not assignable to `Template2`
+v2_bad4: Template2 = Concrete2_Bad4()  # E: `Concrete2_Bad4` is not assignable to `Template2`
 "#,
 );
 
@@ -951,7 +972,6 @@ other_flag = False
 }
 
 testcase!(
-    bug = "conformance: Module with Literal[100] should be accepted for protocol expecting int",
     test_protocols_modules_conformance,
     env_protocols_modules(),
     r#"
@@ -963,6 +983,44 @@ class Options1(Protocol):
     one_flag: bool
     other_flag: bool
 
-op1: Options1 = _protocols_modules1  # E: `Module[_protocols_modules1]` is not assignable to `Options1`
+op1: Options1 = _protocols_modules1
+"#,
+);
+
+testcase!(
+    test_protocol_any_args_kwargs,
+    r#"
+from typing import Generic, Sized, Iterable, Any, TypeVar, Protocol, Self
+
+class NativeSeries(Protocol):
+    def filter(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class MySeries:
+    def filter(self, _predicate: Iterable[bool]) -> Self:
+        return self
+
+T = TypeVar('T', bound=NativeSeries)
+
+class Foo(Generic[T]):
+    ...
+
+def to_foo() -> Foo[MySeries]:
+    ...
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2925
+testcase!(
+    test_protocol_ambiguous_member,
+    r#"
+from typing import Protocol
+
+class Ambiguous(Protocol):
+    x = None  # E: Protocol member `x` must have an explicit type annotation
+    y = ...  # E: Protocol member `y` must have an explicit type annotation
+
+class Ok(Protocol):
+    x: int
+    y: str = "default"
 "#,
 );

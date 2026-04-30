@@ -216,6 +216,20 @@ def use2(mapping: dict[str, int | None]) -> None:
 );
 
 testcase!(
+    test_dict_contains_literal_key_get_narrow,
+    r#"
+from typing import assert_type
+
+def use(options: dict[str, str]) -> None:
+    if "contains" in options:
+        assert_type(options.get("contains"), str)
+        assert_type(options["contains"], str)
+    else:
+        assert_type(options.get("contains"), str | None)
+"#,
+);
+
+testcase!(
     test_typeddict_get_literal_key_narrow,
     TestEnv::new().enable_not_required_key_access_error(),
     r#"
@@ -399,6 +413,20 @@ def use2(mapping: NotDict) -> None:
     else:
         assert_type(mapping.get("foo"), int | None)
         assert_type(mapping["foo"], int | None)
+"#,
+);
+
+testcase!(
+    test_negative_index_narrow,
+    r#"
+from typing import assert_type
+class C:
+    x: str | None
+def test(xs: list[C]) -> bool:
+    if xs[-1].x and "[ERROR]" in xs[-1].x:
+        assert_type(xs[-1].x, str)
+        return True
+    return False
 "#,
 );
 

@@ -413,9 +413,51 @@ testcase!(
     r#"
 from typing import Final
 x: Final   # E: Expected a type argument for `Final`
-y: Final[int]  # OK
+y: Final[int]  # E: Final name must be initialized with a value
 z: Final = 1  # OK
     "#,
+);
+
+testcase!(
+    test_final_stub_no_error,
+    TestEnv::one_with_path(
+        "stub",
+        "stub.pyi",
+        r#"
+from typing import Final
+x: Final[int]
+class C:
+    y: Final[int]
+"#,
+    ),
+    r#"
+from stub import x, C
+"#,
+);
+
+testcase!(
+    test_final_without_assign_should_error,
+    r#"
+from typing import Final
+x: Final[int]  # E: Final name must be initialized with a value
+def f() -> None:
+    y: Final[int]  # E: Final name must be initialized with a value
+class C:
+    z: Final[int]  # E: Final attribute declared in class body must be initialized with a value or in `__init__`
+"#,
+);
+
+testcase!(
+    test_final_alternate_init_forms_no_error,
+    r#"
+from typing import Final, TextIO
+x: Final[int]
+x, _ = 1, 2
+y: Final[int]
+z = (y := 3)
+f: Final[TextIO]
+with open('foo') as f: pass
+"#,
 );
 
 testcase!(
@@ -640,7 +682,7 @@ def expect_str(x: str) -> Any: ...
 class C:
     __iadd__: None = None
 def test(x: C):
-    x += expect_str(0) # E: Expected `__iadd__` to be a callable # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
+    x += expect_str(0) # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
 "#,
 );
 
@@ -891,4 +933,304 @@ class A:
         cls = None
         assert_type(cls, None)
     "#,
+);
+
+testcase!(
+    test_unpacked_annotation_override,
+    r#"
+from typing import assert_type
+
+def f() -> str:
+    return ""
+
+x: int
+x, y = f(), f()  # E: `str` is not assignable to `int`
+assert_type(x, int)
+assert_type(y, str)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2928
+testcase!(
+    bug = "Should detect too many values when unpacking a string literal",
+    test_unpack_string_too_many,
+    r#"
+a, b = "abc"
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2927
+testcase!(
+    bug = "Should detect too few values when unpacking a single-char string",
+    test_unpack_string_too_few,
+    r#"
+a, b = "x"
+"#,
+);
+
+testcase!(
+    bug = "Should detect zero step size in slice",
+    test_slice_zero_step,
+    r#"
+items = [1, 2, 3, 4]
+bad = items[::0]
+"#,
+);
+
+testcase!(
+    test_annotated_var_preserves_type_after_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int
+x = f()
+assert_type(x, int)
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase declared annotation",
+    test_reassigned_var_does_not_preserve_annotation_over_any,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: str = "hello"
+x = f()
+assert_type(x, str)  # E: assert_type(Any, str) failed
+"#,
+);
+
+testcase!(
+    test_annotated_var_augassign_any,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int = 0
+x += f()
+assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_annotated_var_context_manager_any,
+    r#"
+from typing import Any, assert_type
+
+class CM:
+    def __enter__(self) -> Any: ...
+    def __exit__(self, *args: Any) -> None: ...
+
+x: int
+with CM() as x:
+    assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_annotated_var_for_loop_any,
+    r#"
+from typing import Any, assert_type
+
+xs: list[Any] = []
+
+y: int
+for y in xs:
+    assert_type(y, int)
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase nullable annotation",
+    test_nullable_annotation_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int | None = None
+x = f()
+assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase nullable parameter annotation",
+    test_param_nullable_annotation_any_reassign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+def test(x: int | None) -> None:
+    x = f()
+    assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
+"#,
+);
+
+testcase!(
+    bug = "Should filter None from union, preserving gradual list[Any] member",
+    test_union_gradual_narrow_list_any_or_none,
+    r#"
+from typing import Any, assert_type
+
+def f() -> list[int]: ...
+
+x: list[Any] | None = None
+x = f()
+assert_type(x, list[Any])  # E: assert_type(list[int], list[Any]) failed
+"#,
+);
+
+testcase!(
+    bug = "Should filter None from union, preserving Any member",
+    test_union_gradual_narrow_any_or_none,
+    r#"
+from typing import Any, assert_type
+
+def f() -> list[int]: ...
+
+x: Any | None = None
+x = f()
+assert_type(x, Any)  # E: assert_type(list[int], Any) failed
+"#,
+);
+
+testcase!(
+    test_union_narrow_concrete_int_from_function,
+    r#"
+from typing import assert_type
+
+def f() -> int: ...
+
+x: int | str | None = None
+x = f()
+assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_union_narrow_subclass_filters_none,
+    r#"
+from typing import assert_type
+
+class Base: ...
+class Sub(Base): ...
+
+def f() -> Sub: ...
+
+x: Base | None = None
+x = f()
+assert_type(x, Sub)
+"#,
+);
+
+testcase!(
+    test_union_narrow_sequence_with_list,
+    r#"
+from typing import Sequence, assert_type
+
+def f() -> list[int]: ...
+
+x: Sequence[int] | str = "hello"
+x = f()
+assert_type(x, list[int])
+"#,
+);
+
+testcase!(
+    bug = "Any expr should preserve full annotation, not erase it",
+    test_any_expr_preserves_full_union_annotation,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int | str | None = None
+x = f()
+assert_type(x, int | str | None)  # E: assert_type(Any, int | str | None) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase concrete parameter annotation",
+    test_param_concrete_annotation_any_reassign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+def test(x: int) -> None:
+    x = f()
+    assert_type(x, int)  # E: assert_type(Any, int) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase union annotation",
+    test_union_annotation_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: int | str = 0
+x = f()
+assert_type(x, int | str)  # E: assert_type(Any, int | str) failed
+"#,
+);
+
+testcase!(
+    bug = "Any assignment should not erase generic annotation",
+    test_generic_annotation_any_assign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+x: list[int] = [1, 2, 3]
+x = f()
+assert_type(x, list[int])  # E: assert_type(Any, list[int]) failed
+"#,
+);
+
+testcase!(
+    test_gradual_annotation_direct_preserved,
+    r#"
+from typing import Any, assert_type
+
+x: list[Any] = [1, 2, 3]
+assert_type(x, list[Any])
+"#,
+);
+
+testcase!(
+    test_gradual_annotation_forwarded_preserved,
+    r#"
+from typing import Any, assert_type
+
+x: list[Any] = []
+x = [1, 2, 3]
+assert_type(x, list[Any])
+"#,
+);
+
+testcase!(
+    bug = "None guard + Any assignment should preserve annotation",
+    test_param_none_guard_any_reassign,
+    r#"
+from typing import Any, assert_type
+
+def f() -> Any: ...
+
+def test(x: int | None) -> None:
+    if x is None:
+        x = f()
+    assert_type(x, int | None)  # E: assert_type(int | Any, int | None) failed
+"#,
 );

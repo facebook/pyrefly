@@ -5,12 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use dupe::Dupe;
 use pretty_assertions::assert_eq;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::lit_int::LitInt;
+use pyrefly_types::quantified::AnchorIndex;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedIdentity;
+use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
@@ -18,11 +23,13 @@ use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Type;
-use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::report::pysa::class::ClassRef;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::context::PysaResolver;
 use crate::report::pysa::module::ModuleIds;
 use crate::report::pysa::types::ClassNamesFromType;
 use crate::report::pysa::types::PysaType;
@@ -63,59 +70,102 @@ class MyTypedDict(TypedDict):
     let module_ids = ModuleIds::new(&handles);
 
     let test_module_handle = get_handle_for_module_name("test", &transaction);
-    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
+    let resolver = PysaResolver::new_for_test(
+        &transaction,
+        &module_ids,
+        test_module_handle.dupe(),
+        &handles,
+    );
+    let context = ModuleContext {
+        answers_context: ModuleAnswersContext::create(
+            test_module_handle.dupe(),
+            &transaction,
+            &module_ids,
+        ),
+        resolver: &resolver,
+    };
 
     // Builtin types
 
     assert_eq!(
         PysaType::new(
             "int".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.int().class_object(), &context),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.int().class_object(),
+                &context
+            ),
         )
         .with_is_int(true),
-        PysaType::from_type(&Type::ClassType(context.stdlib.int().clone()), &context),
+        PysaType::from_type(
+            &Type::ClassType(context.answers_context.stdlib.int().clone()),
+            &context
+        ),
     );
 
     assert_eq!(
         PysaType::new(
             "str".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.str().class_object(), &context),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.str().class_object(),
+                &context
+            ),
         ),
-        PysaType::from_type(&Type::ClassType(context.stdlib.str().clone()), &context),
+        PysaType::from_type(
+            &Type::ClassType(context.answers_context.stdlib.str().clone()),
+            &context
+        ),
     );
 
     assert_eq!(
         PysaType::new(
             "bool".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.bool().class_object(), &context),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.bool().class_object(),
+                &context
+            ),
         )
         .with_is_bool(true)
         .with_is_int(true),
-        PysaType::from_type(&Type::ClassType(context.stdlib.bool().clone()), &context),
+        PysaType::from_type(
+            &Type::ClassType(context.answers_context.stdlib.bool().clone()),
+            &context
+        ),
     );
 
     assert_eq!(
         PysaType::new(
             "float".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.float().class_object(), &context),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.float().class_object(),
+                &context
+            ),
         )
         .with_is_float(true),
-        PysaType::from_type(&Type::ClassType(context.stdlib.float().clone()), &context),
+        PysaType::from_type(
+            &Type::ClassType(context.answers_context.stdlib.float().clone()),
+            &context
+        ),
     );
 
     assert_eq!(
         PysaType::new("None".to_owned(), ClassNamesFromType::not_a_class()),
-        PysaType::from_type(&Type::None, &context),
+        PysaType::from_type(&context.answers_context.answers.heap().mk_none(), &context),
     );
 
     assert_eq!(
         PysaType::new("Unknown".to_owned(), ClassNamesFromType::not_a_class()),
-        PysaType::from_type(&Type::any_implicit(), &context),
+        PysaType::from_type(
+            &context.answers_context.answers.heap().mk_any_implicit(),
+            &context
+        ),
     );
 
     assert_eq!(
         PysaType::new("typing.Any".to_owned(), ClassNamesFromType::not_a_class()),
-        PysaType::from_type(&Type::any_explicit(), &context),
+        PysaType::from_type(
+            &context.answers_context.answers.heap().mk_any_explicit(),
+            &context
+        ),
     );
 
     assert_eq!(
@@ -152,12 +202,17 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "int | None".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.int().class_object(), &context)
-                .prepend_optional(),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.int().class_object(),
+                &context
+            )
+            .prepend_optional(),
         )
         .with_is_int(true),
         PysaType::from_type(
-            &Type::optional(Type::ClassType(context.stdlib.int().clone())),
+            &Type::optional(Type::ClassType(
+                context.answers_context.stdlib.int().clone()
+            )),
             &context
         ),
     );
@@ -165,11 +220,16 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "str | None".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.str().class_object(), &context)
-                .prepend_optional(),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.str().class_object(),
+                &context
+            )
+            .prepend_optional(),
         ),
         PysaType::from_type(
-            &Type::optional(Type::ClassType(context.stdlib.str().clone())),
+            &Type::optional(Type::ClassType(
+                context.answers_context.stdlib.str().clone()
+            )),
             &context
         ),
     );
@@ -177,13 +237,18 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "bool | None".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.bool().class_object(), &context)
-                .prepend_optional(),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.bool().class_object(),
+                &context
+            )
+            .prepend_optional(),
         )
         .with_is_bool(true)
         .with_is_int(true),
         PysaType::from_type(
-            &Type::optional(Type::ClassType(context.stdlib.bool().clone())),
+            &Type::optional(Type::ClassType(
+                context.answers_context.stdlib.bool().clone()
+            )),
             &context
         ),
     );
@@ -191,12 +256,17 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "float | None".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.float().class_object(), &context)
-                .prepend_optional(),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.float().class_object(),
+                &context
+            )
+            .prepend_optional(),
         )
         .with_is_float(true),
         PysaType::from_type(
-            &Type::optional(Type::ClassType(context.stdlib.float().clone())),
+            &Type::optional(Type::ClassType(
+                context.answers_context.stdlib.float().clone()
+            )),
             &context
         ),
     );
@@ -246,16 +316,19 @@ class MyTypedDict(TypedDict):
             ),
         ),
         PysaType::from_type(
-            &unions(vec![
-                Type::ClassType(ClassType::new(
-                    get_class("test", "A", &context),
-                    Default::default()
-                )),
-                Type::ClassType(ClassType::new(
-                    get_class("test", "B", &context),
-                    Default::default()
-                )),
-            ]),
+            &unions(
+                vec![
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "A", &context),
+                        Default::default()
+                    )),
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "B", &context),
+                        Default::default()
+                    )),
+                ],
+                context.answers_context.answers.heap()
+            ),
             &context
         ),
     );
@@ -269,16 +342,27 @@ class MyTypedDict(TypedDict):
             ),
         ),
         PysaType::from_type(
-            &unions(vec![
-                Type::ClassType(ClassType::new(
-                    get_class("test", "A", &context),
-                    Default::default()
-                )),
-                Type::Callable(Box::new(Callable::list(
-                    ParamList::new(Vec::new()),
-                    Type::None
-                ))),
-            ]),
+            &unions(
+                vec![
+                    context
+                        .answers_context
+                        .answers
+                        .heap()
+                        .mk_class_type(ClassType::new(
+                            get_class("test", "A", &context),
+                            Default::default()
+                        )),
+                    context
+                        .answers_context
+                        .answers
+                        .heap()
+                        .mk_callable_from(Callable::list(
+                            ParamList::new(Vec::new()),
+                            context.answers_context.answers.heap().mk_none()
+                        )),
+                ],
+                context.answers_context.answers.heap()
+            ),
             &context
         ),
     );
@@ -288,17 +372,26 @@ class MyTypedDict(TypedDict):
             "float | int".to_owned(),
             ClassNamesFromType::from_classes(
                 vec![
-                    ClassRef::from_class(context.stdlib.int().class_object(), context.module_ids),
-                    ClassRef::from_class(context.stdlib.float().class_object(), context.module_ids),
+                    ClassRef::from_class(
+                        context.answers_context.stdlib.int().class_object(),
+                        &context,
+                    ),
+                    ClassRef::from_class(
+                        context.answers_context.stdlib.float().class_object(),
+                        &context,
+                    ),
                 ],
                 /* is_exhaustive */ true
             ),
         ),
         PysaType::from_type(
-            &unions(vec![
-                Type::ClassType(context.stdlib.float().clone()),
-                Type::ClassType(context.stdlib.int().clone()),
-            ]),
+            &unions(
+                vec![
+                    Type::ClassType(context.answers_context.stdlib.float().clone()),
+                    Type::ClassType(context.answers_context.stdlib.int().clone()),
+                ],
+                context.answers_context.answers.heap()
+            ),
             &context
         ),
     );
@@ -307,7 +400,10 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "int".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.int().class_object(), &context),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.int().class_object(),
+                &context
+            ),
         )
         .with_is_int(true),
         PysaType::from_type(&LitInt::new(0).to_implicit_type(), &context),
@@ -332,16 +428,17 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "typing.Awaitable[int]".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.int().class_object(), &context)
-                .prepend_awaitable(),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.int().class_object(),
+                &context
+            )
+            .prepend_awaitable(),
         )
         .with_is_int(true),
         PysaType::from_type(
-            &Type::ClassType(
-                context
-                    .stdlib
-                    .awaitable(Type::ClassType(context.stdlib.int().clone()))
-            ),
+            &Type::ClassType(context.answers_context.stdlib.awaitable(Type::ClassType(
+                context.answers_context.stdlib.int().clone()
+            ))),
             &context
         ),
     );
@@ -350,17 +447,18 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "typing.Awaitable[int] | None".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.int().class_object(), &context)
-                .prepend_awaitable()
-                .prepend_optional(),
+            ClassNamesFromType::from_class(
+                context.answers_context.stdlib.int().class_object(),
+                &context
+            )
+            .prepend_awaitable()
+            .prepend_optional(),
         )
         .with_is_int(true),
         PysaType::from_type(
-            &Type::optional(Type::ClassType(
-                context
-                    .stdlib
-                    .awaitable(Type::ClassType(context.stdlib.int().clone()))
-            )),
+            &Type::optional(Type::ClassType(context.answers_context.stdlib.awaitable(
+                Type::ClassType(context.answers_context.stdlib.int().clone())
+            ))),
             &context
         ),
     );
@@ -373,17 +471,24 @@ class MyTypedDict(TypedDict):
                 .prepend_typevar_bound(),
         ),
         PysaType::from_type(
-            &Type::Quantified(Box::new(Quantified::type_var(
-                Name::new_static("T"),
-                &UniqueFactory::new(),
-                /* default */ None,
-                Restriction::Bound(Type::ClassType(ClassType::new(
-                    get_class("test", "MyClass", &context),
-                    Default::default(),
-                ))),
-                PreInferenceVariance::Invariant,
-            ))),
             &context
+                .answers_context
+                .answers
+                .heap()
+                .mk_quantified(Quantified::type_var(
+                    Name::new_static("T"),
+                    QuantifiedIdentity::new(
+                        ModuleName::from_str("__test__"),
+                        AnchorIndex::first(TextRange::default()),
+                        QuantifiedOrigin::Pep695,
+                    ),
+                    /* default */ None,
+                    Restriction::Bound(context.answers_context.answers.heap().mk_class_type(
+                        ClassType::new(get_class("test", "MyClass", &context), Default::default(),)
+                    )),
+                    PreInferenceVariance::Invariant,
+                )),
+            &context,
         ),
     );
 
@@ -401,23 +506,39 @@ class MyTypedDict(TypedDict):
             .prepend_typevar_constraint(),
         ),
         PysaType::from_type(
-            &Type::Quantified(Box::new(Quantified::type_var(
-                Name::new_static("T"),
-                &UniqueFactory::new(),
-                /* default */ None,
-                Restriction::Constraints(vec![
-                    Type::ClassType(ClassType::new(
-                        get_class("test", "MyClass", &context),
-                        Default::default(),
-                    )),
-                    Type::ClassType(ClassType::new(
-                        get_class("test", "A", &context),
-                        Default::default(),
-                    ))
-                ]),
-                PreInferenceVariance::Invariant,
-            ))),
             &context
+                .answers_context
+                .answers
+                .heap()
+                .mk_quantified(Quantified::type_var(
+                    Name::new_static("T"),
+                    QuantifiedIdentity::new(
+                        ModuleName::from_str("__test__"),
+                        AnchorIndex::new(TextRange::default(), 1),
+                        QuantifiedOrigin::Pep695,
+                    ),
+                    /* default */ None,
+                    Restriction::Constraints(vec![
+                        context
+                            .answers_context
+                            .answers
+                            .heap()
+                            .mk_class_type(ClassType::new(
+                                get_class("test", "MyClass", &context),
+                                Default::default(),
+                            )),
+                        context
+                            .answers_context
+                            .answers
+                            .heap()
+                            .mk_class_type(ClassType::new(
+                                get_class("test", "A", &context),
+                                Default::default(),
+                            )),
+                    ]),
+                    PreInferenceVariance::Invariant,
+                )),
+            &context,
         ),
     );
 
@@ -434,16 +555,19 @@ class MyTypedDict(TypedDict):
             .prepend_awaitable(),
         ),
         PysaType::from_type(
-            &Type::ClassType(context.stdlib.awaitable(unions(vec![
-                Type::ClassType(ClassType::new(
-                    get_class("test", "A", &context),
-                    Default::default()
-                )),
-                Type::ClassType(ClassType::new(
-                    get_class("test", "B", &context),
-                    Default::default()
-                )),
-            ]))),
+            &Type::ClassType(context.answers_context.stdlib.awaitable(unions(
+                vec![
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "A", &context),
+                        Default::default()
+                    )),
+                    Type::ClassType(ClassType::new(
+                        get_class("test", "B", &context),
+                        Default::default()
+                    )),
+                ],
+                context.answers_context.answers.heap()
+            ))),
             &context
         ),
     );
@@ -451,7 +575,7 @@ class MyTypedDict(TypedDict):
     // Handle type[A]
     assert_eq!(
         PysaType::new(
-            "type[test.MyClass]".to_owned(),
+            "builtins.type[test.MyClass]".to_owned(),
             ClassNamesFromType::from_class(&get_class("test", "MyClass", &context), &context)
                 .prepend_modifier(TypeModifier::Type),
         ),
@@ -462,22 +586,28 @@ class MyTypedDict(TypedDict):
     );
     assert_eq!(
         PysaType::new(
-            "type[test.MyClass]".to_owned(),
+            "builtins.type[test.MyClass]".to_owned(),
             ClassNamesFromType::from_class(&get_class("test", "MyClass", &context), &context)
                 .prepend_modifier(TypeModifier::Type),
         ),
         PysaType::from_type(
-            &Type::Type(Box::new(Type::ClassType(ClassType::new(
-                get_class("test", "MyClass", &context),
-                Default::default()
-            )))),
-            &context
+            &context.answers_context.answers.heap().mk_type(
+                context
+                    .answers_context
+                    .answers
+                    .heap()
+                    .mk_class_type(ClassType::new(
+                        get_class("test", "MyClass", &context),
+                        Default::default(),
+                    )),
+            ),
+            &context,
         ),
     );
 
     assert_eq!(
         PysaType::new(
-            "type[test.A] | type[test.B]".to_owned(),
+            "builtins.type[test.A | test.B]".to_owned(),
             ClassNamesFromType::from_classes(
                 vec![
                     get_class_ref("test", "A", &context),
@@ -488,17 +618,32 @@ class MyTypedDict(TypedDict):
             .prepend_modifier(TypeModifier::Type),
         ),
         PysaType::from_type(
-            &unions(vec![
-                Type::Type(Box::new(Type::ClassType(ClassType::new(
-                    get_class("test", "A", &context),
-                    Default::default()
-                )))),
-                Type::Type(Box::new(Type::ClassType(ClassType::new(
-                    get_class("test", "B", &context),
-                    Default::default()
-                )))),
-            ]),
-            &context
+            &unions(
+                vec![
+                    context.answers_context.answers.heap().mk_type(
+                        context
+                            .answers_context
+                            .answers
+                            .heap()
+                            .mk_class_type(ClassType::new(
+                                get_class("test", "A", &context),
+                                Default::default(),
+                            )),
+                    ),
+                    context.answers_context.answers.heap().mk_type(
+                        context
+                            .answers_context
+                            .answers
+                            .heap()
+                            .mk_class_type(ClassType::new(
+                                get_class("test", "B", &context),
+                                Default::default(),
+                            )),
+                    ),
+                ],
+                context.answers_context.answers.heap()
+            ),
+            &context,
         ),
     );
 
@@ -509,10 +654,14 @@ class MyTypedDict(TypedDict):
             ClassNamesFromType::from_class(&get_class("test", "MyTypedDict", &context), &context),
         ),
         PysaType::from_type(
-            &Type::TypedDict(TypedDict::new(
-                get_class("test", "MyTypedDict", &context),
-                Default::default()
-            )),
+            &context
+                .answers_context
+                .answers
+                .heap()
+                .mk_typed_dict(TypedDict::new(
+                    get_class("test", "MyTypedDict", &context),
+                    Default::default()
+                )),
             &context
         ),
     );
@@ -521,21 +670,33 @@ class MyTypedDict(TypedDict):
     assert_eq!(
         PysaType::new(
             "dict[str, int]".to_owned(),
-            ClassNamesFromType::from_class(context.stdlib.dict_object(), &context),
+            ClassNamesFromType::from_class(context.answers_context.stdlib.dict_object(), &context),
         ),
         PysaType::from_type(
-            &Type::TypedDict(TypedDict::Anonymous(Box::new(AnonymousTypedDictInner {
-                fields: vec![(
-                    Name::new_static("x"),
-                    TypedDictField {
-                        ty: Type::ClassType(context.stdlib.int().clone()),
-                        required: true,
-                        read_only_reason: None,
-                    },
-                ),],
-                value_type: Type::ClassType(context.stdlib.int().clone()),
-            }))),
             &context
+                .answers_context
+                .answers
+                .heap()
+                .mk_typed_dict(TypedDict::Anonymous(Box::new(AnonymousTypedDictInner {
+                    fields: vec![(
+                        Name::new_static("x"),
+                        TypedDictField {
+                            ty: context
+                                .answers_context
+                                .answers
+                                .heap()
+                                .mk_class_type(context.answers_context.stdlib.int().clone()),
+                            required: true,
+                            read_only_reason: None,
+                        },
+                    )],
+                    value_type: context
+                        .answers_context
+                        .answers
+                        .heap()
+                        .mk_class_type(context.answers_context.stdlib.int().clone()),
+                }))),
+            &context,
         ),
     );
 }

@@ -55,14 +55,36 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- Code should have comments, and functions should have docstrings. The best
+- Code should have comments and functions should have docstrings. The best
   comments are ones that introduce invariants, or prove that invariants are
-  being upheld, or indicate which invariants the code relies upon.
+  being upheld, or indicate which invariants the code relies upon. Don't duplicate comments, or write unnecessary comments for code that is obvious.
+- **Unreachable states must panic, not silently degrade.** Do not use defensive
+  programming to handle states that should be impossible. If a match arm, Option,
+  or Result should never occur given the surrounding invariants, use
+  `unreachable!("explanation")` or `.expect("explanation")` — never
+  `_ => default`, `.unwrap_or_default()`, or silent fallbacks. A type checker
+  that silently produces wrong results is far worse than one that crashes with a
+  clear message. Silent fallbacks hide bugs and confuse maintainers by making
+  unreachable states look reachable.
 - Check for existing helpers in the `pyrefly_types` crate before manually
   creating or destructuring a `Type`.
 - Minimize the number of places `Expr` nodes are passed around and the number of
   times they are parsed. Generally, this means extracting semantic information
   as early as possible.
+- **Imports:** Always add `use` imports at the top of the file rather than using
+  inline qualified paths (e.g., write `use crate::foo::Bar;` and then `Bar`,
+  not `crate::foo::Bar` inline). The only exception is when there is a name
+  collision between two imports, which is rare.
+
+## Commit Messages
+
+Do not write a laundry list of implementation changes. Focus on:
+
+- **Why**: what problem or design gap motivated the change
+- **What** (high level): the approach or solution, not individual file edits
+- **Why it works**: how the code changes realize the solution
+
+A reader should be able to understand the intent and rationale from the commit message, without following all the code changes in details.
 
 ## Development environments
 
@@ -79,6 +101,20 @@ the project root. BUCK files are not exported to GitHub, so:
 - If `BUCK` exists → internal checkout, `buck` and `arc` are available
 - If `BUCK` does not exist → GitHub checkout, only `cargo` works
 
+### Source control
+
+**Do not assume git.** This repo may be either a Git checkout or a Sapling
+(Mercurial-based) checkout. Before running any source-control commands, detect
+which VCS is in use:
+
+- If `.git` exists at the repo root → Git. Use `git` commands.
+- If `.sl` exists at the repo root → Sapling. Use `sl` commands (`sl status`,
+  `sl diff`, `sl commit`, `sl amend`, etc.). **Do not use `git`.**
+
+You can check with: `test -d "$(sl root 2>/dev/null)/.sl" && echo sapling || echo git`
+
+The internal (Meta) checkout always uses Sapling. The GitHub checkout uses Git.
+
 ## Feature guidelines
 
 - When working on a feature, the first commit should be a failing test if
@@ -90,14 +126,20 @@ the project root. BUCK files are not exported to GitHub, so:
   (from within the project folder)
 - **With cargo (external):** `cargo test <name of test>`
 
+Note: The heavyweight `lsp_interaction` tests live in a separate
+`rust_unittest` target for faster iteration. Run them with
+`buck test pyrefly:pyrefly_lsp_interaction_tests -- <name of test>`.
+Running `buck test pyrefly:pyrefly` triggers both test targets.
+
 ### Running the full test suite
 
 - `./test.py` runs linters and tests. It is heavyweight, so only run it when
   you are confident the feature is complete.
 - By default, `test.py` auto-detects the build tool based on BUCK file presence.
   You can override this with `--mode buck` or `--mode cargo`.
+- For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-conformance`
+  `./test.py --no-test --no-conformance --no-jsonschema`
 
 ### After modifying BUCK files (internal only)
 
@@ -107,7 +149,7 @@ the project root. BUCK files are not exported to GitHub, so:
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-conformance`
+`./test.py --no-test --no-conformance --no-jsonschema`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.

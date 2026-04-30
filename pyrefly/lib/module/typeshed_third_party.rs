@@ -22,33 +22,40 @@ use starlark_map::small_map::SmallMap;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::create_bundled_stub_config;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BundledTypeshedThirdParty {
-    pub find: SmallMap<ModuleName, PathBuf>,
+    /// Maps module name to (stub path, typeshed package name).
+    /// The package name is needed for correct `types-{package}` recommendations,
+    /// since the module name often differs from the package name
+    /// (e.g., module `dateutil` comes from package `python-dateutil`).
+    pub find: SmallMap<ModuleName, (PathBuf, ModuleName)>,
     pub load: SmallMap<PathBuf, Arc<String>>,
 }
 
 impl BundledStub for BundledTypeshedThirdParty {
     fn new() -> anyhow::Result<Self> {
-        let contents = bundled_third_party_stubs()?;
+        let (contents, path_to_package) = bundled_third_party_stubs()?;
         let mut res = Self {
             find: SmallMap::new(),
             load: SmallMap::new(),
         };
         for (relative_path, contents) in contents {
             let module_name = ModuleName::from_relative_path(&relative_path)?;
-            res.find.insert(module_name, relative_path.clone());
+            let package_name = path_to_package
+                .get(&relative_path)
+                .map(|s| ModuleName::from_str(s))
+                .unwrap_or_else(|| ModuleName::from_name(&module_name.first_component()));
+            res.find
+                .insert(module_name, (relative_path.clone(), package_name));
             res.load.insert(relative_path, Arc::new(contents));
         }
         Ok(res)
     }
 
-    #[allow(dead_code)]
     fn find(&self, module: ModuleName) -> Option<ModulePath> {
         self.find
             .get(&module)
-            .map(|path| ModulePath::bundled_typeshed_third_party(path.clone()))
+            .map(|(path, _)| ModulePath::bundled_typeshed_third_party(path.clone()))
     }
 
     fn load(&self, path: &Path) -> Option<Arc<String>> {
@@ -72,10 +79,16 @@ impl BundledStub for BundledTypeshedThirdParty {
 
     fn config() -> ArcId<ConfigFile> {
         static CONFIG: LazyLock<ArcId<ConfigFile>> = LazyLock::new(|| {
-            let config_file = create_bundled_stub_config(None, None);
+            let config_file = create_bundled_stub_config(None, None, None);
             ArcId::new(config_file)
         });
         CONFIG.dupe()
+    }
+}
+
+impl BundledTypeshedThirdParty {
+    pub fn package_name(&self, module: ModuleName) -> Option<&ModuleName> {
+        self.find.get(&module).map(|(_, pkg)| pkg)
     }
 }
 
@@ -100,5 +113,21 @@ mod tests {
         // Do it twice, to check that works.
         typeshed.materialized_path_on_disk().unwrap();
         typeshed.write(&path).unwrap();
+    }
+
+    /// Regression test: namespace packages like `google/` are shared by multiple
+    /// typeshed packages (protobuf, google-cloud-ndb). Each module must map to
+    /// its own package, not whichever was iterated first.
+    #[test]
+    fn test_namespace_packages_have_distinct_package_names() {
+        let typeshed = typeshed_third_party().unwrap();
+        let protobuf_pkg = typeshed
+            .package_name(ModuleName::from_str("google.protobuf"))
+            .expect("google.protobuf should have a package name");
+        let ndb_pkg = typeshed
+            .package_name(ModuleName::from_str("google.cloud.ndb"))
+            .expect("google.cloud.ndb should have a package name");
+        assert_eq!(protobuf_pkg.as_str(), "protobuf");
+        assert_eq!(ndb_pkg.as_str(), "google-cloud-ndb");
     }
 }

@@ -17,8 +17,8 @@ T = TypeVar("T", contravariant=True)
 # Intentionally set up 2 type variables:
 # - U needs to has its variance inferred (to be covariant)
 # - T has its variance specified incorrectly -- but downstream logic is expected to respect it.
-class Foo[U](Generic[T]):  # E:
-    def m0(self) -> T: ...
+class Foo[U](Generic[T]):  # E: Type parameter T is not included in the type parameter list
+    def m0(self) -> T: ...  # E: Type variable `T` is Contravariant but is used in covariant position
     def m1(self) -> U: ...
 
 t_good: Foo[int, int] = Foo[int, float]()
@@ -270,6 +270,21 @@ vinv1_2: ShouldBeInvariant1[int] = ShouldBeInvariant1[float](1.1)  # E:
 );
 
 testcase!(
+    test_protocol_property_invariant,
+    r#"
+from typing import Protocol, TypeVar
+
+TypeT = TypeVar("TypeT")
+
+class HasP(Protocol[TypeT]):
+    @property
+    def p(self) -> TypeT: ...
+    @p.setter
+    def p(self, p: TypeT, /) -> None: ...
+"#,
+);
+
+testcase!(
     test_sequence_inheritance,
     r#"
 from typing import Sequence
@@ -306,6 +321,23 @@ foo_union: FooInferred[int | str] = foo_int | foo_str
 "#,
 );
 
+// Regression test: this previously caused an infinite loop in variance inference.
+// The self parameter is excluded from variance inference to avoid self-referential
+// cycles. T only appears through C[T] in `a`, giving bivariant, which is treated
+// as invariant in practice (following mypy/pyright).
+testcase!(
+    test_self_referential_no_hang,
+    r#"
+class C[T]:
+    def f(self, a: C[T]) -> None:
+        pass
+
+good: C[int] = C[int]()
+bad1: C[float] = C[int]()  # E:
+bad2: C[int] = C[float]()  # E:
+"#,
+);
+
 // Test variance inference with stdlib generic that has covariant type parameter
 testcase!(
     test_class_variance_with_mapping,
@@ -322,7 +354,6 @@ def widen(c: Container[int]) -> Container[float]:
 );
 
 testcase!(
-    bug = "conformance: Should error when using TypeVar with wrong variance in base class",
     test_variance_enforcement_in_base_classes,
     r#"
 from typing import TypeVar, Generic
@@ -337,53 +368,52 @@ class Inv(Generic[T]): ...
 class CoContra(Generic[T_co, T_contra]): ...
 
 class Class1(
-    Inv[T_co] # should error: Inv requires invariant TypeVar
-): ...  
+    Inv[T_co]  # E: Type variable `T_co` is Covariant but is used in invariant position
+): ...
 class Class2(
-    Inv[T_contra] # should error: Inv requires invariant TypeVar
-): ...  
+    Inv[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in invariant position
+): ...
 
 class Co_Child3(
-    Co[T_contra] # should error: Co requires covariant
-): ...  
+    Co[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
 class Contra_Child3(
-    Contra[T_co] # should error: Contra requires contravariant
-): ...  
+    Contra[T_co]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
 class Contra_Child5(
-    Contra[Co[T_co]] # should error: Contra requires contravariant
-): ...  
+    Contra[Co[T_co]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
 
 class CoContra_Child2(
-    CoContra[T_co, T_co] # should error: second arg must be contravariant
-): ...  
+    CoContra[T_co, T_co]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
 class CoContra_Child3(
-    CoContra[T_contra, T_contra] # should error: first arg must be covariant
-): ...  
+    CoContra[T_contra, T_contra]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
 class CoContra_Child5(
-    CoContra[Co[T_co], Co[T_co]]  # should error: second arg must be contravariant
-): ... 
+    CoContra[Co[T_co], Co[T_co]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
 
 class CoToContraToContra(
-    Contra[Co[Contra[T_contra]]]
-): ...  # should error
+    Contra[Co[Contra[T_contra]]]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
 class ContraToContraToContra(
-    Contra[Contra[Contra[T_co]]]
-): ...  # should error
+    Contra[Contra[Contra[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
 
 Co_TA = Co[T_co]
 Contra_TA = Contra[T_contra]
 
 class CoToContraToContra_WithTA(
-    Contra_TA[Co_TA[Contra_TA[T_contra]]]
-): ...  # should error
+    Contra_TA[Co_TA[Contra_TA[T_contra]]]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
 class ContraToContraToContra_WithTA(
-    Contra_TA[Contra_TA[Contra_TA[T_co]]]
-): ...  # should error
+    Contra_TA[Contra_TA[Contra_TA[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
 "#,
 );
 
 testcase!(
-    bug = "conformance: Should warn when inferred variance differs from declared variance in protocols",
     test_protocols_variance_conformance,
     r#"
 from typing import Protocol, TypeVar
@@ -392,47 +422,45 @@ T1 = TypeVar("T1")
 T1_co = TypeVar("T1_co", covariant=True)
 T1_contra = TypeVar("T1_contra", contravariant=True)
 
-class AnotherBox(Protocol[T1]):  # should warn: T should be covariant
+class AnotherBox(Protocol[T1]):  # E: Type variable `T1` in class `AnotherBox` is declared as invariant, but could be covariant based on its usage
     def content(self) -> T1: ...
 
-class Protocol4(Protocol[T1]):  # should warn: T1 should be contravariant
+class Protocol4(Protocol[T1]):  # E: Type variable `T1` in class `Protocol4` is declared as invariant, but could be contravariant based on its usage
     def m1(self, p0: T1) -> None: ...
 
 class Protocol5(Protocol[T1_co]):
-    def m1(self, p0: T1_co) -> None: ... # should error on the parameter type
+    def m1(self, p0: T1_co) -> None: ...  # E: Type variable `T1_co` is Covariant but is used in contravariant position
 
-class Protocol6(Protocol[T1]):  # should warn: T1 should be covariant
+class Protocol6(Protocol[T1]):  # E: Type variable `T1` in class `Protocol6` is declared as invariant, but could be covariant based on its usage
     def m1(self) -> T1: ...
 
 class Protocol7(Protocol[T1_contra]):
-    def m1(self) -> T1_contra: ... # should error on the return type
+    def m1(self) -> T1_contra: ...  # E: Type variable `T1_contra` is Contravariant but is used in covariant position
 
-class Protocol12(Protocol[T1]):  # should warn: T1 should be covariant
+class Protocol12(Protocol[T1]):  # E: Type variable `T1` in class `Protocol12` is declared as invariant, but could be covariant based on its usage
     def __init__(self, x: T1) -> None: ...
 "#,
 );
 
 testcase!(
-    bug = "We should raise an error here on the x: T_co usage in f",
     test_shallow_covariant_in_param,
     r#"
 from typing import TypeVar, Generic
 T_co = TypeVar("T_co", covariant=True)
 
 class Foo(Generic[T_co]):
-    def f(self, x: T_co) -> None: ...  # should raise an error on this line
+    def f(self, x: T_co) -> None: ...  # E: Type variable `T_co` is Covariant but is used in contravariant position
 "#,
 );
 
 testcase!(
-    bug = "We should raise an error on T_contra",
     test_shallow_contravariant_in_return,
     r#"
 from typing import TypeVar, Generic
 T_contra = TypeVar("T_contra", contravariant=True)
 
-class Foo(Generic[T_contra]):  
-    def f(self) -> T_contra: ...  # should raise an error on this line
+class Foo(Generic[T_contra]):
+    def f(self) -> T_contra: ...  # E: Type variable `T_contra` is Contravariant but is used in covariant position
 "#,
 );
 
@@ -526,7 +554,6 @@ class Foo(Generic[T_contra]):
 );
 
 testcase!(
-    bug = "covariant in invariant base",
     test_base_covariant_in_invariant,
     r#"
 from typing import TypeVar, Generic
@@ -536,13 +563,12 @@ T = TypeVar("T")
 class Inv(Generic[T]): ...
 
 class Foo(
-    Inv[T_co] # should error: covariant T_co in invariant position
-): ...  
+    Inv[T_co]  # E: Type variable `T_co` is Covariant but is used in invariant position
+): ...
 "#,
 );
 
 testcase!(
-    bug = "contravariant in invariant base",
     test_base_contravariant_in_invariant,
     r#"
 from typing import TypeVar, Generic
@@ -552,13 +578,12 @@ T = TypeVar("T")
 class Inv(Generic[T]): ...
 
 class Foo(
-    Inv[T_contra] # should error: contravariant T_contra in invariant position
-): ...  
+    Inv[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in invariant position
+): ...
 "#,
 );
 
 testcase!(
-    bug = "covariant in contravariant base",
     test_base_covariant_in_contravariant,
     r#"
 from typing import TypeVar, Generic
@@ -568,13 +593,12 @@ T_contra = TypeVar("T_contra", contravariant=True)
 class Contra(Generic[T_contra]): ...
 
 class Foo(
-    Contra[T_co] # should error: covariant T_co in contravariant position
-): ...  
+    Contra[T_co]  # E: Type variable `T_co` is Covariant but is used in contravariant position
+): ...
 "#,
 );
 
 testcase!(
-    bug = "contravariant in covariant base",
     test_base_contravariant_in_covariant,
     r#"
 from typing import TypeVar, Generic
@@ -584,13 +608,12 @@ T_contra = TypeVar("T_contra", contravariant=True)
 class Co(Generic[T_co]): ...
 
 class Foo(
-    Co[T_contra] # should error: contravariant T_contra in covariant position
-): ...  
+    Co[T_contra]  # E: Type variable `T_contra` is Contravariant but is used in covariant position
+): ...
 "#,
 );
 
 testcase!(
-    bug = "error on nested base class",
     test_base_nested_double,
     r#"
 from typing import TypeVar, Generic
@@ -602,13 +625,12 @@ class Contra(Generic[T_contra]): ...
 
 # pyright errors and mypy does not
 class Foo(
-    Contra[Co[T_co]]
+    Contra[Co[T_co]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
 ): ...
 "#,
 );
 
 testcase!(
-    bug = "error on nested base class",
     test_base_nested_triple_error,
     r#"
 from typing import TypeVar, Generic
@@ -619,8 +641,26 @@ class Contra(Generic[T_contra]): ...
 
 # pyright errors and mypy does not
 class Foo(
-    Contra[Contra[Contra[T_co]]]
+    Contra[Contra[Contra[T_co]]]  # E: Type variable `T_co` is Covariant but is used in contravariant position
 ): ...
+"#,
+);
+
+testcase!(
+    test_inherited_contravariance_from_parent,
+    r#"
+from typing import Self
+
+class SupportsLT[ComparableT]:  # contravariant
+    def __lt__(self, other: ComparableT, /) -> Self: ...
+
+def upcast_lt(arg: SupportsLT[object]) -> SupportsLT[float]:
+    return arg
+
+class Impl[T](SupportsLT[T]):  ...  # contravariant via inheritance
+
+def upcast(x: Impl[object]) -> Impl[float]:
+    return x
 "#,
 );
 
@@ -636,5 +676,23 @@ class Contra(Generic[T_contra]): ...
 
 # contra * co * contra = co, so T_co in covariant position - OK
 class Foo(Contra[Co[Contra[T_co]]]): ...
+"#,
+);
+
+// A mutable attribute makes the class invariant in the type parameter, even
+// though methods using the same type parameter would make it covariant.
+// This is important because even though pyrefly allows disabling the
+// bad-override-mutable-attribute error, variance must still be inferred correctly.
+testcase!(
+    test_mutable_attribute_makes_class_invariant,
+    r#"
+class A[T]:
+    p: T
+
+    def m(self) -> T:
+        return self.p
+
+def foo(x: A[int]) -> A[int | str]:
+    return x  # E: Returned type `A[int]` is not assignable to declared return type `A[int | str]`
 "#,
 );

@@ -7,6 +7,7 @@
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Arguments;
@@ -16,15 +17,20 @@ use ruff_python_ast::Comprehension;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprLambda;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Operator;
+use ruff_python_ast::StringLiteral;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -53,12 +59,14 @@ use crate::binding::bindings::NameLookupResult;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowSource;
+use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
+use crate::binding::scope::is_constant_name;
 use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::callable::unexpected_keyword;
-use crate::types::types::Type;
+use crate::types::types::AnyStyle;
 
 /// Match on an expression by name. Should be used only for special names that we essentially treat like keywords,
 /// like reveal_type.
@@ -82,6 +90,11 @@ pub enum Usage {
     Narrowing(Option<Idx<Key>>),
     /// Static type context that should not pin partial types.
     StaticTypeInformation,
+    /// Type alias RHS context. Like StaticTypeInformation, does not pin
+    /// partial types. Additionally signals that names resolving to type
+    /// alias bindings should produce Binding::TypeAliasRef instead of
+    /// Binding::Forward.
+    TypeAliasRhs,
 }
 
 impl Usage {
@@ -90,7 +103,7 @@ impl Usage {
         match other {
             Self::CurrentIdx(idx) => Self::Narrowing(Some(*idx)),
             Self::Narrowing(idx) => Self::Narrowing(*idx),
-            Self::StaticTypeInformation => Self::Narrowing(None),
+            Self::StaticTypeInformation | Self::TypeAliasRhs => Self::Narrowing(None),
         }
     }
 
@@ -99,7 +112,7 @@ impl Usage {
         match self {
             Usage::CurrentIdx(idx) => Some(*idx),
             Usage::Narrowing(idx) => *idx,
-            Usage::StaticTypeInformation => None,
+            Usage::StaticTypeInformation | Usage::TypeAliasRhs => None,
         }
     }
 
@@ -318,9 +331,10 @@ impl<'a> BindingsBuilder<'a> {
             // We still need to produce a `Key` here just to be safe, because other
             // code may rely on all `Identifier`s having `Usage` keys and we could panic
             // in an IDE setting if we don't ensure this is the case.
-            return self.insert_binding_overwrite(key, Binding::Type(Type::any_error()));
+            return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
-        let used_in_static_type = matches!(usage, Usage::StaticTypeInformation);
+        let used_in_static_type =
+            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
         let lookup_result =
             if used_in_static_type && let Some((tparams_collector, tparam_id)) = tparams_lookup {
                 self.intercept_lookup(tparams_collector, tparam_id)
@@ -331,6 +345,7 @@ impl<'a> BindingsBuilder<'a> {
             NameLookupResult::Found {
                 idx: lookup_result_idx,
                 initialized: is_initialized,
+                is_module_scope,
             } => {
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
@@ -358,14 +373,15 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
 
-                // For static type context, create binding immediately since it
-                // doesn't participate in partial type pinning anyway and legacy tparam handling
-                // needs this; otherwise, defer creating a bound name.
-                if used_in_static_type {
-                    self.insert_binding(key, Binding::Forward(lookup_result_idx))
-                } else {
-                    self.defer_bound_name(key, lookup_result_idx, usage)
+                // TODO: `global x` reads bypass this (they use Flow, not Anywhere).
+
+                let promote = self.scopes.in_function_scope()
+                    && (is_module_scope || self.scopes.is_defined_at_module_scope(&name.id))
+                    && !is_constant_name(&name.id);
+                if promote {
+                    self.promote_ranges.insert(name.range);
                 }
+                self.defer_bound_name(key, lookup_result_idx, usage, promote)
             }
             NameLookupResult::NotFound => {
                 let suggestion = self
@@ -374,19 +390,19 @@ impl<'a> BindingsBuilder<'a> {
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
-                        ErrorInfo::Kind(ErrorKind::UnknownName),
+                        ErrorInfo::Kind(ErrorKind::UnimportedDirective),
                         format!(
                             "`{}` must be imported from `typing` for runtime usage",
                             name
                         ),
                     );
-                    self.insert_binding(key, Binding::Type(Type::any_error()))
+                    self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 } else if self.scopes.in_class_body()
                     && let Some((cls, _)) = self.scopes.current_class_and_metadata_keys()
                 {
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(cls, name.clone(), suggestion),
+                        Binding::ClassBodyUnknownName(Box::new((cls, name.clone(), suggestion))),
                     )
                 } else {
                     // Record a type error and fall back to `Any`.
@@ -395,7 +411,7 @@ impl<'a> BindingsBuilder<'a> {
                         msg.push(format!("Did you mean `{suggestion}`?"));
                     }
                     self.error_multiline(name.range, ErrorInfo::Kind(ErrorKind::UnknownName), msg);
-                    self.insert_binding(key, Binding::Type(Type::any_error()))
+                    self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }
         }
@@ -429,7 +445,11 @@ impl<'a> BindingsBuilder<'a> {
             // for inner and outer loops. It is safe to overwrite it because it literally the same.
             let iterable_value_idx = self.insert_binding_overwrite(
                 Key::Anon(comp.iter.range()),
-                Binding::IterableValue(None, comp.iter.clone(), IsAsync::new(comp.is_async)),
+                Binding::IterableValueComprehension(
+                    Box::new(comp.iter.clone()),
+                    IsAsync::new(comp.is_async),
+                    comp.target.range(),
+                ),
             );
             self.scopes.add_lvalue_to_current_static(&comp.target);
             // A comprehension target cannot be annotated, so it is safe to ignore the
@@ -446,25 +466,64 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
-        self.scopes.push(Scope::lambda(lambda.range, false));
+        // Process default values in the enclosing scope before pushing the lambda scope,
+        // because default values are evaluated at function definition time.
+        if let Some(parameters) = &mut lambda.parameters {
+            for x in parameters
+                .posonlyargs
+                .iter_mut()
+                .chain(parameters.args.iter_mut())
+                .chain(parameters.kwonlyargs.iter_mut())
+            {
+                if let Some(default) = x.default.as_deref_mut() {
+                    self.ensure_expr(default, usage);
+                }
+            }
+        }
+        self.scopes.push(Scope::lambda(
+            lambda.range,
+            Identifier::new("<lambda>", lambda.range),
+            false,
+        ));
+        let owner = usage.current_idx();
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
-                self.bind_lambda_param(x.name());
+                self.bind_lambda_param(x.name(), owner);
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
-        // Pyrefly currently does not support `yield` in lambdas, but we cannot drop them
-        // entirely or we will panic at solve time.
-        //
-        // TODO: We should properly handle `yield` and `yield from`; lambdas can be generators.
-        // One example of this is in the standard library, in `_collections_abc.pyi`:
-        // https://github.com/python/cpython/blob/965662ee4a986605b60da470d9e7c1e9a6f922b3/Lib/_collections_abc.py#L92
         let (yields_and_returns, _, _, _) = self.scopes.pop_function_scope();
-        for (idx, y, _) in yields_and_returns.yields {
-            self.insert_binding_idx(idx, BindingYield::Invalid(y));
+        let mut yield_keys = Vec::new();
+        for (idx, y, is_unreachable) in yields_and_returns.yields {
+            yield_keys.push(idx);
+            self.insert_binding_idx(
+                idx,
+                if is_unreachable {
+                    BindingYield::Unreachable(y)
+                } else {
+                    BindingYield::Yield(None, y)
+                },
+            );
         }
-        for (idx, y, _) in yields_and_returns.yield_froms {
-            self.insert_binding_idx(idx, BindingYieldFrom::Invalid(y));
+        let mut yield_from_keys = Vec::new();
+        for (idx, y, is_unreachable) in yields_and_returns.yield_froms {
+            yield_from_keys.push(idx);
+            self.insert_binding_idx(
+                idx,
+                if is_unreachable {
+                    BindingYieldFrom::Unreachable(y)
+                } else {
+                    // Lambdas cannot be async in Python, so this is always false.
+                    BindingYieldFrom::YieldFrom(None, IsAsync::new(false), y)
+                },
+            );
+        }
+        if !yield_keys.is_empty() || !yield_from_keys.is_empty() {
+            self.record_lambda_yield_keys(
+                lambda.range,
+                yield_keys.into_boxed_slice(),
+                yield_from_keys.into_boxed_slice(),
+            );
         }
     }
 
@@ -503,6 +562,43 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             None
         }
+    }
+
+    fn bind_inline_functional_named_tuple(&mut self, call: &mut ExprCall, kind: SpecialExport) {
+        let Some(Expr::StringLiteral(name)) = call.arguments.args.first() else {
+            return;
+        };
+        let class_name = Identifier::new(Name::new(name.value.to_str()), name.range());
+        let parent = self.scopes.nesting_context();
+        let (_arg_name, members) = call
+            .arguments
+            .args
+            .split_first_mut()
+            .expect("caller guarantees at least one arg");
+        let class_idx = match kind {
+            SpecialExport::CollectionsNamedTuple => self.synthesize_collections_named_tuple_def(
+                class_name,
+                &parent,
+                &mut call.func,
+                members,
+                &mut call.arguments.keywords,
+                false,
+                None,
+            ),
+            SpecialExport::TypingNamedTuple => self.synthesize_typing_named_tuple_def(
+                class_name,
+                &parent,
+                &mut call.func,
+                members,
+                false,
+                None,
+            ),
+            _ => unreachable!("caller only passes CollectionsNamedTuple or TypingNamedTuple"),
+        };
+        self.insert_binding(
+            Key::Anon(call.range),
+            Binding::ClassDef(class_idx, Box::new([])),
+        );
     }
 
     fn record_yield(&mut self, mut x: ExprYield) {
@@ -549,9 +645,11 @@ impl<'a> BindingsBuilder<'a> {
             }
             Expr::If(x) => {
                 // Ternary operation. We treat it like an if/else statement.
-                self.start_fork_and_branch(x.range);
+                // Process the test before forking so walrus-defined names are
+                // in the base flow and visible to both branches.
                 self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
+                self.start_fork_and_branch(x.range);
                 self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
                 self.ensure_expr(&mut x.body, usage);
                 // Negate the narrow ops for the `orelse`, then merge the Flows.
@@ -615,6 +713,17 @@ impl<'a> BindingsBuilder<'a> {
                     self.finish_bool_op_fork();
                 }
             }
+            Expr::Call(call)
+                if matches!(
+                    self.as_special_export(&call.func),
+                    Some(SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple)
+                ) && matches!(call.arguments.args.first(), Some(Expr::StringLiteral(_))) =>
+            {
+                let kind = self
+                    .as_special_export(&call.func)
+                    .expect("guard already matched");
+                self.bind_inline_functional_named_tuple(call, kind);
+            }
             Expr::Call(ExprCall {
                 node_index: _,
                 range: _,
@@ -662,6 +771,26 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
             }
+            // TypeForm(expr) — treat the argument as a type expression (forward reference support)
+            Expr::Call(ExprCall {
+                node_index: _,
+                range: _,
+                func,
+                arguments,
+            }) if self.as_special_export(func) == Some(SpecialExport::TypeForm)
+                && !arguments.is_empty() =>
+            {
+                self.ensure_expr(func, usage);
+                if let Some(arg) = arguments.args.first_mut() {
+                    self.ensure_type(arg, &mut None)
+                }
+                for arg in arguments.args.iter_mut().skip(1) {
+                    self.ensure_expr(arg, usage);
+                }
+                for kw in arguments.keywords.iter_mut() {
+                    self.ensure_expr(&mut kw.value, usage);
+                }
+            }
             Expr::Call(ExprCall {
                 node_index: _,
                 range,
@@ -704,7 +833,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr(expr, usage);
                         self.insert_binding(
                             Key::Anon(expr.range()),
-                            Binding::Expr(None, expr.clone()),
+                            Binding::Expr(None, Box::new(expr.clone())),
                         )
                     };
                     let cls_key = bind(&mut posargs[0]);
@@ -727,7 +856,7 @@ impl<'a> BindingsBuilder<'a> {
                 };
                 self.insert_binding(
                     Key::SuperInstance(*range),
-                    Binding::SuperInstance(style, *range),
+                    Binding::SuperInstance(Box::new((style, *range))),
                 );
             }
             Expr::Call(ExprCall {
@@ -752,8 +881,20 @@ impl<'a> BindingsBuilder<'a> {
                 // we still need this for comprehensions, whose scope is defined on-the-fly.
                 self.scopes.add_lvalue_to_current_static(&x.target);
                 self.bind_target_with_expr(&mut x.target, &mut x.value, &|expr, ann| {
-                    Binding::Expr(ann, expr.clone())
+                    Binding::Expr(ann, Box::new(expr.clone()))
                 });
+                // PEP 572: walrus operators inside comprehensions bind to
+                // the enclosing (non-comprehension) scope.
+                if self.scopes.in_comprehension()
+                    && let Expr::Name(name) = &*x.target
+                    && let Some(idx) = self.scopes.get_current_flow_idx(&name.id)
+                {
+                    self.scopes.define_in_enclosing_non_comprehension_scope(
+                        Hashed::new(&name.id),
+                        idx,
+                        FlowStyle::Other,
+                    );
+                }
             }
             Expr::Lambda(x) => {
                 self.bind_lambda(x, usage);
@@ -856,7 +997,18 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut Expr,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) {
-        self.ensure_type_impl(x, tparams_builder, false);
+        self.ensure_type_with_usage(x, tparams_builder, &mut Usage::StaticTypeInformation);
+    }
+
+    /// Like `ensure_type`, but with a specific usage context. Used by type alias
+    /// construction sites to pass `Usage::TypeAliasRhs`.
+    pub fn ensure_type_with_usage(
+        &mut self,
+        x: &mut Expr,
+        tparams_builder: &mut Option<LegacyTParamCollector>,
+        usage: &mut Usage,
+    ) {
+        self.ensure_type_impl(x, tparams_builder, false, usage);
     }
 
     fn ensure_type_impl(
@@ -864,45 +1016,66 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut Expr,
         tparams_builder: &mut Option<LegacyTParamCollector>,
         in_string_literal: bool,
+        usage: &mut Usage,
     ) {
         self.track_potential_typing_self(x);
-        // We do not treat static types as usage for the purpose of first-usage-based type inference.
-        let static_type_usage = &mut Usage::StaticTypeInformation;
+        fn as_forward_ref<'b>(
+            literal: &'b ExprStringLiteral,
+            in_string_literal: bool,
+        ) -> Option<&'b StringLiteral> {
+            if in_string_literal {
+                None
+            } else {
+                literal.as_single_part_string()
+            }
+        }
         match x {
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
-                self.ensure_name(&name, static_type_usage, tparams_builder);
+                self.ensure_name(&name, usage, tparams_builder);
             }
             Expr::Subscript(ExprSubscript { value, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
             {
                 // Don't go inside a literal, since you might find strings which are really strings, not string-types
-                self.ensure_expr(x, static_type_usage);
+                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
             }
             Expr::Subscript(ExprSubscript { value, slice, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Annotated)
                     && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
             {
                 // Only go inside the first argument to Annotated, the rest are non-type metadata.
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal);
+                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
                 // We can't bind a mut box in the guard (sadly), so force unwrapping it here
                 let tup = slice.as_tuple_expr_mut().unwrap();
-                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal);
+                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
                 for e in tup.elts[1..].iter_mut() {
-                    self.ensure_expr(e, static_type_usage);
+                    self.ensure_expr(e, &mut Usage::StaticTypeInformation);
                 }
             }
+            // Jaxtyping annotations: Float[Tensor, "batch channels"].
+            // The second argument is a shape string, not a forward reference.
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if self.tensor_shapes()
+                    && matches!(&**value, Expr::Name(n) if self.scopes.is_imported_from_module(&n.id, "jaxtyping"))
+                    && matches!(&**slice, Expr::Tuple(tup) if tup.elts.len() == 2) =>
+            {
+                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
+                let tup = slice.as_tuple_expr_mut().unwrap();
+                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
+                self.ensure_expr(&mut tup.elts[1], &mut Usage::StaticTypeInformation);
+            }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal);
-                self.ensure_type_impl(&mut *slice, tparams_builder, in_string_literal);
+                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(&mut *slice, tparams_builder, in_string_literal, usage);
             }
             Expr::StringLiteral(literal)
-                if !in_string_literal && let Some(literal) = literal.as_single_part_string() =>
+                if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
             {
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
                         *x = expr;
-                        self.ensure_type_impl(x, tparams_builder, true);
+                        self.ensure_type_impl(x, tparams_builder, true, usage);
                     }
                     Err(_) => {
                         // We don't need to emit errors here, because the solving logic expects the expression to resolve to a type, and it will fail.
@@ -910,11 +1083,11 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             // Bind the lambda so we don't crash on undefined parameter names.
-            Expr::Lambda(_) => self.ensure_expr(x, static_type_usage),
+            Expr::Lambda(_) => self.ensure_expr(x, &mut Usage::StaticTypeInformation),
             // Bind the call so we generate all expected bindings. See
             // test::class_super::test_super_in_base_classes for an example of a SuperInstance
             // binding that we crash looking for if we don't do this.
-            Expr::Call(_) => self.ensure_expr(x, static_type_usage),
+            Expr::Call(_) => self.ensure_expr(x, &mut Usage::StaticTypeInformation),
             // Bind walrus so we don't crash when looking up the assigned name later.
             // Named expressions are not allowed inside type aliases (PEP 695).
             Expr::Named(named) => {
@@ -925,14 +1098,14 @@ impl<'a> BindingsBuilder<'a> {
                         "Named expression cannot be used within a type alias".to_owned(),
                     );
                 }
-                self.ensure_expr(x, static_type_usage);
+                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
             }
             // Bind yield and yield from so we don't crash when checking return type later.
             Expr::Yield(_) => {
-                self.ensure_expr(x, static_type_usage);
+                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
             }
             Expr::YieldFrom(_) => {
-                self.ensure_expr(x, static_type_usage);
+                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
             }
             Expr::Attribute(ExprAttribute { value, attr, .. })
                 if let Expr::Name(value) = &**value
@@ -943,13 +1116,73 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_simple_attr(
                     &Ast::expr_name_identifier(value.clone()),
                     attr,
-                    static_type_usage,
+                    usage,
                     tparams_builder,
                 );
             }
-            _ => {
-                x.recurse_mut(&mut |x| self.ensure_type_impl(x, tparams_builder, in_string_literal))
+            Expr::Attribute(ExprAttribute { value, attr, .. })
+                if let Expr::Name(name_expr) = &**value
+                    && (attr.id == "args" || attr.id == "kwargs") =>
+            {
+                // P.args / P.kwargs: resolve P through the legacy tparam collector if P
+                // is already there (e.g. from `Callable[P, ...]`), but do NOT add P as
+                // a new legacy type parameter. This prevents P from being incorrectly
+                // introduced as a tparam when it is only referenced via P.args/P.kwargs
+                // without being bound by a Callable parameter.
+                let name = Ast::expr_name_identifier(name_expr.clone());
+                let id = LegacyTParamId::Name(name.clone());
+                let resolved = tparams_builder
+                    .as_mut()
+                    .and_then(|tb| self.try_intercept_lookup(tb, &id));
+                if resolved.is_some() {
+                    // P is already a legacy tparam (from Callable[P, ...]),
+                    // process normally so it resolves to QuantifiedValue.
+                    self.ensure_name(&name, usage, tparams_builder);
+                } else {
+                    // P is not yet in the collector. Process without tparam
+                    // interception so P resolves to its original binding.
+                    self.ensure_name(&name, usage, &mut None);
+                }
             }
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                range,
+                ..
+            }) => {
+                // Check if either side is a string literal BEFORE recursing,
+                // since ensure_type_impl will parse and replace them.
+                let left_is_forward_ref = matches!(&**left, Expr::StringLiteral(s) if as_forward_ref(s, in_string_literal).is_some());
+                let right_is_forward_ref = matches!(&**right, Expr::StringLiteral(s) if as_forward_ref(s, in_string_literal).is_some());
+
+                // Recurse into children to handle string literal parsing
+                self.ensure_type_impl(left, tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(right, tparams_builder, in_string_literal, usage);
+
+                // Only create the check if we're in an executable file, at least one side
+                // is a forward ref, and we're not in Python 3.14+ or with future annotations
+                // (which make annotations lazy and avoid the runtime error)
+                if self.module_info.path().style() == ModuleStyle::Executable
+                    && (left_is_forward_ref || right_is_forward_ref)
+                    && !self.sys_info.version().at_least(3, 14)
+                    && !self.scopes.has_future_annotations()
+                {
+                    self.insert_binding(
+                        KeyExpect::ForwardRefUnion(*range),
+                        BindingExpect::ForwardRefUnion {
+                            left: Box::new((**left).clone()),
+                            right: Box::new((**right).clone()),
+                            left_is_forward_ref,
+                            right_is_forward_ref,
+                            range: *range,
+                        },
+                    );
+                }
+            }
+            _ => x.recurse_mut(&mut |x| {
+                self.ensure_type_impl(x, tparams_builder, in_string_literal, usage)
+            }),
         }
     }
 
@@ -957,7 +1190,8 @@ impl<'a> BindingsBuilder<'a> {
     /// create a special binding that can be used to remap the special form to a proper
     /// self type during answers solving.
     ///
-    /// Note that this binding will only be present if we are in a class.
+    /// If we are in a class, creates a `SelfTypeLiteral` binding.
+    /// Otherwise, emits an error since `Self` is only valid within a class.
     fn track_potential_typing_self(&mut self, x: &Expr) {
         match self.as_special_export(x) {
             Some(SpecialExport::SelfType) => {
@@ -967,6 +1201,12 @@ impl<'a> BindingsBuilder<'a> {
                     self.insert_binding(
                         Key::SelfTypeLiteral(x.range()),
                         Binding::SelfTypeLiteral(current_class_idx, x.range()),
+                    );
+                } else {
+                    self.error(
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        "`Self` must appear within a class".to_owned(),
                     );
                 }
             }

@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,10 +25,13 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::commands::config_finder::ConfigConfigurer;
+use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::config_finder::standard_config_finder;
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigSource;
 use crate::config::environment::environment::PythonEnvironment;
 use crate::config::finder::ConfigFinder;
 use crate::state::lsp::DisplayTypeErrors;
@@ -64,8 +68,12 @@ pub struct Workspace {
     search_path: Option<Vec<PathBuf>>,
     pub disable_language_services: bool,
     pub disabled_language_services: Option<DisabledLanguageServices>,
+    pub runnable_code_lens: bool,
     pub display_type_errors: Option<DisplayTypeErrors>,
     pub lsp_analysis_config: Option<LspAnalysisConfig>,
+    pub stream_diagnostics: Option<bool>,
+    pub diagnostic_mode: Option<DiagnosticMode>,
+    pub workspace_config: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -85,6 +93,23 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
     ) -> (ArcId<ConfigFile>, Vec<pyrefly_config::finder::ConfigError>) {
         if let Some(dir) = root {
             self.0.get_with(dir.to_owned(), |(workspace_root, w)| {
+                if let Some(workspace_config_path) = &w.workspace_config {
+                    let (new_config, new_errors) = ConfigFile::from_file(workspace_config_path);
+                    if matches!(new_config.source, ConfigSource::File(_)) {
+                        // Config was parsed successfully (possibly with non-fatal
+                        // warnings like extra keys). Use it.
+                        config = new_config;
+                        errors = new_errors;
+                    } else {
+                        // Config file couldn't be read or parsed. Fall back to
+                        // auto-discovered config but still report the errors.
+                        warn!(
+                            "Failed to load workspace config at `{}`, falling back to auto-discovered config",
+                            workspace_config_path.display()
+                        );
+                        errors = new_errors;
+                    }
+                }
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
                 }
@@ -173,20 +198,23 @@ struct PyreflyClientConfig {
     display_type_errors: Option<DisplayTypeErrors>,
     disable_language_services: Option<bool>,
     extra_paths: Option<Vec<PathBuf>>,
+    runnable_code_lens: Option<bool>,
+    diagnostic_mode: Option<DiagnosticMode>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
     disabled_language_services: Option<DisabledLanguageServices>,
-    // This is a global config that's read separately
-    #[allow(dead_code)]
     stream_diagnostics: Option<bool>,
+    config_path: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagnosticMode {
+    /// Compute and publish diagnostics for all files in the workspace, not just open files.
     #[serde(rename = "workspace")]
     Workspace,
+    #[default]
     #[serde(rename = "openFilesOnly")]
     OpenFilesOnly,
 }
@@ -220,6 +248,8 @@ pub struct DisabledLanguageServices {
     #[serde(default)]
     pub document_symbol: bool,
     #[serde(default)]
+    pub code_lens: bool,
+    #[serde(default)]
     pub semantic_tokens: bool,
     #[serde(default)]
     pub implementation: bool,
@@ -242,6 +272,7 @@ impl DisabledLanguageServices {
             "textDocument/hover" => self.hover,
             "textDocument/inlayHint" => self.inlay_hint,
             "textDocument/documentSymbol" => self.document_symbol,
+            "textDocument/codeLens" => self.code_lens,
             "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
                 self.semantic_tokens
             }
@@ -255,9 +286,9 @@ impl DisabledLanguageServices {
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LspAnalysisConfig {
-    #[allow(dead_code)]
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
+    pub complete_function_parens: Option<bool>,
     pub inlay_hints: Option<InlayHintConfig>,
     // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]
@@ -332,8 +363,12 @@ impl Workspaces {
         f(workspace.unwrap_or((None, &default_workspace)))
     }
 
-    pub fn config_finder(workspaces: Arc<Workspaces>) -> ConfigFinder {
-        standard_config_finder(Arc::new(WorkspaceConfigConfigurer(workspaces)))
+    pub fn config_finder(
+        workspaces: Arc<Workspaces>,
+        wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> ConfigFinder {
+        let configure: Arc<dyn ConfigConfigurer> = Arc::new(WorkspaceConfigConfigurer(workspaces));
+        standard_config_finder(configure, wrapper)
     }
 
     pub fn roots(&self) -> Vec<PathBuf> {
@@ -388,10 +423,22 @@ impl Workspaces {
             if let Some(disabled_language_services) = pyrefly.disabled_language_services {
                 self.update_disabled_language_services(scope_uri, disabled_language_services);
             }
+            if let Some(runnable_code_lens) = pyrefly.runnable_code_lens {
+                self.update_runnable_code_lens(scope_uri, runnable_code_lens);
+            }
+            if let Some(stream_diagnostics) = pyrefly.stream_diagnostics {
+                self.update_stream_diagnostics(scope_uri, stream_diagnostics);
+            }
+            if let Some(diagnostic_mode) = pyrefly.diagnostic_mode {
+                self.update_diagnostic_mode(scope_uri, diagnostic_mode);
+            }
             self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
             // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
             if let Some(analysis) = pyrefly.analysis {
                 self.update_ide_settings(modified, scope_uri, analysis);
+            }
+            if let Some(config_path) = pyrefly.config_path {
+                self.update_workspace_config(modified, scope_uri, config_path);
             }
         }
         // Always handle analysis at top level (no longer conditional on analysis_handled)
@@ -437,6 +484,50 @@ impl Workspaces {
             None => {
                 self.default.write().disabled_language_services = Some(disabled_language_services);
             }
+        }
+    }
+
+    fn update_runnable_code_lens(&self, scope_uri: &Option<Url>, runnable_code_lens: bool) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.runnable_code_lens = runnable_code_lens;
+                }
+            }
+            None => self.default.write().runnable_code_lens = runnable_code_lens,
+        }
+    }
+
+    /// Update streamDiagnostics setting for scope_uri, None if default workspace
+    fn update_stream_diagnostics(&self, scope_uri: &Option<Url>, stream_diagnostics: bool) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.stream_diagnostics = Some(stream_diagnostics);
+                }
+            }
+            None => self.default.write().stream_diagnostics = Some(stream_diagnostics),
+        }
+    }
+
+    /// Update diagnosticMode setting for scope_uri, None if default workspace
+    fn update_diagnostic_mode(&self, scope_uri: &Option<Url>, diagnostic_mode: DiagnosticMode) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                {
+                    workspace.diagnostic_mode = Some(diagnostic_mode);
+                }
+            }
+            None => self.default.write().diagnostic_mode = Some(diagnostic_mode),
         }
     }
 
@@ -533,6 +624,36 @@ impl Workspaces {
         }
     }
 
+    /// Update workspace config path for scope_uri, None if default workspace.
+    /// An empty path clears the workspace config (reverts to auto-discovery).
+    fn update_workspace_config(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        config_path: PathBuf,
+    ) {
+        let workspace_config = if config_path.as_os_str().is_empty() {
+            None
+        } else {
+            Some(config_path)
+        };
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
+                    *modified = true;
+                    workspace.workspace_config = workspace_config;
+                }
+            }
+            None => {
+                *modified = true;
+                self.default.write().workspace_config = workspace_config;
+            }
+        }
+    }
+
     pub fn get_configs_for_source_db(
         &self,
         source_db: ArcId<Box<dyn SourceDatabase + 'static>>,
@@ -561,6 +682,60 @@ impl Workspaces {
 
     pub fn sourcedb_available(&self) -> bool {
         !self.source_db_config_map.lock().is_empty()
+    }
+
+    /// Check if diagnostics should be streamed for a file at the given path.
+    /// Defaults to true if not explicitly configured.
+    pub fn should_stream_diagnostics(&self, path: &Path) -> bool {
+        self.get_with(path.to_path_buf(), |(_, workspace)| {
+            workspace.stream_diagnostics.unwrap_or(true)
+        })
+    }
+
+    /// Get the diagnostic mode for a file at the given path.
+    /// Checks `pyrefly.diagnosticMode` first, then falls back to
+    /// `analysis.diagnosticMode`, and defaults to `OpenFilesOnly`.
+    ///
+    /// Workspace diagnostic mode is only honored for explicit workspace folders,
+    /// never for the catch-all default workspace. If the file resolves to the
+    /// default workspace, `OpenFilesOnly` is returned regardless of the default
+    /// workspace's settings, preventing the server from scanning the entire filesystem.
+    pub fn diagnostic_mode(&self, path: &Path) -> DiagnosticMode {
+        self.get_with(path.to_path_buf(), |(workspace_root, workspace)| {
+            // Only honor Workspace mode for explicit workspace folders, not
+            // the catch-all default (workspace_root == None).
+            if workspace_root.is_none() {
+                return DiagnosticMode::OpenFilesOnly;
+            }
+            workspace
+                .diagnostic_mode
+                .or_else(|| {
+                    workspace
+                        .lsp_analysis_config
+                        .and_then(|c| c.diagnostic_mode)
+                })
+                .unwrap_or_default()
+        })
+    }
+
+    /// Returns the workspace roots that have `DiagnosticMode::Workspace` enabled.
+    pub fn workspace_diagnostic_roots(&self) -> Vec<PathBuf> {
+        self.workspaces
+            .read()
+            .iter()
+            .filter(|(_, workspace)| {
+                let mode = workspace
+                    .diagnostic_mode
+                    .or_else(|| {
+                        workspace
+                            .lsp_analysis_config
+                            .and_then(|c| c.diagnostic_mode)
+                    })
+                    .unwrap_or_default();
+                mode == DiagnosticMode::Workspace
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
     }
 }
 
@@ -711,7 +886,7 @@ mod tests {
         let valid_config = json!({
             "pythonPath": "/usr/bin/python3",
             "analysis": {
-                "diagnosticMode": "workspace",
+                "diagnosticMode": "openFilesOnly",
                 "importFormat": "absolute"
             },
             "pyrefly": {
@@ -726,7 +901,7 @@ mod tests {
         let analysis = config.analysis.unwrap();
         assert!(matches!(
             analysis.diagnostic_mode,
-            Some(DiagnosticMode::Workspace)
+            Some(DiagnosticMode::OpenFilesOnly)
         ));
         assert!(matches!(
             analysis.import_format,

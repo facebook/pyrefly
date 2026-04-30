@@ -20,6 +20,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::class::Class;
 use crate::class::ClassType;
+use crate::heap::TypeHeap;
 use crate::types::TArgs;
 use crate::types::TParams;
 use crate::types::Type;
@@ -27,7 +28,16 @@ use crate::types::Type;
 /// Names of special forms that should be clickable in type hints.
 /// These are defined as annotated assignments in typing.pyi (e.g., `Literal: _SpecialForm`)
 /// rather than as classes, so they require special handling.
-const SPECIAL_FORM_NAMES: &[&str] = &["Literal", "LiteralString", "Never", "NoReturn"];
+const SPECIAL_FORM_NAMES: &[&str] = &[
+    "Literal",
+    "LiteralString",
+    "Never",
+    "NoReturn",
+    "TypeForm",
+    "TypeGuard",
+    "TypeIs",
+    "Unpack",
+];
 
 #[derive(Debug, Clone)]
 struct StdlibError {
@@ -552,14 +562,14 @@ impl Stdlib {
         Self::primitive(&self.param_spec_kwargs)
     }
 
-    pub fn param_spec_args_as_tuple(&self) -> ClassType {
-        self.tuple(self.object().clone().to_type())
+    pub fn param_spec_args_as_tuple(&self, heap: &TypeHeap) -> ClassType {
+        self.tuple(heap.mk_class_type(self.object().clone()))
     }
 
-    pub fn param_spec_kwargs_as_dict(&self) -> ClassType {
+    pub fn param_spec_kwargs_as_dict(&self, heap: &TypeHeap) -> ClassType {
         self.dict(
-            self.str().clone().to_type(),
-            self.object().clone().to_type(),
+            heap.mk_class_type(self.str().clone()),
+            heap.mk_class_type(self.object().clone()),
         )
     }
 

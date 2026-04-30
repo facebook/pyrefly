@@ -7,6 +7,7 @@
 
 use configparser::ini::Ini;
 
+use crate::base::Preset;
 use crate::config::ConfigFile;
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::migration::mypy::util;
@@ -47,9 +48,14 @@ impl ConfigOptionMigrater for ErrorCodes {
         let disable_error_code = util::string_to_array(&mypy_cfg.get("mypy", "disable_error_code"));
         let enable_error_code = util::string_to_array(&mypy_cfg.get("mypy", "enable_error_code"));
         let error_config =
-            util::make_error_config(Some(mypy_flags), disable_error_code, enable_error_code)
-                .ok_or_else(|| anyhow::anyhow!("Failed to create error config"))?;
-        pyrefly_cfg.root.errors = Some(error_config);
+            util::make_error_config(Some(mypy_flags), disable_error_code, enable_error_code);
+        // Use the `legacy` preset as the base. The preset handles defaults
+        // like disabling mutable-override and param-name-override. Any explicit
+        // error code overrides from the mypy config are added on top.
+        pyrefly_cfg.preset = Some(Preset::Legacy);
+        if let Some(error_config) = error_config {
+            pyrefly_cfg.root.errors = Some(error_config);
+        }
         Ok(())
     }
 
@@ -62,7 +68,6 @@ impl ConfigOptionMigrater for ErrorCodes {
         // The PyrightConfig struct already has a method to convert these to an ErrorDisplayConfig
         let error_config = pyright_cfg
             .errors
-            .clone()
             .to_config()
             .ok_or_else(|| anyhow::anyhow!("No error settings found in pyright config"))?;
 
@@ -169,12 +174,48 @@ mod tests {
         let mypy_cfg = Ini::new();
 
         let mut pyrefly_cfg = ConfigFile::default();
-        let default_errors = pyrefly_cfg.root.errors.clone();
 
         let error_codes = ErrorCodes;
-        let _ = error_codes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+        error_codes
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("migration should succeed");
 
-        assert_eq!(pyrefly_cfg.root.errors, default_errors);
+        // Empty mypy config sets the `legacy` preset; no explicit error overrides
+        assert_eq!(pyrefly_cfg.preset, Some(Preset::Legacy));
+        assert!(pyrefly_cfg.root.errors.is_none());
+
+        // After configure(), the preset disables mutable-override
+        pyrefly_cfg.configure();
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Ignore
+        );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_mutable_override_enabled() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set(
+            "mypy",
+            "enable_error_code",
+            Some("mutable-override".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        error_codes
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("migration should succeed");
+
+        // Explicit enable overrides the preset's default after configure()
+        pyrefly_cfg.configure();
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Error
+        );
     }
 
     #[test]

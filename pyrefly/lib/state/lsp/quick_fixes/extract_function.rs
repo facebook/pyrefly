@@ -22,14 +22,15 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::MethodInfo;
 use super::extract_shared::first_parameter_name;
 use super::extract_shared::is_static_or_class_method;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::validate_non_empty_selection;
-use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
 
 const HELPER_INDENT: &str = "    ";
@@ -72,11 +73,19 @@ pub(crate) fn extract_function_code_actions(
             continue;
         }
         if ident.synthetic_load {
-            seen_params.insert(ident.name.clone());
-            params.push(ident.name.clone());
+            let defined_earlier_in_selection = store_refs
+                .iter()
+                .any(|store| store.name == ident.name && store.position < ident.position);
+            if !defined_earlier_in_selection {
+                seen_params.insert(ident.name.clone());
+                params.push(ident.name.clone());
+            }
             continue;
         }
-        let defs = transaction.find_definition(handle, ident.position, FindPreference::default());
+        let defs = transaction
+            .find_definition(handle, ident.position, FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
         let Some(def) = defs.first() else {
             continue;
         };
