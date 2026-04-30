@@ -771,7 +771,8 @@ impl FlowStyle {
                         MergeStyle::Loop
                         | MergeStyle::LoopDefinitelyRuns
                         | MergeStyle::Exclusive
-                        | MergeStyle::Inclusive => FlowStyle::PossiblyUninitialized,
+                        | MergeStyle::Inclusive
+                        | MergeStyle::Finally => FlowStyle::PossiblyUninitialized,
                     }
                 }
             }
@@ -3040,6 +3041,10 @@ enum MergeStyle {
     /// Distinct from [Branching] because we have to be more lax about
     /// uninitialized locals (see `FlowStyle::merge` for details).
     BoolOp,
+    /// This is the merge immediately before analyzing a `finally` block.
+    /// Terminating branches still contribute because `finally` executes before
+    /// their control-flow effect is observed outside the statement.
+    Finally,
 }
 
 impl MergeStyle {
@@ -3392,17 +3397,20 @@ impl<'a> BindingsBuilder<'a> {
             return;
         }
 
+        let use_all_branches = matches!(merge_style, MergeStyle::Finally);
         // We normally only merge the live branches (where control flow is not
         // known to terminate), but if nothing is live we still need to fill in
         // the Phi keys and potentially analyze downstream code, so in that case
         // we'll use the terminated branches.
-        let (terminated_branches, live_branches): (Vec<_>, Vec<_>) =
-            branches.into_iter().partition(|flow| flow.has_terminated);
-        let has_terminated = live_branches.is_empty() && !merge_style.is_loop();
-        let flows = if has_terminated {
-            terminated_branches
+        let n_live_branches = branches.iter().filter(|flow| !flow.has_terminated).count();
+        let has_terminated = n_live_branches == 0 && !merge_style.is_loop();
+        let flows = if use_all_branches || has_terminated {
+            branches
         } else {
-            live_branches
+            branches
+                .into_iter()
+                .filter(|flow| !flow.has_terminated)
+                .collect()
         };
         // Determine reachability of the merged flow.
         // For Loop style with empty flows (all branches terminated), the loop body might
@@ -3414,6 +3422,11 @@ impl<'a> BindingsBuilder<'a> {
                 MergeStyle::Loop => base.is_definitely_unreachable,
                 _ => true,
             }
+        } else if use_all_branches && n_live_branches > 0 {
+            flows
+                .iter()
+                .filter(|f| !f.has_terminated)
+                .all(|f| f.is_definitely_unreachable)
         } else {
             flows.iter().all(|f| f.is_definitely_unreachable)
         };
@@ -3716,6 +3729,18 @@ impl<'a> BindingsBuilder<'a> {
     /// means the caller forgot to call `finish_branch` and is always a bug).
     pub fn finish_exhaustive_fork(&mut self) {
         self.finish_fork_impl(None, false, None)
+    }
+
+    /// Finish an exhaustive fork for a `finally` block. Unlike a normal merge,
+    /// branches that have already terminated still contribute to the merged type
+    /// state because they will execute the `finally` body first.
+    pub fn finish_finally_fork(&mut self) {
+        let fork = self.scopes.current_mut().forks.pop().unwrap();
+        assert!(
+            !fork.branch_started,
+            "A branch is started - did you forget to call `finish_branch`?"
+        );
+        self.merge_flow(fork.base, fork.branches, fork.range, MergeStyle::Finally);
     }
 
     /// Finish a non-exhaustive fork in which the base flow is part of the merge. It negates

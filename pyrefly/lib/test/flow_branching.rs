@@ -2187,6 +2187,33 @@ def main(resolve: bool) -> None:
 "#,
 );
 
+// Issue #2845: `finally` must see both the successful `try` state and terminating `except` state.
+testcase!(
+    test_try_finally_preserves_pre_try_possibility_from_terminating_except,
+    r#"
+from typing import assert_type
+
+def something_that_might_throw() -> None:
+    raise Exception()
+
+class Thing:
+    def something(self) -> None:
+        pass
+
+def blah() -> None:
+    x = None
+    try:
+        something_that_might_throw()
+        if x is None:
+            x = Thing()
+    except Exception:
+        raise
+    finally:
+        assert_type(x, Thing | None)
+        x.something()  # E: Object of class `NoneType` has no attribute `something`
+"#,
+);
+
 // for https://github.com/facebook/pyrefly/issues/1840
 testcase!(
     test_exhaustive_flow_no_fall_through,

@@ -1216,11 +1216,10 @@ impl<'a> BindingsBuilder<'a> {
                         // https://docs.python.org/3/reference/compound_stmts.html#except-clause
                         self.scopes.mark_as_deleted(&name.id);
                     }
-
                     self.finish_branch();
                 }
 
-                self.finish_exhaustive_fork();
+                self.finish_finally_fork();
                 self.scopes.enter_finally();
                 self.stmts(x.finalbody, parent);
                 self.scopes.exit_finally();
