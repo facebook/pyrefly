@@ -913,6 +913,35 @@ x: int = "hello"
 }
 
 #[test]
+fn quickfix_replace_string_literal_with_enum_member() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from enum import Enum
+
+class AccountStatus(Enum):
+    ACTIVE = "active"
+
+def takes_status(status: AccountStatus) -> None:
+    pass
+
+takes_status("active")
+#             ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Replace with `AccountStatus.ACTIVE`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("takes_status(AccountStatus.ACTIVE)"),
+        "{report}"
+    );
+}
+
+#[test]
 fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(

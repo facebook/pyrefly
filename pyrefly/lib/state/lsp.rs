@@ -2348,6 +2348,18 @@ impl<'a> Transaction<'a> {
         for error in errors {
             let error_range = error.range();
             if error_range.contains_range(range)
+                && let Some(action) = quick_fixes::enum_member::replace_with_enum_member_code_action(
+                    &module_info,
+                    &ast,
+                    &error,
+                )
+            {
+                let key = (action.0.clone(), action.2, action.3.clone());
+                if other_action_keys.insert(key) {
+                    other_actions.push(action);
+                }
+            }
+            if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::pyrefly_ignore::add_pyrefly_ignore_code_action(
                     &module_info,
                     &error,
