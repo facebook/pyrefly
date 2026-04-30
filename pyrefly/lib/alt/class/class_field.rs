@@ -1144,7 +1144,10 @@ impl ClassField {
             ClassFieldInner::Method { .. } => false,
             ClassFieldInner::NestedClass { .. } => false,
             ClassFieldInner::ClassAttribute { initialization, .. } => {
-                matches!(initialization, ClassFieldInitialization::Method)
+                matches!(
+                    initialization,
+                    ClassFieldInitialization::Method | ClassFieldInitialization::ClassMethod
+                )
             }
             ClassFieldInner::InstanceAttribute { .. } => true, // By definition, always assigned in methods
         }
