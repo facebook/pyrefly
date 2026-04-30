@@ -961,6 +961,9 @@ impl<'a> BindingsBuilder<'a> {
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                // The while condition always runs at least once, so walrus-defined
+                // names are guaranteed to be initialized after the loop.
+                self.scopes.propagate_new_flow_entries_to_loop_base();
                 let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.bind_narrow_ops(

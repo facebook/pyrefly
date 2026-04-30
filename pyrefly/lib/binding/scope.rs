@@ -2136,6 +2136,28 @@ impl Scopes {
     /// Also updates base entries that are uninitialized (e.g. `x: int` with no
     /// assignment) when the branch has an initialized binding, so that the
     /// merge does not falsely report "may be uninitialized".
+    /// Propagate names introduced by walrus operators in a `while` condition
+    /// into the loop's base flow. The condition always executes at least once,
+    /// so these names are guaranteed to be defined after the loop.
+    pub fn propagate_new_flow_entries_to_loop_base(&mut self) {
+        let scope = self.current_mut();
+        let loop_ = scope
+            .loops
+            .last_mut()
+            .expect("propagate_new_flow_entries_to_loop_base called outside of a loop");
+        for (name, info) in scope.flow.info.iter() {
+            if let Some(existing) = loop_.base.info.get(name) {
+                if matches!(existing.initialized(), InitializedInFlow::No)
+                    && !matches!(info.initialized(), InitializedInFlow::No)
+                {
+                    loop_.base.info.insert(name.clone(), info.clone());
+                }
+            } else {
+                loop_.base.info.insert(name.clone(), info.clone());
+            }
+        }
+    }
+
     pub fn propagate_new_flow_entries_to_fork_base(&mut self) {
         let scope = self.current_mut();
         let fork = scope
