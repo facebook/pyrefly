@@ -95,6 +95,24 @@ def test(o: P):
 );
 
 testcase!(
+    test_overload_through_paramspec_callable,
+    r#"
+import asyncio
+from typing import Any, Coroutine, assert_type, overload
+
+@overload
+def foo(x: int) -> int: ...
+@overload
+def foo(x: str) -> None: ...
+def foo(x: int | str) -> int | None:
+    return None
+
+assert_type(foo("str"), None)
+assert_type(asyncio.to_thread(foo, "str"), Coroutine[Any, Any, None])
+    "#,
+);
+
+testcase!(
     test_method,
     r#"
 from typing import assert_type, overload

@@ -1383,6 +1383,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                     hint,
                     ctor_targs,
+                    true,
                 )
                 .0
             }
@@ -1398,6 +1399,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                     hint,
                     ctor_targs,
+                    true,
                 )
                 .0
             }

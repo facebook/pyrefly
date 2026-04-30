@@ -36,6 +36,7 @@ use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::call::TargetWithTParams;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
@@ -55,6 +56,7 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
+use crate::types::types::OverloadType;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -391,6 +393,93 @@ impl CallArgPreEval<'_> {
         }
     }
 
+    /// For wrappers like `func: Callable[P, R], *args: P.args`, use the forwarded
+    /// arguments to pick an overload before checking `func` against `Callable[P, R]`.
+    fn post_check_overload_callable_paramspec<Ans: LookupAnswer>(
+        &mut self,
+        solver: &AnswersSolver<Ans>,
+        callable_name: Option<&FunctionKind>,
+        hint: &Type,
+        param_name: Option<&Name>,
+        paramspec: Option<Var>,
+        remaining_args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        range: TextRange,
+        arg_errors: &ErrorCollector,
+        call_errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Option<Type> {
+        let Type::Callable(box Callable {
+            params: Params::ParamSpec(prefix, Type::Var(want_paramspec)),
+            ..
+        }) = hint
+        else {
+            return None;
+        };
+        if !prefix.is_empty() || paramspec != Some(*want_paramspec) {
+            return None;
+        }
+
+        let got = match self {
+            Self::Type(ty, done) if matches!(ty, Type::Overload(_)) => {
+                *done = true;
+                (*ty).clone()
+            }
+            Self::Expr(expr @ (Expr::Name(_) | Expr::Attribute(_)), done) => {
+                let got = solver.expr_infer(expr, arg_errors);
+                if !matches!(got, Type::Overload(_)) {
+                    return None;
+                }
+                *done = true;
+                got
+            }
+            _ => return None,
+        };
+
+        let Type::Overload(overload) = &got else {
+            unreachable!("checked that the argument is an overload");
+        };
+        let overloads = overload
+            .signatures
+            .clone()
+            .mapped(|signature| match signature {
+                OverloadType::Function(function) => TargetWithTParams(None, function),
+                OverloadType::Forall(forall) => {
+                    TargetWithTParams(Some(forall.tparams), forall.body)
+                }
+            });
+        let silent_errors = solver.error_collector();
+        let (_, selected) = solver.call_overloads(
+            overloads,
+            &overload.metadata,
+            None,
+            remaining_args,
+            keywords,
+            arguments_range,
+            &silent_errors,
+            context,
+            None,
+            None,
+            false,
+        );
+        let tcc = &|| {
+            TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                param_name.cloned(),
+                callable_name.cloned(),
+            ))
+            .with_context(context.map(|ctx| ctx()))
+        };
+        solver.check_type(
+            &solver.heap.mk_callable_from(selected),
+            hint,
+            range,
+            call_errors,
+            tcc,
+        );
+        Some(got)
+    }
+
     // Step the argument or mark it as done similar to `post_infer`, but without checking the type
     // Intended for arguments matched to unpack-annotated *args, which are typechecked separately later
     fn post_skip(&mut self) {
@@ -648,7 +737,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             Ok(param_list_owner.push(ps).items().iter().rev().collect())
         };
-        for arg in self_arg.iter().chain(args.iter()) {
+        let positional_args = self_arg.iter().chain(args.iter()).collect::<Vec<_>>();
+        for (arg_idx, arg) in positional_args.iter().enumerate() {
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -707,17 +797,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             seen_names.insert(name, ty);
                         }
                         expected_types.insert(arg.range(), ty.clone());
-                        let arg_ty = arg_pre.post_check(
-                            self,
-                            callable_name,
-                            ty,
-                            name,
-                            false,
-                            arg.range(),
-                            arg_errors,
-                            call_errors,
-                            context,
-                        );
+                        let remaining_args = if self_arg.is_some() {
+                            &args[arg_idx..]
+                        } else {
+                            &args[arg_idx + 1..]
+                        };
+                        let arg_ty = arg_pre
+                            .post_check_overload_callable_paramspec(
+                                self,
+                                callable_name,
+                                ty,
+                                name,
+                                paramspec,
+                                remaining_args,
+                                keywords,
+                                arguments_range,
+                                arg.range(),
+                                arg_errors,
+                                call_errors,
+                                context,
+                            )
+                            .or_else(|| {
+                                arg_pre.post_check(
+                                    self,
+                                    callable_name,
+                                    ty,
+                                    name,
+                                    false,
+                                    arg.range(),
+                                    arg_errors,
+                                    call_errors,
+                                    context,
+                                )
+                            });
                         if let Some(name) = name
                             && let Some(ty) = arg_ty
                         {
