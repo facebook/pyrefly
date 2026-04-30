@@ -5047,6 +5047,49 @@ async def foo(l: AsyncIterator[int | str]):
 );
 
 call_graph_testcase!(
+    test_for_subscript_assign,
+    TEST_MODULE_NAME,
+    r#"
+import typing
+def foo(x: typing.List[int], y: typing.List[int]):
+  for x[0] in y:
+    pass
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "4:15-4:16|artificial-call|for-iter",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__iter__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
+                ),
+                (
+                    "4:15-4:16|artificial-call|for-next",
+                    regular_call_callees(vec![
+                        create_call_target("typing.Iterator.__next__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("typing.Iterator", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+                (
+                    "4:7-4:16|artificial-call|for-assign>subscript-set-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.list.__setitem__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.list", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_async_comprehension_with_method_call_on_different_parameter,
     TEST_MODULE_NAME,
     r#"
