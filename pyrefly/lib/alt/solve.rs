@@ -162,6 +162,7 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
+use crate::types::types::CalleeKind;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
 use crate::types::types::TParams;
@@ -5024,7 +5025,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None,
                             );
                             let arg = CallArg::ty(&ty, range);
-                            ty = self.call_infer(
+                            let decorated_ty = self.call_infer(
                                 call_target,
                                 &[arg],
                                 &[],
@@ -5034,8 +5035,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None,
                                 None,
                             );
-                            if self.untype_opt(ty.clone(), range, errors).is_some() {
+                            let decorator_result_is_callable = matches!(
+                                decorated_ty.callee_kind(),
+                                Some(CalleeKind::Callable | CalleeKind::Function(_))
+                            );
+                            if decorator_result_is_callable
+                                || self
+                                    .untype_opt(decorated_ty.clone(), range, errors)
+                                    .is_some()
+                            {
                                 ty = self.heap.mk_class_def(cls.dupe());
+                            } else {
+                                ty = decorated_ty;
                             }
                         }
                     }
