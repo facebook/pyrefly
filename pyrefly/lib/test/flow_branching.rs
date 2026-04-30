@@ -1168,6 +1168,23 @@ def f():
 );
 
 testcase!(
+    bug = "walrus in while condition should not be flagged as uninitialized after loop",
+    test_walrus_in_while_condition,
+    r#"
+from typing import Callable, Any
+
+class Cat:
+    def equals(self, other: Any) -> bool:
+        return False
+
+def main(f: Callable[[], Cat]) -> None:
+    while (a := f()).equals(1):
+        break
+    print(a)  # E: `a` may be uninitialized
+"#,
+);
+
+testcase!(
     test_walrus_on_first_branch_of_if,
     r#"
 def condition() -> bool: ...
