@@ -1543,7 +1543,7 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    Real = Dummy
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 "#,
     )
 }
@@ -1564,19 +1564,17 @@ Real = SubReal
 }
 
 testcase!(
-    bug = "after incompatible rebind in mod, importers should still see the original class type",
     test_class_rebind_import_after_incompatible_write,
     env_class_rebind_incompatible(),
     r#"
 from typing import reveal_type
 from mod import Real
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+reveal_type(Real)  # E: revealed type: type[Real]
+Real("example.com", port=443)
 "#,
 );
 
 testcase!(
-    bug = "after compatible subclass rebind in mod, importers should see the refined class type",
     test_class_rebind_import_after_compatible_write,
     env_class_rebind_compatible(),
     r#"

@@ -2417,7 +2417,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_explicit,
                 ..
             } => {
-                let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, errors);
+                let (annot, ty) =
+                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, errors);
                 if let Some(annot) = &annot
                     && let Some((AnnotationStyle::Forwarded, _)) = annot_key
                 {
@@ -3220,9 +3221,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Name,
         annot_key: Option<&(AnnotationStyle, Idx<KeyAnnotation>)>,
+        receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
         errors: &ErrorCollector,
     ) -> (Option<Arc<AnnotationWithTarget>>, Type) {
+        // Receiver-constrained class assignment: a same-scope rebind of a
+        // name originally bound by a `class` definition. The receiver acts
+        // like an implicit annotation, so the RHS is checked against it but
+        // an incompatible RHS does not change the visible binding.
+        //
+        // The plan keeps this path mutually exclusive with explicit
+        // annotations, so we expect `annot_key` to be `None` here. We solve
+        // the RHS once with the receiver as a hint so the standard
+        // assignment diagnostic fires for incompatible writes, then pick the
+        // visible type based on subset compatibility.
+        if let Some(receiver_idx) = receiver_idx {
+            let receiver_ty = self.get_idx(receiver_idx).arc_clone_ty();
+            let tcc: &dyn Fn() -> TypeCheckContext =
+                &|| TypeCheckContext::of_kind(TypeCheckKind::AnnotatedName(name.clone()));
+            let expr_ty = self.expr(expr, Some((&receiver_ty, tcc)), errors);
+            let visible_ty = if self.is_subset_eq(&expr_ty, &receiver_ty) {
+                expr_ty
+            } else {
+                receiver_ty
+            };
+            return (None, visible_ty);
+        }
         match annot_key {
             // First infer the type as a normal value
             Some((style, k)) => {
@@ -3276,12 +3300,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Name,
         annot_key: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
+        receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
         legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         is_in_function_scope: bool,
         errors: &ErrorCollector,
     ) -> Type {
-        let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, errors);
+        let (annot, ty) =
+            self.name_assign_infer(name, annot_key.as_ref(), receiver_idx, expr, errors);
         if let Some(annot) = &annot
             && let Some((AnnotationStyle::Forwarded, _)) = annot_key
         {
@@ -3292,8 +3318,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &ty,
                 Type::Type(inner) if matches!(inner.as_ref(), Type::SpecialForm(_))
             );
+        // Both annotated assigns and receiver-constrained class assigns pin
+        // the visible type via an external constraint, so a pinned RHS must
+        // not be reinterpreted as an implicit type alias.
+        let is_pinned = annot_key.is_some() || receiver_idx.is_some();
         if !is_bare_special_form
-            && annot.is_none()
+            && !is_pinned
             && self.may_be_implicit_type_alias(&ty)
             && !is_in_function_scope
             && self.has_valid_annotation_syntax(expr, &self.error_swallower())
@@ -4901,6 +4931,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::NameAssign(x) => self.binding_to_type_name_assign(
                 &x.name,
                 x.annotation,
+                x.receiver_idx,
                 &x.expr,
                 &x.legacy_tparams,
                 x.is_in_function_scope,

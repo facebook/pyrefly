@@ -1247,7 +1247,6 @@ def test(x: int | None) -> None:
 // ----------------------------------------------------------------------------
 
 testcase!(
-    bug = "incompatible class rebind should be suppressed; visible Real should remain type[Real]",
     test_class_rebind_conditional_incompatible,
     r#"
 from typing import reveal_type
@@ -1260,10 +1259,10 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    Real = Dummy
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );
 
@@ -1331,7 +1330,6 @@ assert_type(Real, type[Real])
 );
 
 testcase!(
-    bug = "later sequential class rebind should still be checked against the original receiver",
     test_class_rebind_repeated_writes_in_one_flow,
     r#"
 from typing import reveal_type
@@ -1341,16 +1339,15 @@ class Real:
 
 class Dummy: ...
 
-Real = Dummy
-Real = Dummy
+Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );
 
 testcase!(
-    bug = "later branch-join class rebind should keep using the original receiver",
     test_class_rebind_repeated_writes_after_join,
     r#"
 from typing import reveal_type
@@ -1363,24 +1360,21 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    Real = Dummy
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
 if b():
-    Real = Dummy
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );
 
 testcase!(
-    bug = "branch-defining a fresh class with the same name should not silently merge identities",
     test_class_rebind_fresh_class_in_branch,
     r#"
-from typing import reveal_type
-
 class Real:
-    def __init__(self, host: str, port: int = 0) -> None: ...
+    def real_only(self) -> int: ...
 
 class Dummy: ...
 
@@ -1388,18 +1382,20 @@ def b() -> bool: ...
 
 if b():
     class Real:
-        pass
+        def fresh_only(self) -> int: ...
 else:
-    Real = Dummy
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-# Track current behavior. Whatever decision we make later, the merged result
-# must not silently collapse two distinct class identities into one.
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+# After the merge `Real` must not silently collapse to either branch's
+# class identity. Both `real_only` (from the original `class Real`) and
+# `fresh_only` (from the branch-local `class Real`) should be missing on
+# the merged value, since neither method is shared by all branches.
+Real().real_only()  # E: Object of class `Real` has no attribute `real_only`
+Real().fresh_only()  # E: Object of class `Real` has no attribute `fresh_only`
 "#,
 );
 
 testcase!(
-    bug = "compatible subclass write should follow annotated-variable semantics; later writes still checked against original receiver",
     test_class_rebind_compatible_subclass,
     r#"
 from typing import reveal_type
@@ -1418,9 +1414,9 @@ Real = SubReal
 reveal_type(Real)  # E: revealed type: type[SubReal]
 
 if b():
-    Real = Dummy
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
+Real("example.com", port=443)
 "#,
 );
 

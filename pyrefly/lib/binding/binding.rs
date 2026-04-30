@@ -1996,6 +1996,17 @@ pub struct NameAssign {
     pub receiver_idx: Option<Idx<Key>>,
 }
 
+impl NameAssign {
+    /// True if the visible binding is pinned by an external constraint —
+    /// either an explicit annotation or an implicit class receiver. Pinned
+    /// assignments skip implicit-type-alias wrapping and inlay-hint
+    /// suggestions, since the pinning constraint already authoritatively
+    /// describes the variable's type.
+    pub fn is_pinned(&self) -> bool {
+        self.annotation.is_some() || self.receiver_idx.is_some()
+    }
+}
+
 /// Data for a type alias binding.
 #[derive(Clone, Debug)]
 pub struct TypeAliasBinding {
