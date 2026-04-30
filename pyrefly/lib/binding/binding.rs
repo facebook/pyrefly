@@ -1982,6 +1982,18 @@ pub struct NameAssign {
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
     pub def_idx: Option<Idx<Key>>,
+    /// If `Some`, this assignment has an implicit receiver derived from
+    /// flow state (currently: a same-scope `class` definition for the same
+    /// name). The receiver provides contextual typing for the RHS and acts
+    /// like an implicit annotation: incompatible writes do not change the
+    /// visible binding, and the receiver type is preserved across same-scope
+    /// rebinds.
+    ///
+    /// The idx points at the canonical class-object binding of the original
+    /// class. The receiver-constrained semantics live entirely in the solver;
+    /// the textual assignment is still bound as a real `NameAssign` so the
+    /// RHS remains available for its own diagnostics and bookkeeping.
+    pub receiver_idx: Option<Idx<Key>>,
 }
 
 /// Data for a type alias binding.

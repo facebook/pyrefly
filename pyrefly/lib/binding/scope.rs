@@ -846,7 +846,6 @@ impl FlowStyle {
     ///
     /// This is the entry point for deciding whether a same-scope assignment
     /// should be bound as a receiver-constrained `NameAssign`.
-    #[allow(dead_code)] // called by the next patch once `bind_single_name_assign` consults it
     pub fn canonical_class_receiver_idx(&self) -> Option<Idx<Key>> {
         match self {
             FlowStyle::ClassDef { class_idx, .. } => Some(*class_idx),
