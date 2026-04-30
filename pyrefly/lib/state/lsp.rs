@@ -91,6 +91,7 @@ use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod dict_completions;
+mod endpoint_support;
 mod quick_fixes;
 
 pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
@@ -2164,6 +2165,9 @@ impl<'a> Transaction<'a> {
                 }])
             }
             None => {
+                if let Some(res) = self.find_definition_for_endpoint_literal(handle, position) {
+                    return Ok(res);
+                }
                 // Check if this is a None literal, if so, resolve to NoneType class
                 if covering_nodes
                     .iter()
