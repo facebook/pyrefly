@@ -730,9 +730,12 @@ fn keyword_argument_identifier(
         .then_some(identifier.identifier)
 }
 
-fn declared_function_hover_display(module: &Module, definition_range: TextRange) -> Option<String> {
-    let (ast, _, _) = Ast::parse(module.contents(), module.source_type());
-    let function_def = Ast::locate_node(&ast, definition_range.start())
+fn declared_function_hover_display(
+    ast: &ModModule,
+    module: &Module,
+    definition_range: TextRange,
+) -> Option<String> {
+    let function_def = Ast::locate_node(ast, definition_range.start())
         .into_iter()
         .find_map(|node| match node {
             AnyNodeRef::StmtFunctionDef(function_def)
@@ -742,16 +745,17 @@ fn declared_function_hover_display(module: &Module, definition_range: TextRange)
             }
             _ => None,
         })?;
-    let body_start = function_def
-        .body
-        .first()
-        .map(Ranged::range)
-        .map(|range| range.start())
-        .unwrap_or(function_def.range.end());
-    let header = module
-        .code_at(TextRange::new(function_def.range.start(), body_start))
-        .trim_end();
-    header.ends_with(':').then(|| format!("{header} ..."))
+    let signature_end = function_def
+        .returns
+        .as_ref()
+        .map(|returns| returns.range().end())
+        .unwrap_or_else(|| function_def.parameters.end());
+    let contents = module.contents();
+    let colon_offset =
+        contents[signature_end.to_usize()..function_def.range.end().to_usize()].find(':')?;
+    let colon = signature_end + TextSize::try_from(colon_offset + 1).ok()?;
+    let header = module.code_at(TextRange::new(function_def.range.start(), colon));
+    Some(format!("{header} ..."))
 }
 
 /// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
@@ -1048,7 +1052,9 @@ pub fn get_hover_with_verbosity(
     let declared_function_display = if callee_range_opt.is_none() {
         match (&type_, module.as_ref(), definition_range) {
             (Type::Function(_), Some(module), Some(definition_range)) => {
-                declared_function_hover_display(module, definition_range)
+                transaction.get_ast(handle).and_then(|ast| {
+                    declared_function_hover_display(ast.as_ref(), module, definition_range)
+                })
             }
             _ => None,
         }
