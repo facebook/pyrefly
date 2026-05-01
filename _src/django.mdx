@@ -217,6 +217,63 @@ Pyrefly also supports `TextChoices` and the base `Choices` class with various va
 
 ---
 
+## factory_boy Support
+
+Pyrefly recognizes [factory_boy](https://factoryboy.readthedocs.io/) factories that subclass `DjangoModelFactory`. For each factory, it figures out which Django model is produced and infers the correct return types for `create`, `build`, `create_batch`, and `build_batch`. No plugin or extra configuration is required.
+
+The examples below all build on this `User` model and `UserFactory`:
+
+```python
+# myapp/models.py
+from django.db import models
+
+class User(models.Model):
+    username = models.CharField(max_length=150)
+```
+
+```python
+# myapp/factories.py
+from factory.django import DjangoModelFactory
+
+from myapp.models import User
+
+class UserFactory(DjangoModelFactory):
+    class Meta:
+        model = User
+```
+
+### `create()` and `build()`
+
+`UserFactory.create()` and `UserFactory.build()` each return a `User` instance:
+
+```python
+user = UserFactory.create()
+assert_type(user, User)
+
+user = UserFactory.build()
+assert_type(user, User)
+```
+
+Field access on the returned instance is type-checked against the model:
+
+```python
+assert_type(user.username, str)
+```
+
+### `create_batch()` and `build_batch()`
+
+`UserFactory.create_batch(n)` and `UserFactory.build_batch(n)` return `list[User]`:
+
+```python
+users = UserFactory.create_batch(3)
+assert_type(users, list[User])
+
+users = UserFactory.build_batch(3)
+assert_type(users, list[User])
+```
+
+---
+
 ## Differences from Mypy
 
 Mypy uses a plugin (`mypy-django-plugin`) that provides very detailed type information by accessing runtime Django internals and performing multiple passes over the code. Pyrefly takes a different approach by following the type stubs directly without runtime introspection.

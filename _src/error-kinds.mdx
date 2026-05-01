@@ -1394,14 +1394,16 @@ def calculate_sum(x: int, y: int) -> int:
 
 ## unbound-name
 
-This error corresponds to the runtime `NameError`, indicating that a variable is referenced but does not exist.
+Pyrefly found a conditional definition for the given name, so it may be undefined in some flows. For example:
 
 ```python
-def do_things(stuff: list[int]) -> str:
-  ...
-
-do_thing([1, 2])  # typo! Or, unbound-name
+def f(check: bool):
+    if check:
+        x = 1
+    return x  # unbound-name
 ```
+
+Compare this with [unknown-name](#unknown-name), which is reported when no definition at all is found for a name.
 
 ## unexpected-keyword
 
@@ -1436,7 +1438,9 @@ assert_type(1, int)  # error
 
 ## unknown-name
 
-`unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
+A name is referenced but does not exist.
+
+Compare this with [unbound-name](#unbound-name), which is reported when the name is conditionally defined.
 
 Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 

@@ -1,5 +1,6 @@
 ---
 title: IDE Supported Features
+toc_max_heading_level: 4
 
 description: Supported features for Pyrefly's IDE extension
 ---
@@ -220,6 +221,209 @@ Explore callers and callees of a method or function.
 ---
  -->
 
+### [Code actions](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_codeAction)
+
+Code actions are automated fixes and refactorings that Pyrefly offers through your editor. They appear as lightbulb suggestions or can be triggered on save.
+
+#### Quick Fix
+
+When Pyrefly detects a type error, it may offer a quick fix — a one-click resolution available via the lightbulb menu (<kbd>Cmd+.</kbd> / <kbd>Ctrl+.</kbd>). Currently supported:
+
+| Quick fix | Description |
+|---|---|
+| **Add missing import** | Automatically add an import statement for an unresolved name |
+| **Remove redundant cast** | Remove a `typing.cast()` call where the argument already has the target type |
+
+#### Fix All
+
+Pyrefly registers the `source.fixAll.pyrefly` [code action kind](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#codeActionKind), which applies all available auto-fixes across a file at once. This is typically triggered on save.
+
+The generic `source.fixAll` also triggers Pyrefly's fixes, so if you already use `"source.fixAll": "always"` (a common default), Pyrefly will participate alongside other tools like [Ruff](https://docs.astral.sh/ruff/editors/features/#fix-safety) or [ESLint](https://github.com/microsoft/vscode-eslint). The tool-specific `source.fixAll.pyrefly` variant lets you control Pyrefly independently.
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs>
+  <TabItem value="vscode" label="VS Code" default>
+
+```json
+"editor.codeActionsOnSave": {
+    "source.fixAll.pyrefly": "always"
+}
+```
+
+  </TabItem>
+  <TabItem value="neovim" label="Neovim">
+
+```lua
+vim.api.nvim_create_autocmd("BufWritePre", {
+  callback = function()
+    vim.lsp.buf.code_action({
+      context = { only = { "source.fixAll.pyrefly" } },
+      apply = true,
+    })
+  end,
+})
+```
+
+  </TabItem>
+  <TabItem value="sublime" label="Sublime Text">
+
+In your LSP settings (`Preferences > Package Settings > LSP > Settings`):
+
+```json
+{
+    "lsp_code_actions_on_save": {
+        "source.fixAll.pyrefly": true
+    }
+}
+```
+
+  </TabItem>
+</Tabs>
+
+#### Refactor
+
+Pyrefly supports a range of refactoring code actions, triggered via the lightbulb menu or keyboard shortcuts.
+
+**Pull Member Up and Push Member Down**
+
+Pull a method from a subclass to a superclass, or push a method from a superclass to a subclass.
+
+**Pull Member Up**
+<video
+  src="/videos/pull-up-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Push Member Down**
+<video
+  src="/videos/push-down-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Convert to Package and Convert to Module**
+
+Convert to Package takes .py file and moves it to a package directory with all logic moved into an __init__.py file.
+
+<video
+  src="/videos/convert-to-package.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+Convert to Module takes an existing package with all logic defined in its __init__.py and creates a named .py file from it.
+
+<video
+  src="/videos/convert-to-module.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Move function to top level**
+
+Takes a function nested within another function or statement and moves it to the top level of the module.
+
+<video
+  src="/videos/top-level-refactor.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Introduce Parameter**
+
+Adds a new parameter to a function definition and update all call sites to pass the new parameter.
+
+<video
+  src="/videos/refactor-introduce-parameter.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Inline Variable**
+
+Removes redundant variables by replacing them with their value.
+
+<video
+  src="/videos/refactor-inline-variable.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Extract to Field**
+
+Declare a new field on a class with the value of the selected expression.
+
+<video
+  src="/videos/refactor-extract-to-field.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Extract to Variable**
+
+Declare a new variable with the value of the selected expression.
+
+<video
+  src="/videos/refactor-extract-to-variable.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+**Invert Boolean**
+
+Flips the value of a boolean and updates all usages to work with new value.
+
+<video
+  src="/videos/refactor-invert-boolean.mp4"
+  width="720"
+  muted
+  loop
+  autoPlay
+  playsInline
+  preload="metadata"
+/>
+
+---
+
 ### [Diagnostics](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_publishDiagnostics)
 
 Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane ("Problems" pane in VSCode).
@@ -322,142 +526,6 @@ See all subclasses and superclasses of a selected class.
 
 <video
   src="/videos/type-hierarchy.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Pull Member Up and Push Member Down
-
-Pull a method from a subclass to a superclass, or push a method from a superclass to a subclass.
-
-Pull Member Up
-<video
-  src="/videos/pull-up-refactor.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
-
-Push Member Down
-<video
-  src="/videos/push-down-refactor.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Convert to Package and Convert to Module
-
-Convert to Package takes .py file and moves it to a package directory with all logic moved into an __init__.py file.
-
-<video
-  src="/videos/convert-to-package.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
-
-Convert to Module takes an existing package with all logic defined in its __init__.py and creates a named .py file from it.
-
-<video
-  src="/videos/convert-to-module.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Move function to top level
-
-Takes a function nested within another function or statement and moves it to the top level of the module.
-
-<video
-  src="/videos/top-level-refactor.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Introduce Parameter
-
-Adds a new parameter to a function definition and update all call sites to pass the new parameter.
-
-<video
-  src="/videos/refactor-introduce-parameter.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Inline Variable
-
-Removes redundant variables by replacing them with their value.
-
-<video
-  src="/videos/refactor-inline-variable.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Extract to Field
-
-Declare a new field on a class with the value of the selected expression.
-
-<video
-  src="/videos/refactor-extract-to-field.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Extract to Variable
-
-Declare a new variable with the value of the selected expression.
-
-<video
-  src="/videos/refactor-extract-to-variable.mp4"
-  width="720"
-  muted
-  loop
-  autoPlay
-  playsInline
-  preload="metadata"
-/>
----
-### Refactor: Invert Boolean
-
-Flips the value of a boolean and updates all usages to work with new value.
-
-<video
-  src="/videos/refactor-invert-boolean.mp4"
   width="720"
   muted
   loop
@@ -1545,7 +1613,7 @@ A minimal-checking preset for unconfigured projects and LSP users. Only the high
 A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely — type-checking behavior will still differ between the two tools — this preset just disables a few checks that mypy does not have, so migrating users aren't hit with new errors for classes of issues mypy never flagged.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`
-- Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name)
+- Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
 
 #### Preset: `default`
 
@@ -2661,6 +2729,63 @@ reveal_type(Vehicle.choices)  # Pyrefly infers: list[tuple[int, str]]
 ```
 
 Pyrefly also supports `TextChoices` and the base `Choices` class with various value types including `enum.auto()` for automatic value generation.
+
+---
+
+## factory_boy Support
+
+Pyrefly recognizes [factory_boy](https://factoryboy.readthedocs.io/) factories that subclass `DjangoModelFactory`. For each factory, it figures out which Django model is produced and infers the correct return types for `create`, `build`, `create_batch`, and `build_batch`. No plugin or extra configuration is required.
+
+The examples below all build on this `User` model and `UserFactory`:
+
+```python
+# myapp/models.py
+from django.db import models
+
+class User(models.Model):
+    username = models.CharField(max_length=150)
+```
+
+```python
+# myapp/factories.py
+from factory.django import DjangoModelFactory
+
+from myapp.models import User
+
+class UserFactory(DjangoModelFactory):
+    class Meta:
+        model = User
+```
+
+### `create()` and `build()`
+
+`UserFactory.create()` and `UserFactory.build()` each return a `User` instance:
+
+```python
+user = UserFactory.create()
+assert_type(user, User)
+
+user = UserFactory.build()
+assert_type(user, User)
+```
+
+Field access on the returned instance is type-checked against the model:
+
+```python
+assert_type(user.username, str)
+```
+
+### `create_batch()` and `build_batch()`
+
+`UserFactory.create_batch(n)` and `UserFactory.build_batch(n)` return `list[User]`:
+
+```python
+users = UserFactory.create_batch(3)
+assert_type(users, list[User])
+
+users = UserFactory.build_batch(3)
+assert_type(users, list[User])
+```
 
 ---
 
@@ -4132,14 +4257,16 @@ def calculate_sum(x: int, y: int) -> int:
 
 ## unbound-name
 
-This error corresponds to the runtime `NameError`, indicating that a variable is referenced but does not exist.
+Pyrefly found a conditional definition for the given name, so it may be undefined in some flows. For example:
 
 ```python
-def do_things(stuff: list[int]) -> str:
-  ...
-
-do_thing([1, 2])  # typo! Or, unbound-name
+def f(check: bool):
+    if check:
+        x = 1
+    return x  # unbound-name
 ```
+
+Compare this with [unknown-name](#unknown-name), which is reported when no definition at all is found for a name.
 
 ## unexpected-keyword
 
@@ -4174,7 +4301,9 @@ assert_type(1, int)  # error
 
 ## unknown-name
 
-`unknown-name` occurs when attempting to load a name from another scope, but the name cannot be found.
+A name is referenced but does not exist.
+
+Compare this with [unbound-name](#unbound-name), which is reported when the name is conditionally defined.
 
 Even when no configuration file is present, this diagnostic is shown as a warning in the IDE.
 
@@ -5428,7 +5557,7 @@ description: Complete reference of how Pyrefly converts types in Pydantic lax mo
 
 This page provides a complete reference for how Pyrefly converts types when working with Pydantic models in **lax mode** (the default). For background on how lax mode works, see the [main Pydantic documentation](../pydantic).
 
-**Note:** Types without a specific conversion rule (e.g., `Callable`, `Any`, custom classes) are converted to `Any`.
+**Note:** Types without a specific conversion rule (e.g., `Callable`, `Any`, custom classes, and generic classes not listed below) are converted to `Any`.
 
 ---
 

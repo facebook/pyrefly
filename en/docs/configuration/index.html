@@ -33,9 +33,9 @@
 <link rel="stylesheet" href="/css/code-block-buttons.css">
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
-<script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.2ccc2416.css">
-<script src="/assets/js/runtime~main.3b47c7b4.js" defer="defer"></script>
-<script src="/assets/js/main.fd45f994.js" defer="defer"></script>
+<script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.3e510270.css">
+<script src="/assets/js/runtime~main.3d0666d0.js" defer="defer"></script>
+<script src="/assets/js/main.2504ee4c.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -510,7 +510,7 @@ Any explicit settings you specify override the preset.</p>
 <p>A looser, less-strict preset intended for codebases migrating from mypy. This is the preset <code>pyrefly init</code> writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely — type-checking behavior will still differ between the two tools — this preset just disables a few checks that mypy does not have, so migrating users aren&#x27;t hit with new errors for classes of issues mypy never flagged.</p>
 <ul>
 <li>Sets <a href="#check-unannotated-defs"><code>check-unannotated-defs</code></a> <code>= false</code>, <a href="#infer-return-types"><code>infer-return-types</code></a> <code>= &quot;never&quot;</code></li>
-<li>Disables: <a href="/en/docs/error-kinds/#bad-override-mutable-attribute"><code>bad-override-mutable-attribute</code></a>, <a href="/en/docs/error-kinds/#bad-override-param-name"><code>bad-override-param-name</code></a></li>
+<li>Disables: <a href="/en/docs/error-kinds/#bad-override-mutable-attribute"><code>bad-override-mutable-attribute</code></a>, <a href="/en/docs/error-kinds/#bad-override-param-name"><code>bad-override-param-name</code></a>, <a href="/en/docs/error-kinds/#unbound-name"><code>unbound-name</code></a></li>
 </ul>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="preset-default">Preset: <code>default</code><a href="#preset-default" class="hash-link" aria-label="Direct link to preset-default" title="Direct link to preset-default">​</a></h4>
 <p>The default Pyrefly configuration. Equivalent to having no preset at all.</p>
