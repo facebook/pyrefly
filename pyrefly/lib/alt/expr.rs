@@ -162,14 +162,16 @@ enum ConditionRedundantReason {
     EnumLiteral(Name, Name),
     Function(ModuleName, FunctionKind),
     Class(Name),
+    /// Instance of a class that defines neither `__bool__` nor `__len__`, so always truthy
+    InstanceAlwaysTruthy(Name),
 }
 
 impl ConditionRedundantReason {
     fn equivalent_boolean(&self) -> Option<bool> {
         match self {
-            ConditionRedundantReason::Function(..) | ConditionRedundantReason::Class(..) => {
-                Some(true)
-            }
+            ConditionRedundantReason::Function(..)
+            | ConditionRedundantReason::Class(..)
+            | ConditionRedundantReason::InstanceAlwaysTruthy(..) => Some(true),
             ConditionRedundantReason::IntLiteral(b)
             | ConditionRedundantReason::StrLiteral(b)
             | ConditionRedundantReason::BytesLiteral(b) => Some(*b),
@@ -199,6 +201,12 @@ impl ConditionRedundantReason {
             }
             ConditionRedundantReason::Class(name) => {
                 format!("Class name `{name}` used as condition")
+            }
+            ConditionRedundantReason::InstanceAlwaysTruthy(name) => {
+                format!(
+                    "Instance of `{name}` used as condition, but `{name}` defines neither \
+                     `__bool__` nor `__len__`, so instances are always truthy"
+                )
             }
         }
     }
@@ -2963,6 +2971,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 f.func.metadata().kind.clone(),
             )),
             Type::ClassDef(cls) => Some(ConditionRedundantReason::Class(cls.name().clone())),
+            Type::ClassType(ct) => {
+                if !self.class_has_bool_or_len(ct.class_object()) {
+                    Some(ConditionRedundantReason::InstanceAlwaysTruthy(
+                        ct.class_object().name().clone(),
+                    ))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

@@ -1052,6 +1052,41 @@ while E.B:  # E: Enum literal `E.B` used as condition
 );
 
 testcase!(
+    test_redundant_condition_instance_always_truthy,
+    r#"
+class NoBool:
+    pass
+
+class HasBool:
+    def __bool__(self) -> bool: ...
+
+class HasLen:
+    def __len__(self) -> int: ...
+
+class InheritsHasBool(HasBool):
+    pass
+
+class InheritsHasLen(HasLen):
+    pass
+
+def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen) -> None:
+    if x:  # E: Instance of `NoBool` used as condition
+        ...
+    while x:  # E: Instance of `NoBool` used as condition
+        ...
+    [i for i in range(10) if x]  # E: Instance of `NoBool` used as condition
+    if y:
+        ...
+    if z:
+        ...
+    if a:
+        ...
+    if b:
+        ...
+    "#,
+);
+
+testcase!(
     crash_no_try_type,
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/766

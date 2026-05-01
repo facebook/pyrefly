@@ -1197,6 +1197,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         false
     }
 
+    /// Returns `true` if `cls` or any of its non-object ancestors defines `__bool__`, `__len__`,
+    /// or `__getattr__` (which can intercept `__bool__` dynamically).
+    /// Used to detect class instances that are always truthy.
+    pub fn class_has_bool_or_len(&self, cls: &Class) -> bool {
+        let has_relevant_dunder = |c: &Class| {
+            self.get_class_fields(c).is_some_and(|f| {
+                f.contains(&dunder::BOOL)
+                    || f.contains(&dunder::LEN)
+                    || f.contains(&dunder::GETATTR)
+            })
+        };
+        if has_relevant_dunder(cls) {
+            return true;
+        }
+        let mro = self.get_mro_for_class(cls);
+        for ancestor in mro.ancestors_no_object() {
+            if has_relevant_dunder(ancestor.class_object()) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn has_custom_setattr(&self, cls: &Class) -> bool {
         if self
             .get_class_fields(cls)
