@@ -836,6 +836,66 @@ impl Transaction<'_> {
         }
     }
 
+    fn add_imported_name_completions(
+        &self,
+        handle: &Handle,
+        module_name: ModuleName,
+        dots: u32,
+        result: &mut Vec<RankedCompletion>,
+    ) {
+        // For relative imports (dots > 0), resolve to an absolute module name.
+        let resolved = if dots > 0 {
+            let is_init = handle.path().is_init();
+            let suffix = if module_name.as_str().is_empty() {
+                None
+            } else {
+                Some(&Name::new(module_name.as_str()))
+            };
+            handle
+                .module()
+                .new_maybe_relative(is_init, dots, suffix)
+                .unwrap_or(module_name)
+        } else {
+            module_name
+        };
+
+        if let Some(handle) = self.import_handle(handle, resolved, None).finding() {
+            let exports = self.get_exports(&handle);
+
+            for (name, export) in exports.iter() {
+                let (is_deprecated, kind, source) = match export {
+                    ExportLocation::ThisModule(export) => (
+                        export.deprecation.is_some(),
+                        export
+                            .symbol_kind
+                            .map_or(CompletionItemKind::VARIABLE, |k| {
+                                k.to_lsp_completion_item_kind()
+                            }),
+                        CompletionSource::Local,
+                    ),
+                    ExportLocation::OtherModule(_, _) => {
+                        (false, CompletionItemKind::VARIABLE, CompletionSource::Local)
+                    }
+                };
+
+                result.push(RankedCompletion {
+                    item: CompletionItem {
+                        label: name.to_string(),
+                        kind: Some(kind),
+                        tags: if is_deprecated {
+                            Some(vec![CompletionItemTag::DEPRECATED])
+                        } else {
+                            None
+                        },
+                        ..Default::default()
+                    },
+                    source,
+                    is_incompatible: false,
+                })
+            }
+        }
+    }
+
     /// Core completion implementation returning items and incomplete flag.
     pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
@@ -867,62 +927,14 @@ impl Transaction<'_> {
                         module_name, dots, ..
                     },
             }) => {
-                // For relative imports (dots > 0), resolve to an absolute module name.
-                let resolved = if dots > 0 {
-                    let is_init = handle.path().is_init();
-                    let suffix = if module_name.as_str().is_empty() {
-                        None
-                    } else {
-                        Some(&Name::new(module_name.as_str()))
-                    };
-                    handle
-                        .module()
-                        .new_maybe_relative(is_init, dots, suffix)
-                        .unwrap_or(module_name)
-                } else {
-                    module_name
-                };
-                if let Some(handle) = self.import_handle(handle, resolved, None).finding() {
-                    if "import".starts_with(identifier.as_str()) {
-                        result.push(RankedCompletion::new(CompletionItem {
-                            label: "import".to_owned(),
-                            kind: Some(CompletionItemKind::KEYWORD),
-                            ..Default::default()
-                        }))
-                    }
-                    let exports = self.get_exports(&handle);
-                    for (name, export) in exports.iter() {
-                        let (is_deprecated, kind, source) = match export {
-                            ExportLocation::ThisModule(export) => (
-                                export.deprecation.is_some(),
-                                export
-                                    .symbol_kind
-                                    .map_or(CompletionItemKind::VARIABLE, |k| {
-                                        k.to_lsp_completion_item_kind()
-                                    }),
-                                CompletionSource::Local,
-                            ),
-                            ExportLocation::OtherModule(_, _) => {
-                                (false, CompletionItemKind::VARIABLE, CompletionSource::Local)
-                            }
-                        };
-
-                        result.push(RankedCompletion {
-                            item: CompletionItem {
-                                label: name.to_string(),
-                                kind: Some(kind),
-                                tags: if is_deprecated {
-                                    Some(vec![CompletionItemTag::DEPRECATED])
-                                } else {
-                                    None
-                                },
-                                ..Default::default()
-                            },
-                            source,
-                            is_incompatible: false,
-                        })
-                    }
+                if "import".starts_with(identifier.as_str()) {
+                    result.push(RankedCompletion::new(CompletionItem {
+                        label: "import".to_owned(),
+                        kind: Some(CompletionItemKind::KEYWORD),
+                        ..Default::default()
+                    }))
                 }
+                self.add_imported_name_completions(handle, module_name, dots, &mut result)
             }
 
             Some(IdentifierWithContext {
@@ -931,59 +943,7 @@ impl Transaction<'_> {
                     IdentifierContext::ImportedNameEmpty {
                         module_name, dots, ..
                     },
-            }) => {
-                // For relative imports (dots > 0), resolve to an absolute module name.
-                let resolved = if dots > 0 {
-                    let is_init = handle.path().is_init();
-                    let suffix = if module_name.as_str().is_empty() {
-                        None
-                    } else {
-                        Some(&Name::new(module_name.as_str()))
-                    };
-                    handle
-                        .module()
-                        .new_maybe_relative(is_init, dots, suffix)
-                        .unwrap_or(module_name)
-                } else {
-                    module_name
-                };
-
-                if let Some(handle) = self.import_handle(handle, resolved, None).finding() {
-                    let exports = self.get_exports(&handle);
-
-                    for (name, export) in exports.iter() {
-                        let (is_deprecated, kind, source) = match export {
-                            ExportLocation::ThisModule(export) => (
-                                export.deprecation.is_some(),
-                                export
-                                    .symbol_kind
-                                    .map_or(CompletionItemKind::VARIABLE, |k| {
-                                        k.to_lsp_completion_item_kind()
-                                    }),
-                                CompletionSource::Local,
-                            ),
-                            ExportLocation::OtherModule(_, _) => {
-                                (false, CompletionItemKind::VARIABLE, CompletionSource::Local)
-                            }
-                        };
-
-                        result.push(RankedCompletion {
-                            item: CompletionItem {
-                                label: name.to_string(),
-                                kind: Some(kind),
-                                tags: if is_deprecated {
-                                    Some(vec![CompletionItemTag::DEPRECATED])
-                                } else {
-                                    None
-                                },
-                                ..Default::default()
-                            },
-                            source,
-                            is_incompatible: false,
-                        })
-                    }
-                }
-            }
+            }) => self.add_imported_name_completions(handle, module_name, dots, &mut result),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ImportedModule { name, dots },
