@@ -60,6 +60,18 @@ b: type[B] = A  # E: `type[A]` is not assignable to `type[B]`
 );
 
 testcase!(
+    test_metaclass_instance_not_subtype_of_specific_type,
+    r#"
+class Meta(type): pass
+class A(metaclass=Meta): pass
+
+def f(x: Meta):
+    a: type[A] = x  # E: `Meta` is not assignable to `type[A]`
+    o: type[object] = x
+"#,
+);
+
+testcase!(
     test_generic_class_object_subtyping,
     r#"
 class A[T]: pass
@@ -172,7 +184,8 @@ testcase!(
     r#"
 class A(type): pass
 def test(a: A):
-    x: type[int] = a
+    x: type[int] = a  # E: `A` is not assignable to `type[int]`
+    y: type[object] = a
 "#,
 );
 

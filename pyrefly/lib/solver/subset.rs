@@ -2224,6 +2224,28 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .mk_class_type(self.type_order.stdlib().builtins_type().clone()),
                 want,
             ),
+            (Type::ClassType(class), Type::Type(want))
+                if class != self.type_order.stdlib().builtins_type()
+                    && let Some(got_as_type) = self.type_order.as_superclass(
+                        class,
+                        self.type_order.stdlib().builtins_type().class_object(),
+                    )
+                    && got_as_type.targs().is_empty()
+                    && !(want.is_any()
+                        || matches!(want.as_ref(), Type::ClassType(cls) if cls.is_builtin("object"))) =>
+            {
+                Err(SubsetError::Other)
+            }
+            (Type::ClassType(class), Type::ClassDef(_))
+                if class != self.type_order.stdlib().builtins_type()
+                    && let Some(got_as_type) = self.type_order.as_superclass(
+                        class,
+                        self.type_order.stdlib().builtins_type().class_object(),
+                    )
+                    && got_as_type.targs().is_empty() =>
+            {
+                Err(SubsetError::Other)
+            }
             (
                 Type::ClassType(class),
                 Type::Type(_)
