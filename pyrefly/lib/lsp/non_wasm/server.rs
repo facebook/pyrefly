@@ -666,7 +666,7 @@ pub trait TspInterface: Send + Sync + 'static {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
-    fn sender(&self) -> &Sender<Message>;
+    fn sender(&self) -> &MessageSender;
 
     fn lsp_queue(&self) -> &LspQueue;
 
@@ -768,11 +768,87 @@ pub trait TspInterface: Send + Sync + 'static {
 }
 
 pub struct Connection {
-    pub sender: Sender<Message>,
+    pub sender: MessageSender,
     /// Channel receiver, only present for test connections created via
     /// `Connection::memory()`. The test client reads from this to observe
     /// messages sent by the server.
     channel_receiver: Option<Receiver<Message>>,
+}
+
+#[derive(Clone)]
+pub enum MessageSender {
+    Channel(Sender<Message>),
+    BlockingWriter(Sender<WriterMessage>),
+}
+
+impl MessageSender {
+    pub fn send(&self, message: Message) -> Result<(), crossbeam_channel::SendError<Message>> {
+        match self {
+            Self::Channel(sender) => sender.send(message),
+            Self::BlockingWriter(sender) => {
+                let original_message = message.clone();
+                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
+                sender
+                    .send(WriterMessage {
+                        message,
+                        result_sender,
+                    })
+                    .map_err(|error| crossbeam_channel::SendError(error.0.message))?;
+
+                match result_receiver.recv() {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(_)) | Err(_) => Err(crossbeam_channel::SendError(original_message)),
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn send_timeout(
+        &self,
+        message: Message,
+        timeout: Duration,
+    ) -> Result<(), crossbeam_channel::SendTimeoutError<Message>> {
+        match self {
+            Self::Channel(sender) => sender.send_timeout(message, timeout),
+            Self::BlockingWriter(sender) => {
+                let original_message = message.clone();
+                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
+                sender
+                    .send_timeout(
+                        WriterMessage {
+                            message,
+                            result_sender,
+                        },
+                        timeout,
+                    )
+                    .map_err(|error| match error {
+                        crossbeam_channel::SendTimeoutError::Timeout(message) => {
+                            crossbeam_channel::SendTimeoutError::Timeout(message.message)
+                        }
+                        crossbeam_channel::SendTimeoutError::Disconnected(message) => {
+                            crossbeam_channel::SendTimeoutError::Disconnected(message.message)
+                        }
+                    })?;
+
+                match result_receiver.recv_timeout(timeout) {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(_)) | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => Err(
+                        crossbeam_channel::SendTimeoutError::Disconnected(original_message),
+                    ),
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => Err(
+                        crossbeam_channel::SendTimeoutError::Timeout(original_message),
+                    ),
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct WriterMessage {
+    message: Message,
+    result_sender: Sender<std::io::Result<()>>,
 }
 
 /// Owns the message source for the LSP/TSP server. Either a crossbeam channel
@@ -831,7 +907,7 @@ impl Connection {
         });
         (
             Self {
-                sender: writer_sender,
+                sender: MessageSender::Channel(writer_sender),
                 channel_receiver: None,
             },
             MessageReader::Stdio(BufReader::new(std::io::stdin())),
@@ -844,17 +920,29 @@ impl Connection {
     /// or a pipe name on Windows (automatically prefixed with `\\.\pipe\`).
     pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
         let (writer_stream, reader_stream) = Self::connect_ipc(pipe_name)?;
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<WriterMessage>();
         let writer = std::thread::spawn(move || {
             let mut output = writer_stream;
-            while let Ok(msg) = writer_receiver.recv() {
-                write_lsp_message(&mut output, msg)?;
+            while let Ok(writer_message) = writer_receiver.recv() {
+                match write_lsp_message(&mut output, writer_message.message) {
+                    Ok(()) => {
+                        let _ = writer_message.result_sender.send(Ok(()));
+                    }
+                    Err(error) => {
+                        let error_kind = error.kind();
+                        let error_message = error.to_string();
+                        let _ = writer_message
+                            .result_sender
+                            .send(Err(std::io::Error::new(error_kind, error_message)));
+                        return Err(error);
+                    }
+                }
             }
             Ok(())
         });
         Ok((
             Self {
-                sender: writer_sender,
+                sender: MessageSender::BlockingWriter(writer_sender),
                 channel_receiver: None,
             },
             MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
@@ -905,14 +993,14 @@ impl Connection {
         (
             (
                 Self {
-                    sender: s1,
+                    sender: MessageSender::Channel(s1),
                     channel_receiver: Some(r2.clone()),
                 },
                 MessageReader::Channel(r2),
             ),
             (
                 Self {
-                    sender: s2,
+                    sender: MessageSender::Channel(s2),
                     channel_receiver: Some(r1.clone()),
                 },
                 MessageReader::Channel(r1),
@@ -1706,7 +1794,7 @@ pub struct Server {
     server_start_time: Instant,
 }
 
-pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id: RequestId) {
+pub fn shutdown_finish(sender: &MessageSender, reader: &mut MessageReader, id: RequestId) {
     let response = Response::new_ok(id, ());
     if sender.send(response.into()).is_err() {
         return;
@@ -1743,7 +1831,7 @@ pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id:
 // If the connection is closed, or we receive an exit notification, returns None.
 // If we receive an unexpected shutdown notification, respond and wait for exit.
 pub fn initialize_start(
-    sender: &Sender<Message>,
+    sender: &MessageSender,
     reader: &mut MessageReader,
 ) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
     while let Some(msg) = reader.recv() {
@@ -1819,7 +1907,7 @@ struct InitializeResult<C> {
 }
 
 pub fn initialize_finish<C: Serialize>(
-    sender: &Sender<Message>,
+    sender: &MessageSender,
     reader: &mut MessageReader,
     id: RequestId,
     capabilities: C,
@@ -6937,7 +7025,7 @@ impl TspInterface for Server {
         self.send_response(response)
     }
 
-    fn sender(&self) -> &Sender<Message> {
+    fn sender(&self) -> &MessageSender {
         &self.connection.0.sender
     }
 
