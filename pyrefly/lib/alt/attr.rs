@@ -1197,8 +1197,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         false
     }
 
-    /// Returns `true` if `cls` or any of its non-object ancestors defines `__bool__`, `__len__`,
-    /// or `__getattr__` (which can intercept `__bool__` dynamically).
+    /// Returns `true` if `cls` or any of its non-object ancestors defines a dunder that
+    /// could affect truthiness or attribute resolution at runtime: `__bool__`, `__len__`,
+    /// `__getattr__`, `__getattribute__` (which can intercept `__bool__` dynamically), or
+    /// `__get__` (descriptor classes whose instances are typically used via the descriptor
+    /// protocol rather than as standalone values).
     /// Used to detect class instances that are always truthy.
     pub fn class_has_bool_or_len(&self, cls: &Class) -> bool {
         let has_relevant_dunder = |c: &Class| {
@@ -1206,6 +1209,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 f.contains(&dunder::BOOL)
                     || f.contains(&dunder::LEN)
                     || f.contains(&dunder::GETATTR)
+                    || f.contains(&dunder::GETATTRIBUTE)
+                    || f.contains(&dunder::GET)
             })
         };
         if has_relevant_dunder(cls) {

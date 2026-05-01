@@ -1119,6 +1119,59 @@ def test(
 );
 
 testcase!(
+    test_redundant_condition_no_false_positives_for_descriptors_and_special_classes,
+    r#"
+from dataclasses import dataclass
+from datetime import datetime
+import asyncio
+
+class Descriptor:
+    def __get__(self, obj, objtype=None) -> int: ...
+
+class HasGetattr:
+    def __getattr__(self, name: str) -> object: ...
+
+class HasGetattribute:
+    def __getattribute__(self, name: str) -> object: ...
+
+@dataclass
+class MyData:
+    x: int
+    y: str
+
+def test(
+    d: Descriptor,
+    g1: HasGetattr,
+    g2: HasGetattribute,
+    md: MyData,
+    dt: datetime,
+    fut: asyncio.Future[int],
+    lk: asyncio.Lock,
+) -> None:
+    # None of these should warn:
+    # - descriptor classes (with __get__) might intercept attribute access
+    # - classes with __getattr__/__getattribute__ have dynamic attribute behavior
+    # - dataclasses are commonly used with `if obj:` as a defensive guard
+    # - stdlib types come from bundled stubs and often have runtime behavior
+    #   not modeled in the stubs
+    if d:
+        ...
+    if g1:
+        ...
+    if g2:
+        ...
+    if md:
+        ...
+    if dt:
+        ...
+    if fut:
+        ...
+    if lk:
+        ...
+    "#,
+);
+
+testcase!(
     crash_no_try_type,
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/766

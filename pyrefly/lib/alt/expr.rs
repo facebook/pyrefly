@@ -2979,7 +2979,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let metadata = self.get_metadata_for_class(cls);
                 let is_abstract =
                     cls.is_builtin("object") || metadata.is_protocol() || metadata.extends_abc();
-                if !is_abstract && !self.class_has_bool_or_len(cls) {
+                // Skip warning for classes coming from bundled stubs (typeshed stdlib,
+                // typeshed third-party, custom third-party). Stub-only classes often have
+                // dynamic runtime behavior (e.g. `datetime`, `asyncio.Future`, `Lock`,
+                // sqlalchemy `Session`) that the stubs don't model, and the idiomatic
+                // `if x:` None-guard pattern is widespread in real-world code.
+                let is_from_stub = cls.module_path().is_bundled();
+                // Skip warning for dataclasses. These are commonly used as plain data
+                // containers and `if obj:` is frequently a defensive pattern; the
+                // warning would create excessive noise for little benefit.
+                let is_dataclass = metadata.dataclass_metadata().is_some();
+                if !is_abstract
+                    && !is_from_stub
+                    && !is_dataclass
+                    && !self.class_has_bool_or_len(cls)
+                {
                     Some(ConditionRedundantReason::InstanceAlwaysTruthy(
                         cls.name().clone(),
                     ))
