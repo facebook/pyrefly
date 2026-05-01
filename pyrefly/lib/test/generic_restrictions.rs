@@ -673,8 +673,8 @@ testcase!(
 from typing import Callable, Iterable
 def reduce[_S](function: Callable[[_S, _S], _S], iterable: Iterable[_S]) -> _S: ...
 def f[_T: str](arg1: _T, arg2: _T) -> _T: ...
-reduce(f, [1])  # E: `int` is not assignable to upper bound `str` of type variable `_T`
-reduce(f, ["ok"])
+reduce(f, [1])  # E: Argument `list[int]` is not assignable to parameter `iterable` with type `Iterable[Unknown]` in function `reduce`
+reduce(f, ["ok"])  # E: Argument `list[str]` is not assignable to parameter `iterable` with type `Iterable[Unknown]` in function `reduce`
     "#,
 );
 
@@ -1276,6 +1276,63 @@ def main(left: DataFrame, right: DataFrame) -> None:
 
     def func2(*a: Iterable[FrameType] | None) -> None:
         return None
-    func2(left, right)  # E: `Series` is not assignable to upper bound `DataFrame`
+    func2(left, right)  # E: `DataFrame` is not assignable to parameter `*a` with type `Iterable[@_] | None`  # E: `DataFrame` is not assignable to parameter `*a` with type `Iterable[@_] | None`
+    "#,
+);
+
+testcase!(
+    test_ignore_union_member_with_specialization_error,
+    r#"
+from typing import Any
+class A: ...
+def f[T: A](x: Any | T) -> T: ...
+f([1, 2, 3])
+    "#,
+);
+
+testcase!(
+    test_list_literal_overload_with_bounded_typevar_union,
+    r#"
+from typing import overload, Sequence, assert_type, TypeVar
+
+class A: ...
+class B: ...
+class C: ...
+
+T = TypeVar("T", bound=A)
+
+@overload
+def f(data: Sequence[T | None]) -> B: ...
+@overload
+def f(data: Sequence[bool | None]) -> C: ...
+def f(data: object) -> object: ...
+
+assert_type(f([True]), C)
+    "#,
+);
+
+testcase!(
+    test_list_hint_decompose_with_typevar_bound_containing_list,
+    r#"
+from typing import assert_type, Sequence, Self, TypeVar
+S = TypeVar("S", bound=complex | list[str])
+class C(list[S]):
+    def __new__(cls, data: S | Sequence[S]) -> Self: ...
+x = C([1j])
+assert_type(x, C[complex])
+    "#,
+);
+
+testcase!(
+    test_call_with_typevar_union,
+    r#"
+from typing import TypeVar
+
+class C: ...
+T = TypeVar("T", bound=C)
+
+def f(x: T | None) -> T | int: ...
+def g(x: T | None) -> T | int:
+    return f(x)
     "#,
 );

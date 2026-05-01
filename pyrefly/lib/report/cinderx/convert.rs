@@ -16,6 +16,7 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::types::CallableResidualKind;
 use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::Fmt;
@@ -341,6 +342,14 @@ pub(crate) fn type_to_structured(
         Type::Callable(box c) => {
             callable_to_structured(&c.params, &c.ret, None, table, pending_class_traits)
         }
+        Type::CallableResidual(box residual) => match &residual.kind {
+            CallableResidualKind::Generic { quantified } => {
+                type_to_structured(&quantified.as_gradual_type(), table, pending_class_traits)
+            }
+            CallableResidualKind::Overload { .. } => {
+                type_to_structured(&Type::any_implicit(), table, pending_class_traits)
+            }
+        },
         Type::Function(box f) => {
             let defining_func = {
                 let kind = &f.metadata.kind;

@@ -23,7 +23,7 @@ enum Ir {
 
 impl Ir {
     /// Consumes the IR to create the list of strings.
-    fn to_strings(self) -> Vec<String> {
+    fn into_strings(self) -> Vec<String> {
         match self {
             // Part is easy: its string is itself.
             Self::Part(s) => vec![s],
@@ -33,7 +33,7 @@ impl Ir {
             // To handle this, each Ir in the Concat is glued to each of the strings that is being built.
             Self::Concat(parts) => parts
                 .into_iter()
-                .map(Ir::to_strings)
+                .map(Ir::into_strings)
                 .reduce(|acc, ps| {
                     acc.iter()
                         .flat_map(|a| ps.iter().map(|p| format!("{a}{p}")).collect::<Vec<_>>())
@@ -43,7 +43,7 @@ impl Ir {
             // Alter is also easy: each Ir is handled independently.
             Self::Alter(parts) => parts
                 .into_iter()
-                .flat_map(Ir::to_strings)
+                .flat_map(Ir::into_strings)
                 .collect::<Vec<_>>(),
         }
     }
@@ -101,7 +101,7 @@ impl Visitor for RegexConverter {
             ));
         }
         let curr = self.stack.pop().unwrap();
-        let curr = curr.to_strings();
+        let curr = curr.into_strings();
         let globs = curr
             .iter()
             .map(|g| {

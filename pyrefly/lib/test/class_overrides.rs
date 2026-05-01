@@ -1242,8 +1242,12 @@ class B(A):
 "#,
 );
 
+// Explicit `-> Never` is a real user annotation: the override-relaxation
+// only fires when the parent's return was inferred from the placeholder
+// body, so an annotated `-> Never` parent vs. a child returning a concrete
+// type is still a real override violation.
 testcase!(
-    test_explicit_never_annotation_allows_override,
+    test_explicit_never_annotation_checked_for_override,
     r#"
 from typing import Never, assert_type
 
@@ -1254,7 +1258,7 @@ class A:
 assert_type(A().foo(), Never)
 
 class B(A):
-    def foo(self) -> int:
+    def foo(self) -> int:  # E: overrides parent class `A` in an inconsistent manner
         return 1
     "#,
 );
@@ -1281,6 +1285,222 @@ class A:
 
 class B(A):
     f: Callable[[Any], int]  # E: overrides parent class `A` in an inconsistent manner
+    "#,
+);
+
+// The next block tests override consistency for placeholder bodies (i.e. function
+// bodies that consist of nothing but `raise NotImplementedError(...)`) in three
+// decorated forms (`@property`, `async def`, `@cached_property`) plus negative
+// discriminator cases. The plain-method form is covered by
+// `test_raise_not_implemented_infers_never_but_allows_override` above.
+
+testcase!(
+    test_property_raise_not_implemented_allows_override,
+    r#"
+class A:
+    @property
+    def foo(self):
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self):
+        return "azure"
+    "#,
+);
+
+testcase!(
+    test_async_def_raise_not_implemented_allows_override,
+    r#"
+class A:
+    async def aload(self):
+        raise NotImplementedError()
+
+class B(A):
+    async def aload(self):
+        return {}
+    "#,
+);
+
+testcase!(
+    test_property_setter_raise_not_implemented_allows_override,
+    r#"
+class A:
+    @property
+    def foo(self) -> int:
+        raise NotImplementedError()
+    @foo.setter
+    def foo(self, value: int):
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self) -> int:
+        return 1
+    @foo.setter
+    def foo(self, value: int):
+        pass
+    "#,
+);
+
+testcase!(
+    test_cached_property_raise_not_implemented_allows_override,
+    r#"
+from functools import cached_property
+
+class A:
+    @cached_property
+    def dtype(self):
+        raise NotImplementedError()
+
+class B(A):
+    @cached_property
+    def dtype(self):
+        return "float64"
+    "#,
+);
+
+// Explicit `-> Never` is a real user annotation: the override-relaxation only
+// fires when the parent's return was inferred from the placeholder body, so
+// an annotated `-> Never` parent vs. a child returning a concrete type is
+// still a real override violation.
+testcase!(
+    test_property_explicit_never_annotation_checked_for_override,
+    r#"
+from typing import Never
+
+class A:
+    @property
+    def foo(self) -> Never:
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self) -> int:  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_async_def_explicit_never_annotation_checked_for_override,
+    r#"
+from typing import Never
+
+class A:
+    async def aload(self) -> Never:
+        raise NotImplementedError()
+
+class B(A):
+    async def aload(self) -> int:  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+// Override-consistency is a structural subset check on the attribute type.
+// Async-ness is encoded in the return shape (`Coroutine[Any, Any, T]`), so
+// the relaxation must preserve the async wrapper — collapsing an inferred
+// async-placeholder return to bare `Any` would silently let a sync child
+// override an async parent, which is a real shape mismatch.
+testcase!(
+    test_async_def_placeholder_parent_sync_child_checked_for_override,
+    r#"
+class A:
+    async def aload(self):
+        raise NotImplementedError()
+
+class B(A):
+    def aload(self):  # E: overrides parent class `A` in an inconsistent manner
+        return {}
+    "#,
+);
+
+// Unannotated `__new__` is special-cased to return `Self`, not the body-
+// inferred `Never`. The placeholder relaxation must not fire here, otherwise
+// a child `__new__` with an incompatible return would be silently accepted.
+testcase!(
+    test_dunder_new_placeholder_parent_checked_for_override,
+    r#"
+from typing import override
+
+class A:
+    def __new__(cls):
+        raise NotImplementedError()
+
+class B(A):
+    @override
+    def __new__(cls) -> int:  # E: overrides parent class `A` in an inconsistent manner
+        return 1
+    "#,
+);
+
+testcase!(
+    test_annotated_int_raise_not_implemented_checked_for_override,
+    r#"
+class A:
+    def foo(self) -> int:
+        raise NotImplementedError()
+
+class B(A):
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_property_annotated_int_raise_not_implemented_checked_for_override,
+    r#"
+class A:
+    @property
+    def foo(self) -> int:
+        raise NotImplementedError()
+
+class B(A):
+    @property
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_annotated_return_not_implemented_checked_for_override,
+    r#"
+class A:
+    def foo(self) -> int:
+        return NotImplemented
+
+class B(A):
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_property_annotated_return_not_implemented_checked_for_override,
+    r#"
+class A:
+    @property
+    def foo(self) -> int:
+        return NotImplemented
+
+class B(A):
+    @property
+    def foo(self) -> str:  # E: overrides parent class `A` in an inconsistent manner
+        return ""
+    "#,
+);
+
+testcase!(
+    test_sync_def_coroutine_never_return_checked_for_override_consistency,
+    r#"
+from typing import Any, Coroutine, Never
+
+class A:
+    def f(self) -> Coroutine[Any, Any, Never]:
+        raise NotImplementedError()
+
+class B(A):
+    def f(self) -> Coroutine[Any, Any, int]:  # E: overrides parent class `A` in an inconsistent manner
+        ...
     "#,
 );
 

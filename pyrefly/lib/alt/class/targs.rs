@@ -30,8 +30,11 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
+use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
+use crate::types::quantified::QuantifiedOrigin;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
@@ -231,8 +234,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn instantiate_type_var_tuple(&self) -> (TParams, Type) {
+        // Synthetic quantified with no user-visible source location. The anchor is
+        // TextRange::default() as a sentinel for "no source position". Alpha-equivalence
+        // in TypeEqCtx handles pairing with other synthetic quantifieds correctly.
+        let identity = QuantifiedIdentity::new(
+            self.module().name(),
+            AnchorIndex::first(TextRange::default()),
+            QuantifiedOrigin::SyntheticCallableResidual,
+        );
         let quantified = Quantified::new(
-            self.uniques.fresh(),
+            identity,
             Name::new_static("Ts"),
             QuantifiedKind::TypeVarTuple,
             None,
@@ -249,8 +260,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn instantiate_unbounded_tuple(&self) -> (TParams, Type) {
+        // Synthetic quantified with no user-visible source location. The anchor is
+        // TextRange::default() as a sentinel for "no source position". Alpha-equivalence
+        // in TypeEqCtx handles pairing with other synthetic quantifieds correctly.
+        let identity = QuantifiedIdentity::new(
+            self.module().name(),
+            AnchorIndex::new(TextRange::default(), 1),
+            QuantifiedOrigin::SyntheticCallableResidual,
+        );
         let quantified = Quantified::new(
-            self.uniques.fresh(),
+            identity,
             Name::new_static("T"),
             QuantifiedKind::TypeVar,
             None,

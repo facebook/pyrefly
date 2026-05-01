@@ -433,7 +433,6 @@ impl Step {
             ctx.lookup,
             *ctx.sys_info,
             &load.errors,
-            ctx.uniques,
             enable_trace,
             ctx.check_unannotated_defs,
             ctx.require.keep_index(),

@@ -173,6 +173,37 @@ for e in E3:
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3128
+testcase!(
+    test_str_enum_argument_suggestion,
+    r#"
+from enum import StrEnum
+
+class T(StrEnum):
+    A = "a"
+
+def f(t: T) -> None:
+    pass
+
+f("a")  # E: Argument `Literal['a']` is not assignable to parameter `t` with type `T` in function `f`\n  Did you mean `T.A`?
+"#,
+);
+
+testcase!(
+    test_str_enum_argument_suggestion_through_union,
+    r#"
+from enum import StrEnum
+
+class T(StrEnum):
+    A = "a"
+
+def f(t: T | None) -> None:
+    pass
+
+f("a")  # E: Argument `Literal['a']` is not assignable to parameter `t` with type `T | None` in function `f`\n  Did you mean `T.A`?
+"#,
+);
+
 testcase!(
     test_value_annotation,
     r#"
@@ -1113,5 +1144,57 @@ from foo import E
 def f() -> None:
     xs = E.from_ord()
     _ = [x for x in xs if x != E.A]
+    "#,
+);
+
+// When enum.Enum is combined with a conflicting metaclass (common in
+// TYPE_CHECKING stubs like equinox's Enumeration), members should still
+// be recognized as enum members, not plain values.
+testcase!(
+    test_enum_with_conflicting_metaclass,
+    r#"
+from typing import assert_type, Literal, Self
+from enum import Enum
+
+class MyMeta(type):
+    def __getitem__(cls, item) -> str: ...
+    def __len__(cls) -> int: ...
+
+class Base(Enum, metaclass=MyMeta):  # E: Class `Base` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+    @classmethod
+    def where(cls, pred: bool, a: Self, b: Self) -> Self: ...
+
+class A(Base):
+    x = "foo"
+    y = "bar"
+
+assert_type(A.x, Literal[A.x])
+assert_type(A.y, Literal[A.y])
+
+def f() -> A:
+    return A.x
+
+A.where(True, A.x, A.y)
+    "#,
+);
+
+testcase!(
+    test_enum_conflicting_metaclass_no_iter,
+    r#"
+from typing import reveal_type
+from enum import Enum
+
+class MyMeta(type):
+    pass
+
+class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+    A = 1
+    B = 2
+    C = 3
+
+reveal_type(E.A)  # E: revealed type: Literal[E.A]
+
+for x in E:  # E: Type `type[E]` is not iterable
+    reveal_type(x)  # E: revealed type: Unknown
     "#,
 );

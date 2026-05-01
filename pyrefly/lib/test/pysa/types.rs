@@ -7,11 +7,15 @@
 
 use dupe::Dupe;
 use pretty_assertions::assert_eq;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::lit_int::LitInt;
+use pyrefly_types::quantified::AnchorIndex;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedIdentity;
+use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
@@ -19,8 +23,8 @@ use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Type;
-use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::context::ModuleAnswersContext;
@@ -473,7 +477,11 @@ class MyTypedDict(TypedDict):
                 .heap()
                 .mk_quantified(Quantified::type_var(
                     Name::new_static("T"),
-                    UniqueFactory::new().fresh(),
+                    QuantifiedIdentity::new(
+                        ModuleName::from_str("__test__"),
+                        AnchorIndex::first(TextRange::default()),
+                        QuantifiedOrigin::Pep695,
+                    ),
                     /* default */ None,
                     Restriction::Bound(context.answers_context.answers.heap().mk_class_type(
                         ClassType::new(get_class("test", "MyClass", &context), Default::default(),)
@@ -504,7 +512,11 @@ class MyTypedDict(TypedDict):
                 .heap()
                 .mk_quantified(Quantified::type_var(
                     Name::new_static("T"),
-                    UniqueFactory::new().fresh(),
+                    QuantifiedIdentity::new(
+                        ModuleName::from_str("__test__"),
+                        AnchorIndex::new(TextRange::default(), 1),
+                        QuantifiedOrigin::Pep695,
+                    ),
                     /* default */ None,
                     Restriction::Constraints(vec![
                         context

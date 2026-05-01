@@ -156,8 +156,30 @@ pub enum ErrorKind {
     /// Raised when a class implicitly becomes abstract by defining abstract members without
     /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
     ImplicitAbstractClass,
-    /// This error is raised when Pyrefly infers an implicit `Any`
+    /// Umbrella error kind for cases where Pyrefly infers an implicit `Any`.
+    /// Most concrete sites emit one of the more specific sub-kinds below;
+    /// `implicit-any` itself is reserved for the umbrella suppression/config
+    /// code (suppressing `implicit-any` suppresses every sub-kind).
     ImplicitAny,
+    /// An implicit `Any` introduced when a class attribute is defined by
+    /// assignment to `self.x = None` or `self.x = ()` without an explicit
+    /// annotation.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyAttribute,
+    /// An implicit `Any` introduced when an empty container (`[]`, `{}`) cannot
+    /// be inferred from context and is pinned to a container of `Any`.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyEmptyContainer,
+    /// An implicit `Any` introduced because a function parameter has no
+    /// annotation. The `self` and `cls` parameters of methods are excluded.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyParameter,
+    /// An implicit `Any` introduced when a generic class, type alias, or
+    /// special form (e.g., `tuple`, `Callable`, `type`) is used without
+    /// explicit type arguments. Pyrefly defaults the missing type parameters
+    /// to `Any`.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyTypeArgument,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
@@ -265,9 +287,15 @@ pub enum ErrorKind {
     RedundantCondition,
     /// Raised by a call to reveal_type().
     RevealType,
-    /// An attribute is missing a type annotation and is initialized with the `None` literal.
+    /// DEPRECATED: use [ImplicitAnyAttribute] (`implicit-any-attribute`) instead.
+    /// Kept so that existing `# pyrefly: ignore[unannotated-attribute]` comments
+    /// and config entries continue to work. This variant is never emitted by
+    /// the type checker.
     UnannotatedAttribute,
-    /// A function parameter is missing a type annotation.
+    /// DEPRECATED: use [ImplicitAnyParameter] (`implicit-any-parameter`) instead.
+    /// Kept so that existing `# pyrefly: ignore[unannotated-parameter]` comments
+    /// and config entries continue to work. This variant is never emitted by
+    /// the type checker.
     UnannotatedParameter,
     /// A protocol member is assigned a value in the class body without an explicit type annotation.
     UnannotatedProtocolMember,
@@ -286,6 +314,8 @@ pub enum ErrorKind {
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
+    /// Warning when calling a builtin type constructor (str, int, float, bool, bytes) on a value that is already of that type.
+    UnnecessaryTypeConversion,
     /// A return or yield that can never be reached.
     /// This occurs when a return/yield follows a statement that always exits,
     /// such as return, raise, break, or continue.
@@ -352,6 +382,10 @@ impl ErrorKind {
             ErrorKind::BadOverrideMutableAttribute | ErrorKind::BadOverrideParamName => {
                 Some(ErrorKind::BadOverride)
             }
+            ErrorKind::ImplicitAnyAttribute
+            | ErrorKind::ImplicitAnyEmptyContainer
+            | ErrorKind::ImplicitAnyParameter
+            | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
             _ => None,
         }
     }
@@ -361,6 +395,8 @@ impl ErrorKind {
     pub fn deprecated_alias(self) -> Option<ErrorKind> {
         match self {
             ErrorKind::BadOverrideParamName => Some(ErrorKind::BadParamNameOverride),
+            ErrorKind::ImplicitAnyAttribute => Some(ErrorKind::UnannotatedAttribute),
+            ErrorKind::ImplicitAnyParameter => Some(ErrorKind::UnannotatedParameter),
             _ => None,
         }
     }
@@ -380,6 +416,10 @@ impl ErrorKind {
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
+            ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
+            ErrorKind::ImplicitAnyEmptyContainer => Severity::Ignore,
+            ErrorKind::ImplicitAnyParameter => Severity::Ignore,
+            ErrorKind::ImplicitAnyTypeArgument => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
@@ -397,6 +437,7 @@ impl ErrorKind {
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
+            ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
             ErrorKind::UntypedImport => Severity::Warn,

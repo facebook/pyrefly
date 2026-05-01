@@ -587,13 +587,15 @@ fn broadcast_unpacked_with_unpacked(
             result_suffix,
         ))))
     } else {
-        // Different TypeVarTuples or structural mismatch
-        Err(ShapeError::ShapeComputation {
-            message: format!(
-                "Cannot broadcast variadic shapes: incompatible middles *{} vs *{}",
-                am, bm
-            ),
-        })
+        // Different TypeVarTuples or structural mismatch — degrade to shapeless
+        // batch dims rather than producing a hard error. At runtime the middles
+        // are often identical (e.g. two Linear.forward calls on the same batch)
+        // but the checker can't prove it.
+        Ok(TensorShape::Unpacked(Box::new((
+            vec![],
+            Type::any_tuple(),
+            result_suffix,
+        ))))
     }
 }
 

@@ -9,6 +9,12 @@ on:
         description: 'Tag name to upload assets to (e.g., 0.51.0)'
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name to upload assets to (e.g., 0.51.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write

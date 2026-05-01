@@ -185,8 +185,11 @@ mod tests {
     use crate::class::ClassType;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
+    use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
     use crate::tuple::Tuple;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
@@ -312,7 +315,11 @@ mod tests {
 
         // Create TArgs with multiple type arguments
         let tparam1 = Quantified::new(
-            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("T"),
             QuantifiedKind::TypeVar,
             None,
@@ -320,7 +327,11 @@ mod tests {
             PreInferenceVariance::Invariant,
         );
         let tparam2 = Quantified::new(
-            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::new(TextRange::default(), 1),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("U"),
             QuantifiedKind::TypeVar,
             None,
@@ -328,7 +339,11 @@ mod tests {
             PreInferenceVariance::Invariant,
         );
         let tparam3 = Quantified::new(
-            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::new(TextRange::default(), 2),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("V"),
             QuantifiedKind::TypeVar,
             None,

@@ -120,7 +120,6 @@ kwarg(xs=[B()], ys=[B()])
 );
 
 testcase!(
-    bug = "Both assignments should be allowed. When decomposing the contextual hint, we eagerly resolve vars to the 'first' branch of the union. Note: due to the union's sorted representation, the first branch is not necessarily the first in source order.",
     test_contextual_typing_against_unions,
     r#"
 class A: ...
@@ -128,9 +127,41 @@ class B: ...
 class B2(B): ...
 class C: ...
 
-x: list[A] | list[B] = [B2()] # E: `list[B2]` is not assignable to `list[A] | list[B]`
+x: list[A] | list[B] = [B2()]
 y: list[B] | list[C] = [B2()]
+z: list[A] | list[B] = [B2() for _ in range(10)]
 "#,
+);
+
+testcase!(
+    test_dict_union,
+    r#"
+d1: dict[int, int] | dict[str, list[int]] = {"x": [True]}
+x: list[str] = []
+d2: dict[int, int] | dict[str, list[int]] = {k: [True] for k in x}
+    "#,
+);
+
+testcase!(
+    test_set_union,
+    r#"
+class A: ...
+class B: ...
+class B2(B): ...
+x1: set[A] | set[B] = {B2()}
+x2: set[A] | set[B] = {B2() for _ in range(10)}
+    "#,
+);
+
+testcase!(
+    test_nontuple_union_hint_for_tuple_value,
+    r#"
+from typing import Sequence
+class A: ...
+class B: ...
+class B2(B): ...
+x: Sequence[A] | Sequence[list[B]] = ([B2()],)
+    "#,
 );
 
 testcase!(
@@ -250,6 +281,18 @@ x4: Generator[int, None, int] = (1 for _ in [1]) # E: `Generator[Literal[1]]` is
 );
 
 testcase!(
+    test_generator_union,
+    r#"
+from typing import Generator
+class A: ...
+class B: ...
+class B2(B): ...
+def f():
+    x: Generator[A] | Generator[list[B]] = ([B2()] for _ in range(10))
+    "#,
+);
+
+testcase!(
     test_context_if_expr,
     r#"
 class A: ...
@@ -284,7 +327,6 @@ x2: list[A] = True and [B()]
 );
 
 testcase!(
-    bug = "x or y or ... fails due to union hints, see test_contextual_typing_against_unions",
     test_context_boolop_soft,
     r#"
 from typing import TypedDict, assert_type
@@ -298,7 +340,7 @@ def test(x: list[A] | None, y: list[C] | None, z: TD | None) -> None:
     assert_type(x or [B()], list[A])
     assert_type(x or [0], list[A] | list[int])
     assert_type(x or y or [B()], list[A] | list[C])
-    assert_type(x or y or [D()], list[A] | list[C]) # TODO # E: assert_type(list[A] | list[C] | list[D], list[A] | list[C]) failed
+    assert_type(x or y or [D()], list[A] | list[C])
     assert_type(z or {"x": 0}, TD)
     assert_type(z or {"x": ""}, TD | dict[str, str])
 "#,
@@ -322,9 +364,19 @@ testcase!(
     r#"
 from typing import Callable
 class A: ...
-class B(A): ...
-f: Callable[[], list[A]] = lambda: [B()]
+class B: ...
+class B2(B): ...
+f1: Callable[[], list[B]] = lambda: [B2()]
+f2: Callable[[], list[A]] | Callable[[], list[B]] = lambda: [B2()]
 "#,
+);
+
+testcase!(
+    test_use_lambda_annotation_in_body,
+    r#"
+from typing import Callable
+f: Callable[[int], int] | Callable[[str], str] = lambda x: x + "1"
+    "#,
 );
 
 // We want to contextually type lambda params even when there is an arity mismatch.
@@ -418,6 +470,29 @@ def test(x: int | str):
     x = f(0)
     assert_type(x, int)
 "#,
+);
+
+testcase!(
+    test_context_return_union,
+    r#"
+class A: ...
+class B: ...
+class B2(B): ...
+
+def f[T](x: T) -> T:
+    return x
+
+x: list[A] | list[B] = f([B2()])
+    "#,
+);
+
+testcase!(
+    test_context_return_union_literal_hint,
+    r#"
+from typing import Literal
+def f[T](x: T) -> Literal[1, 2] | T: ...
+x: Literal[1, 2] = f(1)
+    "#,
 );
 
 testcase!(
@@ -708,6 +783,7 @@ f(([B()],))  # E: `tuple[list[B]]` is not assignable to upper bound `Sequence[li
 // Contrast this with test_sequence_hint_in_typevar_bound.
 // Because we don't need to filter out wrapped Vars, we are able to use their restrictions as hints.
 testcase!(
+    bug = "Bad Var-Var interaction in `decompose_tuple`",
     test_list_hint_in_typevar_bound,
     r#"
 from typing import Sequence
@@ -724,7 +800,10 @@ f2(([B()],))
 
 def f3[T: list[A]](x: Sequence[T]) -> T:
     return x[0]
-f3(([B()],))
+# `decompose_tuple` accidentally drops the relationship between the Unwrap var we create to collect
+# the hint and the Quantified var created from T because `is_subset_eq_var` unifies the latter
+# into the former, losing the information that the Unwrap var has collected a bound.
+f3(([B()],))  # E: `list[B]` is not assignable to upper bound `list[A]`
     "#,
 );
 

@@ -127,6 +127,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[Idx<KeyDecorator>],
         is_new_type: bool,
         pydantic_config_dict: &PydanticConfigDict,
+        pydantic_before_validator_fields: &[Name],
         django_field_info: &DjangoFieldInfo,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
@@ -271,6 +272,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         || metadata.is_marshmallow_schema()
                 });
 
+        let is_factory_boy_factory =
+            bases_with_metadata
+                .iter()
+                .any(|(base_class_object, metadata)| {
+                    base_class_object
+                        .has_toplevel_qname(ModuleName::factory_base().as_str(), "Factory")
+                        || metadata.is_factory_boy_factory()
+                });
+
         let is_metaclass = bases_with_metadata
             .iter()
             .any(|(base_class_object, metadata)| {
@@ -383,6 +393,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &bases_with_metadata,
             dataclass_from_dataclass_transform,
             pydantic_config.as_ref(),
+            pydantic_before_validator_fields,
             is_attrs_class,
             protocol_metadata.is_some(),
             enum_metadata.is_some(),
@@ -487,6 +498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_attrs_class,
             django_model_metadata,
             is_marshmallow_schema,
+            is_factory_boy_factory,
             is_metaclass,
             slots_info,
         )
@@ -804,11 +816,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<EnumMetadata> {
         let is_django = is_django_choices_subclass(bases_with_metadata);
 
-        if let Some(metaclass) = metaclass
-            && self
-                .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
+        let metaclass_is_enum = metaclass.is_some_and(|m| {
+            self.as_superclass(m, self.stdlib.enum_meta().class_object())
                 .is_some()
-        {
+        });
+        let base_is_enum = bases_with_metadata.iter().any(|(_, meta)| meta.is_enum());
+
+        if metaclass_is_enum || base_is_enum {
             // NOTE(grievejia): This may create potential cycle if metaclass is generic. Need to look into
             // whether it can be removed or not.
             if !self.get_class_tparams(cls).is_empty() {
@@ -963,6 +977,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         dataclass_from_dataclass_transform: Option<(DataclassKeywords, Vec<CalleeKind>)>,
         pydantic_config: Option<&PydanticConfig>,
+        pydantic_before_validator_fields: &[Name],
         is_attrs_class: bool,
         is_protocol: bool,
         is_enum: bool,
@@ -1007,6 +1022,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
+                        pydantic_before_validator_fields: SmallSet::new(),
                     });
                 }
                 // `@dataclass(...)`
@@ -1029,6 +1045,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
+                        pydantic_before_validator_fields: SmallSet::new(),
                     });
                 }
                 _ => {}
@@ -1069,6 +1086,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if let Some((kws, field_specifiers)) = dataclass_from_dataclass_transform {
+            // Inherit before-validator fields from base pydantic models, then add our own.
+            let mut inherited_before_validator_fields: SmallSet<Name> = bases_with_metadata
+                .iter()
+                .filter(|(_, metadata)| metadata.is_pydantic_model())
+                .filter_map(|(_, metadata)| metadata.dataclass_metadata())
+                .flat_map(|dm| dm.pydantic_before_validator_fields.iter().cloned())
+                .collect();
+            inherited_before_validator_fields
+                .extend(pydantic_before_validator_fields.iter().cloned());
             dataclass_metadata = Some(DataclassMetadata {
                 fields: self.get_dataclass_fields(cls, bases_with_metadata),
                 kws,
@@ -1076,6 +1102,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 alias_keyword,
                 init_defaults,
                 default_can_be_positional,
+                pydantic_before_validator_fields: inherited_before_validator_fields,
             });
         }
         dataclass_metadata

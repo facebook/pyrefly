@@ -7,10 +7,8 @@
 
 use configparser::ini::Ini;
 
+use crate::base::Preset;
 use crate::config::ConfigFile;
-use crate::error::ErrorDisplayConfig;
-use crate::error_kind::ErrorKind;
-use crate::error_kind::Severity;
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::migration::mypy::util;
 use crate::migration::mypy::util::MypyErrorConfigFlags;
@@ -49,19 +47,15 @@ impl ConfigOptionMigrater for ErrorCodes {
         };
         let disable_error_code = util::string_to_array(&mypy_cfg.get("mypy", "disable_error_code"));
         let enable_error_code = util::string_to_array(&mypy_cfg.get("mypy", "enable_error_code"));
-        // Mypy's mutable-override is off by default; disable our equivalent
-        // unless the user explicitly enabled it.
-        let mutable_override_enabled = enable_error_code.iter().any(|c| c == "mutable-override");
-        let mut error_config =
+        let error_config =
             util::make_error_config(Some(mypy_flags), disable_error_code, enable_error_code);
-        if !mutable_override_enabled {
-            error_config
-                .get_or_insert_with(ErrorDisplayConfig::default)
-                .set_error_severity(ErrorKind::BadOverrideMutableAttribute, Severity::Ignore);
+        // Use the `legacy` preset as the base. The preset handles defaults
+        // like disabling mutable-override and param-name-override. Any explicit
+        // error code overrides from the mypy config are added on top.
+        pyrefly_cfg.preset = Some(Preset::Legacy);
+        if let Some(error_config) = error_config {
+            pyrefly_cfg.root.errors = Some(error_config);
         }
-        // error_config is always Some: either make_error_config returned Some (when
-        // mutable-override is enabled), or get_or_insert_with guaranteed Some above.
-        pyrefly_cfg.root.errors = Some(error_config.expect("error config must be set"));
         Ok(())
     }
 
@@ -74,7 +68,6 @@ impl ConfigOptionMigrater for ErrorCodes {
         // The PyrightConfig struct already has a method to convert these to an ErrorDisplayConfig
         let error_config = pyright_cfg
             .errors
-            .clone()
             .to_config()
             .ok_or_else(|| anyhow::anyhow!("No error settings found in pyright config"))?;
 
@@ -187,14 +180,18 @@ mod tests {
             .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
             .expect("migration should succeed");
 
-        // Even with empty mypy config, mutable-override is disabled by default
-        // to match mypy's default behavior.
-        assert!(pyrefly_cfg.root.errors.is_some());
+        // Empty mypy config sets the `legacy` preset; no explicit error overrides
+        assert_eq!(pyrefly_cfg.preset, Some(Preset::Legacy));
+        assert!(pyrefly_cfg.root.errors.is_none());
+
+        // After configure(), the preset disables mutable-override and unbound-name
+        pyrefly_cfg.configure();
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
         assert_eq!(
             errors.severity(ErrorKind::BadOverrideMutableAttribute),
             Severity::Ignore
         );
+        assert_eq!(errors.severity(ErrorKind::UnboundName), Severity::Ignore);
     }
 
     #[test]
@@ -213,11 +210,35 @@ mod tests {
             .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
             .expect("migration should succeed");
 
+        // Explicit enable overrides the preset's default after configure()
+        pyrefly_cfg.configure();
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
         assert_eq!(
             errors.severity(ErrorKind::BadOverrideMutableAttribute),
             Severity::Error
         );
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_possibly_undefined_enabled() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set(
+            "mypy",
+            "enable_error_code",
+            Some("possibly-undefined".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        error_codes
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("migration should succeed");
+
+        // Explicit enable overrides the legacy preset's Ignore after configure()
+        pyrefly_cfg.configure();
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(errors.severity(ErrorKind::UnboundName), Severity::Error);
     }
 
     #[test]
@@ -256,7 +277,7 @@ mod tests {
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
 
         assert_eq!(
-            errors.severity(ErrorKind::UnannotatedParameter),
+            errors.severity(ErrorKind::ImplicitAnyParameter),
             Severity::Error
         );
         assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Warn);
@@ -306,6 +327,11 @@ mod tests {
 
         assert!(pyrefly_cfg.root.errors.is_some());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
-        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
+        // mypy's `type-arg` is the missing-type-argument case specifically,
+        // so it maps to the more precise `implicit-any-type-argument` sub-kind.
+        assert_eq!(
+            errors.severity(ErrorKind::ImplicitAnyTypeArgument),
+            Severity::Error
+        );
     }
 }

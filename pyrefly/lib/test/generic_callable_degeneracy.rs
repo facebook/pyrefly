@@ -91,20 +91,19 @@ reveal_type(out_b)  # E: revealed type: str
 "#,
 );
 
-// Passing a generic function through a ParamSpec wrapper loses generic structure.
-// The result is a partial callable; calling it with a concrete arg pins the types.
+// Passing a generic function through a ParamSpec wrapper preserves generic structure.
 testcase!(
     test_paramspec_wrap_generic,
     r#"
 from typing import Callable, Awaitable, reveal_type
 def wrap[**P, T](f: Callable[P, T]) -> Callable[P, Awaitable[T]]: ...
 def identity[X](x: X) -> X: ...
-reveal_type(wrap(identity))  # E: revealed type: (x: @_) -> Awaitable[@_]
+reveal_type(wrap(identity))  # E: revealed type: [T](x: T) -> Awaitable[T]
 out_a = wrap(identity)
-reveal_type(out_a)  # E: revealed type: (x: Unknown) -> Awaitable[Unknown]
+reveal_type(out_a)  # E: revealed type: [T](x: T) -> Awaitable[T]
 out_b = wrap(identity)
 called = out_b(42)
-reveal_type(out_b)  # E: revealed type: (x: int) -> Awaitable[int]
+reveal_type(out_b)  # E: revealed type: [T](x: T) -> Awaitable[T]
 reveal_type(called)  # E: revealed type: Awaitable[int]
 "#,
 );
@@ -142,30 +141,23 @@ reveal_type(out_c)  # E: revealed type: () -> Any
 "#,
 );
 
-// Concatenate preserves X in params (X survives stripping), but the generic
-// forall structure is still lost — X becomes a partial type.
-// Calling the result with a concrete arg pins X.
 testcase!(
-    bug = "Generic structure lost even though X survives in params after stripping",
     test_concatenate_preserves_generic_param,
     r#"
 from typing import Callable, Concatenate, Any, reveal_type
 def strip_first[**P, T](f: Callable[Concatenate[Any, P], T]) -> Callable[P, T]: ...
 def swap[X](ignored: int, x: X) -> X: ...
-reveal_type(strip_first(swap))  # E: revealed type: (x: @_) -> @_
+reveal_type(strip_first(swap))  # E: revealed type: [T](x: T) -> T
 out_a = strip_first(swap)
-reveal_type(out_a)  # E: revealed type: (x: Unknown) -> Unknown
+reveal_type(out_a)  # E: revealed type: [T](x: T) -> T
 out_b = strip_first(swap)
 called = out_b("hello")
-reveal_type(out_b)  # E: revealed type: (x: str) -> str
+reveal_type(out_b)  # E: revealed type: [T](x: T) -> T
 reveal_type(called)  # E: revealed type: str
 "#,
 );
 
-// ParamSpec pins to first overload instead of preserving overload structure.
-// This is the core bug from GitHub issue #2105.
 testcase!(
-    bug = "ParamSpec pins to first overload (issue #2105)",
     test_overload_paramspec_pins_first,
     r#"
 from typing import Callable, Protocol, overload
@@ -181,6 +173,6 @@ def callback[**P, T](
 ) -> Callable[P, T]: ...
 
 def test(rmtree: Foo) -> None:
-    callback(rmtree, ignore_errors=True)  # E: Missing argument `onerror` in function `callback`
+    callback(rmtree, ignore_errors=True)
 "#,
 );

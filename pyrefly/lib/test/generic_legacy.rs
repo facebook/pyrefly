@@ -822,7 +822,7 @@ testcase!(
     r#"
 from typing import assert_type, Literal
 def f(x: bool):
-    if bool(x):
+    if bool(x):  # E: Unnecessary `bool()` call; argument is already of type `bool`
         assert_type(x, Literal[True])
     else:
         assert_type(x, Literal[False])

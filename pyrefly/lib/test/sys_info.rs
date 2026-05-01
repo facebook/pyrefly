@@ -290,6 +290,48 @@ assert_type(y, Literal[''])
 );
 
 testcase!(
+    test_sys_version_unpack_alias,
+    TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
+    r#"
+import sys
+import typing
+import typing_extensions
+from typing import TypedDict, assert_type
+
+if sys.version_info >= (3, 11):
+    Unpack = typing.Unpack
+else:
+    Unpack = typing_extensions.Unpack
+
+class Kwargs(TypedDict, total=False):
+    x: int
+
+def f(**kwargs: Unpack[Kwargs]) -> None:
+    assert_type(kwargs, Kwargs)
+"#,
+);
+
+testcase!(
+    test_typechecking_unpack_alias,
+    r#"
+import typing
+import typing_extensions
+from typing import TYPE_CHECKING, TypedDict, assert_type
+
+if TYPE_CHECKING:
+    GuardedUnpack = typing.Unpack
+else:
+    GuardedUnpack = typing_extensions.Unpack
+
+class Kwargs(TypedDict, total=False):
+    x: int
+
+def f(**kwargs: GuardedUnpack[Kwargs]) -> None:
+    assert_type(kwargs, Kwargs)
+"#,
+);
+
+testcase!(
     test_negative_platform_gate_import,
     TestEnv::new_with_platform(PythonPlatform::linux()),
     r#"

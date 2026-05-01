@@ -212,6 +212,58 @@ C()  # E: Missing argument `x`
 );
 
 testcase!(
+    test_class_field_specifier_required,
+    r#"
+from typing import dataclass_transform, Any
+class CustomField:
+    def __init__(self, **kwargs: Any) -> None: ...
+@dataclass_transform(field_specifiers=(CustomField,))
+def build(x): ...
+@build
+class C:
+    x: int = CustomField()  # E: `CustomField` is not assignable to `int`
+C(x=0)
+C()  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
+    test_class_field_specifier_optional,
+    r#"
+from typing import dataclass_transform, Any
+class CustomField:
+    def __init__(self, *, default: Any = ..., **kwargs: Any) -> None: ...
+@dataclass_transform(field_specifiers=(CustomField,))
+def build(x): ...
+@build
+class C:
+    x: str = CustomField(default="foo")  # E: `CustomField` is not assignable to `str`
+C(x="bar")
+C()  # OK because `default` gives `x` a default
+    "#,
+);
+
+testcase!(
+    test_class_field_specifier_with_str_mixin,
+    r#"
+from typing import dataclass_transform, Any
+class CustomField(str):
+    def __new__(cls, *, default: Any = ..., **kwargs: Any) -> "CustomField":
+        return super().__new__(cls)
+    def __init__(self, *, default: Any = ..., **kwargs: Any) -> None: ...
+@dataclass_transform(field_specifiers=(CustomField,))
+def build(x): ...
+@build
+class C:
+    x: int = CustomField()  # E: `CustomField` is not assignable to `int`
+    y: str = CustomField(default="foo")  # CustomField is a str, so this is fine
+C(x=0)
+C(x=0, y="bar")
+C()  # E: Missing argument `x`
+    "#,
+);
+
+testcase!(
     test_factory,
     r#"
 from typing import dataclass_transform, Any

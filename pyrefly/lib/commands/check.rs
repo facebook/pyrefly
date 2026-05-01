@@ -75,7 +75,7 @@ use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
-use crate::state::subscriber::ProgressBarSubscriber;
+use crate::state::subscriber::ProgressBarStyle;
 
 /// Result data from a non-watch check run, used for telemetry logging.
 pub struct CheckResult {
@@ -319,9 +319,16 @@ struct OutputArgs {
     )]
     summary: Summary,
 
-    /// Suppress the progress bar during type checking.
-    #[arg(long)]
+    /// Suppress the progress bar during type checking. Deprecated: use `--progress-bar=no` instead.
+    #[arg(long, hide = true)]
     no_progress_bar: bool,
+
+    /// Set the progress bar style.
+    /// `interactive` (default) shows a visual progress bar.
+    /// `simple` prints periodic log-style progress messages (suitable for piping or non-interactive use).
+    /// `no` disables progress reporting entirely.
+    #[arg(long, value_enum)]
+    progress_bar: Option<ProgressBarStyle>,
 
     /// When specified, strip this prefix from any paths in the output.
     /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
@@ -357,6 +364,18 @@ impl OutputArgs {
 
     fn output_format(&self) -> OutputFormat {
         self.output_format.unwrap_or_default()
+    }
+
+    /// Resolve the effective progress bar style, taking deprecated flags into account.
+    fn progress_bar_style(&self) -> ProgressBarStyle {
+        if let Some(style) = &self.progress_bar {
+            return style.clone();
+        }
+        if self.no_progress_bar || self.summary == Summary::None {
+            ProgressBarStyle::No
+        } else {
+            ProgressBarStyle::Interactive
+        }
     }
 }
 
@@ -722,16 +741,14 @@ impl CheckArgs {
             ));
         }
 
-        let holder = Forgetter::new(State::new(config_finder, thread_count), true);
+        let state = Forgetter::new(State::new(config_finder, thread_count), true);
         let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
-            holder
-                .as_ref()
-                .new_transaction(require_levels.default, None),
+            state.as_ref().new_transaction(require_levels.default, None),
             true,
         );
-        let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
+        let (loaded_handles, _, sourcedb_errors) = handles.all(state.as_ref().config_finder());
 
         // Project-level output settings can come from config when CLI flags are absent.
         if (self.output.baseline.is_none()
@@ -739,7 +756,7 @@ impl CheckArgs {
             || self.output.min_severity.is_none())
             && let Some(handle) = loaded_handles.first()
         {
-            let config = holder.as_ref().config_finder().python_file(
+            let config = state.as_ref().config_finder().python_file(
                 ModuleNameWithKind::guaranteed(handle.module()),
                 handle.path(),
             );
@@ -875,7 +892,7 @@ impl CheckArgs {
             let events = get_watcher_events(&mut watcher).await?;
             transaction = state.new_committable_transaction(
                 require_levels.default,
-                Some(Box::new(ProgressBarSubscriber::new())),
+                self.output.progress_bar_style().make_subscriber(),
             );
             let new_transaction_mut = transaction.as_mut();
             new_transaction_mut.invalidate_events(&events);
@@ -949,15 +966,9 @@ impl CheckArgs {
         }
 
         let type_check_start = Instant::now();
-        let show_progress_bar =
-            self.output.summary != Summary::None && !self.output.no_progress_bar;
-        if show_progress_bar {
-            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
-        }
+        transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
         transaction.run(handles, require, None);
-        if show_progress_bar {
-            transaction.set_subscriber(None);
-        }
+        transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
@@ -1161,7 +1172,7 @@ impl CheckArgs {
         }
         if let Some(output_path) = &self.output.report_timings {
             eprintln!("Computing timing information");
-            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+            transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
             transaction.report_timings(output_path)?;
             transaction.set_subscriber(None);
         }

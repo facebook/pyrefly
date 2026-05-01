@@ -113,10 +113,8 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     /// Record that recursive value along with the answer.
     fn record_recursive(
         _answers: &AnswersSolver<Ans>,
-        _range: TextRange,
         answer: Arc<Self::Answer>,
         _recursive: Var,
-        _errors: &ErrorCollector,
     ) -> Arc<Self::Answer> {
         answer
     }
@@ -157,14 +155,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
 
     fn record_recursive(
         answers: &AnswersSolver<Ans>,
-        range: TextRange,
         answer: Arc<TypeInfo>,
         recursive: Var,
-        errors: &ErrorCollector,
     ) -> Arc<TypeInfo> {
         let ty_info = answer
             .arc_clone()
-            .map_ty(|ty| answers.record_recursive(range, ty, recursive, errors));
+            .map_ty(|ty| answers.record_recursive(ty, recursive));
         Arc::new(ty_info)
     }
 
@@ -176,7 +172,9 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
             }
             Binding::LambdaParameter(id, owner) => {
                 let var = answers.resolve_lambda_param_var(*id, *owner);
-                Some(Arc::new(TypeInfo::of_ty(var.to_type(answers.heap))))
+                Some(Arc::new(TypeInfo::of_ty(
+                    answers.solver().expand_unwrap(var),
+                )))
             }
             _ => None,
         }
@@ -500,10 +498,13 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyLegacyTypeParam {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingLegacyTypeParam,
-        _range: TextRange,
+        range: TextRange,
         _errors: &ErrorCollector,
     ) -> Arc<LegacyTypeParameterLookup> {
-        answers.solve_legacy_tparam(binding)
+        // `range` is the KeyLegacyTypeParam's own range (first occurrence of the TypeVar
+        // name in this scope), which is unique per (scope, TypeVar) pair and serves as
+        // the scope anchor for deterministic Quantified identity.
+        answers.solve_legacy_tparam(binding, range)
     }
 
     fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {

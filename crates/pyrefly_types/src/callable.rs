@@ -75,6 +75,25 @@ impl Callable {
         }
     }
 
+    pub fn contains_callable_residual(&self) -> bool {
+        let check = |t: &Type| matches!(t, Type::CallableResidual(_));
+        if self.ret.any(check) {
+            return true;
+        }
+        match &self.params {
+            Params::List(params) => params.items().iter().any(|p| p.as_type().any(check)),
+            Params::ParamSpec(prefix, p) => {
+                prefix.iter().any(|pp| {
+                    let ty = match pp {
+                        PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
+                    };
+                    ty.any(check)
+                }) || p.any(check)
+            }
+            Params::Ellipsis | Params::Materialization => false,
+        }
+    }
+
     /// Returns true if this callable carries no real type information: all
     /// parameters and the return type are `Any(Implicit)` (i.e. Unknown).
     pub fn is_fully_unknown(&self) -> bool {
@@ -533,6 +552,26 @@ pub enum PropertyRole {
     DeleterDecorator,
 }
 
+/// Shape of a function body that consists of a single placeholder statement.
+/// The two variants share the surface form of "trivial body" but have very
+/// different semantics: `RaiseNotImplementedError` is an "abstract-ish"
+/// placeholder that never returns at runtime, while `ReturnNotImplemented`
+/// returns the singleton `NotImplemented` value (a real runtime value used by
+/// the dunder protocol). The type checker keeps them separate so it can relax
+/// override-consistency only for the abstract-style form, without conflating
+/// it with the dunder-protocol form.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
+)]
+pub enum PlaceholderBodyKind {
+    /// Body is exactly `raise NotImplementedError(...)`. This is the canonical
+    /// "abstract-ish" placeholder; concrete subclasses override it.
+    RaiseNotImplementedError,
+    /// Body is exactly `return NotImplemented`. This is the dunder-protocol
+    /// signal to defer to the other operand and is not an override placeholder.
+    ReturnNotImplemented,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Visit, VisitMut, TypeEq
 )]
@@ -564,6 +603,24 @@ pub struct FuncFlags {
     pub lacks_implementation: bool,
     /// Is the function definition in a `.pyi` file
     pub defined_in_stub_file: bool,
+    /// Set when the function was declared with `async def` (NOT when a regular
+    /// `def` happens to return a `Coroutine[...]`-typed value). Used to
+    /// distinguish async-def placeholders from sync functions explicitly
+    /// annotated to return a coroutine, which look identical at the type level
+    /// once the async-wrapping into `Coroutine[Any, Any, T]` has happened.
+    pub is_async: bool,
+    /// Set when the function body is a single placeholder statement (see
+    /// `PlaceholderBodyKind`), ignoring a leading docstring. `None` for
+    /// ordinary function bodies, and also for trivial bodies (`pass`, `...`,
+    /// or empty) — those are tracked separately as stubs, not placeholders.
+    pub placeholder_body_kind: Option<PlaceholderBodyKind>,
+    /// Set when the function's return type has no user-supplied annotation and
+    /// was inferred from the body (corresponds to
+    /// `ReturnTypeKind::ShouldInferType`). Used to distinguish a return type
+    /// the user wrote (e.g. an explicit `-> Never`) from one Pyrefly inferred,
+    /// which lets override-consistency logic relax inferred placeholder returns
+    /// without overriding what the user explicitly declared.
+    pub is_return_inferred: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
@@ -1233,10 +1290,11 @@ pub fn unexpected_keyword(error: &dyn Fn(String), func: &str, keyword: &Keyword)
 
 #[cfg(test)]
 mod tests {
-    use pyrefly_util::uniques::UniqueFactory;
+    use pyrefly_python::module_name::ModuleName;
     use pyrefly_util::visit::Visit;
     use pyrefly_util::visit::VisitMut;
     use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
 
     use crate::callable::Callable;
     use crate::callable::DefaultValue;
@@ -1244,8 +1302,11 @@ mod tests {
     use crate::callable::ParamList;
     use crate::callable::PrefixParam;
     use crate::callable::Required;
+    use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::types::Type;
@@ -1382,9 +1443,12 @@ mod tests {
 
     #[test]
     fn test_default_value_visit_delegates_to_ty() {
-        let uniques = UniqueFactory::new();
         let q = Quantified::new(
-            uniques.fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("T"),
             QuantifiedKind::TypeVar,
             None,
@@ -1402,9 +1466,12 @@ mod tests {
 
     #[test]
     fn test_default_value_visit_mut_delegates_to_ty() {
-        let uniques = UniqueFactory::new();
         let q = Quantified::new(
-            uniques.fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::new(TextRange::default(), 1),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("T"),
             QuantifiedKind::TypeVar,
             None,

@@ -8,6 +8,7 @@
 use std::mem;
 use std::sync::Arc;
 
+use clap::ValueEnum;
 use dupe::Dupe;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
@@ -19,6 +20,29 @@ use starlark_map::small_map::SmallMap;
 
 use crate::state::load::Load;
 use crate::state::state::Transaction;
+
+/// Controls which progress bar style to use during type checking.
+#[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
+pub enum ProgressBarStyle {
+    /// Show an interactive progress bar (default).
+    #[default]
+    Interactive,
+    /// Show simple log-style progress messages, suitable for non-interactive use.
+    Simple,
+    /// Disable progress reporting entirely.
+    No,
+}
+
+impl ProgressBarStyle {
+    /// Create a subscriber matching this style, or `None` if progress reporting is disabled.
+    pub fn make_subscriber(&self) -> Option<Box<dyn Subscriber>> {
+        match self {
+            ProgressBarStyle::Interactive => Some(Box::new(ProgressBarSubscriber::new())),
+            ProgressBarStyle::Simple => Some(Box::new(SimpleProgressBarSubscriber::new())),
+            ProgressBarStyle::No => None,
+        }
+    }
+}
 
 /// Trait to capture which handles are executed by `State`.
 /// Calls to `start_work` and `finish_work` will be paired.
@@ -173,6 +197,45 @@ impl ProgressBarSubscriber {
         };
         me.event(|_| ());
         me
+    }
+}
+
+/// A simple progress bar subscriber that prints log-style progress messages.
+/// Suitable for non-interactive environments (e.g., when output is piped to a file
+/// or when pyrefly is invoked by another tool like pysa).
+pub struct SimpleProgressBarSubscriber {
+    state: Mutex<ProgressBarState>,
+}
+
+impl SimpleProgressBarSubscriber {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(ProgressBarState {
+                last_progress: 0,
+                started: 0,
+                finished: 0,
+            }),
+        }
+    }
+}
+
+impl Subscriber for SimpleProgressBarSubscriber {
+    fn start_work(&self, _: &Handle) {
+        self.state.lock().started += 1;
+    }
+
+    fn finish_work(&self, _: &Transaction<'_>, _: &Handle, _: &Arc<Load>, _: bool) {
+        let (finished, started) = {
+            let mut state = self.state.lock();
+            state.finished += 1;
+            (state.finished, state.started)
+        };
+        // Log at regular intervals to avoid flooding the output.
+        // Print on the first completion, then at every 1% of progress, and at the end.
+        let interval = (started / 100).max(1);
+        if finished == 1 || finished == started || finished % interval == 0 {
+            eprintln!("Processed {} of {} modules", finished, started);
+        }
     }
 }
 

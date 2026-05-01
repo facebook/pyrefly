@@ -262,6 +262,10 @@ pub struct TelemetryExternalWorkspaceSymbolsStats {
     pub db_name: Option<String>,
     pub result_count: usize,
     pub find_repo_ms: Option<Duration>,
+    /// Time the request spent waiting on the in-flight warmup
+    /// `listDatabases` RPC instead of issuing a duplicate one. Only set when
+    /// the request raced the warmup window.
+    pub warmup_wait_ms: Option<Duration>,
     pub angle_query_ms: Option<Duration>,
 }
 
@@ -272,6 +276,10 @@ pub struct TelemetryExternalReferencesStats {
     pub result_file_count: usize,
     pub result_span_count: usize,
     pub find_repo_ms: Option<Duration>,
+    /// Time the request spent waiting on the in-flight warmup
+    /// `listDatabases` RPC instead of issuing a duplicate one. Only set when
+    /// the request raced the warmup window.
+    pub warmup_wait_ms: Option<Duration>,
     pub angle_query_ms: Option<Duration>,
     pub cas_init_error: Option<String>,
     /// Wall time of the entire resolve step (envelope around the phase

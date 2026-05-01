@@ -2351,6 +2351,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(
                 box (Type::Function(_)
                 | Type::Callable(_)
+                | Type::CallableResidual(_)
                 | Type::Overload(_)
                 | Type::Forall(box Forall {
                     tparams: _,
@@ -2383,9 +2384,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     deleter: metadata.has_deleter,
                 }));
             }
-            Type::Callable(_) => acc.push(AttributeBase1::ClassInstance(
-                self.stdlib.function_type().clone(),
-            )),
+            Type::Callable(_) | Type::CallableResidual(_) => acc.push(
+                AttributeBase1::ClassInstance(self.stdlib.function_type().clone()),
+            ),
             Type::KwCall(call) => self.as_attribute_base1(call.return_ty, acc),
             Type::Function(box Function {
                 signature: _,

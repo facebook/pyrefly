@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "0.62.0"
+version = "0.63.1"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -24,10 +24,10 @@ anstream = "0.6.11"
 anyhow = "1.0.102"
 arc-swap = { version = "1.9.0", features = ["weak"] }
 blake3 = { version = "=1.8.2", features = ["mmap", "rayon", "traits-preview"] }
-capnp = "0.25.2"
+capnp = "0.25.4"
 clap = { version = "4.6.0", features = ["cargo", "derive", "env", "string", "unicode", "wrap_help"] }
 crossbeam-channel = "0.5.15"
-dashmap = { version = "5.5.3", features = ["rayon", "serde"] }
+dashmap = { version = "6.1.0", features = ["rayon", "serde"] }
 dupe = "0.9.1"
 enum-iterator = "2.3.0"
 faster-hex = "0.6.1"

@@ -659,7 +659,7 @@ testcase!(
 from typing import Iterable
 def f(x: tuple[str, ...]): ...
 def g(x: Iterable[int]):
-    f(tuple(x))  # E: `Iterable[int]` is not assignable to parameter `iterable` with type `Iterable[str]`
+    f(tuple(x))  # E: `tuple[int, ...]` is not assignable to parameter `x` with type `tuple[str, ...]`
     "#,
 );
 

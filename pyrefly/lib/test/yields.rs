@@ -630,3 +630,84 @@ reveal_type(bar1)  # E: revealed type: () -> Iterator[dict[str, Any]] | Iterator
 reveal_type(bar2)  # E: revealed type: () -> Iterator[tuple[Any, ...]]
 "#,
 );
+
+testcase!(
+    test_union_of_generators_return_type,
+    r#"
+from typing import Generator
+def f() -> Generator[str, int]: ...
+def g() -> Generator[int, None] | Generator[str, int]:
+    yield from f()
+    "#,
+);
+
+testcase!(
+    test_yield_from_union_of_iterator,
+    r#"
+from typing import Iterator
+def f() -> Iterator[list[int]] | Iterator[list[str]]: ...
+def g() -> Iterator[list[int]] | Iterator[list[str]]:
+    yield from f()
+    "#,
+);
+
+testcase!(
+    test_return_is_incompatible_with_generator,
+    r#"
+from typing import Generator
+def f() -> Generator[int, None, str] | int:
+    yield 1
+    return 42  # E: `Literal[42]` is not assignable to declared return type `str`
+    "#,
+);
+
+testcase!(
+    test_generator_return_annotation,
+    r#"
+def f() -> int:  # E: Generator function should return `Generator`
+    yield 0
+    "#,
+);
+
+testcase!(
+    test_generator_nongenerator_union,
+    r#"
+from typing import Generator
+class A: ...
+# This is a silly return type, but it's technically valid.
+def f1() -> A | Generator[A]:
+    return A()
+def f2() -> A | Generator[A]:
+    yield A()
+    "#,
+);
+
+testcase!(
+    test_async_generator_union,
+    r#"
+from typing import AsyncGenerator
+async def f() -> AsyncGenerator[int] | AsyncGenerator[str]:
+    yield ""
+    "#,
+);
+
+testcase!(
+    test_async_generator_return_annotation,
+    r#"
+async def f() -> int:  # E: Async generator function should return `AsyncGenerator`
+    yield 0
+    "#,
+);
+
+testcase!(
+    test_async_generator_nongenerator_union,
+    r#"
+from typing import AsyncGenerator
+class A: ...
+# This is a silly return type, but it's technically valid.
+async def f1() -> A | AsyncGenerator[A]:
+    return A()
+async def f2() -> A | AsyncGenerator[A]:
+    yield A()
+    "#,
+);

@@ -17,7 +17,6 @@ use pyrefly_python::qname::QName;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::display::append;
 use pyrefly_util::display::commas_iter;
-use pyrefly_util::uniques::Unique;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
@@ -29,6 +28,7 @@ use crate::callable::Function;
 use crate::class::Class;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
+use crate::quantified::QuantifiedIdentity;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
@@ -42,6 +42,7 @@ use crate::typed_dict::TypedDict;
 use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::BoundMethodType;
+use crate::types::CallableResidualKind;
 use crate::types::Forall;
 use crate::types::Forallable;
 use crate::types::NeverStyle;
@@ -53,7 +54,7 @@ use crate::types::Union;
 /// Scope guard that truncates the forall type-parameter tracking stack on drop,
 /// ensuring cleanup even on early return or panic.
 struct ForallScope<'a> {
-    vec: &'a RefCell<Vec<Unique>>,
+    vec: &'a RefCell<Vec<QuantifiedIdentity>>,
     prev_len: usize,
 }
 
@@ -135,13 +136,14 @@ pub struct TypeDisplayContext<'a> {
     lsp_display_mode: LspDisplayMode,
     always_display_module_name: bool,
     always_display_expanded_unions: bool,
+    render_self_type_as_self: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
-    /// Stack of unique IDs of type variables currently bound by enclosing Foralls.
-    /// Owner display is suppressed for a variable if its unique is in this stack (it is
+    /// Stack of identities of type variables currently bound by enclosing Foralls.
+    /// Owner display is suppressed for a variable if its identity is in this stack (it is
     /// quantified by an enclosing Forall), but shown for free variables from outer scopes
     /// (e.g. `F1@bar.f1` inside a nested function `f2[F2]` — F1 is free, F2 is bound).
-    forall_tparam_uniques: RefCell<Vec<Unique>>,
+    forall_tparam_uniques: RefCell<Vec<QuantifiedIdentity>>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -189,6 +191,10 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn always_display_expanded_unions(&mut self) {
         self.always_display_expanded_unions = true;
+    }
+
+    pub fn render_self_type_as_self(&mut self) {
+        self.render_self_type_as_self = true;
     }
 
     /// Always display the module name, except for builtins.
@@ -357,7 +363,10 @@ impl<'a> TypeDisplayContext<'a> {
             let needs_parens = wrap_callables_and_intersect
                 && matches!(
                     t,
-                    Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                    Type::Callable(_)
+                        | Type::CallableResidual(_)
+                        | Type::Function(_)
+                        | Type::Intersect(_)
                 );
             if needs_parens {
                 output.write_str("(")?;
@@ -405,7 +414,7 @@ impl<'a> TypeDisplayContext<'a> {
         let prev_len = self.forall_tparam_uniques.borrow().len();
         self.forall_tparam_uniques
             .borrow_mut()
-            .extend(tparams.into_iter().map(|q| q.unique()));
+            .extend(tparams.into_iter().map(|q| q.identity().clone()));
         ForallScope {
             vec: &self.forall_tparam_uniques,
             prev_len,
@@ -558,8 +567,12 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::SelfType(cls) => {
-                self.maybe_fmt_with_module("typing", "Self@", output)?;
-                output.write_qname(cls.qname())
+                if self.render_self_type_as_self {
+                    self.maybe_fmt_with_module("typing", "Self", output)
+                } else {
+                    self.maybe_fmt_with_module("typing", "Self@", output)?;
+                    output.write_qname(cls.qname())
+                }
             }
 
             // Other things
@@ -589,6 +602,14 @@ impl<'a> TypeDisplayContext<'a> {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
             }
+            Type::CallableResidual(box residual) => match &residual.kind {
+                CallableResidualKind::Generic { quantified } => {
+                    self.fmt_helper_generic(&quantified.as_gradual_type(), is_toplevel, output)
+                }
+                CallableResidualKind::Overload { .. } => {
+                    write!(output, "<overload residual>")
+                }
+            },
             Type::Function(box Function {
                 signature,
                 metadata,
@@ -821,7 +842,10 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => {
+                        Type::Callable(_)
+                        | Type::CallableResidual(_)
+                        | Type::Function(_)
+                        | Type::Intersect(_) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -884,7 +908,10 @@ impl<'a> TypeDisplayContext<'a> {
                             // Regular union member - use helper for just this one
                             let needs_parens = matches!(
                                 t,
-                                Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                                Type::Callable(_)
+                                    | Type::CallableResidual(_)
+                                    | Type::Function(_)
+                                    | Type::Intersect(_)
                             );
                             if needs_parens {
                                 output.write_str("(")?;
@@ -1088,7 +1115,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Quantified(var) => {
                 write!(output, "{}", var.name)?;
                 if self.always_display_module_name
-                    && !self.forall_tparam_uniques.borrow().contains(&var.unique())
+                    && !self.forall_tparam_uniques.borrow().contains(var.identity())
                     && let Some(owner) = &var.owner
                 {
                     write!(output, "@{owner}")?;
@@ -1315,7 +1342,6 @@ pub mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::nesting_context::NestingContext;
-    use pyrefly_util::uniques::UniqueFactory;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
     use vec1::vec1;
@@ -1336,8 +1362,11 @@ pub mod tests {
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
+    use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
     use crate::type_alias::TypeAliasData;
@@ -1371,9 +1400,14 @@ pub mod tests {
         Arc::new(TParams::new(tparams))
     }
 
-    fn fake_tparam(uniques: &UniqueFactory, name: &str, kind: QuantifiedKind) -> Quantified {
+    fn fake_tparam(ordinal: u32, name: &str, kind: QuantifiedKind) -> Quantified {
+        let identity = QuantifiedIdentity::new(
+            ModuleName::from_str("__test__"),
+            AnchorIndex::new(ruff_text_size::TextRange::default(), ordinal),
+            QuantifiedOrigin::Pep695,
+        );
         Quantified::new(
-            uniques.fresh(),
+            identity,
             Name::new(name),
             kind,
             None,
@@ -1479,19 +1513,15 @@ pub mod tests {
 
     #[test]
     fn test_display() {
-        let uniques = UniqueFactory::new();
         let heap = TypeHeap::new();
         let foo1 = fake_class("foo", "mod.ule", 5);
         let foo2 = fake_class("foo", "mod.ule", 8);
         let foo3 = fake_class("foo", "ule", 3);
         let bar = fake_class("bar", "mod.ule", 0);
-        let bar_tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let bar_tparams = fake_tparams(vec![fake_tparam(0, "T", QuantifiedKind::TypeVar)]);
         let tuple_param = fake_class("TupleParam", "mod.ule", 0);
-        let tuple_param_tparams = fake_tparams(vec![fake_tparam(
-            &uniques,
-            "T",
-            QuantifiedKind::TypeVarTuple,
-        )]);
+        let tuple_param_tparams =
+            fake_tparams(vec![fake_tparam(1, "T", QuantifiedKind::TypeVarTuple)]);
         let class_type =
             |class: &Class, targs: TArgs| heap.mk_class_type(ClassType::new(class.dupe(), targs));
 
@@ -1546,7 +1576,7 @@ pub mod tests {
             .to_string(),
             "TupleParam[foo, *tuple[foo, ...], foo]"
         );
-        let shape_param = fake_tparam(&uniques, "Shape", QuantifiedKind::TypeVarTuple);
+        let shape_param = fake_tparam(0, "Shape", QuantifiedKind::TypeVarTuple);
         assert_eq!(
             class_type(
                 &tuple_param,
@@ -1785,12 +1815,11 @@ pub mod tests {
 
     #[test]
     fn test_display_generic_callable() {
-        let uniques = UniqueFactory::new();
         let param1 = Param::Pos(Name::new_static("hello"), Type::None, Required::Required);
         let param2 = Param::KwOnly(Name::new_static("world"), Type::None, Required::Required);
         let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
         let generic_callable_type = Type::Forall(Box::new(Forall {
-            tparams: fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]),
+            tparams: fake_tparams(vec![fake_tparam(1, "T", QuantifiedKind::TypeVar)]),
             body: Forallable::Callable(callable),
         }));
         let mut ctx = TypeDisplayContext::new(&[&generic_callable_type]);
@@ -1869,9 +1898,7 @@ pub mod tests {
 
     #[test]
     fn test_display_specialized_untyped_alias() {
-        let uniques = UniqueFactory::new();
-
-        let tparams1 = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams1 = fake_tparams(vec![fake_tparam(2, "T", QuantifiedKind::TypeVar)]);
         let alias1 = Type::UntypedAlias(Box::new(TypeAliasData::Ref(TypeAliasRef {
             name: Name::new_static("X"),
             args: Some(TArgs::new(tparams1, vec![Type::any_implicit()])),
@@ -1881,8 +1908,8 @@ pub mod tests {
         })));
 
         let tparams2 = fake_tparams(vec![
-            fake_tparam(&uniques, "K", QuantifiedKind::TypeVar),
-            fake_tparam(&uniques, "V", QuantifiedKind::TypeVar),
+            fake_tparam(0, "K", QuantifiedKind::TypeVar),
+            fake_tparam(0, "V", QuantifiedKind::TypeVar),
         ]);
         let alias2 = Type::UntypedAlias(Box::new(TypeAliasData::Ref(TypeAliasRef {
             name: Name::new_static("Y"),
@@ -1993,9 +2020,8 @@ pub mod tests {
 
     #[test]
     fn test_display_generic_typeddict() {
-        let uniques = UniqueFactory::new();
         let cls = fake_class("C", "test", 0);
-        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams = fake_tparams(vec![fake_tparam(3, "T", QuantifiedKind::TypeVar)]);
         let t = Type::None;
         let targs = TArgs::new(tparams.dupe(), vec![t]);
         let td = TypedDict::new(cls, targs);
@@ -2028,12 +2054,11 @@ pub mod tests {
 
     #[test]
     fn test_display_generic_bound_method() {
-        let uniques = UniqueFactory::new();
         let bound_method = fake_generic_bound_method(
             "foo",
             "MyClass",
             "my.module",
-            fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]),
+            fake_tparams(vec![fake_tparam(4, "T", QuantifiedKind::TypeVar)]),
         );
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
@@ -2058,7 +2083,6 @@ pub mod tests {
 
     #[test]
     fn test_display_overload() {
-        let uniques = UniqueFactory::new();
         let class = fake_class("TestClass", "test", 0);
         let sig1 = Function {
             signature: Callable::list(
@@ -2105,11 +2129,7 @@ pub mod tests {
             signatures: vec1![
                 OverloadType::Function(sig1.clone()),
                 OverloadType::Forall(Forall {
-                    tparams: fake_tparams(vec![fake_tparam(
-                        &uniques,
-                        "T",
-                        QuantifiedKind::TypeVar
-                    )]),
+                    tparams: fake_tparams(vec![fake_tparam(8, "T", QuantifiedKind::TypeVar)]),
                     body: sig2.clone()
                 })
             ],
@@ -2151,11 +2171,7 @@ def overloaded_func[T](
                 signatures: vec1![
                     OverloadType::Function(sig1.clone()),
                     OverloadType::Forall(Forall {
-                        tparams: fake_tparams(vec![fake_tparam(
-                            &uniques,
-                            "T",
-                            QuantifiedKind::TypeVar
-                        )]),
+                        tparams: fake_tparams(vec![fake_tparam(9, "T", QuantifiedKind::TypeVar)]),
                         body: sig2
                     })
                 ],
@@ -2281,10 +2297,9 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_class_with_targs() {
-        let uniques = UniqueFactory::new();
         let foo = fake_class("Foo", "test.module", 10);
         let bar = fake_class("Bar", "test.module", 20);
-        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams = fake_tparams(vec![fake_tparam(5, "T", QuantifiedKind::TypeVar)]);
 
         let inner_type = Type::ClassType(ClassType::new(bar, TArgs::default()));
         let t = Type::ClassType(ClassType::new(foo, TArgs::new(tparams, vec![inner_type])));
@@ -2327,10 +2342,9 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_nested_types() {
-        let uniques = UniqueFactory::new();
         let outer = fake_class("Outer", "test", 10);
         let inner = fake_class("Inner", "test", 20);
-        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams = fake_tparams(vec![fake_tparam(6, "T", QuantifiedKind::TypeVar)]);
 
         let inner_type = Type::ClassType(ClassType::new(inner, TArgs::default()));
         let outer_type =
@@ -2353,10 +2367,9 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_tparams() {
-        let uniques = UniqueFactory::new();
-        let t_param = fake_tparam(&uniques, "T", QuantifiedKind::TypeVar);
-        let u_param = fake_tparam(&uniques, "U", QuantifiedKind::TypeVar);
-        let ts_param = fake_tparam(&uniques, "Ts", QuantifiedKind::TypeVarTuple);
+        let t_param = fake_tparam(7, "T", QuantifiedKind::TypeVar);
+        let u_param = fake_tparam(0, "U", QuantifiedKind::TypeVar);
+        let ts_param = fake_tparam(0, "Ts", QuantifiedKind::TypeVarTuple);
         let tparams = fake_tparams(vec![t_param, u_param, ts_param]);
 
         let param1 = Param::Pos(
@@ -2491,15 +2504,10 @@ def overloaded_func[T](
         // A TypeVarTuple bound to a TypeVarTuple parameter must render with a `*`
         // prefix on the location-aware path too — otherwise quick-fix code generation
         // emits invalid syntax like `TupleParam[Shape]` instead of `TupleParam[*Shape]`.
-        let uniques = UniqueFactory::new();
         let tuple_param = fake_class("TupleParam", "mod.ule", 0);
-        let tparams = fake_tparams(vec![fake_tparam(
-            &uniques,
-            "T",
-            QuantifiedKind::TypeVarTuple,
-        )]);
+        let tparams = fake_tparams(vec![fake_tparam(2, "T", QuantifiedKind::TypeVarTuple)]);
         let heap = TypeHeap::new();
-        let shape = fake_tparam(&uniques, "Shape", QuantifiedKind::TypeVarTuple);
+        let shape = fake_tparam(1, "Shape", QuantifiedKind::TypeVarTuple);
         let t = heap.mk_class_type(ClassType::new(
             tuple_param,
             TArgs::new(tparams, vec![shape.to_type(&heap)]),

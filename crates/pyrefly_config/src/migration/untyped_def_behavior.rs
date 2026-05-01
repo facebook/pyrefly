@@ -25,11 +25,9 @@ impl ConfigOptionMigrater for UntypedDefBehaviorConfig {
         // We handle this by only checking for the global config.
         let Ok(Some(check_untyped_defs)) = mypy_cfg.getboolcoerce("mypy", "check_untyped_defs")
         else {
-            // No setting found: default to skipping unannotated defs, no return inference.
-            pyrefly_cfg.root.check_unannotated_defs = Some(false);
-            pyrefly_cfg.root.infer_return_types = Some(InferReturnTypes::Never);
+            // No explicit setting: let the preset handle the defaults.
             return Err(anyhow::anyhow!(
-                "No check_untyped_defs found in mypy config, setting default to skip unannotated defs"
+                "No check_untyped_defs found in mypy config"
             ));
         };
 
@@ -104,12 +102,10 @@ mod tests {
         let config = UntypedDefBehaviorConfig;
         let result = config.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
+        // No explicit setting: fields left as None for the preset to handle
         assert!(result.is_err());
-        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, Some(false));
-        assert_eq!(
-            pyrefly_cfg.root.infer_return_types,
-            Some(InferReturnTypes::Never)
-        );
+        assert_eq!(pyrefly_cfg.root.check_unannotated_defs, None);
+        assert_eq!(pyrefly_cfg.root.infer_return_types, None);
     }
 
     #[test]

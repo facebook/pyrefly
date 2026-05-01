@@ -2583,6 +2583,11 @@ fn eval_call(
         DslCallTarget::Builtin(builtin) => match builtin {
             DslBuiltin::Prod => {
                 assert_eq!(args.len(), 1, "DSL bug: {op_name}: prod takes 1 arg");
+                if matches!(args[0], Val::Unpacked { .. }) {
+                    return Err(ShapeError::Unsupported {
+                        message: format!("{op_name}: prod() not supported on variadic shape"),
+                    });
+                }
                 let items = args[0].as_list();
                 // Check if all items are Int — if so, concrete product.
                 // If any is Dim, use symbolic product.
@@ -2601,6 +2606,11 @@ fn eval_call(
             }
             DslBuiltin::Sum => {
                 assert_eq!(args.len(), 1, "DSL bug: {op_name}: sum takes 1 arg");
+                if matches!(args[0], Val::Unpacked { .. }) {
+                    return Err(ShapeError::Unsupported {
+                        message: format!("{op_name}: sum() not supported on variadic shape"),
+                    });
+                }
                 let items = args[0].as_list();
                 let all_int = items.iter().all(|v| matches!(v, Val::Int(_)));
                 if all_int {

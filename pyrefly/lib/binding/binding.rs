@@ -20,6 +20,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAlias;
@@ -29,7 +30,6 @@ use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::display::intersperse_iter;
-use pyrefly_util::uniques::Unique;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -80,6 +80,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::equality::TypeEq;
 use crate::types::globals::ImplicitGlobal;
+use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::stdlib::Stdlib;
 use crate::types::type_info::JoinStyle;
@@ -115,7 +116,7 @@ assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 9);
+assert_words!(BindingClassMetadata, 11);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 11);
@@ -1763,6 +1764,13 @@ pub struct BindingUndecoratedFunction {
     pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
     pub stub_or_impl: FunctionStubOrImpl,
+    /// `Some` if the function body is a single placeholder statement
+    /// (`raise NotImplementedError(...)` or `return NotImplemented`); `None` otherwise.
+    pub placeholder_body_kind: Option<PlaceholderBodyKind>,
+    /// `true` when the return type has no user-supplied annotation and will be
+    /// inferred from the body (i.e. the corresponding `ReturnType` binding will
+    /// use `ReturnTypeKind::ShouldInferType`).
+    pub is_return_inferred: bool,
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,
@@ -1855,6 +1863,11 @@ impl ReturnTypeKind {
 pub struct ReturnType {
     pub kind: ReturnTypeKind,
     pub is_async: bool,
+    /// Per the constructor typing spec, an unannotated `__new__` is assumed to
+    /// return `Self`. We track that here so `Key::ReturnType` can expose the
+    /// effective return type without pretending the function was explicitly
+    /// annotated.
+    pub implicit_dunder_new_self: Option<Idx<KeyClass>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1905,7 +1918,7 @@ pub enum AnnotationStyle {
 #[derive(Clone, Debug)]
 pub struct TypeParameter {
     pub name: Name,
-    pub unique: Unique,
+    pub identity: QuantifiedIdentity,
     pub kind: QuantifiedKind,
     pub bound: Option<Expr>,
     pub default: Option<Expr>,
@@ -1969,6 +1982,29 @@ pub struct NameAssign {
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
     pub def_idx: Option<Idx<Key>>,
+    /// If `Some`, this assignment has an implicit receiver derived from
+    /// flow state (currently: a same-scope `class` definition for the same
+    /// name). The receiver provides contextual typing for the RHS and acts
+    /// like an implicit annotation: incompatible writes do not change the
+    /// visible binding, and the receiver type is preserved across same-scope
+    /// rebinds.
+    ///
+    /// The idx points at the canonical class-object binding of the original
+    /// class. The receiver-constrained semantics live entirely in the solver;
+    /// the textual assignment is still bound as a real `NameAssign` so the
+    /// RHS remains available for its own diagnostics and bookkeeping.
+    pub receiver_idx: Option<Idx<Key>>,
+}
+
+impl NameAssign {
+    /// True if the visible binding is pinned by an external constraint —
+    /// either an explicit annotation or an implicit class receiver. Pinned
+    /// assignments skip implicit-type-alias wrapping and inlay-hint
+    /// suggestions, since the pinning constraint already authoritatively
+    /// describes the variable's type.
+    pub fn is_pinned(&self) -> bool {
+        self.annotation.is_some() || self.receiver_idx.is_some()
+    }
 }
 
 /// Data for a type alias binding.
@@ -2271,7 +2307,7 @@ impl DisplayWith<Bindings> for Binding {
             Self::Any(style) => write!(f, "Any({style:?})"),
             Self::Global(g) => write!(f, "Global({})", g.name()),
             Self::TypeParameter(tp) => {
-                write!(f, "TypeParameter({}, {}, ..)", tp.unique, tp.kind)
+                write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
             Self::PossibleLegacyTParam(k, _) => {
                 write!(f, "PossibleLegacyTParam({})", ctx.display(*k))
@@ -2484,6 +2520,11 @@ impl Binding {
             Binding::Module(_) => Some(SymbolKind::Module),
             Binding::TypeAlias(_) => Some(SymbolKind::TypeAlias),
             Binding::TypeAliasRef(_) => Some(SymbolKind::TypeAlias),
+            // A receiver-constrained class assignment is class-shaped (the
+            // visible result is whichever class the receiver-compatibility
+            // decision chose), so present it as a class in IDE metadata
+            // rather than a constant/variable assignment.
+            Binding::NameAssign(x) if x.receiver_idx.is_some() => Some(SymbolKind::Class),
             Binding::NameAssign(x) if x.name.as_str() == x.name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
@@ -2962,6 +3003,9 @@ pub struct BindingClassMetadata {
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
     pub pydantic_config_dict: PydanticConfigDict,
+    /// Field names targeted by `@field_validator(..., mode='before'|'plain')` decorators.
+    /// These fields accept `Any` in `__init__` because the validator can transform arbitrary input.
+    pub pydantic_before_validator_fields: Box<[Name]>,
     /// Django-specific field information.
     pub django_field_info: Box<DjangoFieldInfo>,
 }

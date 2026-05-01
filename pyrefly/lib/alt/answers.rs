@@ -980,8 +980,8 @@ impl Answers {
         }
     }
 
-    fn deep_force(&self, t: Type) -> Type {
-        self.solver.deep_force(t)
+    fn force_for_export_boundary(&self, t: Type) -> Type {
+        self.solver.for_export_boundary(t)
     }
 
     pub fn solver(&self) -> &Solver {
@@ -1002,28 +1002,30 @@ impl Answers {
     }
 
     pub fn get_type_at(&self, idx: Idx<Key>) -> Option<Type> {
-        Some(self.deep_force(self.get_idx(idx)?.arc_clone_ty()))
+        Some(self.force_for_export_boundary(self.get_idx(idx)?.arc_clone_ty()))
     }
 
     pub fn get_type_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.deep_force(lock.types.get(&range)?.as_ref().clone()))
+        Some(self.force_for_export_boundary(lock.types.get(&range)?.as_ref().clone()))
     }
 
     pub fn try_get_getter_for_range(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.deep_force(lock.invoked_properties.get(&range)?.as_ref().clone()))
+        Some(self.force_for_export_boundary(lock.invoked_properties.get(&range)?.as_ref().clone()))
     }
 
     pub fn get_chosen_overload_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
-            OverloadedCallee::Resolved { callable } => Some(self.deep_force(callable.as_type())),
+            OverloadedCallee::Resolved { callable } => {
+                Some(self.force_for_export_boundary(callable.as_type()))
+            }
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
-            } if *is_closest_chosen => Some(self.deep_force(closest.as_type())),
+            } if *is_closest_chosen => Some(self.force_for_export_boundary(closest.as_type())),
             _ => None,
         }
     }

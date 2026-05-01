@@ -9,7 +9,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::iter;
 
-use itertools::Either;
 use itertools::EitherOrBoth;
 use itertools::Itertools;
 use itertools::izip;
@@ -37,16 +36,20 @@ use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
+use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::CallContext;
 use crate::solver::solver::OpenTypedDictSubsetError;
+use crate::solver::solver::ResidualWitnessContext;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetCacheEntry;
 use crate::solver::solver::SubsetError;
+use crate::solver::solver::SubsetWithSnapshotResult;
 use crate::solver::solver::TypedDictSubsetError;
-use crate::solver::solver::VarSnapshot;
 use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
@@ -129,23 +132,6 @@ fn any<T>(
         }
     }
     Err(err.unwrap_or(SubsetError::Other))
-}
-
-/// Result of `with_snapshot`, which performs an `is_subset_eq` call with var snapshotting.
-enum SubsetWithSnapshotResult {
-    /// `is_subset_eq` call was successful.
-    Ok,
-    /// `is_subset_eq` call was successful aside from instantiation errors.
-    /// Holds a snapshot of the vars with the instantiation errors.
-    InstantiationErrors(VarSnapshot),
-    /// `is_subset_eq` call failed.
-    Err(SubsetError),
-}
-
-impl SubsetWithSnapshotResult {
-    fn is_ok(&self) -> bool {
-        matches!(self, SubsetWithSnapshotResult::Ok)
-    }
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -510,6 +496,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
+    fn is_subset_params_with_context(
+        &mut self,
+        l_params: &Params,
+        u_params: &Params,
+        call_context: &CallContext,
+    ) -> Result<(), SubsetError> {
+        self.with_active_call_context(call_context, |me| me.is_subset_params(l_params, u_params))
+    }
+
     fn is_subset_protocol(&mut self, got: Type, protocol: ClassType) -> Result<(), SubsetError> {
         let want = Type::ClassType(protocol.clone());
         let has_no_vars = got.collect_all_vars().is_empty() && want.collect_all_vars().is_empty();
@@ -586,6 +581,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .type_order
             .get_protocol_member_names(protocol.class_object());
         for name in protocol_members {
+            let allow_residual_capture = name == dunder::CALL;
             if name == dunder::INIT || name == dunder::NEW {
                 // Protocols can't be instantiated
                 continue;
@@ -606,20 +602,39 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             self.is_subset_eq(got, want).is_ok()
                         })
                 {
-                    self.is_subset_eq(&got, &want_no_self)?;
+                    self.is_subset_eq_for_protocol_member(
+                        &got,
+                        &want_no_self,
+                        allow_residual_capture,
+                    )?;
                 } else {
-                    self.is_subset_eq(&got, &want)?;
+                    self.is_subset_eq_for_protocol_member(&got, &want, allow_residual_capture)?;
                 }
             } else {
                 self.type_order.is_protocol_subset_at_attr(
                     &got,
                     &protocol,
                     &name,
-                    &mut |got, want| self.is_subset_eq(got, want),
+                    &mut |got, want| {
+                        self.is_subset_eq_for_protocol_member(got, want, allow_residual_capture)
+                    },
                 )?;
             }
         }
         Ok(())
+    }
+
+    fn is_subset_eq_for_protocol_member(
+        &mut self,
+        got: &Type,
+        want: &Type,
+        allow_residual_capture: bool,
+    ) -> Result<(), SubsetError> {
+        if allow_residual_capture {
+            self.is_subset_eq(got, want)
+        } else {
+            self.with_active_call_context(&CallContext::outside(), |me| me.is_subset_eq(got, want))
+        }
     }
 
     fn is_subset_tuple(&mut self, got: &Tuple, want: &Tuple) -> Result<(), SubsetError> {
@@ -950,6 +965,39 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         got: &TypedDict,
         want: &TypedDict,
     ) -> Result<(), SubsetError> {
+        let cacheable = Self::typed_dict_is_cacheable(got) && Self::typed_dict_is_cacheable(want);
+        if cacheable && let Some(result) = self.solver.check_typed_dict_cache(got, want) {
+            return result;
+        }
+        // Save coinductive state so we can detect if any coinductive assumptions
+        // were used during field comparisons (e.g., a field with a protocol type
+        // that recursively references this TypedDict).
+        let prev_coinductive = self.coinductive_assumptions_used;
+        self.coinductive_assumptions_used = false;
+        let res = self.is_subset_typed_dict_inner(got, want);
+        let used_coinductive = self.coinductive_assumptions_used;
+        if cacheable && !used_coinductive {
+            self.solver
+                .store_typed_dict_cache(got.clone(), want.clone(), res.clone());
+        }
+        self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
+        res
+    }
+
+    /// Only cache non-generic class-based TypedDicts. Generic TypedDicts could
+    /// contain Vars whose meaning depends on the subset context.
+    fn typed_dict_is_cacheable(td: &TypedDict) -> bool {
+        match td {
+            TypedDict::TypedDict(inner) => inner.targs().is_empty(),
+            TypedDict::Anonymous(_) => false,
+        }
+    }
+
+    fn is_subset_typed_dict_inner(
+        &mut self,
+        got: &TypedDict,
+        want: &TypedDict,
+    ) -> Result<(), SubsetError> {
         let got_name = got.name();
         let want_name = want.name();
         let (got_fields, want_fields) = {
@@ -1134,12 +1182,99 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         })
     }
 
+    fn witness_and_captured_vars_for_overload(
+        &mut self,
+    ) -> Option<(ResidualWitnessContext, Vec<Var>)> {
+        if let Some(witness) = self.active_overload_residual_witness() {
+            let captured_vars = self.solver.overload_capture_quantified_vars(&witness);
+            if !captured_vars.is_empty() {
+                return Some((witness, captured_vars));
+            }
+        }
+        None
+    }
+
+    fn is_subset_overload_with_active_witness(
+        &mut self,
+        witness: &ResidualWitnessContext,
+        captured_vars: &[Var],
+        overload: &Overload,
+        want: &Type,
+    ) -> bool {
+        let pre_probe_snapshot = self.solver.snapshot_vars(captured_vars);
+        let mut matched_any_branch = false;
+        let mut successful_branch_captures = Vec::new();
+        for (branch_index, l) in overload.signatures.iter().enumerate() {
+            let probe_snapshot = self.solver.snapshot_vars(captured_vars);
+            if self.is_subset_eq(&l.as_type(), want).is_ok() {
+                matched_any_branch = true;
+                successful_branch_captures.push(
+                    self.solver
+                        .extract_overload_branch_capture(branch_index, captured_vars),
+                );
+            }
+            self.solver.restore_vars(probe_snapshot);
+        }
+        self.solver.restore_vars(pre_probe_snapshot);
+        if matched_any_branch {
+            if successful_branch_captures.is_empty() {
+                unreachable!("successful overload probe must produce a branch capture");
+            }
+            self.solver
+                .record_overload_residuals_for_witness(witness, successful_branch_captures);
+            true
+        } else {
+            false
+        }
+    }
+
     fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
-        if any(overload.signatures.iter(), |l| {
-            self.is_subset_eq(&l.as_type(), want)
-        })
-        .is_ok()
+        let initial_is_subset = if let Some((witness, captured_vars)) =
+            self.witness_and_captured_vars_for_overload()
         {
+            self.is_subset_overload_with_active_witness(&witness, &captured_vars, overload, want)
+        } else {
+            let argument_side = self.active_argument_side();
+            let can_synthesize_witness = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
+            if can_synthesize_witness {
+                let eligible_vars: Vec<Var> = want
+                    .collect_maybe_placeholder_vars()
+                    .into_iter()
+                    .filter(|v| self.solver.var_is_quantified(*v))
+                    .collect();
+                if eligible_vars.is_empty() {
+                    any(overload.signatures.iter(), |l| {
+                        self.is_subset_eq(&l.as_type(), want)
+                    })
+                    .is_ok()
+                } else {
+                    let overload_type = Type::Overload(overload.clone());
+                    let synthesized = self.make_overload_witness_context(
+                        &overload_type,
+                        &eligible_vars,
+                        argument_side,
+                    );
+                    self.with_active_call_context(&synthesized, |me| {
+                        let (witness, captured_vars) =
+                            me.witness_and_captured_vars_for_overload().expect(
+                                "synthesized overload witness must be active for capture probing",
+                            );
+                        me.is_subset_overload_with_active_witness(
+                            &witness,
+                            &captured_vars,
+                            overload,
+                            want,
+                        )
+                    })
+                }
+            } else {
+                any(overload.signatures.iter(), |l| {
+                    self.is_subset_eq(&l.as_type(), want)
+                })
+                .is_ok()
+            }
+        };
+        if initial_is_subset {
             return Ok(());
         }
         if let Type::Callable(box Callable {
@@ -1217,9 +1352,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
     /// during the failing computation are rolled back by popping the map back to
     /// the saved size, invalidating intermediate results that may have relied on
     /// a coinductive assumption that turned out to be false.
-    pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
+    pub fn is_subset_eq_impl(
+        &mut self,
+        got: &Type,
+        want: &Type,
+        call_context: &CallContext,
+    ) -> Result<(), SubsetError> {
+        let context_key = call_context.subset_cache_context();
         let cache_key = if self.can_be_recursive(got, want) {
-            let key = (got.clone(), want.clone());
+            // Cache keys include residual context identity so witness-scoped
+            // comparisons do not suppress context-sensitive side effects.
+            // The vast majority of checks run under `Default` context.
+            let key = (got.clone(), want.clone(), context_key);
             if let Some(entry) = self.subset_cache.get(&key) {
                 return match entry {
                     SubsetCacheEntry::InProgress => {
@@ -1242,7 +1386,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         } else {
             None
         };
-        let res = self.is_subset_eq_no_recursive_check(got, want);
+        let res = self.is_subset_eq_no_recursive_check(got, want, call_context);
         if let Some(key) = cache_key {
             match &res {
                 Ok(()) => {
@@ -1265,40 +1409,46 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         res
     }
 
-    /// Snapshots the given vars, calls `f`, and rolls back the vars if the call fails.
-    /// Note that this only rolls back the var state and not:
-    /// * `Ok` entries left in `subset_cache` (the rollback in `is_subset_eq_impl` only fires on
-    ///   `Err` from the speculative call, not on `Ok`-with-instantiation-errors), or
-    /// * `coinductive_assumptions_used`, which is one-way.
-    fn with_snapshot(
+    /// Run a speculative subset check used only for overload-branch pruning in
+    /// quantified finishing.
+    ///
+    /// Why this exists:
+    /// Pruning asks "would this branch be compatible with the solved type?" so we
+    /// can trim impossible overload residual branches before final materialization.
+    ///
+    /// Why we snapshot:
+    /// `is_subset_eq` is not pure - it can pin vars, refine bounds, and update
+    /// subset/protocol/witness side-state. None of those probe side effects are
+    /// semantically part of the real solve path, so we snapshot and restore the
+    /// relevant local state after each probe.
+    pub(crate) fn is_subset_eq_probe_for_pruning(
         &mut self,
-        vars: &[Var],
-        f: impl FnOnce(&mut Subset<Ans>) -> Result<(), SubsetError>,
-    ) -> SubsetWithSnapshotResult {
-        if vars.is_empty() {
-            // Fast path - no var snapshotting needed.
-            return f(self).map_or_else(SubsetWithSnapshotResult::Err, |_| {
-                SubsetWithSnapshotResult::Ok
-            });
-        }
-        let snapshot = self.solver.snapshot_vars(vars);
-        let res = match (f(self), self.solver.has_new_instantiation_errors(&snapshot)) {
-            (Ok(()), false) => SubsetWithSnapshotResult::Ok,
-            (Ok(()), true) => {
-                SubsetWithSnapshotResult::InstantiationErrors(self.solver.snapshot_vars(vars))
-            }
-            (Err(e), _) => SubsetWithSnapshotResult::Err(e),
-        };
-        if !res.is_ok() {
-            self.solver.restore_vars(snapshot);
-        }
-        res
+        got: &Type,
+        want: &Type,
+    ) -> Result<(), SubsetError> {
+        let mut vars: SmallSet<Var> = got.collect_maybe_placeholder_vars().into_iter().collect();
+        vars.extend(want.collect_maybe_placeholder_vars());
+        let vars = vars.into_iter().collect::<Vec<_>>();
+        let vars_snapshot = self.solver.snapshot_vars(&vars);
+        let cache_snapshot = self.subset_cache.clone();
+        self.subset_cache.clear();
+        let protocol_assumptions = self.class_protocol_assumptions.clone();
+        let deferred_vars = self.snapshot_witness_deferred_vars();
+        let coinductive_assumptions_used = self.coinductive_assumptions_used;
+        let result = self.is_subset_eq_with_context(got, want, &CallContext::outside());
+        self.solver.restore_vars(vars_snapshot);
+        self.subset_cache = cache_snapshot;
+        self.class_protocol_assumptions = protocol_assumptions;
+        self.restore_witness_deferred_vars(deferred_vars);
+        self.coinductive_assumptions_used = coinductive_assumptions_used;
+        result
     }
 
     fn is_subset_eq_no_recursive_check(
         &mut self,
         got: &Type,
         want: &Type,
+        call_context: &CallContext,
     ) -> Result<(), SubsetError> {
         match (got, want) {
             (Type::Any(_), _) => {
@@ -1374,8 +1524,9 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Quantified(q), u)
                 if let Restriction::Bound(bound) = q.restriction()
                     && self
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
-                            me.is_subset_eq(bound, u)
+                        .solver
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
+                            self.is_subset_eq(bound, u)
                         })
                         .is_ok() =>
             {
@@ -1384,9 +1535,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
                     && self
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
+                        .solver
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
                             all(constraints.iter(), |constraint| {
-                                me.is_subset_eq(constraint, u)
+                                self.is_subset_eq(constraint, u)
                             })
                         })
                         .is_ok() =>
@@ -1494,36 +1646,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             },
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Union(box Union { members: us, .. })) => {
-                // Check non-var elements before var elements, so that if we match a non-var, we
-                // don't pin the vars. Within var-containing members, try wrapped vars (e.g.
-                // `type[T]`) before bare vars (e.g. `T`), so that more specific patterns are
-                // tried first. This prevents cases like `T | type[T]` from incorrectly matching
-                // bare `T` when `type[T]` would produce a better (bound-satisfying) solution.
-                let (vars, nonvars): (Vec<_>, Vec<_>) = us.iter().partition_map(|u| {
-                    let vs = u.collect_maybe_placeholder_vars();
-                    if !vs.is_empty() {
-                        Either::Left((u, vs))
-                    } else {
-                        Either::Right((u, vs))
-                    }
-                });
-                let (bare_vars, wrapped_vars): (Vec<_>, Vec<_>) = vars
-                    .into_iter()
-                    .partition(|(u, _)| matches!(u, Type::Var(_)));
-                let ordered_us = nonvars.into_iter().chain(wrapped_vars).chain(bare_vars);
-                let mut res_with_instantiation_errors = None;
+                let ordered_us = self.solver.partial_sort_by_vars(us);
                 let mut error = None;
                 let l_vs = l.collect_maybe_placeholder_vars();
                 // Take the first successful match.
                 for (u, vs) in ordered_us {
                     let all_vs = l_vs.iter().copied().chain(vs).collect::<Vec<_>>();
-                    match self.with_snapshot(&all_vs, |me| me.is_subset_eq(l, u)) {
+                    match self
+                        .solver
+                        .with_snapshot(&all_vs, || self.is_subset_eq(l, u))
+                    {
                         SubsetWithSnapshotResult::Ok => return Ok(()),
-                        SubsetWithSnapshotResult::InstantiationErrors(snapshot) => {
-                            if res_with_instantiation_errors.is_none() {
-                                res_with_instantiation_errors = Some(snapshot);
-                            }
-                        }
                         SubsetWithSnapshotResult::Err(e) => {
                             if error.is_none() {
                                 error = Some(e);
@@ -1531,14 +1664,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         }
                     }
                 }
-                if let Some(snapshot) = res_with_instantiation_errors {
-                    // If there was no fully successful match, take the first match that was
-                    // successful aside from instantiation errors. This ensures that we get
-                    // specific [bad-specialization] errors when the only issue is a violation of a
-                    // type variable's upper bound, rather than generic "not assignable" errors.
-                    self.solver.restore_vars(snapshot);
-                    Ok(())
-                } else if let Type::Type(box Type::Union(box Union { members, .. })) = l {
+                if let Type::Type(box Type::Union(box Union { members, .. })) = l {
                     // type[A | B] <: X | Y: distribute into type[A] <: X | Y and
                     // type[B] <: X | Y. This fires as a fallback after per-member matching
                     // fails, because type[A | B] isn't a subtype of any single X or Y,
@@ -1640,8 +1766,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     metadata: _,
                 }),
             ) => {
-                self.is_subset_params(&l.params, &u.params)?;
-                self.is_subset_eq(&l.ret, &u.ret)
+                let params_context = call_context.with_negated_side();
+                self.is_subset_params_with_context(&l.params, &u.params, &params_context)?;
+                let ret_context = call_context.with_preserved_side();
+                self.is_subset_eq_with_context(&l.ret, &u.ret, &ret_context)
             }
             (Type::TypedDict(TypedDict::Anonymous(got)), Type::TypedDict(want)) => {
                 self.is_subset_anonymous_typed_dict(got, want)
@@ -2005,9 +2133,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             // ClassType(int) <: Dim[...]
             // Redirect: int <: Dim[...] becomes Dim[any_implicit] <: Dim[...]
-            (Type::ClassType(cls), want @ Type::Dim(_)) if cls.is_builtin("int") => {
-                self.is_subset_eq_impl(&self.solver.heap.mk_dim(Type::any_implicit()), want)
-            }
+            (Type::ClassType(cls), want @ Type::Dim(_)) if cls.is_builtin("int") => self
+                .is_subset_eq_impl(
+                    &self.solver.heap.mk_dim(Type::any_implicit()),
+                    want,
+                    call_context,
+                ),
             // ========== End Dim Subtyping Rules ==========
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
                 ok_or(l_lit.value == u_lit.value, SubsetError::Other)
@@ -2127,9 +2258,23 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .mk_class_type(self.type_order.stdlib().none_type().clone()),
             ),
             (Type::Forall(forall), _) => {
+                let forall_type = Type::Forall(forall.clone());
                 // Finalizing the quantified vars returns instantiation errors
                 let (vs, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
-                let result = self.is_subset_eq(&got, want);
+                let mut witness_context =
+                    self.make_forall_witness_context(&forall_type, &vs, want, call_context);
+                let result = self.is_subset_eq_with_context(&got, want, &witness_context);
+                if result.is_ok()
+                    && witness_context.residual_hooks_enabled()
+                    && let Some(witness) = witness_context.residual_witness_mut()
+                {
+                    if let Some(deferred_vars) =
+                        self.take_witness_deferred_vars(witness.witness_hash())
+                    {
+                        witness.extend_deferred_vars(deferred_vars);
+                    }
+                    self.solver.record_generic_residuals_for_witness(witness);
+                }
                 result.and(
                     self.finish_quantified(vs)
                         .map_err(SubsetError::TypeVarSpecialization),

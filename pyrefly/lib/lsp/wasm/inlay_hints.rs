@@ -186,7 +186,13 @@ impl<'a> Transaction<'a> {
                 {
                     // For unpacked values, extract the element expression if available
                     let (e, is_unpacked) = match bindings.get(idx) {
-                        Binding::NameAssign(x) if x.annotation.is_none() => (Some(&*x.expr), false),
+                        // Pinned assignments (explicit annotation or
+                        // receiver-constrained class rebind) are already
+                        // authoritatively typed; suggesting an explicit
+                        // annotation here would be redundant and, for the
+                        // receiver case, could mislead users into
+                        // annotating with the RHS-derived type.
+                        Binding::NameAssign(x) if !x.is_pinned() => (Some(&*x.expr), false),
                         Binding::Expr(None, e) => (Some(&**e), false),
                         Binding::UnpackedValue(None, unpack_idx, _, pos) => {
                             // Try to get the element expression from the unpacked source
@@ -608,7 +614,7 @@ impl<'a> Transaction<'a> {
                 key @ Key::Definition(_) if containers => {
                     if let Some(ty) = self.get_type(handle, key) {
                         let e = match bindings.get(idx) {
-                            Binding::NameAssign(x) if x.annotation.is_none() => match &*x.expr {
+                            Binding::NameAssign(x) if !x.is_pinned() => match &*x.expr {
                                 Expr::List(ExprList { elts, .. }) => {
                                     if elts.is_empty() {
                                         Some(&*x.expr)

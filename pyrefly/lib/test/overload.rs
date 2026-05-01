@@ -566,7 +566,7 @@ class C:
     @overload
     def f3(x: str) -> str: ...
     @classmethod
-    def f3(x: int | str):
+    def f3(x: int | str):  # E: `f3` method cls type `int | str` is not a valid `type[...]` annotation
         return x
 
     # missing from implementation
@@ -586,7 +586,7 @@ class C:
     @overload
     def f5(x: str) -> str: ...  # E: If `@classmethod` is present on any overload or the implementation, it should be on every overload and the implementation
     @classmethod
-    def f5(x: int | str):
+    def f5(x: int | str):  # E: `f5` method cls type `int | str` is not a valid `type[...]` annotation
         return x
     "#,
 );

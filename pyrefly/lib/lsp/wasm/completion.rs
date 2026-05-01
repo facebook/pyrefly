@@ -21,6 +21,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Union;
@@ -836,6 +837,62 @@ impl Transaction<'_> {
         }
     }
 
+    fn add_attribute_completions_for_type(
+        &self,
+        handle: &Handle,
+        base_type: Type,
+        expected_type: Option<&Type>,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        self.ad_hoc_solve(handle, "completion_attributes", |solver| {
+            solver
+                .completions(base_type, None, true)
+                .iter()
+                .for_each(|attr| {
+                    let kind = match attr.ty {
+                        Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
+                        Some(Type::Function(_) | Type::Overload(_)) => {
+                            Some(CompletionItemKind::FUNCTION)
+                        }
+                        Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
+                        Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
+                        _ => Some(CompletionItemKind::FIELD),
+                    };
+                    let detail = attr
+                        .ty
+                        .clone()
+                        .map(|t| t.as_lsp_string(LspDisplayMode::Hover));
+                    let documentation = self.get_docstring_for_attribute(handle, attr);
+                    let is_incompatible = self.is_incompatible_with_expected_type(
+                        handle,
+                        expected_type,
+                        attr.ty.as_ref(),
+                    );
+                    let source = if attr.is_reexport {
+                        CompletionSource::Reexport
+                    } else {
+                        CompletionSource::Local
+                    };
+                    completions.push(RankedCompletion {
+                        item: CompletionItem {
+                            label: attr.name.as_str().to_owned(),
+                            detail,
+                            kind,
+                            documentation,
+                            tags: if attr.is_deprecated {
+                                Some(vec![CompletionItemTag::DEPRECATED])
+                            } else {
+                                None
+                            },
+                            ..Default::default()
+                        },
+                        source,
+                        is_incompatible,
+                    });
+                });
+        });
+    }
+
     /// Core completion implementation returning items and incomplete flag.
     pub(crate) fn completion_sorted_opt_with_incomplete<F>(
         &self,
@@ -857,9 +914,16 @@ impl Transaction<'_> {
         let mut result: Vec<RankedCompletion> = Vec::new();
         let mut is_incomplete = false;
         let mut allow_function_call_parens = false;
+        let ast = self.get_ast(handle);
+        let covering_nodes = ast
+            .as_ref()
+            .map(|module| Ast::locate_node(module.as_ref(), position));
         // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
         // If the user might be typing the `import` keyword, add that as an autocomplete option.
-        match self.identifier_at(handle, position) {
+        match covering_nodes
+            .as_deref()
+            .and_then(Self::identifier_from_covering_nodes)
+        {
             Some(IdentifierWithContext {
                 identifier,
                 context:
@@ -977,58 +1041,19 @@ impl Transaction<'_> {
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
-                    self.ad_hoc_solve(handle, "completion_attributes", |solver| {
-                        solver
-                            .completions(base_type, None, true)
-                            .iter()
-                            .for_each(|x| {
-                                let kind = match x.ty {
-                                    Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
-                                    Some(Type::Function(_) | Type::Overload(_)) => {
-                                        Some(CompletionItemKind::FUNCTION)
-                                    }
-                                    Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
-                                    Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
-                                    _ => Some(CompletionItemKind::FIELD),
-                                };
-                                let ty = &x.ty;
-                                let detail =
-                                    ty.clone().map(|t| t.as_lsp_string(LspDisplayMode::Hover));
-                                let documentation = self.get_docstring_for_attribute(handle, x);
-                                let is_incompatible = self.is_incompatible_with_expected_type(
-                                    handle,
-                                    expected_type.as_ref(),
-                                    ty.as_ref(),
-                                );
-                                let source = if x.is_reexport {
-                                    CompletionSource::Reexport
-                                } else {
-                                    CompletionSource::Local
-                                };
-                                result.push(RankedCompletion {
-                                    item: CompletionItem {
-                                        label: x.name.as_str().to_owned(),
-                                        detail,
-                                        kind,
-                                        documentation,
-                                        tags: if x.is_deprecated {
-                                            Some(vec![CompletionItemTag::DEPRECATED])
-                                        } else {
-                                            None
-                                        },
-                                        ..Default::default()
-                                    },
-                                    source,
-                                    is_incompatible,
-                                });
-                            });
-                    });
+                    self.add_attribute_completions_for_type(
+                        handle,
+                        base_type,
+                        expected_type.as_ref(),
+                        &mut result,
+                    );
                 }
             }
             Some(IdentifierWithContext {
                 identifier,
                 context,
             }) => {
+                let is_method_def = matches!(context, IdentifierContext::MethodDef { .. });
                 let expected_type = if matches!(
                     context,
                     IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
@@ -1043,8 +1068,37 @@ impl Transaction<'_> {
                 ) {
                     allow_function_call_parens = true;
                 }
-                if matches!(context, IdentifierContext::MethodDef { .. }) {
+                if is_method_def {
                     Self::add_magic_method_completions(&identifier, &mut result);
+                }
+                if (is_method_def || matches!(context, IdentifierContext::Expr(ExprContext::Store)))
+                    && let Some(covering_nodes) = covering_nodes.as_deref()
+                {
+                    let mut saw_function = false;
+                    let mut enclosing_class = None;
+                    for node in covering_nodes.iter() {
+                        match node {
+                            AnyNodeRef::StmtFunctionDef(_) => saw_function = true,
+                            AnyNodeRef::StmtClassDef(class_def) => {
+                                enclosing_class = Some(class_def);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(class_def) = enclosing_class
+                        && (!saw_function || is_method_def)
+                    {
+                        let key = Key::Definition(ShortIdentifier::new(&class_def.name));
+                        if let Some(class_type) = self.get_type(handle, &key) {
+                            self.add_attribute_completions_for_type(
+                                handle,
+                                class_type,
+                                None,
+                                &mut result,
+                            );
+                        }
+                    }
                 }
                 self.add_kwargs_completions(handle, position, &mut result);
                 Self::add_keyword_completions(handle, &mut result);
@@ -1082,9 +1136,10 @@ impl Transaction<'_> {
             }
             None => {
                 // todo(kylei): optimization, avoid duplicate ast walkss
-                if let Some(mod_module) = self.get_ast(handle) {
+                if let Some(mod_module) = ast.as_ref() {
                     let expected_type = self.expected_call_argument_type(handle, position);
-                    let nodes = Ast::locate_node(&mod_module, position);
+                    let nodes = covering_nodes
+                        .unwrap_or_else(|| Ast::locate_node(mod_module.as_ref(), position));
                     if nodes.is_empty() {
                         Self::add_keyword_completions(handle, &mut result);
                         self.add_local_variable_completions(

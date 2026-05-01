@@ -22,6 +22,7 @@ use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
+use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::QuantifiedKind;
@@ -85,7 +86,10 @@ use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::literal::Lit;
+use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
+use crate::types::quantified::QuantifiedIdentity;
+use crate::types::quantified::QuantifiedOrigin;
 use crate::types::read_only::ReadOnlyReason;
 use crate::types::stdlib::Stdlib;
 use crate::types::typed_dict::TypedDict;
@@ -1817,22 +1821,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Identify whether this is a descriptor
         let mut descriptor = None;
-        // Descriptor semantics apply when:
-        // 1. The field is initialized in the class body (class-level attribute), or
-        // 2. The field is annotated with ClassVar (explicitly class-level, even without initialization), or
-        // 3. The field's type is special-case to always be treated like a descriptor.
-        let is_classvar = direct_annotation
-            .as_ref()
-            .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar));
+        // Descriptor semantics apply when the field is modeled as class-level:
+        // either by a class-body definition, or by `Magic` for stub/interface
+        // declarations where the runtime initializer is omitted. Some types are
+        // also always treated like descriptors.
         let is_special_descriptor_type = direct_annotation.as_ref().is_some_and(|annot| {
             annot
                 .ty
                 .as_ref()
                 .is_some_and(|ty| self.is_special_descriptor_type(ty))
         });
-        if matches!(initialization, ClassFieldInitialization::ClassBody(_))
-            || is_classvar
-            || is_special_descriptor_type
+        if matches!(
+            initialization,
+            ClassFieldInitialization::ClassBody(_) | ClassFieldInitialization::Magic
+        ) || is_special_descriptor_type
         {
             match &ty {
                 // TODO(stroxler): This works for simple descriptors. There are known gaps:
@@ -1910,7 +1912,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if ty.is_property_getter() || ty.is_property_setter_with_getter().is_some() {
             ClassField(ClassFieldInner::Property { ty, is_abstract }, is_inherited)
         } else if let Some(descriptor) = descriptor {
-            // Descriptors are always initialized in class body (or wouldn't trigger descriptor protocol)
             ClassField(
                 ClassFieldInner::Descriptor {
                     ty,
@@ -2093,7 +2094,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // We interpret `self.foo = None` to mean the type of foo is None or some unknown type.
             (None, Expr::NoneLiteral(_)) => {
-                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::UnannotatedAttribute), "This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.".to_owned());
+                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::ImplicitAnyAttribute), "This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.".to_owned());
                 self.union(self.heap.mk_none(), self.heap.mk_any_implicit())
             }
             // We interpret `self.foo = ()` to mean the type of foo is an arbitrary-length tuple,
@@ -2104,7 +2105,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (None, Expr::Tuple(ExprTuple { elts, .. }))
                 if elts.is_empty() && *name != dunder::MATCH_ARGS =>
             {
-                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::UnannotatedAttribute), "This expression is implicitly inferred to be `tuple[Any, ...]`. Please provide an explicit type annotation.".to_owned());
+                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::ImplicitAnyAttribute), "This expression is implicitly inferred to be `tuple[Any, ...]`. Please provide an explicit type annotation.".to_owned());
                 self.heap.mk_unbounded_tuple(self.heap.mk_any_implicit())
             }
             (None, _) => self.expr_infer(x, errors),
@@ -2590,10 +2591,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Creates a Quantified for a class's "self" type.
-    fn get_self_quantified(&self, class_name: &Name, instance_type: Type) -> Quantified {
+    fn get_self_quantified(&self, class: &Class, instance_type: Type) -> Quantified {
+        let identity = QuantifiedIdentity::new(
+            self.module().name(),
+            AnchorIndex::first(class.range()),
+            QuantifiedOrigin::SyntheticSelf,
+        );
         Quantified::new(
-            self.uniques.fresh(),
-            Name::new(format!("Self@{class_name}")),
+            identity,
+            Name::new(format!("Self@{}", class.name())),
             QuantifiedKind::TypeVar,
             None,
             Restriction::Bound(instance_type),
@@ -2664,7 +2670,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // special case because it's not legal to use `Self` in other static methods.
         let self_quantified =
             if field_name == &dunder::NEW && matches!(instance.kind, InstanceKind::ClassType) {
-                Some(self.get_self_quantified(instance.class.name(), instance.to_type(self.heap)))
+                Some(self.get_self_quantified(instance.class, instance.to_type(self.heap)))
             } else {
                 None
             };
@@ -2675,6 +2681,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 targs: instance.targs,
             },
             None => instance,
+        };
+        let normalize_attr_ty = |this: &Self, mut ty: Type| {
+            this.expand_vars_mut(&mut ty);
+            this.solver().finalize_callable_residuals_at_boundary(ty)
         };
         match field.instantiate_for(self.heap, instance).0 {
             ClassFieldInner::Property { ty, .. } => {
@@ -2711,7 +2721,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             ClassFieldInner::Method { mut ty, .. } => {
                 // bind_instance matches on the type, so resolve it if we can
-                self.expand_vars_mut(&mut ty);
+                ty = normalize_attr_ty(self, ty);
                 // If the field is a dunder or ClassVar[Callable] & the assigned value is a callable, we replace it with a named function
                 // so that it gets treated as a bound method.
                 //
@@ -2756,7 +2766,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 read_only_reason,
                 ..
             } => {
-                self.expand_vars_mut(&mut ty);
+                ty = normalize_attr_ty(self, ty);
                 if is_classvar {
                     ClassAttribute::read_only(ty, ReadOnlyReason::ClassVar)
                 } else if let Some(reason) = read_only_reason {
@@ -2766,10 +2776,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             ClassFieldInner::InstanceAttribute {
-                ty,
+                mut ty,
                 read_only_reason,
                 ..
             } => {
+                ty = normalize_attr_ty(self, ty);
                 if let Some(reason) = read_only_reason {
                     ClassAttribute::read_only(ty, reason)
                 } else {
@@ -2792,10 +2803,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let self_quantified = if field_name == &dunder::NEW
             && let ClassBase::ClassDef(cls) = cls
         {
-            Some(self.get_self_quantified(
-                cls.class_object().name(),
-                self.heap.mk_class_type(cls.clone()),
-            ))
+            Some(self.get_self_quantified(cls.class_object(), self.heap.mk_class_type(cls.clone())))
         } else {
             None
         };
@@ -2811,15 +2819,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 field.instantiate_for_class_tparams(self.heap, tparams, self_type, &mut ambiguous)
             }
         };
+        let normalize_attr_ty = |this: &Self, mut ty: Type| {
+            this.expand_vars_mut(&mut ty);
+            this.solver().finalize_callable_residuals_at_boundary(ty)
+        };
         match field.0 {
-            ClassFieldInner::Property { ty, .. } => {
+            ClassFieldInner::Property { mut ty, .. } => {
                 // When accessing a property on a class (not instance), you get the property object itself
+                ty = normalize_attr_ty(self, ty);
                 bind_class_attribute(self.heap, cls, ty, None)
             }
             ClassFieldInner::Descriptor { descriptor, .. } => {
                 ClassAttribute::descriptor(descriptor, DescriptorBase::ClassDef(cls.clone()))
             }
             ClassFieldInner::Method { mut ty, .. } => {
+                ty = normalize_attr_ty(self, ty);
                 // When accessing a method on a class (not instance), you get the unbound function.
                 // Filter overloads with narrower self-type annotations (e.g., `self: LiteralString`
                 // on str methods). These overloads only apply when the instance is known to be the
@@ -2863,8 +2877,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 bind_class_attribute(self.heap, cls, ty, None)
             }
-            ClassFieldInner::NestedClass { ty, .. } => {
+            ClassFieldInner::NestedClass { mut ty, .. } => {
                 // Nested classes are always read-only (ClassObjectInitializedOnBody)
+                ty = normalize_attr_ty(self, ty);
                 bind_class_attribute(
                     self.heap,
                     cls,
@@ -2879,10 +2894,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 cls.class_object().dupe(),
             )),
             ClassFieldInner::ClassAttribute {
-                ty,
+                mut ty,
                 read_only_reason,
                 ..
             } => {
+                ty = normalize_attr_ty(self, ty);
                 if ambiguous {
                     ClassAttribute::no_access(NoAccessReason::ClassAttributeIsGeneric(
                         cls.class_object().dupe(),
@@ -3113,10 +3129,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         }
 
-        // Django models and marshmallow schemas: skip override check for `Meta` class.
-        // These frameworks use a nested `Meta` class for configuration, and child classes
-        // define their own `Meta` without inheriting from the parent's `Meta`.
-        if (class_metadata.is_django_model() || class_metadata.is_marshmallow_schema())
+        // Django models, marshmallow schemas, and factory-boy factories: skip override
+        // check for `Meta` class. These frameworks use a nested `Meta` class for
+        // configuration, and child classes define their own `Meta` without inheriting
+        // from the parent's `Meta`.
+        if (class_metadata.is_django_model()
+            || class_metadata.is_marshmallow_schema()
+            || class_metadata.is_factory_boy_factory())
             && field_name.as_str() == "Meta"
         {
             return false;
@@ -3274,21 +3293,61 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Substitute `Self` with derived class to support contravariant occurrences of `Self`
                     &Instance::of_protocol(parent, self.instantiate(cls)),
                 );
-                if !want_class_field.has_explicit_annotation() {
-                    match &mut attr {
-                        ClassAttribute::ReadOnly(ty, _) | ClassAttribute::ReadWrite(ty)
-                            if ty.has_toplevel_func_metadata() =>
-                        {
-                            // If parent return type was Never (for example a method that only raises),
-                            // skip override consistency checks on the return type so we don't produce noisy bad-override diagnostics.
-                            ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
-                                if callable.ret.is_never() {
-                                    callable.ret = Type::any_implicit();
-                                }
-                            });
-                        }
-                        _ => {}
+                // Relax the parent return type for the override-consistency check when the parent
+                // function's body is a `raise NotImplementedError(...)` placeholder *and* the
+                // parent's return type was inferred (not user-annotated). In that case the
+                // inferred return is `Never` (or `Coroutine[Any, Any, Never]` for `async def`),
+                // which we treat as no real signal about the intended return shape — replace it
+                // with `Any` (sync) or `Coroutine[Any, Any, Any]` (async) so a child override is
+                // not flagged. We preserve the async wrapper because override-consistency is a
+                // structural subset check on attribute types — collapsing an async parent's
+                // return to bare `Any` would silently let a sync child override an async parent.
+                // We do *not* relax when the user explicitly annotated the return (e.g.
+                // `-> Never`) — that annotation is intentional and should still produce an
+                // override error if a child's return is incompatible. We also do *not* relax
+                // `return NotImplemented` (different semantics — that's the dunder-protocol
+                // "defer to other operand" signal).
+                let relax_ty = |ty: &mut Type| {
+                    let (placeholder_kind, is_async, is_return_inferred) = ty
+                        .visit_toplevel_func_metadata(&|meta| {
+                            (
+                                meta.flags.placeholder_body_kind,
+                                meta.flags.is_async,
+                                meta.flags.is_return_inferred,
+                            )
+                        });
+                    if placeholder_kind != Some(PlaceholderBodyKind::RaiseNotImplementedError)
+                        || !is_return_inferred
+                    {
+                        return;
                     }
+                    let any_implicit = self.heap.mk_any_implicit();
+                    let relaxed_ret = if is_async {
+                        self.heap.mk_class_type(self.stdlib.coroutine(
+                            any_implicit.clone(),
+                            any_implicit.clone(),
+                            any_implicit,
+                        ))
+                    } else {
+                        any_implicit
+                    };
+                    ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+                        callable.ret = relaxed_ret.clone();
+                    });
+                };
+                match &mut attr {
+                    ClassAttribute::ReadOnly(ty, _) | ClassAttribute::ReadWrite(ty)
+                        if ty.has_toplevel_func_metadata() =>
+                    {
+                        relax_ty(ty);
+                    }
+                    ClassAttribute::Property(getter, setter, _) => {
+                        relax_ty(getter);
+                        if let Some(setter) = setter {
+                            relax_ty(setter);
+                        }
+                    }
+                    _ => {}
                 }
                 attr
             };

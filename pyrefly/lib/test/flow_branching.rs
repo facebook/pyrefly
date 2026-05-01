@@ -2402,3 +2402,127 @@ for x in range(10):
     assert_type(z, int)
     "#,
 );
+
+// When a variable is defined inside `if a:` and used inside a subsequent
+// `if a:`, the variable is guaranteed to be initialized because the same
+// condition guards both the definition and the use.
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_basic,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    c = 5
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_negated_condition,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    if not a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_unrelated_condition,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+    if c:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b and c are always initialized when a is truthy",
+    test_guarded_initialization_multiple_variables,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+        c = 4
+    if a:
+        return b + c  # E: `b` may be uninitialized  # E: `c` may be uninitialized
+    return 0
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_with_intermediate_statements,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    x = 5
+    y = x + 1
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_annotation_then_guarded_assign,
+    r#"
+def f(a: bool) -> int:
+    b: int
+    if a:
+        b = 3
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_repeated_use,
+    r#"
+def f(a: bool) -> None:
+    if a:
+        b = 3
+    if a:
+        print(b)  # E: `b` may be uninitialized
+    if a:
+        print(b)
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_guard_reassigned,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+    a = c
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a > 0 at both sites",
+    test_guarded_initialization_complex_condition,
+    r#"
+def f(a: int) -> int:
+    if a > 0:
+        b = 3
+    if a > 0:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);

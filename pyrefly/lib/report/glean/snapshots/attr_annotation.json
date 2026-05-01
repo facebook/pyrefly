@@ -1,0 +1,1417 @@
+[
+  {
+    "facts": [],
+    "predicate": "gencode.GenCode.1"
+  },
+  {
+    "facts": [],
+    "predicate": "python.DeclarationDocstring.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.ImportStarLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": ""
+      }
+    ],
+    "predicate": "python.Name.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "call_args": [],
+          "callee_span": {
+            "length": 6,
+            "start": 120
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          }
+        }
+      }
+    ],
+    "predicate": "python.FileCall.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "attr_annotation.Node"
+          },
+          "caller": {
+            "id": 0,
+            "key": "attr_annotation.Container.setup"
+          }
+        }
+      }
+    ],
+    "predicate": "python.CalleeToCaller.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container.setup"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container.setup.<locals>.self"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Node"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "attr_annotation.Optional"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "typing.Optional"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.ContainingTopLevelDeclaration.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 113,
+            "start": 51
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Node"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 20,
+            "start": 29
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container.setup"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 92,
+            "start": 72
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "attr_annotation.Optional"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "typing.Optional"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 8,
+            "start": 19
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 165,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container.setup.<locals>.self"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 4,
+            "start": 82
+          }
+        }
+      }
+    ],
+    "predicate": "python.DeclarationLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "bases": [],
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "attr_annotation"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "attr_annotation.Container"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 113,
+            "start": 51
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "bases": [],
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "attr_annotation"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "attr_annotation.Node"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 20,
+            "start": 29
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "cls": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "attr_annotation.Container"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "attr_annotation.Container.setup"
+                    }
+                  }
+                },
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [
+                  {
+                    "name": {
+                      "id": 0,
+                      "key": "self"
+                    }
+                  }
+                ],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "None"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 4,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "None"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 92,
+            "start": 72
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "module": {
+              "id": 0,
+              "key": {
+                "module": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "attr_annotation"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 165,
+            "start": 0
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "variable": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "attr_annotation.Container.setup"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "attr_annotation.Container.setup.<locals>.self"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "span": {
+            "length": 4,
+            "start": 82
+          }
+        }
+      }
+    ],
+    "predicate": "python.DefinitionLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "digest": {
+            "hash": "bfd478c5600949ebc13a87d0b65fb078d72ffec46dfb669e2ca7573c5fc16f25",
+            "size": 165
+          },
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          }
+        }
+      }
+    ],
+    "predicate": "digest.FileDigest.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "endsInNewline": true,
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "hasUnicodeOrTabs": false,
+          "lengths": [
+            1,
+            1,
+            12,
+            17,
+            28,
+            29,
+            30,
+            38,
+            9
+          ]
+        }
+      }
+    ],
+    "predicate": "src.FileLines.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "language": 7
+        }
+      }
+    ],
+    "predicate": "src.FileLanguage.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 105
+            },
+            {
+              "length": 4,
+              "start": 135
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "attr_annotation.Container.setup.<locals>.self"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 113
+            },
+            {
+              "length": 4,
+              "start": 120
+            },
+            {
+              "length": 4,
+              "start": 152
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "attr_annotation.Node"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 160
+            },
+            {
+              "length": 4,
+              "start": 91
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "None"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "spans": [
+            {
+              "length": 6,
+              "start": 5
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "spans": [
+            {
+              "length": 8,
+              "start": 143
+            },
+            {
+              "length": 8,
+              "start": 19
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "typing.Optional"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "spans": [
+            {
+              "length": 8,
+              "start": 143
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "attr_annotation.Optional"
+          }
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 4,
+                "start": 105
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "attr_annotation.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container.setup.<locals>.self"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 113
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "attr_annotation.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Node"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 120
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "attr_annotation.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Node"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 135
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "attr_annotation.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Container.setup.<locals>.self"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 152
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "attr_annotation.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Node"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 160
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "None"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 91
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "None"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 5
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 143
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "attr_annotation.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "attr_annotation.Optional"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 143
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Optional"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 19
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "typing.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "typing.Optional"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "attr_annotation.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 4,
+                "start": 105
+              },
+              "target": {
+                "id": 0,
+                "key": "attr_annotation.Container.setup.<locals>.self"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 113
+              },
+              "target": {
+                "id": 0,
+                "key": "attr_annotation.Node"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 120
+              },
+              "target": {
+                "id": 0,
+                "key": "attr_annotation.Node"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 135
+              },
+              "target": {
+                "id": 0,
+                "key": "attr_annotation.Container.setup.<locals>.self"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 152
+              },
+              "target": {
+                "id": 0,
+                "key": "attr_annotation.Node"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 160
+              },
+              "target": {
+                "id": 0,
+                "key": "None"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 91
+              },
+              "target": {
+                "id": 0,
+                "key": "None"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 5
+              },
+              "target": {
+                "id": 0,
+                "key": "typing"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 143
+              },
+              "target": {
+                "id": 0,
+                "key": "attr_annotation.Optional"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 143
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.Optional"
+              }
+            },
+            {
+              "source": {
+                "length": 8,
+                "start": 19
+              },
+              "target": {
+                "id": 0,
+                "key": "typing.Optional"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByFile.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": ""
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": ""
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "attr_annotation"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "attr_annotation"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "attr_annotation.Container"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Container"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "attr_annotation.Container.setup"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "setup"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "Container"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "attr_annotation"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "attr_annotation.Container.setup.<locals>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<locals>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "setup"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "Container"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "attr_annotation"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "attr_annotation.Container.setup.<locals>.self"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "self"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "setup"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "Container"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "attr_annotation"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "attr_annotation.Node"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Node"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "attr_annotation.Optional"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Optional"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "attr_annotation"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "typing"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "typing"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "typing.Optional"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Optional"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "typing"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.NameToSName.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "name": {
+            "id": 0,
+            "key": "attr_annotation"
+          }
+        }
+      }
+    ],
+    "predicate": "python.Module.4"
+  },
+  {
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
+  }
+]

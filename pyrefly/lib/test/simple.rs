@@ -1154,6 +1154,18 @@ def test(x: list[int], y: list[str]):
 );
 
 testcase!(
+    test_unpack_map_in_list_literal,
+    r#"
+from typing import assert_type
+def test(cs: list[str], n: int):
+    assert_type(
+        ",".join([*("=" + c for c in cs), *map(str, range(n))]),
+        str,
+    )
+"#,
+);
+
+testcase!(
     test_union_never,
     r#"
 from typing import Never, assert_type

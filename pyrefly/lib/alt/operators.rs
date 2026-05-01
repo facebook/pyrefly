@@ -446,20 +446,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Without loss of generality, consider e1 + e2 where e1 has type int and e2 has type Any.
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
-                if let Type::Any(style) = &rhs {
-                    style.propagate()
-                } else if let Type::Any(style) = &lhs {
-                    style.propagate()
-                } else if x.op == Operator::BitOr
+                //
+                // Exception: when one operand is a shaped Tensor, fall through
+                // to dunder dispatch. Tensor's arithmetic dunders accept any
+                // numeric type and return Self, so the shape is preserved
+                // regardless of the other operand's type. Without this, e.g.
+                // Tensor[B, 1] / (2**n - 1.0) loses shape because 2**n is Any.
+                if (lhs.is_any() || rhs.is_any())
+                    && !matches!(lhs, Type::Tensor(_))
+                    && !matches!(rhs, Type::Tensor(_))
+                {
+                    if let Type::Any(style) = &rhs {
+                        return style.propagate();
+                    } else if let Type::Any(style) = &lhs {
+                        return style.propagate();
+                    }
+                }
+                if x.op == Operator::BitOr
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
                     && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
                     self.heap.mk_type_of(self.union(l, r))
                 } else if x.op == Operator::Add
-                    && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
-                        || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))
+                    && let Some(lhs_style) = lhs.lit_string_style()
+                    && let Some(rhs_style) = rhs.lit_string_style()
                 {
-                    self.heap.mk_literal_string(LitStyle::Implicit)
+                    self.heap.mk_literal_string(match (lhs_style, rhs_style) {
+                        (LitStyle::Explicit, LitStyle::Explicit) => LitStyle::Explicit,
+                        _ => LitStyle::Implicit,
+                    })
                 } else if x.op == Operator::Add
                     && let Type::Tuple(l) = lhs
                     && let Type::Tuple(r) = rhs
@@ -601,10 +616,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if let Type::Any(style) = &rhs {
                     style.propagate()
                 } else if x.op == Operator::Add
-                    && base.is_literal_string()
-                    && rhs.is_literal_string()
+                    && let Some(lhs_style) = lhs.lit_string_style()
+                    && let Some(rhs_style) = rhs.lit_string_style()
                 {
-                    self.heap.mk_literal_string(LitStyle::Implicit)
+                    self.heap.mk_literal_string(match (lhs_style, rhs_style) {
+                        (LitStyle::Explicit, LitStyle::Explicit) => LitStyle::Explicit,
+                        _ => LitStyle::Implicit,
+                    })
                 } else if x.op == Operator::Add
                     && let Type::Tuple(ref l) = base
                     && let Type::Tuple(r) = rhs
@@ -767,7 +785,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     errors,
                                     Some(&context),
                                 ) {
-                                    ret
+                                    self.check_dunder_bool_is_callable(&ret, x.range, errors);
+                                    self.heap.mk_class_type(self.stdlib.bool().clone())
                                 } else {
                                     let iteration_errors = self.error_collector();
                                     let iterables = self.iterate(

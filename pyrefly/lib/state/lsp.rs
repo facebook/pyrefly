@@ -286,6 +286,8 @@ pub(crate) enum IdentifierContext {
         base_range: TextRange,
         /// The range of the entire expression.
         range: TextRange,
+        /// Whether the attribute is being loaded, assigned to, or deleted.
+        expr_context: ExprContext,
     },
     /// An identifier appeared as the name of a keyword argument.
     /// ex: `x` in `f(x=1)`. We also store some info about the callee `f` so
@@ -339,6 +341,28 @@ pub(crate) enum IdentifierContext {
     /// An identifier appeared in a `global` or `nonlocal` statement.
     /// ex: `x` in `global x` or `nonlocal x`.
     MutableCapture,
+}
+
+impl IdentifierContext {
+    pub(crate) fn is_write(&self) -> bool {
+        matches!(
+            self,
+            IdentifierContext::Expr(ExprContext::Store | ExprContext::Del)
+                | IdentifierContext::Attribute {
+                    expr_context: ExprContext::Store | ExprContext::Del,
+                    ..
+                }
+                | IdentifierContext::ImportedModule { .. }
+                | IdentifierContext::ImportedName { .. }
+                | IdentifierContext::FunctionDef { .. }
+                | IdentifierContext::MethodDef { .. }
+                | IdentifierContext::ClassDef { .. }
+                | IdentifierContext::Parameter
+                | IdentifierContext::TypeParameter
+                | IdentifierContext::ExceptionHandler
+                | IdentifierContext::PatternMatch(_)
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -495,6 +519,7 @@ impl IdentifierWithContext {
             context: IdentifierContext::Attribute {
                 base_range: attr.value.range(),
                 range: attr.range(),
+                expr_context: attr.ctx,
             },
         }
     }
@@ -682,7 +707,7 @@ impl<'a> Transaction<'a> {
         Self::identifier_from_covering_nodes(&covering_nodes)
     }
 
-    fn identifier_from_covering_nodes(
+    pub(crate) fn identifier_from_covering_nodes(
         covering_nodes: &[AnyNodeRef],
     ) -> Option<IdentifierWithContext> {
         match (
@@ -2344,10 +2369,22 @@ impl<'a> Transaction<'a> {
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
+        let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         for error in errors {
+            let error_range = error.range();
+            if error_range.contains_range(range)
+                && let Some(action) = quick_fixes::pyrefly_ignore::add_pyrefly_ignore_code_action(
+                    &module_info,
+                    &error,
+                )
+            {
+                let key = (action.0.clone(), action.2, action.3.clone());
+                if other_action_keys.insert(key) {
+                    other_actions.push(action);
+                }
+            }
             match error.error_kind() {
                 ErrorKind::UnknownName => {
-                    let error_range = error.range();
                     if error_range.contains_range(range) {
                         let unknown_name = module_info.code_at(error_range);
                         for (handle_to_import_from, export) in self
@@ -2420,7 +2457,6 @@ impl<'a> Transaction<'a> {
                     }
                 }
                 ErrorKind::RedundantCast => {
-                    let error_range = error.range();
                     if let Some(action) = quick_fixes::redundant_cast::redundant_cast_code_action(
                         &module_info,
                         &ast,
@@ -3451,7 +3487,13 @@ impl<'a> Transaction<'a> {
                                     || (exports_data.is_explicit_reexport(&name)
                                         && Self::allows_explicit_reexport(handle)))
                             {
-                                results.push((handle.dupe(), export));
+                                // Use handle (re-exporting module) so completions
+                                // generate the re-export import path, but zero out the
+                                // location because export.location is a byte range in
+                                // the canonical module's file, not this module's file.
+                                let mut reexport = export;
+                                reexport.location = TextRange::default();
+                                results.push((handle.dupe(), reexport));
                             }
                             results
                         } else {
@@ -3491,7 +3533,13 @@ impl<'a> Transaction<'a> {
                                 || (exports_data.is_explicit_reexport(name)
                                     && Self::allows_explicit_reexport(handle)))
                         {
-                            results.push((score, handle.dupe(), name_str.to_owned(), export));
+                            // Use handle (re-exporting module) so completions
+                            // generate the re-export import path, but zero out the
+                            // location because export.location is a byte range in
+                            // the canonical module's file, not this module's file.
+                            let mut reexport = export;
+                            reexport.location = TextRange::default();
+                            results.push((score, handle.dupe(), name_str.to_owned(), reexport));
                         }
                     }
                 }

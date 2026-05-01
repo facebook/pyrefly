@@ -295,6 +295,10 @@ impl ModuleName {
         Self::from_str("django.utils.functional")
     }
 
+    pub fn factory_base() -> Self {
+        Self::from_str("factory.base")
+    }
+
     pub fn marshmallow_schema() -> Self {
         Self::from_str("marshmallow.schema")
     }

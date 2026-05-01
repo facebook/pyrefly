@@ -244,12 +244,11 @@ class Child(Base[int]):
 // and metaclass __call__ cls param is not actually `type[Self]`; (2) instantiating `T=str`
 // may be reasonable here.
 testcase!(
-    bug = "Missing check that self/cls param is a supertype of the defining class",
     test_metaclass_call_cls_param_does_not_instantiate,
     r#"
 from typing import assert_type
 class Meta(type):
-    def __call__(cls: 'type[C[str]]', *args, **kwargs): ... # TODO: error because annot is not supertype of Meta
+    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__` method self type `type[C[str]]` is not a superclass of class `Meta`
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
@@ -828,8 +827,10 @@ T = TypeVar("T")
 class C(Generic[T]):
     def __init__[V](self: "C[V]", x: V) -> None: pass
 def takes_callable[V](x: Callable[[V], C[V]], y: V) -> C[V]: ...
-assert_type(takes_callable(C, 42), C[int])
-assert_type(takes_callable(C, "hello"), C[str])
+out1 = takes_callable(C, 42)  # E: Argument `Literal[42]` is not assignable to parameter `y` with type `Unknown` in function `takes_callable`
+assert_type(out1, C[int])  # E: assert_type(C[Unknown], C[int]) failed
+out2 = takes_callable(C, "hello")  # E: Argument `Literal['hello']` is not assignable to parameter `y` with type `Unknown` in function `takes_callable`
+assert_type(out2, C[str])  # E: assert_type(C[Unknown], C[str]) failed
     "#,
 );
 
@@ -1001,7 +1002,7 @@ class A:
             return cls.__new__(cls, 5)
         else:
             return object.__new__(cls)
-    
+
     def __init__(self):
         return "x"
 
@@ -1104,5 +1105,48 @@ c2 = C("a")
 assert_type(c2, C)
 d2 = D("a")
 assert_type(d2, D)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3236
+testcase!(
+    test_construct_with_hint_and_overloads,
+    r#"
+from typing import Generic, Never, overload, Protocol, TypeVar
+
+_T = TypeVar("_T")
+_T_co = TypeVar("_T_co", covariant=True)
+_AddWithT_contra = TypeVar("_AddWithT_contra", contravariant=True)
+_ResultT_co = TypeVar("_ResultT_co", covariant=True)
+_AddWithT = TypeVar("_AddWithT")
+_ResultT = TypeVar("_ResultT")
+
+class CanAdd(Protocol[_AddWithT_contra, _ResultT_co]):
+    def __add__(self, other: _AddWithT_contra, /) -> _ResultT_co: ...
+
+class H(Generic[_T_co]):
+    @overload
+    def __init__(self: "H[Never]", init_val: dict[Never, int], /) -> None: ...
+    @overload
+    def __init__(self: "H[_T]", init_val: dict[_T, int], /) -> None: ...
+    @overload
+    def __init__(self: "H[int]", init_val: int, /) -> None: ...
+    def __init__(self, init_val: object, /) -> None: ...
+
+def explode_n(source: "H[CanAdd[_AddWithT, _ResultT]]") -> "H[_ResultT]":
+    raise NotImplementedError
+
+result: "H[int]" = explode_n(H(10))
+    "#,
+);
+
+testcase!(
+    test_hint_and_bound_interaction,
+    r#"
+from typing import assert_type, Self, Sequence
+class C[T: int | list[str]]:
+    def __new__(cls, data: T | Sequence[T]) -> Self: ...
+x = C([1, 2])
+assert_type(x, C[int])
     "#,
 );
