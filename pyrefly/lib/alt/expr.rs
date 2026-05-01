@@ -2977,9 +2977,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // a variable typed as `Hashable`, `Iterable`, etc. may hold a concrete
                 // instance that defines `__bool__` or `__len__` at runtime.
                 let metadata = self.get_metadata_for_class(cls);
-                let is_abstract = cls.is_builtin("object")
-                    || metadata.is_protocol()
-                    || metadata.extends_abc();
+                let is_abstract =
+                    cls.is_builtin("object") || metadata.is_protocol() || metadata.extends_abc();
                 if !is_abstract && !self.class_has_bool_or_len(cls) {
                     Some(ConditionRedundantReason::InstanceAlwaysTruthy(
                         cls.name().clone(),
