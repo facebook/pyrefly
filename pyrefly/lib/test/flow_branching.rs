@@ -1087,6 +1087,38 @@ def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen
 );
 
 testcase!(
+    test_redundant_condition_no_false_positives_for_abstract_types,
+    r#"
+from typing import Hashable, Iterable
+from collections.abc import Sized
+import abc
+
+class MyABC(abc.ABC):
+    pass
+
+def test(
+    o: object,
+    h: Hashable,
+    it: Iterable[int],
+    sz: Sized,
+    ab: MyABC,
+) -> None:
+    # None of these should warn: static type is abstract/protocol/object,
+    # so the concrete runtime instance may define __bool__ or __len__.
+    if o:
+        ...
+    if h:
+        ...
+    if it:
+        ...
+    if sz:
+        ...
+    if ab:
+        ...
+    "#,
+);
+
+testcase!(
     crash_no_try_type,
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/766
