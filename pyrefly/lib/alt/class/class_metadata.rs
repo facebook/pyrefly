@@ -1620,9 +1620,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return true;
             }
             if let Some(metaclass) = base_metadata.custom_metaclass()
-                && metaclass
-                    .class_object()
-                    .has_toplevel_qname("abc", "ABCMeta")
+                && self.metaclass_extends_abcmeta(metaclass.class_object())
             {
                 return true;
             }
@@ -1631,11 +1629,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if let Some(metaclass) = metaclass
-            && metaclass
-                .class_object()
-                .has_toplevel_qname("abc", "ABCMeta")
+            && self.metaclass_extends_abcmeta(metaclass.class_object())
         {
             return true;
+        }
+        false
+    }
+
+    /// Check if `metaclass_cls` is `abc.ABCMeta` or has `abc.ABCMeta` anywhere in its
+    /// inheritance chain. HA-style frameworks define custom metaclasses that mix
+    /// `ABCMeta` with other behavior (e.g. `class ABCCachedProperties(CachedProperties,
+    /// ABCMeta)`), and a class using such a metaclass should be treated as abstract.
+    fn metaclass_extends_abcmeta(&self, metaclass_cls: &Class) -> bool {
+        if metaclass_cls.has_toplevel_qname("abc", "ABCMeta") {
+            return true;
+        }
+        let metadata = self.get_metadata_for_class(metaclass_cls);
+        for base in metadata.base_class_objects() {
+            if base.has_toplevel_qname("abc", "ABCMeta") {
+                return true;
+            }
+            if self.metaclass_extends_abcmeta(base) {
+                return true;
+            }
         }
         false
     }

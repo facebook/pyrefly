@@ -1096,12 +1096,26 @@ import abc
 class MyABC(abc.ABC):
     pass
 
+# Custom metaclass that mixes ABCMeta with other type-level behavior.
+# Real-world frameworks (e.g. Home Assistant's `ABCCachedProperties`) define
+# such metaclasses, and classes using them should be treated as abstract.
+class MyMixedMeta(abc.ABCMeta):
+    pass
+
+class WithMixedMeta(metaclass=MyMixedMeta):
+    pass
+
+class WithMixedMetaSub(WithMixedMeta):
+    pass
+
 def test(
     o: object,
     h: Hashable,
     it: Iterable[int],
     sz: Sized,
     ab: MyABC,
+    mm: WithMixedMeta,
+    mms: WithMixedMetaSub,
 ) -> None:
     # None of these should warn: static type is abstract/protocol/object,
     # so the concrete runtime instance may define __bool__ or __len__.
@@ -1114,6 +1128,10 @@ def test(
     if sz:
         ...
     if ab:
+        ...
+    if mm:
+        ...
+    if mms:
         ...
     "#,
 );
