@@ -2003,7 +2003,7 @@ Path to the root of the repository.
 
 ### `permissive-ignores`
 
-Should Pyrefly ignore errors based on annotations from other tools, e.g. `# pyre-ignore` or `# mypy: ignore`?
+Should Pyrefly ignore errors based on annotations from other tools, e.g. `# pyright: ignore` or `# ty: ignore`?
 By default, respects `# pyrefly: ignore` and `# type: ignore`.
 Enabling this option is equivalent to passing the names of all tools to `enabled-ignores`.
 
@@ -3495,6 +3495,27 @@ class C:
         self.x = 0  # no error, `__init__` always executes
     def f(self):
         self.y = 0  # error, `y` may be undefined if `f` does not execute
+```
+
+## incompatible-overload-residual
+
+This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
+
+This usually indicates a higher-order call where each overload branch implies incompatible constraints for the same type variable.
+
+```python
+from typing import Callable, overload
+
+@overload
+def f(x: int) -> float: ...
+@overload
+def f(x: str) -> str: ...
+def f(x): ...
+
+def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
+    return lambda: y
+
+project(f, 1)  # Overload type was not compatible with solved type variables: S = int
 ```
 
 ## inconsistent-inheritance
@@ -6315,6 +6336,1542 @@ Private names (single leading underscore) are excluded by default. Dunder names 
 Pyrefly uses its type checker to resolve types for declarations that lack explicit annotations. When a type cannot be resolved, it is annotated as `Incomplete` from `_typeshed`, following the convention used by typeshed stubs.
 
 Source annotations are always preferred over inferred types when both are available.
+
+
+---
+
+---
+title: Agent Skill for Tensor Shape Porting
+description: How to use the port-model agent skill to automatically add tensor shape annotations to PyTorch models.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Agent Skill for Tensor Shape Porting
+
+Pyrefly includes a skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)
+that can automatically port PyTorch models to use tensor shape annotations. The
+skill runs a structured, multi-step workflow — auditing ops, inventorying
+parameters, probing shapes with `reveal_type`, restructuring for tracking, and
+verifying the result — that produces a fully annotated port file.
+
+## Invoking the skill
+
+In Claude Code, from a project with pyrefly's tensor shape fixtures, ask:
+
+```
+Port this model to use tensor shape types: path/to/model.py
+```
+
+Or use the slash command directly:
+
+```
+/port-model path/to/model.py
+```
+
+The skill will:
+
+1. **Audit ops** — check every `nn.Module` and `torch`/`F.` function against
+   fixture stubs and the DSL registry, adding missing stubs before proceeding.
+2. **Inventory the original** — list every class, method, and function, noting
+   which constructor parameters are `Dim` vs `int`.
+3. **Port each module in dependency order** — for each module, inventory
+   parameters, type the constructor, probe the forward with `reveal_type`,
+   restructure bare results for tracking, write the forward with `assert_type`,
+   and fill a post-module checklist.
+4. **Verify** — run `verify_port.sh`, audit bare `assert_type` calls, compare
+   against the style guide, and produce a completion report.
+
+## The iterate-and-reflect loop
+
+A single pass usually gets 80-90% of the way there. The remaining gaps —
+bridge dims, optional dims, parameterized configs — benefit from a second pass
+where the AI reflects on what it missed.
+
+The workflow:
+
+1. **First pass.** Invoke the skill. Review the completion report, paying
+   attention to the bare `assert_type` fraction and any `type: ignore` counts.
+2. **Reflect.** Ask the AI to re-read the skill file and compare what it did
+   against what the skill prescribes. A prompt like:
+
+   ```
+   Re-read the port-model skill and reflect on the port you just produced.
+   What did you miss? What could be improved?
+   ```
+
+   This typically surfaces missed restructuring opportunities — cases where the
+   AI used a bare `assert_type` or annotation fallback without attempting all
+   the restructuring steps in Step 4.
+
+3. **Second pass.** Ask it to fix the issues it identified. This usually
+   converges: the bare fraction drops and shaped coverage improves.
+
+Most models converge in 2-3 iterations. Complex models with many dynamic
+patterns (e.g., `nn.Sequential(*list)`, conditional branching, late-initialized
+buffers) may need one more round.
+
+## Reading the output
+
+The skill produces a `verify_port.sh` report with these key metrics:
+
+| Metric | What it means |
+|--------|--------------|
+| **`ig` (ignore)** | `type: ignore` comments. Lower is better. Each should have a category (algebraic gap, conditional equality, stub gap). |
+| **`bs` (bare sig)** | Bare `Tensor` in function signatures. Should be 0 for well-typed modules. |
+| **`bv` (bare var)** | Bare `Tensor` in local variable annotations. Lower is better. |
+| **`sh` (shaped)** | `assert_type` calls with full shapes (e.g., `Tensor[B, D]`). Higher is better. |
+| **`ba` (bare assert)** | `assert_type(x, Tensor)` — tracking gaps. Lower is better. Each should have a root-cause comment. |
+| **`sm` (smoke)** | Smoke test functions. At least 1-2 per model. |
+
+A good port has high `sh`, low `ba`, and every bare assert documented with a
+root cause tracing back to a restructuring receipt.
+
+## When to intervene
+
+The AI workflow handles most patterns automatically, but some decisions require
+domain knowledge:
+
+- **Bridge dims.** When an untracked section (e.g., a feature extractor built
+  with `nn.Sequential(*list)`) connects to a tracked downstream module, you may
+  need to decide which dimension to promote to a class type parameter.
+- **Missing stubs.** If the model uses a library without fixture stubs, you'll
+  need to add minimal stubs for the specific ops used.
+- **Architectural choices.** When a model has multiple valid ways to restructure
+  for tracking (e.g., separating the first iteration of a loop vs. using a typed
+  interface), domain knowledge about the model's invariants can guide the better
+  choice.
+- **Config parameterization.** Deciding which config fields should become `Dim`
+  type parameters (and which modules extract which parameters) is often a design
+  decision about the model's API.
+
+
+---
+
+---
+title: Contributing
+description: How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Contributing to Tensor Shapes
+
+Pyrefly's tensor shape tracking is designed so that coverage of the PyTorch
+library can be extended without understanding Pyrefly's internals. There are
+three ways to contribute:
+
+1. **Fixture stubs** — `.pyi` files with shape-generic type signatures for
+   PyTorch modules and functions (e.g., `nn.Linear`, `torch.mm`).
+2. **DSL functions** — shape transform specifications for operators with
+   complex shape logic (e.g., `reshape`, `cat`, `F.interpolate`).
+3. **Ported models** — fully annotated ports of real-world PyTorch models
+   that serve as tests and examples.
+
+For detailed instructions on writing stubs, DSL functions, and porting
+models, see the
+[Tensor Shapes Contributing Guide](https://github.com/facebook/pyrefly/blob/main/TENSOR_SHAPES_CONTRIBUTING.md)
+in the repository.
+
+
+---
+
+---
+title: API Reference
+description: Complete reference for Dim, Tensor, and tensor shape type system APIs.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# API Reference
+
+This page documents the types, functions, and type-level constructs that make
+up pyrefly's tensor shape type system.
+
+## `Dim[X]`
+
+`Dim[X]` is a type constructor that bridges runtime integer values to
+type-level symbols. It is defined in the `torch_shapes` package.
+
+### Basics
+
+`Dim[X]` denotes the type of an integer value whose type-level identity is
+`X`. For example:
+
+- `Dim[5]` is the type of the literal `5`
+- `Dim[N]` (where `N` is a type variable) is the type of an integer whose
+  value is bound to `N` at the type level
+
+`Dim` is a subtype of `int`, so `Dim` values can be used anywhere `int` is
+expected. However, the reverse is not true — passing a plain `int` where
+`Dim[X]` is expected loses tracking.
+
+### Arithmetic
+
+Arithmetic on `Dim` values produces `Dim` results with the corresponding
+type-level expression:
+
+| Expression | Type |
+|-----------|------|
+| `a + b` where `a: Dim[A]`, `b: Dim[B]` | `Dim[A + B]` |
+| `a - b` | `Dim[A - B]` |
+| `a * b` | `Dim[A * B]` |
+| `a // b` | `Dim[A // B]` |
+| `a ** b` | `Dim[A ** B]` |
+
+**Caution:** `int * Dim` produces `Unknown` because the `int` side has no
+type-level identity. Use `Dim * Dim` or literal `* Dim` instead.
+
+### `Dim[X] | None`
+
+For optional dimensions — parameters that may or may not be present — use
+`Dim[X] | None`. In the forward method, narrow with
+`if param is not None:` to recover `Dim[X]` inside the branch:
+
+```python
+class Attention[D, RK](nn.Module):
+    def __init__(self, dim: Dim[D], rank_k: Dim[RK] | None = None):
+        ...
+
+    def forward[B, T](self, x: Tensor[B, T, D]) -> Tensor[B, T, D]:
+        if self.rank_k is not None:
+            # rank_k is Dim[RK] here
+            ...
+```
+
+### Usage patterns
+
+| Pattern | Purpose |
+|---------|---------|
+| `def __init__(self, dim: Dim[D])` | Accept a dimension as a constructor parameter |
+| `class Model[D](nn.Module)` | Make a dimension a class-level type parameter |
+| `def forward[B](self, x: Tensor[B, D])` | Bind a per-call dimension |
+| `self.head_dim = dim // n_head` | Compute a derived dimension (`Dim[D // NHead]`) |
+
+## `Tensor[D1, D2, ...]`
+
+`Tensor` with type arguments represents a tensor with a known shape. The
+type arguments are the dimensions, in order.
+
+### Forms
+
+| Form | Meaning |
+|------|---------|
+| `Tensor[3, 4]` | Concrete 2D tensor with shape `(3, 4)` |
+| `Tensor[B, C, H, W]` | Generic 4D tensor with symbolic dimensions |
+| `Tensor[B, 3 * C, H // 2]` | Dimensions can contain arithmetic expressions |
+| `Tensor[*Bs, D]` | Variadic: any number of leading batch dimensions |
+| `Tensor` (bare) | Shape unknown — tracking gap |
+
+### Variadic dimensions with `*Bs`
+
+Use `TypeVarTuple` (or PEP 646 `*Bs` syntax) for dimensions that should be
+propagated without being enumerated:
+
+```python
+def forward[*Bs](self, x: Tensor[*Bs, InDim]) -> Tensor[*Bs, OutDim]:
+    ...
+```
+
+This accepts any number of leading dimensions (batch, sequence, etc.) and
+preserves them in the output.
+
+**Don't hide known class dims inside variadic params.** If the module has a
+class-level Dim `D`, use `Tensor[*Bs, D]` not `Tensor[*S]`.
+
+### `.shape` and `.size()`
+
+When `x: Tensor[B, C, H, W]`:
+
+- `x.shape` has type `tuple[Dim[B], Dim[C], Dim[H], Dim[W]]`
+- `x.size(0)` has type `Dim[B]`
+- `x.size()` has type `tuple[Dim[B], Dim[C], Dim[H], Dim[W]]`
+
+This means you can extract dimensions from tensors and use them to construct
+new tensors with matching shapes.
+
+## `assert_type`
+
+`assert_type(expr, Type)` is checked by the type checker: it verifies that
+`expr` has exactly the stated type. If the types don't match, the checker
+reports an error.
+
+```python
+h = self.fc1(x)
+assert_type(h, Tensor[B, 512])  # checked by pyrefly
+```
+
+Use `assert_type` during development to verify inferred shapes as you port
+a model. Once the port is complete, remove the `assert_type` calls — each
+one corresponds to an inlay type hint that your IDE shows permanently.
+Pyrefly catches shape errors through function signatures and return types
+regardless.
+
+`assert_type` forces evaluation of its type argument at runtime, so a file
+with `assert_type` calls will crash if executed. This is fine during
+development (you run `pyrefly check`, not the file itself) — just remove
+them when the port is done.
+
+### When to use
+
+- During porting, after key shape-changing operations (reshapes,
+  convolutions, matmuls)
+- As regression guards for complex shape computations
+
+In practice, pyrefly shows inferred shapes as inlay type hints in your
+editor, so you can verify shapes visually. Use `assert_type` at key
+checkpoints where you want a permanent regression guard.
+
+### `reveal_type`
+
+`reveal_type(expr)` prints the inferred type of `expr` during type checking.
+Use it to understand what pyrefly infers before writing `assert_type`:
+
+```python
+h = self.fc1(x)
+reveal_type(h)  # Revealed type: Tensor[B, 512]
+```
+
+Replace `reveal_type` with `assert_type` once you know the expected type.
+
+## Type-level arithmetic
+
+Annotations can contain arithmetic on type parameters and literals:
+
+| Expression | Example |
+|-----------|---------|
+| Addition | `Tensor[B, C1 + C2, H, W]` — concatenation |
+| Subtraction | `Tensor[B, T, D - 1]` |
+| Multiplication | `Tensor[B, NHead * DK]` — multi-head reshape |
+| Floor division | `Tensor[B, NHead, T, D // NHead]` |
+| Exponentiation | `Tensor[B, C * 2 ** I, H // 2 ** I]` |
+
+### Simplification rules
+
+The type checker automatically simplifies expressions:
+
+- `2 * C // 2` → `C`
+- `(H - 1) * 2 + 2` → `H * 2`
+- `(a * b) // b` → `a` (sound for all positive integers)
+
+### Known limitations
+
+`N * (X // N)` does **not** simplify to `X` — floor division loses the
+remainder, so the equivalence only holds when `X` is divisible by `N`.
+The checker can't assume this. Common instances:
+
+- Multi-head reassembly: `NHead * (D // NHead)` — use `type: ignore`
+- BiLSTM output: `2 * (D // 2)` — use `type: ignore`
+
+## Annotation hierarchy
+
+When annotating local variables, choose from most to least desirable:
+
+1. **`assert_type`** — verifies the checker's inference. Proves the system
+   works, not just that you annotated correctly.
+2. **Annotation fallback** — `x: Tensor[B, C, H, W] = untracked_op(...)`.
+   The checker can't infer the shape, but the annotation is compatible.
+   Document WHY.
+3. **`type: ignore`** — the checker produces a WRONG type (algebraic gap).
+   Last resort. Always include a comment explaining the specific gap.
+4. **Bare `Tensor`** — shape genuinely unknowable (data-dependent token
+   counts, conditional accumulation). Document the specific reason.
+
+## Jaxtyping compatibility
+
+Pyrefly supports [jaxtyping](https://github.com/patrick-kidger/jaxtyping)
+annotations as an alternative front-end:
+
+| Pyrefly native | Jaxtyping equivalent |
+|---------------|---------------------|
+| `Tensor[M, 2, M // 2]` | `Shaped[Tensor, "M 2 M//2"]` |
+| `Tensor[B, C, H, W]` | `Shaped[Tensor, "B C H W"]` |
+
+Jaxtyping annotations are translated internally to generics and display
+back in jaxtyping syntax. Note that jaxtyping cannot share symbolic
+dimensions across class boundaries — see the
+[overview](./tensor-shapes.mdx#jaxtyping-runtime-type-checking) for details.
+
+
+---
+
+---
+title: Getting Started
+description: How to configure Pyrefly for tensor shape checking and set up your project.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Getting Started with Pyrefly Tensor Shapes
+
+This page walks you through configuring Pyrefly for tensor shape checking and
+getting your first shape-annotated code running.
+
+## Configuration
+
+Tensor shape checking requires two settings in your `pyrefly.toml` (or under
+`[tool.pyrefly]` in `pyproject.toml`):
+
+```toml
+tensor-shapes = true
+
+search_path = [
+    "path/to/fixtures",
+]
+```
+
+**`tensor-shapes = true`** enables shape inference for `Tensor`, including
+subscript syntax (`Tensor[B, C, H, W]`), algebraic dimension arithmetic, and
+shape-aware dispatch for operations like `conv2d`, `view`, and `cat`.
+
+**`search_path`** points to a directory of *fixture stubs* — `.pyi` files that
+provide shape-generic type signatures for PyTorch modules and functions. The
+real `torch` library's type stubs don't carry shape information, so the fixtures
+replace them with shape-aware versions (e.g., `nn.Conv2d.__init__` that captures
+kernel size, stride, and padding as type-level values, and a `forward` that
+computes the output spatial dimensions).
+
+The fixtures live in Pyrefly's source tree at
+[`test/tensor_shapes/fixtures/`](https://github.com/facebook/pyrefly/tree/main/pyrefly/test/tensor_shapes/fixtures).
+To use them in your project, copy the `fixtures/` directory into your project
+and set `search_path` to point to it. The path is relative to the location of
+your `pyrefly.toml`.
+
+The fixtures also provide the `torch_shapes` package, which exports `Dim` — the
+bridge between runtime integer values and type-level symbols.
+
+## Imports and runtime considerations
+
+Python evaluates type annotations at runtime by default. This is a problem
+for tensor shape annotations because Python's built-in `typing.TypeVar`
+doesn't support arithmetic — expressions like `D // NHead` in an annotation
+will raise `TypeError` when the annotation is evaluated. There are two ways
+to avoid this:
+
+### Option 1: `from __future__ import annotations` (recommended)
+
+Adding this import at the top of the file defers evaluation of all
+annotations, so shape arithmetic never executes at runtime:
+
+```python
+from __future__ import annotations
+
+import torch
+import torch.nn as nn
+from torch import Tensor
+from torch_shapes import Dim
+```
+
+This works with both old-style and new-style generics (PEP 695
+`class Foo[T]` syntax).
+
+**`assert_type` during development:** You can use `assert_type` while
+porting to verify shapes via `pyrefly check`. Once you're done, remove the
+`assert_type` calls — each one corresponds to an IDE inlay type hint that
+shows the same information permanently. Pyrefly catches shape errors
+through your function signatures and return types regardless.
+
+Note that `assert_type` forces evaluation of its type argument, so the
+file will crash if you try to *run* it with `assert_type` calls still
+present. This is fine — just remove them when the port is complete.
+
+You can also guard `Tensor` and `Dim` under `TYPE_CHECKING` if you prefer
+to keep shape imports invisible at runtime:
+
+```python
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+import torch
+import torch.nn as nn
+
+if TYPE_CHECKING:
+    from torch import Tensor
+    from torch_shapes import Dim
+```
+
+### Option 2: `torch_shapes.TypeVar` (runtime-compatible)
+
+If you need annotations to evaluate at runtime (e.g., for runtime shape
+validation or keeping `assert_type` in production code), import
+`torch_shapes` directly. The package patches
+`torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
+syntax at runtime without crashing. It also provides a `TypeVar` that
+supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
+
+Use old-style generics with `torch_shapes.TypeVar`:
+
+```python
+from typing import assert_type
+
+import torch
+import torch.nn as nn
+from torch import Tensor
+from torch_shapes import Dim, TypeVar
+
+N = TypeVar("N")
+M = TypeVar("M")
+
+class Linear(nn.Module):
+    def __init__(self, n: Dim[N], m: Dim[M]):
+        ...
+```
+
+PEP 695 new-style generics (`class Foo[T]`) automatically use
+`typing.TypeVar` internally, which doesn't support arithmetic — so this
+option requires old-style generics.
+
+## Hello world
+
+Here's a minimal example to verify everything works. This example uses
+Option 1 (`from __future__ import annotations`) since it's the simplest
+setup. We skip `assert_type` — instead, run `pyrefly check` and use your
+IDE's inlay type hints to verify shapes.
+
+Create a file `hello_shapes.py`:
+
+```python
+from __future__ import annotations
+
+import torch
+import torch.nn as nn
+from torch import Tensor
+from torch_shapes import Dim
+
+
+class TwoLayerNet[InDim, HidDim, OutDim](nn.Module):
+    def __init__(
+        self,
+        in_dim: Dim[InDim],
+        hid_dim: Dim[HidDim],
+        out_dim: Dim[OutDim],
+    ):
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, hid_dim)
+        self.fc2 = nn.Linear(hid_dim, out_dim)
+
+    def forward[B](self, x: Tensor[B, InDim]) -> Tensor[B, OutDim]:
+        h = self.fc1(x)          # pyrefly infers: Tensor[B, HidDim]
+        return self.fc2(torch.relu(h))
+```
+
+Run `pyrefly check hello_shapes.py`. You should see no errors — pyrefly
+infers the shapes through the `nn.Linear` calls.
+
+If you're using an IDE with Pyrefly's language server, you'll see inlay
+type hints showing the inferred shape of `h` as `Tensor[B, HidDim]`
+without needing any `assert_type` calls.
+
+### Inlay hints in action
+
+Here's what inlay hints look like on a real model (NanoGPT). The MLP
+module shows shapes flowing through linear layers and activations:
+
+<img src="/img/tensor-shapes/nanogpt-mlp.png" alt="NanoGPT MLP module with inlay type hints showing Tensor[B, T, 4 * NEmbedding] after the expansion layer" />
+
+The forward method signature shows how `x.size()` unpacks into typed
+dimensions:
+
+<img src="/img/tensor-shapes/nanogpt-forward-signature.png" alt="NanoGPT forward signature with x.size() unpacking to b: Dim[B], t: Dim[T], c: Dim[NEmbedding]" />
+
+And the attention module, where view/transpose reshapes for multi-head
+attention are fully tracked:
+
+<img src="/img/tensor-shapes/nanogpt-attention-qkv.png" alt="NanoGPT attention QKV computation with inlay type hints showing Tensor[B, NHead, T, NEmbedding // NHead]" />
+
+The full attention body, including both flash and manual paths:
+
+<img src="/img/tensor-shapes/nanogpt-attention-body.png" alt="NanoGPT attention body with flash and manual attention paths fully shape-tracked" />
+
+
+---
+
+---
+title: "Tutorial 4: Configs and Dynamic Patterns"
+description: Parameterized config dataclasses, dynamic construction patterns, and typed interfaces.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Tutorial 4: Configs and Dynamic Patterns
+
+The previous tutorials covered models where dimensions flow directly through
+constructor parameters. In practice, many models store hyperparameters in
+config dataclasses and construct modules dynamically. This tutorial shows how
+to type those patterns.
+
+## Config classes with type parameters
+
+When a `@dataclass` holds dimension hyperparameters consumed by multiple
+modules, make it generic so dimensions propagate through constructors:
+
+```python
+@dataclass
+class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
+    block_size: Dim[BlockSize]
+    vocab_size: Dim[VocabSize]
+    n_layer: Dim[NLayer]
+    n_head: Dim[NHead]
+    n_embd: Dim[NEmbedding]
+    dropout: float = 0.0
+    bias: bool = True
+```
+
+Modules extract only the type parameters they need, using `Any` for the rest:
+
+```python
+class MLP[NEmbedding](nn.Module):
+    def __init__(self, config: GPTConfig[Any, Any, NEmbedding, Any, Any]):
+        super().__init__()
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
+
+    def forward[B, T](
+        self, x: Tensor[B, T, NEmbedding]
+    ) -> Tensor[B, T, NEmbedding]:
+        h = F.gelu(self.c_fc(x))
+        assert_type(h, Tensor[B, T, 4 * NEmbedding])
+        return self.c_proj(h)
+```
+
+Without config parameterization, each module would need to independently
+accept and thread every dimension through its constructor — error-prone and
+verbose.
+
+### `Final` class attributes for constants
+
+When a model has fixed hyperparameters, `Final` class attributes let
+`Literal` arithmetic work at the type level:
+
+```python
+class DCGAN:
+    nc: Final = 3
+    nz: Final = 100
+    ngf: Final = 64
+    ndf: Final = 64
+```
+
+The type checker resolves `DCGAN.ngf * 8` to `Literal[512]`, so you can
+write:
+
+```python
+self.project = nn.ConvTranspose2d(DCGAN.nz, DCGAN.ngf * 8, 4, 1, 0)
+# Type checker infers: ConvTranspose2d[100, 512, ...]
+```
+
+## Dynamic construction patterns
+
+Several common patterns break shape tracking. Here's a quick reference and
+the fix for each:
+
+### `nn.Sequential(*list_var)`
+
+When modules are constructed in a loop and passed as `*list_var`, the
+Sequential loses all type information:
+
+```python
+# Bad: Sequential erases module types
+layers = [nn.Linear(dim, dim) for _ in range(n)]
+self.net = nn.Sequential(*layers)  # returns bare Tensor
+```
+
+Fix: extract shape-changing modules as individual attributes and chain them
+in `forward`. Shape-preserving modules (activations, norms, dropout) can
+remain grouped:
+
+```python
+# Good: individual attributes preserve types
+self.fc1 = nn.Linear(dim, hidden)
+self.fc2 = nn.Linear(hidden, dim)
+
+def forward[B](self, x: Tensor[B, D]) -> Tensor[B, D]:
+    h = F.relu(self.fc1(x))
+    return self.fc2(h)
+```
+
+Note: `nn.Sequential(M1(), M2(), M3())` with direct arguments **is**
+tracked — only the `*list_var` form loses types.
+
+### Factory functions returning `nn.Sequential`
+
+Returning `nn.Sequential` from a function erases all type parameters at the
+function boundary:
+
+```python
+# Bad: factory function — types erased
+def _make_block(in_c, out_c) -> nn.Sequential:
+    return nn.Sequential(nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...))
+```
+
+Fix: use a class with a typed `forward` method:
+
+```python
+# Good: class preserves shape contract
+class Block[InC, OutC](nn.Module):
+    def __init__(self, in_c: Dim[InC], out_c: Dim[OutC]) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...)
+        )
+
+    def forward[B, H, W](
+        self, x: Tensor[B, InC, H, W]
+    ) -> Tensor[B, OutC, H, W]:
+        return self.net(x)
+```
+
+### Dimensions from `list[int]`
+
+`list[int]` element access returns `int`, losing the concrete value:
+
+```python
+hidden_units = [512, 256, 128]
+last_dim = hidden_units[-1]  # type is int, not Dim[128]
+```
+
+Fix: add an explicit `Dim` field to the config:
+
+```python
+@dataclass
+class Config[K, MlpOut]:
+    num_output_features: Dim[K]
+    mlp_output_dim: Dim[MlpOut]        # explicit — was hidden_units[-1]
+    mlp_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
+```
+
+## Typed interfaces
+
+When none of the above restructurings can recover shape tracking, the last
+resort is a **typed interface**: the module's `forward` signature provides
+the shape contract, and `type: ignore` narrows the internal result:
+
+```python
+class DynamicMLP[InDim, OutDim](nn.Module):
+    def __init__(self, in_dim: Dim[InDim], out_dim: Dim[OutDim],
+                 hidden: list[int]) -> None:
+        super().__init__()
+        layers = []
+        prev = in_dim
+        for h in hidden:
+            layers.append(nn.Linear(prev, h))
+            prev = h
+        layers.append(nn.Linear(prev, out_dim))
+        self.layers = nn.ModuleList(layers)
+
+    def forward[B](self, x: Tensor[B, InDim]) -> Tensor[B, OutDim]:
+        h = x
+        for layer in self.layers:
+            h = layer(h)
+        result: Tensor[B, OutDim] = h  # type: ignore[bad-assignment]
+        return result
+```
+
+The caller sees a clean `Tensor[B, InDim] -> Tensor[B, OutDim]` contract.
+The `type: ignore` is localized to the module's internals.
+
+Use typed interfaces only after exhausting all restructuring options —
+they're the fallback, not the first move.
+
+## Key concepts
+
+- **Parameterized configs** propagate dimensions across modules without
+  threading every `Dim` through every constructor.
+- **`Final` class attributes** let the checker resolve constants at the type
+  level.
+- **Dynamic construction** (`Sequential(*list)`, factory functions,
+  `list[int]` access) breaks tracking — restructure or add explicit `Dim`
+  fields.
+- **Typed interfaces** provide a clean shape contract when internals are
+  dynamic, but should be the last resort.
+
+
+---
+
+---
+title: "Tutorial 3: Complex Architectures"
+description: Type encoder-decoder skip connections and recursive chains with exponential shapes.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Tutorial 3: Complex Architectures
+
+[Tutorial 2](./tensor-shapes-tutorial-loops.mdx) covered shape-preserving loops.
+This tutorial tackles architectures where shapes change systematically —
+encoder-decoder networks with skip connections, and recursive chains where
+dimensions grow or shrink exponentially.
+
+## Encoder-decoder with skip connections
+
+Encoder-decoder architectures (UNet, Demucs, Super SloMo) encode the input
+to a bottleneck and then decode back, with skip connections between
+corresponding encoder and decoder layers.
+
+### The shape pattern
+
+Each encode step transforms `(B, C, H, W)` to `(B, 2C, H', W')` — doubling
+channels and shrinking spatial dimensions. Decoding reverses this, using the
+skip connection to restore the original shape. The key insight is that each
+encode-recurse-decode cycle **preserves the input shape**:
+
+```
+encode: (B, C, H, W) → (B, 2C, H', W')
+recurse: preserves (B, 2C, H', W')
+decode + skip: (B, 2C, H', W') + (B, C, H, W) → (B, C, H, W)
+```
+
+### Typing the recursion
+
+This gives a recursive signature where `recurse` takes and returns the same
+shape:
+
+```python
+class UNet[NChannels, NClasses](nn.Module):
+    def _encode[B, C, H, W](
+        self, x: Tensor[B, C, H, W], depth: int
+    ) -> Tensor[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]:
+        idx = len(self.downs) - depth
+        down: Down[C, 2 * C] = self.downs[idx]
+        return down(x)
+
+    def _decode[B, C, H, W](
+        self,
+        skip: Tensor[B, C, H, W],
+        deep: Tensor[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1],
+        depth: int,
+    ) -> Tensor[B, C, H, W]:
+        idx = len(self.ups) - depth
+        up: Up[2 * C, C] = self.ups[idx]
+        return up(deep, skip)
+
+    def recurse[I, B, C, H, W](
+        self, x: Tensor[B, C, H, W], depth: Dim[I]
+    ) -> Tensor[B, C, H, W]:
+        if depth == 0:
+            return x
+        skip = x
+        encoded = self._encode(x, depth)
+        middle = self.recurse(encoded, depth - 1)
+        decoded = self._decode(skip, middle, depth)
+        return decoded
+```
+
+### Narrowing annotations for heterogeneous lists
+
+Python has no way to express "element `i` of this list has type
+`Stage[C * 2**i]`". The workaround:
+
+1. Declare the list with `Any`: `list[Down[Any, Any]]`
+2. Narrow at the access site:
+
+```python
+down: Down[C, 2 * C] = self.downs[idx]
+```
+
+The `Any` erases element-level type info, and the annotation re-introduces
+it for each use.
+
+### Algebraic gaps
+
+Some algebraic equivalences can't be automatically proven. For example,
+`((H - 2) // 2 + 1) * 2` does not simplify back to `H`. When you hit this,
+use `type: ignore` with a comment explaining the gap:
+
+```python
+return up(deep, skip)  # type: ignore[bad-argument-type]  # ((H-2)//2+1)*2 = H
+```
+
+Keep these to an absolute minimum and document each one.
+
+## Recursive chains with exponential shapes
+
+When each stage doubles or halves a dimension, the result after `I` stages
+involves `2**I`. This appears in DCGAN (generator and discriminator), ResNet,
+and DenseNet.
+
+### The `@overload` pattern
+
+Use `@overload` to separate the base case from the recursive case:
+
+```python
+class Generator(nn.Module):
+    def _apply_stage[B, C, H, W](
+        self, x: Tensor[B, C, H, W], depth: int
+    ) -> Tensor[B, C // 2, (H - 1) * 2 + 2, (W - 1) * 2 + 2]:
+        idx = len(self.up_stages) - depth
+        stage: GenUpStage[C] = self.up_stages[idx]
+        return stage(x)
+
+    @overload
+    def _chain[B, C, H, W](
+        self, x: Tensor[B, C, H, W], depth: Dim[1]
+    ) -> Tensor[B, C // 2, H * 2, W * 2]: ...
+
+    @overload
+    def _chain[I, B, C, H, W](
+        self, x: Tensor[B, C, H, W], depth: Dim[I]
+    ) -> Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]: ...
+
+    def _chain[I, B, C, H, W](
+        self, x: Tensor[B, C, H, W], depth: Dim[I]
+    ) -> (Tensor[B, C // 2, H * 2, W * 2]
+         | Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]):
+        y = self._apply_stage(x, depth)
+        if depth == 1:
+            return y
+        return self._chain(y, depth - 1)
+```
+
+The base-case overload (`depth: Dim[1]`) handles the single-stage case
+where the formula simplifies concretely. The recursive overload uses `2**I`
+to express the exponential relationship.
+
+### The two-method pattern
+
+This `_apply_stage` + `_chain` pattern separates concerns:
+
+- **`_apply_stage`**: applies a single stage from the `ModuleList`, using a
+  narrowing annotation to type the list element.
+- **`_chain`**: recursively applies `_apply_stage` with overloaded return
+  types.
+
+The caller invokes `_chain` with a concrete depth:
+
+```python
+def forward[B](self, input: Tensor[B, 100, 1, 1]) -> Tensor[B, 3, 64, 64]:
+    h0 = F.relu(self.project_bn(self.project(input)))
+    assert_type(h0, Tensor[B, 512, 4, 4])
+    h1 = self._chain(h0, 3)  # 512->64, 4->32
+    assert_type(h1, Tensor[B, 64, 32, 32])
+    return torch.tanh(self.output(h1))
+```
+
+## Key concepts
+
+- **Recursive shape preservation**: encode-recurse-decode cycles preserve
+  the input shape, enabling a clean recursive signature.
+- **Narrowing annotations** re-introduce type information lost by
+  heterogeneous `ModuleList`s.
+- **`@overload`** separates base and recursive cases for exponential shape
+  chains.
+- **`type: ignore`** is a last resort for algebraic gaps the checker can't
+  prove. Always document the specific equivalence.
+
+## Next steps
+
+In [Tutorial 4](./tensor-shapes-tutorial-advanced.mdx), you'll see how to handle
+config classes with type parameters, dynamic construction patterns, and
+other advanced techniques.
+
+
+---
+
+---
+title: "Tutorial 1: Your First Port"
+description: Learn the basics of tensor shape annotations by typing a simple multi-layer perceptron (MLP) model.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Tutorial 1: Your First Port
+
+In this tutorial, you'll add tensor shape annotations to a simple multi-layer perceptron (MLP) model.
+By the end, you'll understand `Dim`, `Tensor[...]`, class-level type
+parameters, and method-level type parameters.
+
+## The model
+
+Here's a simple actor network from a reinforcement learning setup — three
+Linear layers in sequence:
+
+```python
+class BaselineActor(nn.Module):
+    def __init__(self, state_size: int, action_size: int):
+        super().__init__()
+        self.fc1 = nn.Linear(state_size, 400)
+        self.fc2 = nn.Linear(400, 400)
+        self.out = nn.Linear(400, action_size)
+
+    def forward(self, state):
+        h1 = F.relu(self.fc1(state))
+        h2 = F.relu(self.fc2(h1))
+        return torch.tanh(self.out(h2))
+```
+
+Without shape annotations, every intermediate value is just `Tensor`. You
+can't tell from reading the code what shape `h1` has, or whether the layer
+dimensions are consistent.
+
+## Step 1: Identify the dimensions
+
+The constructor takes two parameters that determine tensor dimensions:
+
+- `state_size` — the input dimension (flows into `nn.Linear`)
+- `action_size` — the output dimension (flows into `nn.Linear`)
+
+Both flow to sub-module constructors, so both must be `Dim`, not `int`.
+(`Dim[X]` is a type that bridges a runtime integer value to a type-level
+symbol `X` — see [Getting Started](./tensor-shapes-setup.mdx) for details.)
+
+There are also two fixed constants: `400` (hidden dimension). These are
+literal values, not parameters, so they don't need type params.
+
+## Step 2: Type the constructor
+
+Make the dimension parameters into `Dim[...]` and add class-level type
+parameters:
+
+```python
+class BaselineActor[S, A](nn.Module):
+    def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(state_size, 400)
+        self.fc2 = nn.Linear(400, 400)
+        self.out = nn.Linear(400, action_size)
+```
+
+Now when someone writes `BaselineActor(24, 4)`, the type checker binds
+`S = 24` and `A = 4`, inferring the type `BaselineActor[24, 4]`. The
+sub-modules are automatically typed: `self.fc1` is `Linear[24, 400]`,
+`self.out` is `Linear[400, 4]`.
+
+## Step 3: Type the forward
+
+The forward method has one dynamic dimension — **batch size** — that
+varies across calls. Make it a method-level type parameter:
+
+```python
+def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+    h1 = F.relu(self.fc1(state))
+    h2 = F.relu(self.fc2(h1))
+    return torch.tanh(self.out(h2))
+```
+
+`S` and `A` are class-level params (fixed at construction). `B` is a
+method-level param (bound per call).
+
+## Step 4: Verify inferred shapes
+
+Add `assert_type` after each intermediate to verify what pyrefly infers:
+
+```python
+def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+    h1 = F.relu(self.fc1(state))
+    assert_type(h1, Tensor[B, 400])
+    h2 = F.relu(self.fc2(h1))
+    assert_type(h2, Tensor[B, 400])
+    act = torch.tanh(self.out(h2))
+    assert_type(act, Tensor[B, A])
+    return act
+```
+
+Run `pyrefly check`. If any `assert_type` fails, the shape you expected
+doesn't match what pyrefly inferred — investigate the mismatch.
+
+Once all shapes check out, **remove the `assert_type` calls**. Each one
+corresponds to an inlay type hint that your IDE shows permanently. Pyrefly
+catches shape errors through your function signatures and return types
+regardless — you don't need `assert_type` in the final code.
+
+## Step 5: Add a smoke test
+
+Smoke tests exercise the model at concrete dimensions. They verify that
+the shape annotations are consistent end-to-end:
+
+```python
+def test_baseline_actor():
+    actor = BaselineActor(24, 4)
+    state = torch.randn(8, 24)
+    # pyrefly infers: Tensor[8, 24]
+    act = actor(state)
+    # pyrefly infers: Tensor[8, 4]
+```
+
+Use concrete dimensions in tests (`Tensor[8, 24]`, not generic `Tensor[B, S]`)
+so the type checker verifies the full shape calculation.
+
+## The complete port
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs>
+  <TabItem value="after" label="With tensor shapes" default>
+    ```python
+    from __future__ import annotations
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+    from torch_shapes import Dim
+
+
+    class BaselineActor[S, A](nn.Module):
+        def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+            super().__init__()
+            self.fc1 = nn.Linear(state_size, 400)
+            self.fc2 = nn.Linear(400, 400)
+            self.out = nn.Linear(400, action_size)
+
+        def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+            h1 = F.relu(self.fc1(state))
+            # pyrefly infers: Tensor[B, 400]
+            h2 = F.relu(self.fc2(h1))
+            # pyrefly infers: Tensor[B, 400]
+            act = torch.tanh(self.out(h2))
+            # pyrefly infers: Tensor[B, A]
+            return act
+    ```
+  </TabItem>
+  <TabItem value="before" label="Without tensor shapes">
+    ```python
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+
+
+    class BaselineActor(nn.Module):
+        def __init__(self, state_size: int, action_size: int):
+            super().__init__()
+            self.fc1 = nn.Linear(state_size, 400)
+            self.fc2 = nn.Linear(400, 400)
+            self.out = nn.Linear(400, action_size)
+
+        def forward(self, state):
+            h1 = F.relu(self.fc1(state))
+            # what shape is h1? Tensor — that's all you know
+            h2 = F.relu(self.fc2(h1))
+            return torch.tanh(self.out(h2))
+    ```
+  </TabItem>
+</Tabs>
+
+:::note
+This example uses `from __future__ import annotations` with new-style
+generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
+hints in your IDE. If you want `assert_type` for runtime regression guards,
+see [Getting Started](./tensor-shapes-setup.mdx#option-2-torch_shapestypevar-runtime-compatible)
+for the `torch_shapes.TypeVar` import style, which requires old-style
+generics.
+:::
+
+## Key concepts
+
+- **`Dim[X]`** bridges runtime integer values to type-level symbols. Constructor
+  parameters that determine tensor dimensions should be `Dim[X]`, not `int`.
+- **Class type parameters** (`class Foo[S, A]`) represent dimensions fixed at
+  construction time.
+- **Method type parameters** (`def forward[B]`) represent dimensions that vary
+  per call (batch size, sequence length).
+- **Inlay type hints** show inferred shapes in your IDE. Use `reveal_type`
+  during development to inspect shapes in checker output.
+
+## Next steps
+
+This model had a simple linear pipeline — each layer feeds into the next with
+known shapes. In [Tutorial 2](./tensor-shapes-tutorial-loops.mdx), you'll see what
+happens when layers are stacked in loops, as in Transformer architectures.
+
+
+---
+
+---
+title: "Tutorial 2: Loops and Stacking"
+description: Type shape-preserving loops and ModuleList iteration in Transformer-style architectures.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Tutorial 2: Loops and Stacking
+
+In [Tutorial 1](./tensor-shapes-tutorial-basics.mdx), every layer was called
+directly. But Transformer-style architectures stack identical layers in a
+`ModuleList` and iterate over them. This tutorial shows how to type those
+patterns.
+
+## Shape-preserving loops
+
+When every layer in a loop has the same type signature — input shape equals
+output shape — the type checker can verify that the loop preserves the shape
+invariant.
+
+Here's a Transformer encoder that stacks `n_layers` identical
+`EncoderLayer` modules:
+
+```python
+class Encoder[NHead, DK, DInner](nn.Module):
+    def __init__(
+        self,
+        n_head: Dim[NHead],
+        d_k: Dim[DK],
+        d_inner: Dim[DInner],
+        n_layers: int = 6,
+    ) -> None:
+        super().__init__()
+        self.layer_stack = nn.ModuleList(
+            [EncoderLayer(n_head, d_k, d_inner) for _ in range(n_layers)]
+        )
+
+    def forward[B, T](
+        self, src_seq: Tensor[B, T, NHead * DK]
+    ) -> Tensor[B, T, NHead * DK]:
+        enc_output = src_seq
+        for layer in self.layer_stack:
+            enc_output, _attn = layer(enc_output)
+            assert_type(enc_output, Tensor[B, T, NHead * DK])
+        return enc_output
+```
+
+Notice that `n_layers` is `int`, not `Dim` — it's an iteration count that
+doesn't flow into any tensor dimension. Only values that determine tensor
+shapes need to be `Dim`.
+
+Each `EncoderLayer` takes `Tensor[B, T, NHead * DK]` and returns the same
+shape, so the loop preserves the invariant and the type checker is
+satisfied.
+
+### Derived dimensions
+
+The model dimension here is `NHead * DK` — a derived expression, not an
+independent type parameter. This is important: only independent degrees of
+freedom get type params. If you wrote `class Encoder[NHead, DK, D]` with
+an independent `D`, you'd lose the constraint that `D == NHead * DK`.
+
+## Separating the first iteration
+
+Sometimes the first iteration of a loop changes the shape, while subsequent
+iterations preserve it. The type checker sees the union of both shapes and
+widens to a less precise type.
+
+The fix is to separate the first iteration:
+
+```python
+# Problem: x widens to Tensor[B, F, D] | Tensor[B, K, D]
+x = input_embs
+for layer in self.layers:
+    x = layer(x)
+out: Tensor[B, K, D] = x  # type: ignore[bad-assignment]
+
+# Solution: no union, no type: ignore
+x = self.layers[0](input_embs)        # [B, F, D] -> [B, K, D]
+assert_type(x, Tensor[B, K, D])
+for i in range(1, len(self.layers)):
+    x = self.layers[i](x)             # [B, K, D] -> [B, K, D]
+```
+
+The first call changes the shape; subsequent calls preserve it. By
+separating them, you avoid the union widening entirely.
+
+## Shape-preserving activations
+
+Many architectures accept an activation function as a parameter (ReLU, GELU,
+SiLU, etc.). Since each activation's forward signature is
+`Tensor[*S] -> Tensor[*S]`, you can express this with a type alias:
+
+```python
+ShapePreservingActivation = (
+    type[nn.ReLU] | type[nn.GELU] | type[nn.SiLU] | type[nn.Tanh]
+)
+
+class ResBlock[C](nn.Module):
+    def __init__(self, c: Dim[C], act_fn: ShapePreservingActivation) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(c, c, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(c),
+            act_fn(),
+        )
+```
+
+The `Sequential` chains the modules and the type checker verifies that the
+overall shape is preserved.
+
+## Multi-head attention
+
+Multi-head attention involves reshaping tensors from `[B, T, D]` to
+`[B, NHead, T, D // NHead]` and back. The dimension arithmetic is expressed
+directly in annotations:
+
+```python
+class CausalSelfAttention[NEmbedding, NHead](nn.Module):
+    def __init__(
+        self,
+        n_embd: Dim[NEmbedding],
+        n_head: Dim[NHead],
+    ) -> None:
+        super().__init__()
+        self.c_attn = nn.Linear(n_embd, 3 * n_embd)
+        self.c_proj = nn.Linear(n_embd, n_embd)
+        self.n_head = n_head
+        self.n_embd = n_embd
+
+    def forward[B, T](
+        self, x: Tensor[B, T, NEmbedding]
+    ) -> Tensor[B, T, NEmbedding]:
+        qkv = self.c_attn(x)
+        assert_type(qkv, Tensor[B, T, 3 * NEmbedding])
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        assert_type(q, Tensor[B, T, NEmbedding])
+
+        # Reshape for multi-head: [B, T, D] -> [B, NHead, T, D // NHead]
+        head_dim = self.n_embd // self.n_head
+        q = q.view(q.size(0), q.size(1), self.n_head, head_dim)
+        q = q.transpose(1, 2)
+        assert_type(q, Tensor[B, NHead, T, NEmbedding // NHead])
+        ...
+```
+
+The type checker tracks the reshape and transpose, verifying that
+`D // NHead` is consistent throughout the attention computation.
+
+## Key concepts
+
+- **`int` for iteration counts, `Dim` for tensor dimensions.** `n_layers`
+  doesn't flow into tensor shapes, so it stays `int`.
+- **Derived dimensions** express relationships: `NHead * DK`, not
+  independent `D`.
+- **Separate the first iteration** when it changes shape to avoid union
+  widening.
+- **Arithmetic in annotations** (`3 * NEmbedding`, `NEmbedding // NHead`)
+  is tracked and simplified automatically.
+
+## Next steps
+
+In [Tutorial 3](./tensor-shapes-tutorial-architectures.mdx), you'll see how to
+handle encoder-decoder architectures with skip connections, where shapes
+change as you go deeper and must be restored on the way back up.
+
+
+---
+
+---
+title: Tensor Shapes
+description: An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Tensor Shapes
+
+:::warning Experimental
+This feature is experimental. The API and behavior may change in future releases without notice.
+::::
+
+Pyrefly can track **tensor shapes** through your PyTorch models, giving you
+**end-to-end static type checking** of shape transformations.
+
+## Why tensor shapes?
+
+When you write PyTorch code, the hardest thing to keep track of is tensor
+shapes. Every operator transforms shapes in non-trivial ways, and shape
+mistakes don't always crash — they can silently produce wrong results. With
+Pyrefly's tensor shape support, you get **automatic inlay type hints showing
+tensor shapes as you type**, so you can see exactly what shape every
+intermediate tensor has without running your code or adding print statements.
+
+Here's the same NanoGPT forward method, without and with tensor shape
+tracking:
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs>
+  <TabItem value="before" label="Without tensor shapes" default>
+    <img src="/img/tensor-shapes/nanogpt-forward-before.png" alt="NanoGPT forward without tensor shape hints — every variable is bare Tensor" />
+  </TabItem>
+  <TabItem value="after" label="With tensor shapes">
+    <img src="/img/tensor-shapes/nanogpt-forward-after.png" alt="NanoGPT forward with tensor shape hints — every variable shows its full shape" />
+  </TabItem>
+</Tabs>
+
+With tensor shapes enabled, Pyrefly infers and displays the shape of every
+intermediate tensor — `Tensor[B, T, NEmbedding]` for embeddings,
+`Tensor[T]` for position indices — without any manual annotations on local
+variables.
+
+## How it works
+
+Pyrefly's tensor shape support is built on two extensions that work together:
+
+1. **Symbolic integer arithmetic** in the core type system — lets you write
+   `Tensor[B, C, H, W]` and have arithmetic like `D // NHead` work at the
+   type level.
+2. **Shape transform specifications** for PyTorch operators — a library of
+   shape rules that tells Pyrefly how each operator transforms shapes.
+
+With these two extensions, you can use Pyrefly to typecheck real-world PyTorch
+models, where the tensor shapes of all local variables are inferred from just
+a few annotations at class and function boundaries.
+
+### Symbolic integer arithmetic
+
+You can write tensor types with integer dimensions — `Tensor[3, 4]` is a
+2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
+takes `Tensor[..., 3]` as input and returns `Tensor[..., 4]`.
+
+**`Dim[X]`** bridges runtime integer values to the type level. When
+`x: Tensor[3, 4]`, then `x.shape` has type `tuple[Dim[3], Dim[4]]` — you
+can extract dimensions from tensors and use them to construct new ones.
+Arithmetic works too: if `a: Dim[3]` and `b: Dim[4]`, then
+`a * b: Dim[12]`.
+
+**Generic type parameters** let you write shape-polymorphic modules:
+
+```python
+class Linear[N, M]:
+    def __init__(self, n: Dim[N], m: Dim[M]):
+        ...
+
+    def forward[*Xs](self, inp: Tensor[*Xs, N]) -> Tensor[*Xs, M]:
+        ...
+
+linear: Linear[3, 4] = Linear(3, 4)
+inp: Tensor[2, 5, 3] = ...
+x: Tensor[2, 5, 4] = linear(inp)
+```
+
+`Dim` encodes symbolic shapes at the type level throughout PyTorch, covering modules as well as tensors.
+
+**Arithmetic on type variables** lets you write custom shape transforms:
+
+```python
+def custom_rand_tensor[A, B](a: Dim[A], b: Dim[B]) -> Tensor[(A + B) // 2]:
+    return torch.randn((a + b) // 2)
+
+x: Tensor[3] = custom_rand_tensor(2, 4)
+```
+
+While these examples use type annotations for exposition, the types of local
+variables like `x` and `linear` are *inferred automatically* — Pyrefly shows
+them as inlay type hints in your editor.
+
+### Shape transform specifications
+
+Some PyTorch operators have simple shape signatures that can be expressed as
+standard type stubs. For example, `torch.mm`:
+
+```python
+def mm[M, K, N](x: Tensor[M, K], y: Tensor[K, N]) -> Tensor[M, N]:
+    ...
+```
+
+For operators with more complex shape logic (like `reshape`, `cat`, or
+`F.interpolate`), Pyrefly uses a small DSL to specify shape transforms:
+
+```python
+# Internal library definition — not user-facing code
+def repeat_ir(self: Tensor, sizes: list[int | symint]) -> Tensor:
+    return Tensor(shape=[d * r for d, r in zip(self.shape, sizes)])
+```
+
+This means you can extend Pyrefly's shape coverage for new PyTorch operators
+without touching Pyrefly's internals — see the
+[contributing guide](./tensor-shapes-contributing.mdx) for details.
+
+## Related Work
+
+Tensor shape checking is not a new idea. Several projects have explored this
+space, each with different trade-offs. Here's how Pyrefly's approach compares.
+
+### Pyre and Pyright (static type checking)
+
+An early attempt at tensor shapes in Pyre, the precursor of Pyrefly, is
+described in [this PyCon 2023 talk](https://www.youtube.com/watch?v=iPVgG-W7ET8).
+That system used `Literal` to wrap concrete sizes and explicit type constructors
+like `IntDiv` for arithmetic — avoiding the need to support integers as type
+arguments or arithmetic on type variables, but at the cost of verbose syntax
+(e.g., `Tensor[float, M, Literal[2], IntDiv[M, 2]]`).
+
+More recently, [this video](https://www.youtube.com/watch?v=gJRkJVs3GAI) details
+two approaches to extend Pyright with tensor shapes, with the author concluding
+neither was the right approach. Both suffered from verbose syntax and a large set
+of type-level operators.
+
+Pyrefly's system is leaner by design:
+
+- No constraint solver — Pyrefly prioritizes "more shape inference with fewer
+  annotations" rather than "more red squiggles with more annotations."
+- The complexity of specifying shape transforms for PyTorch operators is
+  separated into a DSL available to library maintainers, keeping the type
+  system features available to users simple.
+
+### Jaxtyping (runtime type checking)
+
+With [jaxtyping](https://github.com/patrick-kidger/jaxtyping), users can
+express tensor shapes in type annotations that other libraries like `typeguard`
+and `beartype` can check at runtime. The syntax is designed to be universal for
+array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
+verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
+`Tensor[M, 2, M // 2]`.
+
+Pyrefly supports jaxtyping annotations as an alternative front-end to our native
+syntax; these annotations are translated internally to use generics and display
+back in jaxtyping syntax.
+
+However, there is a significant limitation of jaxtyping: there is no way to
+share symbolic dimensions across variables and functions in a class (see
+[this issue](https://github.com/patrick-kidger/jaxtyping/issues/383)). This
+limits jaxtyping to individual functions that operate on tensors, rather than a
+hierarchy of modules connecting them end-to-end. In practical terms, our fully
+typechecked implementations of real-world models (e.g., NanoGPT) cannot be
+faithfully ported to use jaxtyping syntax alone.
+
+## Get involved
+
+Tensor shapes are under active development. We welcome contributions —
+especially new fixture stubs and DSL specifications for PyTorch operators.
+See the [contributing guide](./tensor-shapes-contributing.mdx) to get started.
+
+Join the conversation:
+- [Pyrefly Discord](https://discord.gg/BVWQdkkEFJ)
+- [Python typing Discourse](https://discuss.python.org/c/typing/32)
+- [GitHub Issues](https://github.com/facebook/pyrefly/issues)
 
 
 ---

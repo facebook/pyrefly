@@ -634,6 +634,27 @@ class C:
         self.y = 0  # error, `y` may be undefined if `f` does not execute
 ```
 
+## incompatible-overload-residual
+
+This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
+
+This usually indicates a higher-order call where each overload branch implies incompatible constraints for the same type variable.
+
+```python
+from typing import Callable, overload
+
+@overload
+def f(x: int) -> float: ...
+@overload
+def f(x: str) -> str: ...
+def f(x): ...
+
+def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
+    return lambda: y
+
+project(f, 1)  # Overload type was not compatible with solved type variables: S = int
+```
+
 ## inconsistent-inheritance
 
 When a class inherits from multiple base classes, the inherited fields must be consistent.

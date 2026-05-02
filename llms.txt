@@ -22,4 +22,13 @@
 - [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
 - [Report](report): Measure type coverage in your Python codebase with the Pyrefly report command.
 - [Stub Generation](stubgen): Generate .pyi stub files from Python source files with Pyrefly stubgen.
+- [Tensor Shapes](tensor-shapes): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
+- [Agent Skill for Tensor Shape Porting](tensor-shapes-ai-porting): How to use the port-model agent skill to automatically add tensor shape annotations to PyTorch models.
+- [Contributing](tensor-shapes-contributing): How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
+- [API Reference](tensor-shapes-reference): Complete reference for Dim, Tensor, and tensor shape type system APIs.
+- [Getting Started](tensor-shapes-setup): How to configure Pyrefly for tensor shape checking and set up your project.
+- [Tutorial 4: Configs and Dynamic Patterns](tensor-shapes-tutorial-advanced): Parameterized config dataclasses, dynamic construction patterns, and typed interfaces.
+- [Tutorial 3: Complex Architectures](tensor-shapes-tutorial-architectures): Type encoder-decoder skip connections and recursive chains with exponential shapes.
+- [Tutorial 1: Your First Port](tensor-shapes-tutorial-basics): Learn the basics of tensor shape annotations by typing a simple multi-layer perceptron (MLP) model.
+- [Tutorial 2: Loops and Stacking](tensor-shapes-tutorial-loops): Type shape-preserving loops and ModuleList iteration in Transformer-style architectures.
 - [Typing for Python Developers](typing-for-python-developers): Get to know Python's Type System with working examples
