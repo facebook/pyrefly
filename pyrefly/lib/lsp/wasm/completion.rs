@@ -921,29 +921,26 @@ impl Transaction<'_> {
         // If the user might be typing the `import` keyword, add that as an autocomplete option.
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
-                identifier,
+                identifier: _,
                 context:
                     IdentifierContext::ImportedName {
-                        module_name, dots, ..
+                        module_name,
+                        dots,
+                        identifier: imported_name_identifier,
+                        ..
                     },
             }) => {
-                if "import".starts_with(identifier.as_str()) {
-                    result.push(RankedCompletion::new(CompletionItem {
-                        label: "import".to_owned(),
-                        kind: Some(CompletionItemKind::KEYWORD),
-                        ..Default::default()
-                    }))
+                if let Some(identifier) = imported_name_identifier {
+                    if "import".starts_with(identifier.as_str()) {
+                        result.push(RankedCompletion::new(CompletionItem {
+                            label: "import".to_owned(),
+                            kind: Some(CompletionItemKind::KEYWORD),
+                            ..Default::default()
+                        }))
+                    }
                 }
                 self.add_imported_name_completions(handle, module_name, dots, &mut result)
             }
-
-            Some(IdentifierWithContext {
-                identifier: _,
-                context:
-                    IdentifierContext::ImportedNameEmpty {
-                        module_name, dots, ..
-                    },
-            }) => self.add_imported_name_completions(handle, module_name, dots, &mut result),
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::ImportedModule { name, dots },

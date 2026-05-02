@@ -312,14 +312,9 @@ pub(crate) enum IdentifierContext {
         /// Name of the imported entity in the current module. If there's no as-rename, this will be
         /// the same as the identifier. If there is as-rename, this will be the name after the `as`.
         /// ex: For `from ... import x`, the name is `x`. For `from ... import x as y`, the name is `y`.
-        name_after_import: Identifier,
-    },
-
-    ImportedNameEmpty {
-        /// Name of the imported module
-        module_name: ModuleName,
-        /// Track of leading dots in case of relative imports
-        dots: u32,
+        name_after_import: Option<Identifier>,
+        /// Helps to fallback in case of empty name for eg. `from x import |`.
+        identifier: Option<Identifier>,
     },
     /// An identifier appeared as the name of a function.
     /// ex: `x` in `def x(...): ...`
@@ -408,11 +403,12 @@ impl IdentifierWithContext {
             identifier.clone()
         };
         Self {
-            identifier,
+            identifier: identifier.clone(),
             context: IdentifierContext::ImportedName {
                 module_name,
                 dots,
-                name_after_import,
+                name_after_import: Some(name_after_import),
+                identifier: Some(identifier),
             },
         }
     }
@@ -722,7 +718,12 @@ impl<'a> Transaction<'a> {
                 range: TextRange::at(position, TextSize::new(0)),
                 node_index: AtomicNodeIndex::default(),
             },
-            context: IdentifierContext::ImportedNameEmpty { module_name, dots },
+            context: IdentifierContext::ImportedName {
+                module_name,
+                dots,
+                name_after_import: None,
+                identifier: None,
+            },
         })
     }
 
@@ -1016,6 +1017,10 @@ impl<'a> Transaction<'a> {
                         name_after_import, ..
                     },
             }) => {
+                let Some(name_after_import) = name_after_import else {
+                    return None;
+                };
+
                 let key = Key::Definition(ShortIdentifier::new(&name_after_import));
                 let bindings = self.get_bindings(handle)?;
                 if !bindings.is_valid_key(&key) {
@@ -1023,11 +1028,6 @@ impl<'a> Transaction<'a> {
                 }
                 self.get_type(handle, &key)
             }
-            Some(IdentifierWithContext {
-                identifier: _,
-                context: IdentifierContext::ImportedNameEmpty { .. },
-            }) => None,
-
             Some(IdentifierWithContext {
                 identifier,
                 context:
@@ -2082,6 +2082,13 @@ impl<'a> Transaction<'a> {
                         name_after_import, ..
                     },
             }) => {
+                let Some(name_after_import) = name_after_import else {
+                    return Err(EmptyResponseReason::DefinitionNotFound {
+                        name: identifier.id.to_string(),
+                        context: DefinitionContext::ImportedName,
+                    });
+                };
+
                 match self.find_definition_for_name_def(handle, &name_after_import, preference)? {
                     Some(item) => Ok(vec1![item]),
                     None => Err(EmptyResponseReason::DefinitionNotFound {
@@ -2090,14 +2097,6 @@ impl<'a> Transaction<'a> {
                     }),
                 }
             }
-
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::ImportedNameEmpty { .. },
-            }) => Err(EmptyResponseReason::NotAnIdentifier {
-                found: identifier.id.to_string(),
-            }),
-
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::MethodDef { docstring_range },
