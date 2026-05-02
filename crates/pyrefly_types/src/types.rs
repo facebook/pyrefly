@@ -179,10 +179,9 @@ impl TParams {
     /// through the chain: TParams → Restriction → ClassType → TArgs → TParams → ...
     ///
     /// This method enforces a structural invariant: within a Quantified's restriction,
-    /// any ClassType whose TArgs embed TParams with their own non-trivial restrictions
-    /// (Bound or Constraints) has its TArgs stripped to empty. This prevents recursive
-    /// nesting while preserving TArgs for simple cases like `T: List[int]` where the
-    /// inner TParams have only unrestricted type variables.
+    /// any ClassType whose TArgs embed TParams that can reach the same class through
+    /// their own restrictions has its TArgs stripped to empty. This prevents recursive
+    /// nesting while preserving TArgs for non-recursive bounds like `T: P[Any]`.
     pub fn truncate_recursive_targs(self) -> Self {
         let quantifieds = self
             .0
@@ -206,22 +205,79 @@ impl TParams {
     }
 
     /// Walk a type tree and strip TArgs from any ClassType whose TArgs' TParams
-    /// have non-trivial restrictions (Bound or Constraints). Such TParams can
-    /// participate in recursive nesting across fixpoint iterations.
+    /// can recursively reach the same class.
     fn strip_recursive_class_targs(ty: Type) -> Type {
         ty.transform(&mut |t| {
             if let Type::ClassType(ct) = t
                 && !ct.targs().is_empty()
-                && Self::tparams_have_restrictions(ct.targs().tparams())
+                && Self::tparams_can_reach_class(ct.targs().tparams(), ct.class_object())
             {
                 *t = Type::ClassType(ClassType::new(ct.class_object().dupe(), TArgs::default()));
             }
         })
     }
 
-    /// Check if any Quantified in the TParams has a non-trivial restriction.
-    fn tparams_have_restrictions(tparams: &TParams) -> bool {
-        tparams.iter().any(|q| q.restriction().is_restricted())
+    fn tparams_can_reach_class(tparams: &TParams, class: &Class) -> bool {
+        Self::tparams_can_reach_class_with_seen(tparams, class, &mut Vec::new())
+    }
+
+    fn tparams_can_reach_class_with_seen(
+        tparams: &TParams,
+        class: &Class,
+        seen_classes: &mut Vec<Class>,
+    ) -> bool {
+        tparams
+            .iter()
+            .any(|q| Self::restriction_can_reach_class(q.restriction(), class, seen_classes))
+    }
+
+    fn restriction_can_reach_class(
+        restriction: &Restriction,
+        class: &Class,
+        seen_classes: &mut Vec<Class>,
+    ) -> bool {
+        match restriction {
+            Restriction::Bound(ty) => Self::type_can_reach_class(ty, class, seen_classes),
+            Restriction::Constraints(tys) => tys
+                .iter()
+                .any(|ty| Self::type_can_reach_class(ty, class, seen_classes)),
+            Restriction::Unrestricted => false,
+        }
+    }
+
+    fn type_can_reach_class(ty: &Type, class: &Class, seen_classes: &mut Vec<Class>) -> bool {
+        match ty {
+            Type::ClassType(cls) => {
+                if cls.class_object() == class {
+                    return true;
+                }
+                if seen_classes.iter().any(|seen| seen == cls.class_object()) {
+                    return false;
+                }
+                seen_classes.push(cls.class_object().dupe());
+                let found = cls
+                    .targs()
+                    .as_slice()
+                    .iter()
+                    .any(|ty| Self::type_can_reach_class(ty, class, seen_classes))
+                    || Self::tparams_can_reach_class_with_seen(
+                        cls.targs().tparams(),
+                        class,
+                        seen_classes,
+                    );
+                seen_classes.pop();
+                found
+            }
+            _ => {
+                let mut found = false;
+                ty.recurse(&mut |ty| {
+                    if !found && Self::type_can_reach_class(ty, class, seen_classes) {
+                        found = true;
+                    }
+                });
+                found
+            }
+        }
     }
 }
 

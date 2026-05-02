@@ -180,6 +180,35 @@ def g(c1: C1, c2: C2) -> None:
 );
 
 testcase!(
+    test_protocol_typevar_bound_preserves_specialized_targs,
+    r#"
+from typing import Any, Callable, Protocol, Sequence, TypeVar
+
+class Base: ...
+
+T = TypeVar("T", bound=Base)
+T_co = TypeVar("T_co", bound=Base, covariant=True)
+P_co = TypeVar("P_co", bound="P[Any]", covariant=True)
+
+class P0(Protocol[T_co]): ...
+
+class P(P0[T], Protocol[T]):
+    @classmethod
+    def make(cls, f: Callable[[Sequence[T]], T]) -> None: ...
+
+class Namespace(Protocol[P_co, T_co]):
+    @property
+    def item(self) -> type[P_co]: ...
+
+    def test(self) -> None:
+        def f(x: Sequence[T_co]) -> T_co:
+            return x[0]
+
+        self.item.make(f)
+"#,
+);
+
+testcase!(
     test_protocol_property,
     r#"
 from typing import Protocol
