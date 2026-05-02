@@ -778,10 +778,11 @@ pub struct Connection {
 #[derive(Clone)]
 pub enum MessageSender {
     Channel(Sender<Message>),
-    BlockingWriter(Sender<WriterMessage>),
+    BlockingWriter(Sender<MessageWriter>),
 }
 
 impl MessageSender {
+    #[expect(clippy::result_large_err)] // Keep the crossbeam sender API shape so callers get the unsent Message back.
     pub fn send(&self, message: Message) -> Result<(), crossbeam_channel::SendError<Message>> {
         match self {
             Self::Channel(sender) => sender.send(message),
@@ -789,7 +790,7 @@ impl MessageSender {
                 let original_message = message.clone();
                 let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
                 sender
-                    .send(WriterMessage {
+                    .send(MessageWriter {
                         message,
                         result_sender,
                     })
@@ -803,7 +804,7 @@ impl MessageSender {
         }
     }
 
-    #[allow(clippy::result_large_err)]
+    #[expect(clippy::result_large_err)] // Keep the crossbeam sender API shape so callers get the unsent Message back.
     pub fn send_timeout(
         &self,
         message: Message,
@@ -816,7 +817,7 @@ impl MessageSender {
                 let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
                 sender
                     .send_timeout(
-                        WriterMessage {
+                        MessageWriter {
                             message,
                             result_sender,
                         },
@@ -846,7 +847,7 @@ impl MessageSender {
 }
 
 #[derive(Clone)]
-pub struct WriterMessage {
+pub struct MessageWriter {
     message: Message,
     result_sender: Sender<std::io::Result<()>>,
 }
@@ -920,7 +921,7 @@ impl Connection {
     /// or a pipe name on Windows (automatically prefixed with `\\.\pipe\`).
     pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
         let (writer_stream, reader_stream) = Self::connect_ipc(pipe_name)?;
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<WriterMessage>();
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
         let writer = std::thread::spawn(move || {
             let mut output = writer_stream;
             while let Ok(writer_message) = writer_receiver.recv() {
@@ -964,7 +965,7 @@ impl Connection {
         pipe_name: &str,
     ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
         use std::fs::OpenOptions;
-        let stream = OpenOptions::new().read(true).write(true).open(&pipe_name)?;
+        let stream = OpenOptions::new().read(true).write(true).open(pipe_name)?;
         let reader = stream.try_clone()?;
         Ok((Box::new(stream), Box::new(reader)))
     }
