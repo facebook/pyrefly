@@ -2098,8 +2098,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 !self.is_flag_enum(cls) && self.is_final(cls.class_object())
                     || cls.is_builtin("bool")
                     || include_open_builtins
-                        && (cls.is_builtin("bytes")
+                        && (cls.is_builtin("bytearray")
+                            || cls.is_builtin("bytes")
                             || cls.is_builtin("dict")
+                            || cls.is_builtin("float")
                             || cls.is_builtin("frozenset")
                             || cls.is_builtin("int")
                             || cls.is_builtin("list")
@@ -2155,11 +2157,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         narrowing_subject: &NarrowingSubject,
         narrow_ops_for_fall_through: &(Box<NarrowOp>, TextRange),
         subject_range: &TextRange,
+        include_open_builtins: bool,
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
         let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
-        let include_open_builtins = matches!(narrowing_subject, NarrowingSubject::Name(_));
+        let include_open_builtins =
+            include_open_builtins && matches!(narrowing_subject, NarrowingSubject::Name(_));
         if !self.should_check_exhaustiveness(subject_info.ty(), include_open_builtins) {
             return;
         }

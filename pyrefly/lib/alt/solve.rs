@@ -2357,11 +2357,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 narrowing_subject,
                 narrow_ops_for_fall_through,
                 subject_range: range,
+                include_open_builtins,
             } => self.check_match_exhaustiveness(
                 subject_idx,
                 narrowing_subject,
                 narrow_ops_for_fall_through,
                 range,
+                *include_open_builtins,
                 errors,
             ),
             BindingExpect::MatchCaseReachability {
