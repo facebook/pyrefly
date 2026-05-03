@@ -43,6 +43,23 @@ match None:
 );
 
 testcase!(
+    test_match_case_unreachable_for_disjoint_subject_type,
+    r#"
+def bad(x: list[int]) -> None:
+    match x:
+        case 1:  # E: Case pattern can never match subject of type `list[int]`
+            pass
+        case 2:  # E: Case pattern can never match subject of type `list[int]`
+            pass
+
+def ok(x: int) -> None:
+    match x:
+        case 1:
+            pass
+"#,
+);
+
+testcase!(
     test_pattern_dict_key_enum,
     r#"
 from enum import StrEnum

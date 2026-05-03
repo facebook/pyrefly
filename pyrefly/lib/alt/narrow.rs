@@ -1932,6 +1932,71 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
     }
 
+    pub fn check_match_case_reachability(
+        &self,
+        subject_idx: &Idx<Key>,
+        narrowing_subject: &NarrowingSubject,
+        narrow_ops_for_case: &(Box<NarrowOp>, TextRange),
+        case_range: &TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let (op, narrow_range) = narrow_ops_for_case;
+        if !Self::is_value_match_case_op(op) {
+            return;
+        }
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+        let subject_ty = subject_info.ty().clone();
+        if subject_ty.is_any()
+            || subject_ty.is_never()
+            || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))
+        {
+            return;
+        }
+        let ignore_errors = self.error_swallower();
+        let mut narrowed_ty = match narrowing_subject {
+            NarrowingSubject::Name(_) => self
+                .narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors)
+                .ty()
+                .clone(),
+            NarrowingSubject::Facets(_, facets) => {
+                let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
+                    return;
+                };
+                let type_info = TypeInfo::of_ty(self.heap.mk_any_implicit());
+                let narrowing_subject_info =
+                    type_info.with_narrow(resolved_chain.facets(), subject_ty.clone());
+                let narrowed = self.narrow(
+                    &narrowing_subject_info,
+                    op.as_ref(),
+                    *narrow_range,
+                    &ignore_errors,
+                );
+                self.get_facet_chain_type(&narrowed, &resolved_chain, *case_range)
+            }
+        };
+        self.expand_vars_mut(&mut narrowed_ty);
+        if !narrowed_ty.is_never() {
+            return;
+        }
+        let subject_display = self.for_display(subject_ty);
+        self.error(
+            errors,
+            *case_range,
+            ErrorInfo::Kind(ErrorKind::Unreachable),
+            format!("Case pattern can never match subject of type `{subject_display}`"),
+        );
+    }
+
+    fn is_value_match_case_op(op: &NarrowOp) -> bool {
+        match op {
+            NarrowOp::Atomic(_, AtomicNarrowOp::Eq(_) | AtomicNarrowOp::Is(_)) => true,
+            NarrowOp::And(ops) | NarrowOp::Or(ops) => {
+                !ops.is_empty() && ops.iter().all(Self::is_value_match_case_op)
+            }
+            _ => false,
+        }
+    }
+
     pub fn resolve_facet_chain(&self, unresolved: UnresolvedFacetChain) -> Option<FacetChain> {
         let resolved: Option<Vec<FacetKind>> = unresolved
             .facets()
