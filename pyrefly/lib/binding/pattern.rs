@@ -528,6 +528,7 @@ impl<'a> BindingsBuilder<'a> {
         // x is bound to Narrow(x, Eq(None)) in the first case, and the negation, Narrow(x, NotEq(None)),
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
+        let include_open_builtins = x.cases.len() > 1;
         for case in x.cases {
             let MatchCase {
                 pattern,
@@ -639,6 +640,7 @@ impl<'a> BindingsBuilder<'a> {
                         narrowing_subject: narrowing_subject.clone(),
                         narrow_ops_for_fall_through: (Box::new(op.clone()), *range),
                         subject_range: x.subject.range(),
+                        include_open_builtins,
                     },
                 );
             }
