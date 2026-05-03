@@ -1806,16 +1806,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Determines if a type should be checked for match exhaustiveness.
-    /// We check exhaustiveness when the type has a finite, known set of possible values.
-    fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
+    /// Finite domains can report precise missing cases; selected concrete builtins
+    /// still benefit from the remaining-type check for refutable literal,
+    /// sequence, and mapping patterns.
+    pub(crate) fn should_check_exhaustiveness(
+        &self,
+        ty: &Type,
+        include_open_builtins: bool,
+    ) -> bool {
         match ty {
             Type::ClassType(cls) => {
                 // Final classes can't have subclasses, so they are exhaustible, with the exception
                 // of Flag enums, whose members can be combined into new members via bitwise ops
                 !self.is_flag_enum(cls) && self.is_final(cls.class_object())
-                    // bool is effectively Literal[True] | Literal[False]
                     || cls.is_builtin("bool")
+                    || include_open_builtins
+                        && (cls.is_builtin("bytes")
+                            || cls.is_builtin("dict")
+                            || cls.is_builtin("frozenset")
+                            || cls.is_builtin("int")
+                            || cls.is_builtin("list")
+                            || cls.is_builtin("set")
+                            || cls.is_builtin("str")
+                            || cls.is_builtin("tuple"))
             }
 
             // Literal types have explicit values
@@ -1830,7 +1843,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && union
                         .members
                         .iter()
-                        .all(|m| self.should_check_exhaustiveness(m))
+                        .all(|m| self.should_check_exhaustiveness(m, include_open_builtins))
             }
 
             _ => false,
@@ -1869,8 +1882,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
         let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
-        // We only check match exhaustiveness if the subject is an enum or a union of enum literals
-        if !self.should_check_exhaustiveness(subject_info.ty()) {
+        let include_open_builtins = matches!(narrowing_subject, NarrowingSubject::Name(_));
+        if !self.should_check_exhaustiveness(subject_info.ty(), include_open_builtins) {
             return;
         }
         let ignore_errors = self.error_swallower();

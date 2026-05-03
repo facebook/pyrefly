@@ -622,6 +622,33 @@ def describe(flag: bool):
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3294
+testcase!(
+    test_non_exhaustive_builtin_match_warning,
+    r#"
+def describe_int(x: int):
+    match x: # E: Match on `int` is not exhaustive
+        case 1:
+            pass
+        case 2:
+            pass
+
+def describe_str(x: str):
+    match x: # E: Match on `str` is not exhaustive
+        case "a":
+            pass
+        case "b":
+            pass
+
+def describe_list(x: list[int]):
+    match x: # E: Match on `list[int]` is not exhaustive
+        case [1]:
+            pass
+        case [2]:
+            pass
+"#,
+);
+
 testcase!(
     test_exhaustive_union_with_none,
     r#"
