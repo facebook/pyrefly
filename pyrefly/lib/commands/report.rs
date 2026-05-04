@@ -745,8 +745,8 @@ impl ReportArgs {
     }
 
     /// Returns the ClassBinding if the class owning this field is a schema class (dataclass, enum,
-    /// TypedDict, or NamedTuple). Fields of schema classes are IMPLICIT — they have
-    /// 0 typable slots because the class definition itself governs their types.
+    /// TypedDict, NamedTuple, pydantic model, or attrs class). Fields of schema classes are
+    /// IMPLICIT — they have 0 typable slots because the class definition itself governs their types.
     fn get_cls_binding_if_schema_class_field<'a>(
         bindings: &'a Bindings,
         answers: &Answers,
@@ -762,6 +762,8 @@ impl ReportArgs {
             || metadata.is_enum()
             || metadata.is_typed_dict()
             || metadata.named_tuple_metadata().is_some()
+            || metadata.is_pydantic_model()
+            || metadata.is_attrs_class()
         {
             Some(cls_binding)
         } else {
@@ -953,14 +955,13 @@ impl ReportArgs {
                     annotation,
                     initialized_in_recognized_method,
                 } => {
-                    if !initialized_in_recognized_method {
-                        // Check if this is a schema class body field
-                        if let Some(cls_binding) =
-                            Self::get_cls_binding_if_schema_class_field(bindings, answers, field)
-                        {
-                            if Self::has_function_ancestor(&cls_binding.parent) {
-                                continue;
-                            }
+                    // Schema class fields are always IMPLICIT regardless of whether they're
+                    // also initialized in a recognized method — the class definition governs
+                    // their types.
+                    if let Some(cls_binding) =
+                        Self::get_cls_binding_if_schema_class_field(bindings, answers, field)
+                    {
+                        if !Self::has_function_ancestor(&cls_binding.parent) {
                             let class_name = Self::class_qualified_name(
                                 module,
                                 &cls_binding.parent,
@@ -976,6 +977,10 @@ impl ReportArgs {
                                 location,
                             });
                         }
+                        continue;
+                    }
+                    // Non-schema fields only count when initialized in a recognized method.
+                    if !initialized_in_recognized_method {
                         continue;
                     }
                     Some(*annotation)
@@ -2053,11 +2058,12 @@ mod tests {
         );
     }
 
-    /// Build a `ModuleReport` from a checked-in Python test file,
+    /// Build a `ModuleReport` from a checked-in Python test file using a custom `TestEnv`,
     /// mirroring the production pipeline in `run_inner`.
-    fn build_module_report_for_test(py_file: &str) -> ModuleReport {
+    fn build_module_report_for_test_with_env(py_file: &str, mut env: TestEnv) -> ModuleReport {
         let code = load_test_file(py_file);
-        let (state, handle_fn) = TestEnv::one("test", &code)
+        env.add("test", &code);
+        let (state, handle_fn) = env
             .with_default_require_level(Require::Everything)
             .to_state();
         let handle = handle_fn("test");
@@ -2101,6 +2107,12 @@ mod tests {
             &classes,
             suppressions,
         )
+    }
+
+    /// Build a `ModuleReport` from a checked-in Python test file,
+    /// mirroring the production pipeline in `run_inner`.
+    fn build_module_report_for_test(py_file: &str) -> ModuleReport {
+        build_module_report_for_test_with_env(py_file, TestEnv::new())
     }
 
     /// Build a `ModuleReport` with a module name override, mirroring
@@ -2903,5 +2915,45 @@ def g(x: int) -> int:
         assert!(fqns.contains("pkg._internal.bar"));
         assert!(!fqns.contains("pkg._internal.foo"));
         assert!(!fqns.contains("pkg.baz"));
+    }
+
+    /// Dataclass and NamedTuple fields are IMPLICIT; methods on those classes count normally.
+    #[test]
+    fn test_report_schema_classes_methods() {
+        let report = build_module_report_for_test("schema_classes_methods.py");
+        compare_snapshot("schema_classes_methods.expected.json", &report);
+    }
+
+    /// IntEnum, StrEnum, Flag, IntFlag members are IMPLICIT (0 typable).
+    #[test]
+    fn test_report_schema_classes_enums() {
+        let report = build_module_report_for_test("schema_classes_enums.py");
+        compare_snapshot("schema_classes_enums.expected.json", &report);
+    }
+
+    /// TypedDict and dataclass subclasses: fields of all classes are IMPLICIT.
+    /// Inherited fields appear only under the defining class.
+    #[test]
+    fn test_report_schema_classes_inherited() {
+        let report = build_module_report_for_test("schema_classes_inherited.py");
+        compare_snapshot("schema_classes_inherited.expected.json", &report);
+    }
+
+    /// Pydantic BaseModel fields are IMPLICIT (0 typable).
+    #[test]
+    fn test_report_schema_classes_pydantic() {
+        let path = std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+        let env = TestEnv::new_with_site_package_paths(&[&path]);
+        let report = build_module_report_for_test_with_env("schema_classes_pydantic.py", env);
+        compare_snapshot("schema_classes_pydantic.expected.json", &report);
+    }
+
+    /// attrs @define and @attr.s(auto_attribs=True) fields are IMPLICIT (0 typable).
+    #[test]
+    fn test_report_schema_classes_attrs() {
+        let path = std::env::var("ATTRS_TEST_PATH").expect("ATTRS_TEST_PATH must be set");
+        let env = TestEnv::new_with_site_package_paths(&[&path]);
+        let report = build_module_report_for_test_with_env("schema_classes_attrs.py", env);
+        compare_snapshot("schema_classes_attrs.expected.json", &report);
     }
 }
