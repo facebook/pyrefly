@@ -69,7 +69,7 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 
 /// `(major, minor)` version for the report JSON schema.
-const REPORT_SCHEMA_VERSION: (u32, u32) = (0, 1);
+const REPORT_SCHEMA_VERSION: (u32, u32) = (0, 2);
 
 /// Slot-level annotation counts for a symbol.
 ///
@@ -328,6 +328,8 @@ impl SymbolReport {
 struct ModuleReport {
     /// Fully-qualified module name (e.g. "mypackage.submodule").
     name: String,
+    /// Filesystem path to the module source file.
+    path: String,
     /// Names of symbols defined in this module.
     names: Vec<String>,
     line_count: usize,
@@ -1699,6 +1701,7 @@ impl ReportArgs {
 
     fn build_module_report(
         name: String,
+        path: String,
         derived_name: &str,
         line_count: usize,
         functions: &[Function],
@@ -1797,6 +1800,7 @@ impl ReportArgs {
 
         ModuleReport {
             name,
+            path,
             names,
             line_count,
             symbol_reports,
@@ -1956,8 +1960,10 @@ impl ReportArgs {
 
                 let derived_name = handle.module().to_string();
                 let name = module_name_override.clone().unwrap_or(derived_name.clone());
+                let path = handle.path().as_path().display().to_string();
                 let mut module_report = Self::build_module_report(
                     name.clone(),
+                    path,
                     &derived_name,
                     line_count,
                     &functions,
@@ -2094,6 +2100,7 @@ mod tests {
 
         ReportArgs::build_module_report(
             "test".to_owned(),
+            "test.py".to_owned(),
             "test",
             line_count,
             &functions,
@@ -2223,6 +2230,7 @@ mod tests {
 
         ReportArgs::build_module_report(
             "test".to_owned(),
+            "test.pyi".to_owned(),
             "test",
             line_count,
             &functions,
@@ -2740,6 +2748,7 @@ def g(x: int) -> int:
         let loc = |line| Location { line, column: 1 };
         let mut report = ModuleReport {
             name: "pkg".to_owned(),
+            path: "pkg/__init__.py".to_owned(),
             names: vec!["pkg.Foo".into(), "pkg.bar".into(), "pkg._private".into()],
             line_count: 10,
             symbol_reports: vec![

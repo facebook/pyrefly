@@ -1,5 +1,6 @@
 {
   "name": "test",
+  "path": "test.pyi",
   "names": [
     "test.x",
     "test.y",

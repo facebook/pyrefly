@@ -1,5 +1,6 @@
 {
   "name": "test",
+  "path": "test.py",
   "names": [
     "test.WithDecorators.static_method",
     "test.WithDecorators.class_method",

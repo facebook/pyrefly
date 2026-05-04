@@ -1,5 +1,6 @@
 {
   "name": "test",
+  "path": "test.py",
   "names": [
     "test.partial",
     "test.different_params",
