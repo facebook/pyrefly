@@ -195,18 +195,44 @@ class C:
 );
 
 testcase!(
-    bug = "conformance: Should error when returning concrete class instead of Self",
     test_self_return_concrete_class,
     r#"
 from typing import Self
 
 class Shape:
     def method(self) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self`
 
     @classmethod
     def cls_method(cls) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self`
+"#,
+);
+
+testcase!(
+    test_self_return_concrete_class_final_ok,
+    r#"
+from typing import Self, final
+
+@final
+class Shape:
+    def method(self) -> Self:
+        return Shape()
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()
+"#,
+);
+
+testcase!(
+    test_self_return_concrete_class_generic,
+    r#"
+from typing import Self
+
+class Container[T]:
+    def m(self) -> Self:
+        return Container()  # E: Returned type `Container[Unknown]` is not assignable to declared return type `Self`
 "#,
 );
 
