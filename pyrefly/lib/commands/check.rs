@@ -1255,6 +1255,7 @@ impl CheckArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1335,6 +1336,93 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn gitlab_output_format_writes_valid_json() {
+        let errors = vec![sample_error(vec1!["bad".into()])];
+        let mut buf = Vec::new();
+        write_error_gitlab(&mut buf, Path::new("/repo"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        let arr = value.as_array().expect("top-level array");
+        assert_eq!(arr.len(), 1);
+        let entry = &arr[0];
+        for key in [
+            "description",
+            "check_name",
+            "fingerprint",
+            "severity",
+            "location",
+        ] {
+            assert!(entry.get(key).is_some(), "missing key {key} in {entry}");
+        }
+        assert_eq!(entry["check_name"], "bad-assignment");
+        assert_eq!(entry["location"]["path"], "foo.py");
+        assert_eq!(entry["location"]["lines"]["begin"], 1);
+    }
+
+    #[test]
+    fn gitlab_output_format_severity_mapping() {
+        let info = sample_error(vec1!["m".into()]).with_severity(Severity::Info);
+        let warn = sample_error(vec1!["m".into()]).with_severity(Severity::Warn);
+        let error = sample_error(vec1!["m".into()]).with_severity(Severity::Error);
+        let ignore = sample_error(vec1!["m".into()]).with_severity(Severity::Ignore);
+        let errors = vec![info, warn, error, ignore];
+        let mut buf = Vec::new();
+        write_error_gitlab(&mut buf, Path::new("/repo"), &errors).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(buf).unwrap()).expect("valid JSON");
+        let arr = value.as_array().unwrap();
+        // Ignore should be filtered out, leaving 3 entries.
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["severity"], "info");
+        assert_eq!(arr[1]["severity"], "minor");
+        assert_eq!(arr[2]["severity"], "major");
+    }
+
+    #[test]
+    fn gitlab_output_format_fingerprint_stability() {
+        let errors_a = vec![sample_error(vec1!["bad".into()])];
+        let errors_b = vec![sample_error(vec1!["different message".into()])];
+        let mut buf_a = Vec::new();
+        let mut buf_b = Vec::new();
+        write_error_gitlab(&mut buf_a, Path::new("/repo"), &errors_a).unwrap();
+        write_error_gitlab(&mut buf_b, Path::new("/repo"), &errors_b).unwrap();
+        let value_a: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(buf_a).unwrap()).unwrap();
+        let value_b: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(buf_b).unwrap()).unwrap();
+        // Fingerprint depends on (kind, path) only, so same kind+path => same fingerprint
+        // even when the message text differs.
+        assert_eq!(value_a[0]["fingerprint"], value_b[0]["fingerprint"]);
+    }
+
+    #[test]
+    fn gitlab_output_format_fingerprint_collision_resolution() {
+        // Two errors with the same (kind, path) would collide; the renderer must salt-rehash
+        // so each entry gets a unique fingerprint.
+        let errors = vec![
+            sample_error(vec1!["one".into()]),
+            sample_error(vec1!["two".into()]),
+        ];
+        let mut buf = Vec::new();
+        write_error_gitlab(&mut buf, Path::new("/repo"), &errors).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
+        let arr = value.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_ne!(arr[0]["fingerprint"], arr[1]["fingerprint"]);
+    }
+
+    #[test]
+    fn gitlab_output_format_description_includes_check_name() {
+        let errors = vec![sample_error(vec1!["bad".into()])];
+        let mut buf = Vec::new();
+        write_error_gitlab(&mut buf, Path::new("/repo"), &errors).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
+        assert_eq!(value[0]["description"], "bad-assignment: bad");
     }
 
     #[test]
