@@ -397,7 +397,7 @@ def cache_on_self(fn: Callable[[Constraint], int]) -> CachedMethod:
     return CachedMethod(fn)
 
 class Constraint:
-    @cache_on_self
+    @cache_on_self  # E: Argument `(self: Self@Constraint) -> int` is not assignable to parameter `fn` with type `(Constraint) -> int`
     def pointwise_read_writes(self) -> int:
         return 0
 

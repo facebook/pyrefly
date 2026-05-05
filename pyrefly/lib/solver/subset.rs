@@ -2026,11 +2026,18 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             {
                 self.is_subset_eq(&got, want)
             }
-            (Type::ClassType(got), Type::SelfType(want)) => ok_or(
-                self.type_order
-                    .has_superclass(got.class_object(), want.class_object()),
-                SubsetError::Other,
-            ),
+            (Type::ClassType(got), Type::SelfType(want)) => {
+                // `Self` is bound to the (unknown) runtime class of the receiver, which
+                // may be a subclass of `want`. A concrete instance of `want` is therefore
+                // only assignable to `Self` if no subclass can ever rebind `Self` — i.e.
+                // when `want` is `@final`. Strict subclasses remain assignable as usual
+                // because `Self` covers the whole subtree below `want`.
+                let got_cls = got.class_object();
+                let want_cls = want.class_object();
+                let ok = self.type_order.has_superclass(got_cls, want_cls)
+                    && (got_cls != want_cls || self.type_order.is_final(want_cls));
+                ok_or(ok, SubsetError::Other)
+            }
             (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => ok_or(
                 self.type_order.has_metaclass(got.class_object(), want),
                 SubsetError::Other,
