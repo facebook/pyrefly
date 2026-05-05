@@ -48,6 +48,14 @@ use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EqualityCompatibilityGroup {
+    Numeric,
+    BytesLike,
+    SetLike,
+    Str,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn callable_dunder_helper(
         &self,
@@ -1057,18 +1065,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if left.is_any() || right.is_any() || left.is_never() || right.is_never() {
             return;
         }
-        let Some(left_ty) = self.comparison_base(left) else {
+        let Some(left_group) = self.equality_compatibility_group(left) else {
             return;
         };
-        let Some(right_ty) = self.comparison_base(right) else {
+        let Some(right_group) = self.equality_compatibility_group(right) else {
             return;
         };
-        let left_base = self.disjoint_base(&left_ty);
-        let right_base = self.disjoint_base(&right_ty);
-        if left_base == right_base
-            || self.has_superclass(&left_base, &right_base)
-            || self.has_superclass(&right_base, &left_base)
-        {
+        if left_group == right_group {
             return;
         }
         let left_display = self.for_display(left.clone());
@@ -1086,13 +1089,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
     }
 
-    fn comparison_base(&self, ty: &Type) -> Option<Type> {
-        match ty {
-            Type::ClassType(_) | Type::Tuple(_) => Some(ty.clone()),
-            Type::Literal(lit) => Some(Type::ClassType(
-                lit.value.general_class_type(self.stdlib).clone(),
-            )),
-            Type::LiteralString(_) => Some(Type::ClassType(self.stdlib.str().clone())),
+    fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
+        let class = match ty {
+            Type::ClassType(cls) => cls.class_object(),
+            Type::Literal(lit) => lit.value.general_class_type(self.stdlib).class_object(),
+            Type::LiteralString(_) => self.stdlib.str().class_object(),
+            _ => return None,
+        };
+        match (class.qname().module_name().as_str(), class.name().as_str()) {
+            ("builtins", "bool" | "int" | "float" | "complex") | ("decimal", "Decimal") => {
+                Some(EqualityCompatibilityGroup::Numeric)
+            }
+            ("builtins", "bytes" | "bytearray" | "memoryview") => {
+                Some(EqualityCompatibilityGroup::BytesLike)
+            }
+            ("builtins", "set" | "frozenset") => Some(EqualityCompatibilityGroup::SetLike),
+            ("builtins", "str") => Some(EqualityCompatibilityGroup::Str),
             _ => None,
         }
     }

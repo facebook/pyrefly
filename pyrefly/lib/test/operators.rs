@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -125,11 +126,36 @@ class CandidateWeight(Generic[Weight]):
 
 testcase!(
     test_incompatible_equality_comparison,
+    TestEnv::new().enable_incompatible_comparison_error(),
     r#"
-def compare(x: int, y: str, z: int | str) -> None:
+from decimal import Decimal
+
+def compare(
+    x: int,
+    y: str,
+    z: int | str,
+    f: float,
+    b: bytes,
+    ba: bytearray,
+    s: set[int],
+    fs: frozenset[int],
+    d: Decimal,
+) -> None:
     x == y  # E: Comparison `==` between incompatible types `int` and `str`
     x != y  # E: Comparison `!=` between incompatible types `int` and `str`
     z == y
+    x == f
+    x == d
+    b == ba
+    s == fs
+"#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison_default_off,
+    r#"
+def compare(x: int, y: str) -> None:
+    x == y
 "#,
 );
 

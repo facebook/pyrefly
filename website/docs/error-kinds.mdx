@@ -634,6 +634,22 @@ class C:
         self.y = 0  # error, `y` may be undefined if `f` does not execute
 ```
 
+## incompatible-comparison
+
+This error is raised when Pyrefly can prove that an equality (`==`) or inequality
+(`!=`) comparison is made between incompatible built-in types (for example, `int`
+versus `str`). This check is currently limited to a small allowlist: numeric
+types (including `decimal.Decimal`), bytes-like types, set-like types, and `str`.
+It does not analyze unions, `None`, or user-defined classes.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+x: int = 1
+y: str = ""
+if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
+```
+
 ## incompatible-overload-residual
 
 This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
@@ -653,17 +669,6 @@ def project[S](func: Callable[[S], S], y: S) -> Callable[[], S]:
     return lambda: y
 
 project(f, 1)  # Overload type was not compatible with solved type variables: S = int
-## incompatible-comparison
-
-This error is raised when Pyrefly can prove that an equality (`==`) or inequality
-(`!=`) comparison is made between incompatible built-in scalar types (for example,
-`int` versus `str`). This check is currently limited to primitive scalar types and
-does not analyze unions, `None`, or user-defined classes.
-
-```python
-x: int = 1
-y: str = ""
-if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
 ```
 
 ## inconsistent-inheritance
