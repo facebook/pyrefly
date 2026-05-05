@@ -9,6 +9,9 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
 use std::fs::File;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
@@ -51,6 +54,7 @@ use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::watcher::Watcher;
 use ruff_text_size::Ranged;
+use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -424,6 +428,7 @@ fn write_errors_to_file(
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
+        OutputFormat::Gitlab => write_error_gitlab_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -438,6 +443,7 @@ fn write_errors_to_console(
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
+        OutputFormat::Gitlab => write_error_gitlab_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -575,6 +581,112 @@ fn escape_workflow_data(value: &str) -> String {
 
 fn escape_workflow_property(value: &str) -> String {
     utf8_percent_encode(value, WORKFLOW_PROPERTY_ENCODE_SET).to_string()
+}
+
+/// One entry in a GitLab Code Quality JSON report. The schema is the CodeClimate report
+/// format subset documented at
+/// https://docs.gitlab.com/ci/testing/code_quality/#code-quality-report-format.
+#[derive(Serialize)]
+struct GitlabReportEntry<'a> {
+    description: String,
+    check_name: &'a str,
+    fingerprint: String,
+    severity: &'static str,
+    location: GitlabLocation,
+}
+
+#[derive(Serialize)]
+struct GitlabLocation {
+    path: String,
+    lines: GitlabLines,
+}
+
+#[derive(Serialize)]
+struct GitlabLines {
+    begin: u32,
+}
+
+/// Map a Pyrefly severity onto a GitLab Code Quality severity, returning `None` for
+/// `Ignore` so suppressed errors are dropped from the report.
+fn severity_to_gitlab(severity: Severity) -> Option<&'static str> {
+    match severity {
+        Severity::Ignore => None,
+        Severity::Info => Some("info"),
+        Severity::Warn => Some("minor"),
+        Severity::Error => Some("major"),
+    }
+}
+
+/// Stable per-issue identifier. Hashes the error kind name and (project-relative) path,
+/// salted with `salt`. The caller salt-rehashes on collision so multiple issues of the
+/// same kind in the same file still produce distinct fingerprints.
+fn gitlab_fingerprint(check_name: &str, path: &str, salt: u64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    salt.hash(&mut hasher);
+    check_name.hash(&mut hasher);
+    path.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn write_error_gitlab(
+    writer: &mut impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut fingerprints: HashSet<u64> = HashSet::new();
+    let mut entries: Vec<GitlabReportEntry> = Vec::new();
+    for error in errors {
+        let Some(severity) = severity_to_gitlab(error.severity()) else {
+            continue;
+        };
+        let check_name = error.error_kind().to_name();
+        let abs_path = error.path().as_path();
+        let path = abs_path
+            .strip_prefix(relative_to)
+            .unwrap_or(abs_path)
+            .to_string_lossy()
+            .into_owned();
+
+        let mut fp = gitlab_fingerprint(check_name, &path, 0);
+        while !fingerprints.insert(fp) {
+            fp = gitlab_fingerprint(check_name, &path, fp);
+        }
+
+        entries.push(GitlabReportEntry {
+            description: format!("{check_name}: {}", error.msg()),
+            check_name,
+            fingerprint: format!("{fp:x}"),
+            severity,
+            location: GitlabLocation {
+                path,
+                lines: GitlabLines {
+                    begin: error.display_range().start.line_within_file().get(),
+                },
+            },
+        });
+    }
+    serde_json::to_writer_pretty(writer.by_ref(), &entries)?;
+    writeln!(writer)?;
+    Ok(())
+}
+
+fn write_error_gitlab_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut file = BufWriter::new(File::create(path)?);
+    write_error_gitlab(&mut file, relative_to, errors)
+        .with_context(|| format!("while writing GitLab errors to `{}`", path.display()))?;
+    file.flush()?;
+    Ok(())
+}
+
+fn write_error_gitlab_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(stdout());
+    write_error_gitlab(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
 }
 
 /// A data structure to facilitate the creation of handles for all the files we want to check.

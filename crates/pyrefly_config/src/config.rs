@@ -134,6 +134,9 @@ pub enum OutputFormat {
     Json,
     /// Emit GitHub Actions workflow commands
     Github,
+    /// Emit a GitLab Code Quality JSON report
+    /// (https://docs.gitlab.com/ci/testing/code_quality/#code-quality-report-format)
+    Gitlab,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }
