@@ -400,7 +400,7 @@ pub trait TspInterface: Send + Sync + 'static {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
-    fn sender(&self) -> &Sender<Message>;
+    fn sender(&self) -> &MessageSender;
 
     fn lsp_queue(&self) -> &LspQueue;
 
@@ -502,11 +502,120 @@ pub trait TspInterface: Send + Sync + 'static {
 }
 
 pub struct Connection {
-    pub sender: Sender<Message>,
+    pub sender: MessageSender,
     /// Channel receiver, only present for test connections created via
     /// `Connection::memory()`. The test client reads from this to observe
     /// messages sent by the server.
     channel_receiver: Option<Receiver<Message>>,
+}
+
+#[derive(Clone)]
+pub enum MessageSender {
+    Channel(Sender<Message>),
+    BlockingWriter(Sender<MessageWriter>),
+}
+
+#[derive(Debug)]
+pub enum MessageSendError {
+    Disconnected,
+    Timeout,
+    WriteFailed(std::io::Error),
+}
+
+impl std::fmt::Display for MessageSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disconnected => write!(f, "message sender disconnected"),
+            Self::Timeout => write!(f, "message send timed out"),
+            Self::WriteFailed(error) => write!(f, "message write failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for MessageSendError {}
+
+impl MessageSender {
+    pub fn send(&self, message: Message) -> Result<(), MessageSendError> {
+        match self {
+            Self::Channel(sender) => sender
+                .send(message)
+                .map_err(|_| MessageSendError::Disconnected),
+            Self::BlockingWriter(sender) => {
+                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
+                sender
+                    .send(MessageWriter {
+                        message,
+                        result_sender,
+                    })
+                    .map_err(|_| MessageSendError::Disconnected)?;
+
+                match result_receiver.recv() {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(error)) => Err(MessageSendError::WriteFailed(error)),
+                    Err(_) => Err(MessageSendError::Disconnected),
+                }
+            }
+        }
+    }
+
+    pub fn send_timeout(
+        &self,
+        message: Message,
+        timeout: Duration,
+    ) -> Result<(), MessageSendError> {
+        match self {
+            Self::Channel(sender) => {
+                sender
+                    .send_timeout(message, timeout)
+                    .map_err(|error| match error {
+                        crossbeam_channel::SendTimeoutError::Timeout(_) => {
+                            MessageSendError::Timeout
+                        }
+                        crossbeam_channel::SendTimeoutError::Disconnected(_) => {
+                            MessageSendError::Disconnected
+                        }
+                    })
+            }
+            Self::BlockingWriter(sender) => {
+                let deadline = Instant::now() + timeout;
+                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
+                sender
+                    .send_timeout(
+                        MessageWriter {
+                            message,
+                            result_sender,
+                        },
+                        timeout,
+                    )
+                    .map_err(|error| match error {
+                        crossbeam_channel::SendTimeoutError::Timeout(_) => {
+                            MessageSendError::Timeout
+                        }
+                        crossbeam_channel::SendTimeoutError::Disconnected(_) => {
+                            MessageSendError::Disconnected
+                        }
+                    })?;
+
+                match result_receiver
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(error)) => Err(MessageSendError::WriteFailed(error)),
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                        Err(MessageSendError::Disconnected)
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        Err(MessageSendError::Timeout)
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub struct MessageWriter {
+    message: Message,
+    result_sender: Sender<std::io::Result<()>>,
 }
 
 /// Owns the message source for the LSP/TSP server. Either a crossbeam channel
@@ -565,7 +674,7 @@ impl Connection {
         });
         (
             Self {
-                sender: writer_sender,
+                sender: MessageSender::Channel(writer_sender),
                 channel_receiver: None,
             },
             MessageReader::Stdio(BufReader::new(std::io::stdin())),
@@ -578,17 +687,29 @@ impl Connection {
     /// or a pipe name on Windows (automatically prefixed with `\\.\pipe\`).
     pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
         let (writer_stream, reader_stream) = Self::connect_ipc(pipe_name)?;
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
         let writer = std::thread::spawn(move || {
             let mut output = writer_stream;
-            while let Ok(msg) = writer_receiver.recv() {
-                write_lsp_message(&mut output, msg)?;
+            while let Ok(writer_message) = writer_receiver.recv() {
+                match write_lsp_message(&mut output, writer_message.message) {
+                    Ok(()) => {
+                        let _ = writer_message.result_sender.send(Ok(()));
+                    }
+                    Err(error) => {
+                        let error_kind = error.kind();
+                        let error_message = error.to_string();
+                        let _ = writer_message
+                            .result_sender
+                            .send(Err(std::io::Error::new(error_kind, error_message)));
+                        return Err(error);
+                    }
+                }
             }
             Ok(())
         });
         Ok((
             Self {
-                sender: writer_sender,
+                sender: MessageSender::BlockingWriter(writer_sender),
                 channel_receiver: None,
             },
             MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
@@ -610,7 +731,7 @@ impl Connection {
         pipe_name: &str,
     ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
         use std::fs::OpenOptions;
-        let stream = OpenOptions::new().read(true).write(true).open(&pipe_name)?;
+        let stream = OpenOptions::new().read(true).write(true).open(pipe_name)?;
         let reader = stream.try_clone()?;
         Ok((Box::new(stream), Box::new(reader)))
     }
@@ -639,14 +760,14 @@ impl Connection {
         (
             (
                 Self {
-                    sender: s1,
+                    sender: MessageSender::Channel(s1),
                     channel_receiver: Some(r2.clone()),
                 },
                 MessageReader::Channel(r2),
             ),
             (
                 Self {
-                    sender: s2,
+                    sender: MessageSender::Channel(s2),
                     channel_receiver: Some(r1.clone()),
                 },
                 MessageReader::Channel(r1),
@@ -926,11 +1047,117 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+    use std::time::Duration;
+
     use lsp_types::CodeActionKind;
 
+    use super::MessageSendError;
+    use super::MessageSender;
+    use super::MessageWriter;
     use super::SOURCE_FIX_ALL_PYREFLY;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
+    use crate::lsp::non_wasm::protocol::Message;
+    use crate::lsp::non_wasm::protocol::Notification;
+
+    fn test_message() -> Message {
+        Message::Notification(Notification {
+            method: "test/message".to_owned(),
+            params: serde_json::Value::Null,
+            activity_key: None,
+        })
+    }
+
+    #[test]
+    fn test_channel_send_reports_disconnected() {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        drop(receiver);
+
+        let error = MessageSender::Channel(sender)
+            .send(test_message())
+            .unwrap_err();
+
+        assert!(matches!(error, MessageSendError::Disconnected));
+    }
+
+    #[test]
+    fn test_blocking_writer_send_waits_for_write_result() {
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
+        let sender = MessageSender::BlockingWriter(writer_sender);
+        let (done_sender, done_receiver) = crossbeam_channel::bounded(1);
+
+        std::thread::spawn(move || {
+            done_sender
+                .send(sender.send(test_message()))
+                .expect("test result receiver should stay open");
+        });
+
+        let writer_message = writer_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocking writer should receive the message");
+        assert!(
+            done_receiver.try_recv().is_err(),
+            "send should wait until the writer reports the write result"
+        );
+
+        writer_message
+            .result_sender
+            .send(Ok(()))
+            .expect("send result receiver should stay open");
+
+        assert!(
+            done_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("send should complete after write acknowledgement")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_blocking_writer_send_reports_write_failure() {
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
+        let sender = MessageSender::BlockingWriter(writer_sender);
+        let (done_sender, done_receiver) = crossbeam_channel::bounded(1);
+
+        std::thread::spawn(move || {
+            done_sender
+                .send(sender.send(test_message()))
+                .expect("test result receiver should stay open");
+        });
+
+        let writer_message = writer_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocking writer should receive the message");
+        writer_message
+            .result_sender
+            .send(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "broken pipe",
+            )))
+            .expect("send result receiver should stay open");
+
+        let error = done_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("send should complete after write failure")
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            MessageSendError::WriteFailed(error) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+    }
+
+    #[test]
+    fn test_blocking_writer_send_timeout_waits_for_write_result() {
+        let (writer_sender, _writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
+        let sender = MessageSender::BlockingWriter(writer_sender);
+
+        let error = sender
+            .send_timeout(test_message(), Duration::from_millis(10))
+            .unwrap_err();
+
+        assert!(matches!(error, MessageSendError::Timeout));
+    }
 
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
@@ -1092,7 +1319,7 @@ pub struct Server {
     server_start_time: Instant,
 }
 
-pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id: RequestId) {
+pub fn shutdown_finish(sender: &MessageSender, reader: &mut MessageReader, id: RequestId) {
     let response = Response::new_ok(id, ());
     if sender.send(response.into()).is_err() {
         return;
@@ -1129,7 +1356,7 @@ pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id:
 // If the connection is closed, or we receive an exit notification, returns None.
 // If we receive an unexpected shutdown notification, respond and wait for exit.
 pub fn initialize_start(
-    sender: &Sender<Message>,
+    sender: &MessageSender,
     reader: &mut MessageReader,
 ) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
     while let Some(msg) = reader.recv() {
@@ -1205,7 +1432,7 @@ struct InitializeResult<C> {
 }
 
 pub fn initialize_finish<C: Serialize>(
-    sender: &Sender<Message>,
+    sender: &MessageSender,
     reader: &mut MessageReader,
     id: RequestId,
     capabilities: C,
@@ -6291,7 +6518,7 @@ impl TspInterface for Server {
         self.send_response(response)
     }
 
-    fn sender(&self) -> &Sender<Message> {
+    fn sender(&self) -> &MessageSender {
         &self.connection.0.sender
     }
 

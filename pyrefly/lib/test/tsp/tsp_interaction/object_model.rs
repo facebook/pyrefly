@@ -35,6 +35,7 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Connection;
+use crate::lsp::non_wasm::server::MessageSender;
 use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
@@ -50,7 +51,7 @@ pub struct InitializeSettings {
 }
 
 pub struct TestTspServer {
-    sender: crossbeam_channel::Sender<Message>,
+    sender: MessageSender,
     timeout: Duration,
     /// Handle to the spawned server thread
     server_thread: Option<JoinHandle<Result<(), io::Error>>>,
@@ -60,7 +61,7 @@ pub struct TestTspServer {
 }
 
 impl TestTspServer {
-    pub fn new(sender: crossbeam_channel::Sender<Message>, request_idx: Arc<Mutex<i32>>) -> Self {
+    pub fn new(sender: MessageSender, request_idx: Arc<Mutex<i32>>) -> Self {
         Self {
             sender,
             timeout: Duration::from_secs(25),

@@ -39,6 +39,7 @@ use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::MessageReader;
+use crate::lsp::non_wasm::server::MessageSender;
 use crate::lsp::non_wasm::server::ProcessEvent;
 use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
@@ -51,7 +52,6 @@ use crate::tsp::validation::snapshot_outdated_error;
 
 struct ExtraConnectionHandle {
     close_tx: crossbeam_channel::Sender<()>,
-    response_sender: crossbeam_channel::Sender<Message>,
 }
 
 pub struct TspServer<T: TspInterface> {
@@ -71,28 +71,16 @@ impl<T: TspInterface> TspServer<T> {
         })
     }
 
-    /// Send a `snapshotChanged` notification to the main connection and every extra connection.
+    /// Send a `snapshotChanged` notification to the main connection.
     fn broadcast_snapshot_changed(
         &self,
-        main_sender: &crossbeam_channel::Sender<Message>,
+        main_sender: &MessageSender,
         old_snapshot: i32,
         new_snapshot: i32,
     ) {
         let notification = snapshot_changed_notification(old_snapshot, new_snapshot);
         if let Err(e) = main_sender.send(Message::Notification(notification.clone())) {
             warn!("Failed to send snapshotChanged notification: {e}");
-        }
-        let handles = self
-            .extra_connections
-            .lock()
-            .expect("extra_connections mutex poisoned");
-        for (name, handle) in handles.iter() {
-            if let Err(e) = handle
-                .response_sender
-                .send(Message::Notification(notification.clone()))
-            {
-                warn!("Failed to send snapshotChanged to extra connection {name}: {e}");
-            }
         }
     }
 }
@@ -103,11 +91,11 @@ impl<T: TspInterface> TspServer<T> {
 /// `TspServer` core with all other connections.
 pub struct TspConnection<T: TspInterface> {
     pub(crate) server: Arc<TspServer<T>>,
-    response_sender: crossbeam_channel::Sender<Message>,
+    response_sender: MessageSender,
 }
 
 impl<T: TspInterface> TspConnection<T> {
-    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
+    fn new(server: Arc<TspServer<T>>, response_sender: MessageSender) -> Self {
         Self {
             server,
             response_sender,
@@ -251,7 +239,7 @@ impl<T: TspInterface> TspConnection<T> {
 pub struct TspMainConnection<T: TspInterface>(TspConnection<T>);
 
 impl<T: TspInterface> TspMainConnection<T> {
-    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
+    fn new(server: Arc<TspServer<T>>, response_sender: MessageSender) -> Self {
         Self(TspConnection::new(server, response_sender))
     }
 }
@@ -383,13 +371,7 @@ impl<T: TspInterface> TspMainConnection<T> {
         let (close_tx, close_rx) = crossbeam_channel::bounded::<()>(1);
         let name_owned = name.to_owned();
 
-        extra_connections.insert(
-            name_owned.clone(),
-            ExtraConnectionHandle {
-                close_tx,
-                response_sender: extra_sender,
-            },
-        );
+        extra_connections.insert(name_owned.clone(), ExtraConnectionHandle { close_tx });
         drop(extra_connections);
 
         extra_conn.run(reader, close_rx, name_owned);
@@ -436,7 +418,7 @@ impl<T: TspInterface> TspMainConnection<T> {
 struct TspExtraConnection<T: TspInterface>(TspConnection<T>);
 
 impl<T: TspInterface> TspExtraConnection<T> {
-    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
+    fn new(server: Arc<TspServer<T>>, response_sender: MessageSender) -> Self {
         Self(TspConnection::new(server, response_sender))
     }
 }
@@ -456,7 +438,11 @@ impl<T: TspInterface> TspExtraConnection<T> {
         std::thread::spawn(move || {
             std::thread::spawn(move || {
                 while let Some(message) = reader.recv() {
-                    if message_tx.send(message).is_err() {
+                    let (processed_tx, processed_rx) = crossbeam_channel::bounded(1);
+                    if message_tx.send((message, processed_tx)).is_err() {
+                        break;
+                    }
+                    if processed_rx.recv().is_err() {
                         break;
                     }
                 }
@@ -468,9 +454,12 @@ impl<T: TspInterface> TspExtraConnection<T> {
             loop {
                 let selected = selector.select();
                 match selected.index() {
-                    i if i == close_index => break,
+                    i if i == close_index => {
+                        let _ = selected.recv(&close_rx);
+                        break;
+                    }
                     i if i == message_index => {
-                        let Ok(message) = selected.recv(&message_rx) else {
+                        let Ok((message, processed_tx)) = selected.recv(&message_rx) else {
                             break;
                         };
 
@@ -513,6 +502,8 @@ impl<T: TspInterface> TspExtraConnection<T> {
                             }
                             Message::Notification(_) | Message::Response(_) => {}
                         }
+
+                        let _ = processed_tx.send(());
                     }
                     _ => unreachable!(),
                 }
