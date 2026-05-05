@@ -80,6 +80,7 @@ use pyrefly::lsp::non_wasm::protocol::Request;
 use pyrefly::lsp::non_wasm::protocol::Response;
 use pyrefly::lsp::non_wasm::server::Connection;
 use pyrefly::lsp::non_wasm::server::TypeErrorDisplayStatusRequest;
+use pyrefly::lsp::non_wasm::server::MessageSendError;
 use pyrefly::lsp::wasm::provide_type::ProvideType;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::lock::FinishHandle;
@@ -291,11 +292,7 @@ impl TestClient {
         }
     }
 
-    #[allow(clippy::result_large_err)]
-    fn send_timeout(
-        &self,
-        message: Message,
-    ) -> Result<(), crossbeam_channel::SendTimeoutError<Message>> {
+    fn send_timeout(&self, message: Message) -> Result<(), MessageSendError> {
         self.conn
             .as_ref()
             .unwrap()
