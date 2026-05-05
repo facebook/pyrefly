@@ -641,11 +641,17 @@ fn write_error_gitlab(
         };
         let check_name = error.error_kind().to_name();
         let abs_path = error.path().as_path();
-        let path = abs_path
+        let mut path = abs_path
             .strip_prefix(relative_to)
             .unwrap_or(abs_path)
             .to_string_lossy()
             .into_owned();
+        // GitLab CI runners are Linux containers and match report paths against
+        // repo files using forward-slash separators, so normalize any native
+        // separator (e.g. `\` on Windows hosts) to `/`.
+        if std::path::MAIN_SEPARATOR != '/' {
+            path = path.replace(std::path::MAIN_SEPARATOR, "/");
+        }
 
         let mut fp = gitlab_fingerprint(check_name, &path, 0);
         while !fingerprints.insert(fp) {
@@ -1382,9 +1388,13 @@ mod tests {
     use super::*;
 
     fn sample_error(msg: Vec1<String>) -> Error {
+        sample_error_at(msg, "/repo/foo.py")
+    }
+
+    fn sample_error_at(msg: Vec1<String>, path: &str) -> Error {
         let module = Module::new(
             ModuleName::from_str("sample"),
-            ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
+            ModulePath::filesystem(PathBuf::from(path)),
             Arc::new("x = 1\n".to_owned()),
         );
         Error::new(
@@ -1535,6 +1545,31 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
         assert_eq!(value[0]["description"], "bad-assignment: bad");
+    }
+
+    #[test]
+    fn gitlab_output_format_empty_error_list() {
+        // An empty input must produce a valid empty JSON array, not `null` or
+        // an empty string — GitLab CI rejects anything that isn't a JSON array.
+        let mut buf = Vec::new();
+        write_error_gitlab(&mut buf, Path::new("/repo"), &[]).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap(), "[]\n");
+    }
+
+    #[test]
+    fn gitlab_output_format_path_outside_relative_to() {
+        // When an error's path can't be made relative to `relative_to`, the
+        // writer falls back to the absolute path rather than dropping the
+        // entry. Locks in the `unwrap_or(abs_path)` branch.
+        let errors = vec![sample_error_at(
+            vec1!["bad".into()],
+            "/different/root/foo.py",
+        )];
+        let mut buf = Vec::new();
+        write_error_gitlab(&mut buf, Path::new("/repo"), &errors).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
+        assert_eq!(value[0]["location"]["path"], "/different/root/foo.py");
     }
 
     #[test]
