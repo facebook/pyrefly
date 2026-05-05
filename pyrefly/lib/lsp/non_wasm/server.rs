@@ -509,10 +509,19 @@ pub struct Connection {
     channel_receiver: Option<Receiver<Message>>,
 }
 
+/// Send side of a connection's message channel.
+///
+/// - **`Channel`** (`Connection::stdio`, `Connection::memory`): fire-and-forget
+///   passthrough to a `crossbeam_channel::Sender<Message>`.
+/// - **`BlockingWriter`** (`Connection::ipc`): sends the message on a work
+///   channel, then blocks on a persistent ack channel until the writer thread
+///   confirms the write succeeded. This provides back-pressure and synchronous
+///   write-error detection.
 #[derive(Clone)]
 pub enum MessageSender {
     Channel(Sender<Message>),
-    BlockingWriter(Sender<MessageWriter>),
+    /// (work_tx, ack_rx): send the message, then wait for the write result.
+    BlockingWriter(Sender<Message>, Receiver<std::io::Result<()>>),
 }
 
 #[derive(Debug)]
@@ -540,16 +549,11 @@ impl MessageSender {
             Self::Channel(sender) => sender
                 .send(message)
                 .map_err(|_| MessageSendError::Disconnected),
-            Self::BlockingWriter(sender) => {
-                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
-                sender
-                    .send(MessageWriter {
-                        message,
-                        result_sender,
-                    })
+            Self::BlockingWriter(work_tx, ack_rx) => {
+                work_tx
+                    .send(message)
                     .map_err(|_| MessageSendError::Disconnected)?;
-
-                match result_receiver.recv() {
+                match ack_rx.recv() {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(error)) => Err(MessageSendError::WriteFailed(error)),
                     Err(_) => Err(MessageSendError::Disconnected),
@@ -576,17 +580,10 @@ impl MessageSender {
                         }
                     })
             }
-            Self::BlockingWriter(sender) => {
+            Self::BlockingWriter(work_tx, ack_rx) => {
                 let deadline = Instant::now() + timeout;
-                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
-                sender
-                    .send_timeout(
-                        MessageWriter {
-                            message,
-                            result_sender,
-                        },
-                        timeout,
-                    )
+                work_tx
+                    .send_timeout(message, timeout)
                     .map_err(|error| match error {
                         crossbeam_channel::SendTimeoutError::Timeout(_) => {
                             MessageSendError::Timeout
@@ -595,10 +592,7 @@ impl MessageSender {
                             MessageSendError::Disconnected
                         }
                     })?;
-
-                match result_receiver
-                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                {
+                match ack_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(error)) => Err(MessageSendError::WriteFailed(error)),
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
@@ -611,11 +605,6 @@ impl MessageSender {
             }
         }
     }
-}
-
-pub struct MessageWriter {
-    message: Message,
-    result_sender: Sender<std::io::Result<()>>,
 }
 
 /// Owns the message source for the LSP/TSP server. Either a crossbeam channel
@@ -687,29 +676,25 @@ impl Connection {
     /// or a pipe name on Windows (automatically prefixed with `\\.\pipe\`).
     pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
         let (writer_stream, reader_stream) = Self::connect_ipc(pipe_name)?;
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
+        let (work_tx, work_rx) = crossbeam_channel::unbounded::<Message>();
+        // Rendezvous channel: the sender blocks until the writer thread has
+        // consumed the ack, providing back-pressure and write-error feedback.
+        let (ack_tx, ack_rx) = crossbeam_channel::bounded(0);
         let writer = std::thread::spawn(move || {
             let mut output = writer_stream;
-            while let Ok(writer_message) = writer_receiver.recv() {
-                match write_lsp_message(&mut output, writer_message.message) {
-                    Ok(()) => {
-                        let _ = writer_message.result_sender.send(Ok(()));
-                    }
-                    Err(error) => {
-                        let error_kind = error.kind();
-                        let error_message = error.to_string();
-                        let _ = writer_message
-                            .result_sender
-                            .send(Err(std::io::Error::new(error_kind, error_message)));
-                        return Err(error);
-                    }
+            while let Ok(msg) = work_rx.recv() {
+                let result = write_lsp_message(&mut output, msg);
+                let is_err = result.is_err();
+                // If the ack receiver is dropped, stop writing.
+                if ack_tx.send(result).is_err() || is_err {
+                    break;
                 }
             }
             Ok(())
         });
         Ok((
             Self {
-                sender: MessageSender::BlockingWriter(writer_sender),
+                sender: MessageSender::BlockingWriter(work_tx, ack_rx),
                 channel_receiver: None,
             },
             MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
@@ -1054,7 +1039,6 @@ mod tests {
 
     use super::MessageSendError;
     use super::MessageSender;
-    use super::MessageWriter;
     use super::SOURCE_FIX_ALL_PYREFLY;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
@@ -1083,8 +1067,9 @@ mod tests {
 
     #[test]
     fn test_blocking_writer_send_waits_for_write_result() {
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
-        let sender = MessageSender::BlockingWriter(writer_sender);
+        let (work_tx, work_rx) = crossbeam_channel::unbounded::<Message>();
+        let (ack_tx, ack_rx) = crossbeam_channel::bounded::<io::Result<()>>(0);
+        let sender = MessageSender::BlockingWriter(work_tx, ack_rx);
         let (done_sender, done_receiver) = crossbeam_channel::bounded(1);
 
         std::thread::spawn(move || {
@@ -1093,18 +1078,17 @@ mod tests {
                 .expect("test result receiver should stay open");
         });
 
-        let writer_message = writer_receiver
+        // Wait for the message to arrive on the work channel.
+        work_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("blocking writer should receive the message");
+        // send() should still be blocked, waiting for the ack.
         assert!(
             done_receiver.try_recv().is_err(),
             "send should wait until the writer reports the write result"
         );
 
-        writer_message
-            .result_sender
-            .send(Ok(()))
-            .expect("send result receiver should stay open");
+        ack_tx.send(Ok(())).expect("ack receiver should stay open");
 
         assert!(
             done_receiver
@@ -1116,8 +1100,9 @@ mod tests {
 
     #[test]
     fn test_blocking_writer_send_reports_write_failure() {
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
-        let sender = MessageSender::BlockingWriter(writer_sender);
+        let (work_tx, work_rx) = crossbeam_channel::unbounded::<Message>();
+        let (ack_tx, ack_rx) = crossbeam_channel::bounded::<io::Result<()>>(0);
+        let sender = MessageSender::BlockingWriter(work_tx, ack_rx);
         let (done_sender, done_receiver) = crossbeam_channel::bounded(1);
 
         std::thread::spawn(move || {
@@ -1126,16 +1111,15 @@ mod tests {
                 .expect("test result receiver should stay open");
         });
 
-        let writer_message = writer_receiver
+        work_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("blocking writer should receive the message");
-        writer_message
-            .result_sender
+        ack_tx
             .send(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "broken pipe",
             )))
-            .expect("send result receiver should stay open");
+            .expect("ack receiver should stay open");
 
         let error = done_receiver
             .recv_timeout(Duration::from_secs(1))
@@ -1148,9 +1132,12 @@ mod tests {
     }
 
     #[test]
-    fn test_blocking_writer_send_timeout_waits_for_write_result() {
-        let (writer_sender, _writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
-        let sender = MessageSender::BlockingWriter(writer_sender);
+    fn test_blocking_writer_send_timeout_reports_timeout() {
+        // Create a BlockingWriter where nobody reads the work channel,
+        // so send_timeout will time out waiting for the ack.
+        let (work_tx, _work_rx) = crossbeam_channel::unbounded::<Message>();
+        let (_ack_tx, ack_rx) = crossbeam_channel::bounded::<io::Result<()>>(0);
+        let sender = MessageSender::BlockingWriter(work_tx, ack_rx);
 
         let error = sender
             .send_timeout(test_message(), Duration::from_millis(10))

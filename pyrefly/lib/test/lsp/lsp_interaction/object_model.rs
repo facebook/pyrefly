@@ -290,11 +290,10 @@ impl TestClient {
         }
     }
 
-    #[allow(clippy::result_large_err)]
     fn send_timeout(
         &self,
         message: Message,
-    ) -> Result<(), crossbeam_channel::SendTimeoutError<Message>> {
+    ) -> Result<(), pyrefly::lsp::non_wasm::server::MessageSendError> {
         self.conn
             .as_ref()
             .unwrap()
