@@ -604,8 +604,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "`dict[str, complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
-      "description": "`dict[str, complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "concise_description": "`dict[str, complex | int]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "description": "`dict[str, complex | int]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
       "line": 19,
       "name": "bad-assignment",
       "severity": "error",
@@ -615,8 +615,8 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "`list[complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
-      "description": "`list[complex | Json]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "concise_description": "`list[complex | int]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
+      "description": "`list[complex | int]` is not assignable to `dict[str, Json] | float | int | list[Json] | str | None`",
       "line": 20,
       "name": "bad-assignment",
       "severity": "error",
@@ -659,8 +659,8 @@
     {
       "code": -2,
       "column": 24,
-      "concise_description": "`dict[str, list[int] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
-      "description": "`dict[str, list[int] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "concise_description": "`dict[str, int | list[int] | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "description": "`dict[str, int | list[int] | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
       "line": 51,
       "name": "bad-assignment",
       "severity": "error",
@@ -670,8 +670,8 @@
     {
       "code": -2,
       "column": 24,
-      "concise_description": "`dict[str, dict[str, list[int] | RecursiveMapping] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
-      "description": "`dict[str, dict[str, list[int] | RecursiveMapping] | RecursiveMapping]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "concise_description": "`dict[str, dict[str, int | list[int] | str] | int | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
+      "description": "`dict[str, dict[str, int | list[int] | str] | int | str]` is not assignable to `Mapping[str, RecursiveMapping] | int | str`",
       "line": 52,
       "name": "bad-assignment",
       "severity": "error",
@@ -681,8 +681,8 @@
     {
       "code": -2,
       "column": 30,
-      "concise_description": "`list[list[float] | str | GenericTypeAlias1[str]]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
-      "description": "`list[list[float] | str | GenericTypeAlias1[str]]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
+      "concise_description": "`list[list[float] | str]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
+      "description": "`list[list[float] | str]` is not assignable to `list[str | GenericTypeAlias1[str]]`",
       "line": 63,
       "name": "bad-assignment",
       "severity": "error",
@@ -692,8 +692,8 @@
     {
       "code": -2,
       "column": 35,
-      "concise_description": "`list[int | list[int | list[int | list[float] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
-      "description": "`list[int | list[int | list[int | list[float] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]] | str | GenericTypeAlias2[str, int]]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
+      "concise_description": "`list[list[int | list[int | list[float] | str]] | str]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
+      "description": "`list[list[int | list[int | list[float] | str]] | str]` is not assignable to `list[int | str | GenericTypeAlias2[str, int]]`",
       "line": 69,
       "name": "bad-assignment",
       "severity": "error",
@@ -3578,35 +3578,13 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: int) -> Class7[int]",
-      "description": "revealed type: (x: int) -> Class7[int]",
+      "concise_description": "revealed type: Overload[\n  (x: int) -> Class7[int]\n  (x: str) -> Class7[str]\n]",
+      "description": "revealed type: Overload[\n  (x: int) -> Class7[int]\n  (x: str) -> Class7[str]\n]",
       "line": 163,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 2,
       "stop_line": 165
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Class7[int], Class7[str]) failed",
-      "description": "assert_type(Class7[int], Class7[str]) failed",
-      "line": 167,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 33,
-      "stop_line": 167
-    },
-    {
-      "code": -2,
-      "column": 16,
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `x` with type `int`",
-      "description": "Argument `Literal['']` is not assignable to parameter `x` with type `int`",
-      "line": 167,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 18,
-      "stop_line": 167
     },
     {
       "code": -2,
@@ -3633,13 +3611,24 @@
     {
       "code": -2,
       "column": 12,
-      "concise_description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class9",
-      "description": "revealed type: (x: list[Unknown], y: list[Unknown]) -> Class9",
+      "concise_description": "revealed type: [T](x: list[T], y: list[T]) -> Class9",
+      "description": "revealed type: [T](x: list[T], y: list[T]) -> Class9",
       "line": 195,
       "name": "reveal-type",
       "severity": "info",
       "stop_column": 16,
       "stop_line": 195
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "Argument `list[str]` is not assignable to parameter `y` with type `list[int]`",
+      "description": "Argument `list[str]` is not assignable to parameter `y` with type `list[int]`",
+      "line": 197,
+      "name": "bad-argument-type",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 197
     }
   ],
   "constructors_consistency.py": [],
@@ -6363,10 +6352,10 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "`type[Self@Container]` is not subscriptable",
-      "description": "`type[Self@Container]` is not subscriptable",
+      "concise_description": "`Self` may not be subscripted",
+      "description": "`Self` may not be subscripted",
       "line": 68,
-      "name": "unsupported-operation",
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 35,
       "stop_line": 68
@@ -12508,17 +12497,6 @@
       "severity": "error",
       "stop_column": 19,
       "stop_line": 69
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "`Self` must appear within a class",
-      "description": "`Self` must appear within a class",
-      "line": 70,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 70
     },
     {
       "code": -2,

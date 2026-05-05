@@ -238,17 +238,6 @@ def update_a(a: A, b: B) -> None:
 );
 
 testcase!(
-    test_update_with_readonly_key,
-    r#"
-from typing import ReadOnly, TypedDict
-class A(TypedDict):
-    x: ReadOnly[int]
-a: A = {'x': 1}
-a.update({'x': 2})  # E: No matching overload found for function `A.update`
-    "#,
-);
-
-testcase!(
     test_typed_dict_readonly_kwargs_tuple_update,
     r#"
 from typing import TypedDict, ReadOnly

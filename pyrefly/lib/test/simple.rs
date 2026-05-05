@@ -1895,7 +1895,6 @@ while True:
 else:
     exit(1)
 
-
 def func() -> int:
     return 1
 "#,
@@ -1909,7 +1908,6 @@ class MyException:
     def __init__(self) -> None:
         self.x = ""
         self
-
 
 def f(x: MyException):
     x.__init__()

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::DocumentHighlightKind;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
@@ -32,13 +33,15 @@ fn test_notebook_document_highlight() {
                 "range": {
                     "start": { "line": 0, "character": 0 },
                     "end": { "line": 0, "character": 1 }
-                }
+                },
+                "kind": DocumentHighlightKind::WRITE
             },
             {
                 "range": {
                     "start": { "line": 1, "character": 4 },
                     "end": { "line": 1, "character": 5 }
-                }
+                },
+                "kind": DocumentHighlightKind::READ
             }
         ]))
         .unwrap();

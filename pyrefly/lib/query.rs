@@ -1058,6 +1058,7 @@ impl Query {
                         _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
                     };
                     let field_ty = field_ty?;
+                    let field_ty = answers.solver().for_export_boundary(field_ty);
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
 
                     Some(Attribute {

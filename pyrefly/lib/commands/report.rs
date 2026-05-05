@@ -69,7 +69,7 @@ use crate::state::state::State;
 use crate::state::state::Transaction;
 
 /// `(major, minor)` version for the report JSON schema.
-const REPORT_SCHEMA_VERSION: (u32, u32) = (0, 1);
+const REPORT_SCHEMA_VERSION: (u32, u32) = (0, 2);
 
 /// Slot-level annotation counts for a symbol.
 ///
@@ -146,14 +146,14 @@ impl SlotCounts {
     }
 }
 
-/// Annotation quality for a single slot, ordered worst-to-best so that
-/// `min()` gives "worst-wins" semantics.
+/// Annotation quality for a single slot, ordered so that `max()` gives "best-wins" semantics across
+/// overloads. `Skip` is the neutral element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum SlotRank {
+    Skip,
     Untyped,
     Any,
     Typed,
-    Skip,
 }
 
 impl SlotRank {
@@ -328,6 +328,8 @@ impl SymbolReport {
 struct ModuleReport {
     /// Fully-qualified module name (e.g. "mypackage.submodule").
     name: String,
+    /// Filesystem path to the module source file.
+    path: String,
     /// Names of symbols defined in this module.
     names: Vec<String>,
     line_count: usize,
@@ -521,7 +523,7 @@ impl ReportArgs {
     }
 
     /// Merge overloads with the same qualified name into one entry,
-    /// keeping the worst annotation quality per deduplicated slot.
+    /// keeping the best annotation quality per deduplicated slot.
     fn merge_overloads(functions: &mut Vec<Function>) {
         let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, func) in functions.iter().enumerate() {
@@ -544,12 +546,12 @@ impl ReportArgs {
                 } else {
                     SlotRank::classify(has_annotation, func.is_return_type_known)
                 };
-                return_rank = return_rank.min(ret);
+                return_rank = return_rank.max(ret);
 
                 for param in &func.parameters {
                     if let Some(key) = &param.merge_key {
                         let entry = param_slots.entry(key.clone()).or_insert(SlotRank::Skip);
-                        *entry = (*entry).min(param.into());
+                        *entry = (*entry).max(param.into());
                     }
                 }
             }
@@ -890,7 +892,7 @@ impl ReportArgs {
                 }
             }
         }
-        variables.sort_by(|a, b| a.location.cmp(&b.location));
+        variables.sort_by_key(|a| a.location);
         variables
     }
 
@@ -1043,7 +1045,7 @@ impl ReportArgs {
                 location,
             });
         }
-        attrs.sort_by(|a, b| a.location.cmp(&b.location));
+        attrs.sort_by_key(|a| a.location);
         attrs
     }
 
@@ -1699,6 +1701,7 @@ impl ReportArgs {
 
     fn build_module_report(
         name: String,
+        path: String,
         derived_name: &str,
         line_count: usize,
         functions: &[Function],
@@ -1797,6 +1800,7 @@ impl ReportArgs {
 
         ModuleReport {
             name,
+            path,
             names,
             line_count,
             symbol_reports,
@@ -1956,8 +1960,10 @@ impl ReportArgs {
 
                 let derived_name = handle.module().to_string();
                 let name = module_name_override.clone().unwrap_or(derived_name.clone());
+                let path = handle.path().as_path().display().to_string();
                 let mut module_report = Self::build_module_report(
                     name.clone(),
+                    path,
                     &derived_name,
                     line_count,
                     &functions,
@@ -2094,6 +2100,7 @@ mod tests {
 
         ReportArgs::build_module_report(
             "test".to_owned(),
+            "test.py".to_owned(),
             "test",
             line_count,
             &functions,
@@ -2223,6 +2230,7 @@ mod tests {
 
         ReportArgs::build_module_report(
             "test".to_owned(),
+            "test.pyi".to_owned(),
             "test",
             line_count,
             &functions,
@@ -2531,6 +2539,15 @@ mod tests {
         compare_snapshot("overloads_partial.expected.json", &report);
     }
 
+    /// @overload merging with a fallback returning `Any`.
+    /// Best-wins semantics mean the merged return is `Typed`, not `Any`.
+    /// Regression test for https://github.com/facebook/pyrefly/issues/3257.
+    #[test]
+    fn test_report_overloads_any_fallback() {
+        let report = build_module_report_for_test("overloads_any_fallback.py");
+        compare_snapshot("overloads_any_fallback.expected.json", &report);
+    }
+
     /// @dataclass, Enum, TypedDict, NamedTuple: schema class fields.
     /// Current: schema class fields are reported as regular variables.
     /// Typestats: schema fields are IMPLICIT (0 typable).
@@ -2731,6 +2748,7 @@ def g(x: int) -> int:
         let loc = |line| Location { line, column: 1 };
         let mut report = ModuleReport {
             name: "pkg".to_owned(),
+            path: "pkg/__init__.py".to_owned(),
             names: vec!["pkg.Foo".into(), "pkg.bar".into(), "pkg._private".into()],
             line_count: 10,
             symbol_reports: vec![

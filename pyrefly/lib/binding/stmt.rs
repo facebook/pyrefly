@@ -7,7 +7,6 @@
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
-use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -40,6 +39,8 @@ use crate::binding::binding::BindingTypeAlias;
 use crate::binding::binding::ExhaustiveBinding;
 use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::ExprOrBinding;
+use crate::binding::binding::ImportBinding;
+use crate::binding::binding::ImportFallback;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
@@ -61,8 +62,6 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::special::SpecialExport;
-use crate::state::loader::FindError;
-use crate::state::loader::FindingOrError;
 use crate::types::alias::resolve_typeshed_alias;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::AnyStyle;
@@ -120,7 +119,9 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
+        let test_clone = test.clone();
         self.insert_binding(Key::Anon(test_range), Binding::Expr(None, Box::new(test)));
+        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test_clone));
         if let Some(mut msg_expr) = msg {
             let mut base = self.scopes.clone_current_flow();
             // Negate the narrowing of the test expression when typechecking
@@ -495,14 +496,6 @@ impl<'a> BindingsBuilder<'a> {
         self.scopes.mark_flow_termination(false);
     }
 
-    fn find_error(&self, error: &FindError, range: TextRange) {
-        let Some(kind) = error.kind() else {
-            return;
-        };
-        let (ctx, msg) = error.display();
-        self.error_multiline(range, ErrorInfo::new(kind, ctx.as_deref()), msg);
-    }
-
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
@@ -544,7 +537,13 @@ impl<'a> BindingsBuilder<'a> {
                 //
                 // For example, we treat `typing.List` as if it were an import of `builtins.list`.
                 self.bind_legacy_type_var_or_typing_alias(name, |_| {
-                    Binding::Import(Box::new((module, forward, None)))
+                    Binding::Import(Box::new(ImportBinding {
+                        module,
+                        name: forward,
+                        original_name_range: None,
+                        check_deprecated: None,
+                        fallback: None,
+                    }))
                 })
             }
             Stmt::Assign(mut x) => {
@@ -961,6 +960,9 @@ impl<'a> BindingsBuilder<'a> {
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                // The while condition always evaluates at least once, so walrus
+                // targets are guaranteed to be assigned after the loop.
+                self.scopes.propagate_new_flow_entries_to_loop_base();
                 let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.bind_narrow_ops(
@@ -1231,9 +1233,6 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    if let Some(error) = self.lookup.module_exists(m).error() {
-                        self.find_error(&error, x.range);
-                    }
                     match x.asname {
                         Some(asname) => {
                             // `import X as X` is an explicit re-export per Python typing spec.
@@ -1249,6 +1248,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     m.components().into_boxed_slice(),
                                     None,
+                                    Some(x.range),
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
@@ -1262,6 +1262,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     Box::new([first.clone()]),
                                     module_key,
+                                    Some(x.range),
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
@@ -1282,18 +1283,7 @@ impl<'a> BindingsBuilder<'a> {
                     x.level,
                     x.module.as_ref().map(|x| &x.id),
                 ) {
-                    match self.lookup.module_exists(m) {
-                        FindingOrError::Finding(f) => {
-                            if let Some(error) = f.error {
-                                self.find_error(&error, x.range);
-                            }
-                            self.bind_module_exports(x, m);
-                        }
-                        FindingOrError::Error(error) => {
-                            self.find_error(&error, x.range);
-                            self.bind_unimportable_names(&x, error.kind().is_some());
-                        }
-                    }
+                    self.bind_module_exports(x, m);
                 } else {
                     self.error(
                         x.range,
@@ -1400,6 +1390,24 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn bind_module_exports(&mut self, x: StmtImportFrom, m: ModuleName) {
+        let module_range = x.range;
+        // Single solve-time module-existence check per `from X import …`
+        // statement. Surfaces a `MissingImport` (or other find-error)
+        // diagnostic for `X` without firing bind-time `module_exists`,
+        // and covers all shapes uniformly: named imports, wildcards
+        // (where the bind-time `get_wildcard` may have silently returned
+        // `None` because `X` doesn't exist), and parse-failed forms with
+        // no names. Nothing consumes the resulting module type — the
+        // binding exists only so its solver emits the diagnostic.
+        self.insert_binding(
+            Key::Import(Box::new((m.first_component(), module_range))),
+            Binding::Module(Box::new((
+                m,
+                m.components().into_boxed_slice(),
+                None,
+                Some(module_range),
+            ))),
+        );
         for x in x.names {
             if &x.name == "*" {
                 let Some(wildcards) = self.lookup.get_wildcard(m) else {
@@ -1408,7 +1416,13 @@ impl<'a> BindingsBuilder<'a> {
                 for name in wildcards.iter_hashed() {
                     let key = Key::Import(Box::new((name.into_key().clone(), x.range)));
                     let val = if self.lookup.export_exists(m, &name) {
-                        Binding::Import(Box::new((m, name.into_key().clone(), None)))
+                        Binding::Import(Box::new(ImportBinding {
+                            module: m,
+                            name: name.into_key().clone(),
+                            original_name_range: None,
+                            check_deprecated: None,
+                            fallback: None,
+                        }))
                     } else {
                         if !self.scopes.is_unreachable_from_static_test() {
                             self.error(
@@ -1442,55 +1456,16 @@ impl<'a> BindingsBuilder<'a> {
                     None
                 };
                 let asname = x.asname.unwrap_or_else(|| x.name.clone());
-                // A `from x import y` statement is ambiguous; if `x` is a package with
-                // an `__init__.py` file, then it might import the name `y` from the
-                // module `x` defined by the `__init__.py` file, or it might import a
-                // submodule `x.y` of the package `x`.
-                //
-                // If both are present, generally we prefer the name defined in `x`,
-                // but there is an exception: if we are already looking at the
-                // `__init__` module of `x`, we always prefer the submodule.
-                let val = if (self.module_info.name() != m)
-                    && self.lookup.export_exists(m, &x.name.id)
-                {
-                    if let Some(deprecated) = self.lookup.get_deprecated(m, &x.name.id) {
-                        let msg =
-                            deprecated.as_error_message(format!("`{}` is deprecated", x.name));
-                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
-                    }
-                    Binding::Import(Box::new((m, x.name.id.clone(), original_name_range)))
-                } else {
-                    // Try submodule lookup first, then fall back to __getattr__
-                    let x_as_module_name = m.append(&x.name.id);
-                    let (finding, error) = match self.lookup.module_exists(x_as_module_name) {
-                        FindingOrError::Finding(finding) => (true, finding.error),
-                        FindingOrError::Error(error) => (false, Some(error)),
-                    };
-                    let is_not_found =
-                        error.is_some_and(|e| matches!(e, FindError::MissingImport(..)));
-                    if finding {
-                        Binding::Module(Box::new((
-                            x_as_module_name,
-                            x_as_module_name.components().into_boxed_slice(),
-                            None,
-                        )))
-                    } else if self.lookup.export_exists(m, &dunder::GETATTR) {
-                        // Module has __getattr__, which means any attribute can be accessed.
-                        // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
-                        Binding::ImportViaGetattr(Box::new((m, x.name.id.clone())))
-                    } else if is_not_found {
-                        if !self.scopes.is_unreachable_from_static_test() {
-                            self.error(
-                                x.range,
-                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                                format!("Could not import `{}` from `{m}`", x.name.id),
-                            );
-                        }
-                        Binding::Any(AnyStyle::Error)
-                    } else {
-                        Binding::Any(AnyStyle::Implicit)
-                    }
-                };
+                let val = Binding::Import(Box::new(ImportBinding {
+                    module: m,
+                    name: x.name.id.clone(),
+                    original_name_range,
+                    check_deprecated: Some(x.range),
+                    fallback: Some(ImportFallback {
+                        stmt_range: x.range,
+                        is_unreachable: self.scopes.is_unreachable_from_static_test(),
+                    }),
+                }));
                 // __future__ imports have side effects even if not explicitly used,
                 // so we skip the unused import check for them.
                 // See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions

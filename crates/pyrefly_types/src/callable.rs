@@ -75,6 +75,25 @@ impl Callable {
         }
     }
 
+    pub fn contains_callable_residual(&self) -> bool {
+        let check = |t: &Type| matches!(t, Type::CallableResidual(_));
+        if self.ret.any(check) {
+            return true;
+        }
+        match &self.params {
+            Params::List(params) => params.items().iter().any(|p| p.as_type().any(check)),
+            Params::ParamSpec(prefix, p) => {
+                prefix.iter().any(|pp| {
+                    let ty = match pp {
+                        PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
+                    };
+                    ty.any(check)
+                }) || p.any(check)
+            }
+            Params::Ellipsis | Params::Materialization => false,
+        }
+    }
+
     /// Returns true if this callable carries no real type information: all
     /// parameters and the return type are `Any(Implicit)` (i.e. Unknown).
     pub fn is_fully_unknown(&self) -> bool {

@@ -1359,7 +1359,6 @@ impl LspInteraction {
             indexing_mode,
             workspace_indexing_limit: 50,
             build_system_blocking: false,
-            enable_external_references: false,
         };
         Self::new_with_args(args, NoTelemetry, None, None)
     }
@@ -1369,7 +1368,6 @@ impl LspInteraction {
             indexing_mode: IndexingMode::None,
             workspace_indexing_limit: 50,
             build_system_blocking: false,
-            enable_external_references: false,
         };
         Self::new_with_args(args, NoTelemetry, None, thrift_remapper)
     }

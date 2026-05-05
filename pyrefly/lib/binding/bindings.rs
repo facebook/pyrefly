@@ -58,6 +58,7 @@ use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BranchInfo;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
+use crate::binding::binding::ImportBinding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
@@ -195,6 +196,13 @@ struct BindingsInner {
     /// keyed by the lambda's TextRange. Populated at binding time so the
     /// solver can look up yield info without re-walking the AST.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
+    /// Class body ranges paired with class indices. Used by the solver to
+    /// recover the enclosing class for an expression that resolves to
+    /// `typing.Self`, without needing a per-`Self`-use bind-time key.
+    /// Populated in source order (parent class bodies before nested ones),
+    /// so a reverse iteration with "first containing range" yields the
+    /// innermost enclosing class.
+    class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
     /// Annotation-only declarations (`x: Final[int]`) that are subsequently
     /// initialized by an assignment that cannot be syntactically merged with
     /// the annotation (tuple unpacking, walrus operator, `with … as`).
@@ -272,6 +280,11 @@ pub struct BindingsBuilder<'a> {
     /// Yield and yield-from indices for lambdas that contain yields.
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
     next_lambda_param_id: u32,
+    /// Class body ranges paired with class indices, populated as
+    /// `class_def_inner` enters each class body. The solver uses this to
+    /// recover the enclosing class for a given expression range without
+    /// needing a per-`Self`-use bind-time key.
+    pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
     /// See `BindingsInner::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
     /// Defaults extracted from an adjacent `__new__.__defaults__` assignment,
@@ -327,6 +340,7 @@ impl Bindings {
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
             lambda_yield_keys: Vec::new(),
+            class_scopes: Vec::new(),
             subsequently_initialized: SmallSet::new(),
             promote_ranges: SmallSet::new(),
         }))
@@ -374,6 +388,21 @@ impl Bindings {
             .iter()
             .find(|(r, _, _)| *r == range)
             .map_or((&[], &[]), |(_, yields, yield_froms)| (yields, yield_froms))
+    }
+
+    /// Returns the innermost class whose body range contains `range`, or
+    /// `None` if `range` is not inside any class body. Used by the solver
+    /// to anchor `typing.Self` references to the enclosing class.
+    ///
+    /// `class_scopes` is populated in source/visit order, so reverse
+    /// iteration yields the most-recently-pushed (innermost) class first.
+    pub fn enclosing_class(&self, range: TextRange) -> Option<Idx<KeyClass>> {
+        self.0
+            .class_scopes
+            .iter()
+            .rev()
+            .find(|(r, _)| r.contains_range(range))
+            .map(|(_, idx)| *idx)
     }
 
     /// Returns `true` if the given annotation-only declaration was subsequently
@@ -552,6 +581,7 @@ impl Bindings {
             deferred_bound_names: Vec::new(),
             lambda_yield_keys: Vec::new(),
             next_lambda_param_id: 0,
+            class_scopes: Vec::new(),
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
@@ -662,6 +692,7 @@ impl Bindings {
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
             lambda_yield_keys: builder.lambda_yield_keys,
+            class_scopes: builder.class_scopes,
             subsequently_initialized: builder.subsequently_initialized,
             promote_ranges: builder.promote_ranges,
         }))
@@ -1074,7 +1105,18 @@ impl<'a> BindingsBuilder<'a> {
                     let key = Key::Import(Box::new((name.clone(), TextRange::default())));
                     let idx = self.table.insert(
                         key,
-                        Binding::Import(Box::new((builtins_module, name.clone(), None))),
+                        Binding::Import(Box::new(ImportBinding {
+                            module: builtins_module,
+                            name: name.clone(),
+                            original_name_range: None,
+                            check_deprecated: None,
+                            // Caller (inject_builtins) got this name from
+                            // `get_wildcard(builtins)`, so the name is known
+                            // to exist in builtins's exports. Implicit
+                            // builtins injection: do not emit deprecation
+                            // warnings.
+                            fallback: None,
+                        })),
                     );
                     self.bind_name(name, idx, FlowStyle::Import(builtins_module, name.clone()));
                 }
@@ -1138,7 +1180,11 @@ impl<'a> BindingsBuilder<'a> {
             | FlowStyle::Import(..)
             | FlowStyle::ImportAs(_)
             | FlowStyle::FunctionDef { .. }
-            | FlowStyle::ClassDef
+            // A non-pristine `ClassDef` (a same-scope reassignment of a name
+            // originally introduced by a class definition) still binds the
+            // name to a class-shaped value, so it is not itself a
+            // special-export alias for typing constructs like `TypeVar`.
+            | FlowStyle::ClassDef { .. }
             | FlowStyle::LoopRecursion => None,
         }
     }
@@ -1161,10 +1207,17 @@ impl<'a> BindingsBuilder<'a> {
                     idx = *inner_idx;
                 }
                 Binding::NameAssign(x) => {
+                    // Receiver-constrained class assignments rebind a
+                    // class-shaped name; the receiver semantics keep the
+                    // visible identity, so a rebind RHS like `Optional`
+                    // does not alias this name to the special export.
+                    if x.receiver_idx.is_some() {
+                        return None;
+                    }
                     return self.as_special_export_inner(&x.expr, visited_names, visited_keys);
                 }
                 Binding::Import(x) => {
-                    return self.lookup.is_special_export(x.0, &x.1);
+                    return self.lookup.is_special_export(x.module, &x.name);
                 }
                 Binding::Phi(_, branches) => {
                     // Check all branches for a consistent special export (e.g. try/except
@@ -1443,7 +1496,14 @@ impl<'a> BindingsBuilder<'a> {
             // All partial type reads forward to the NameAssign (def_idx).
             self.insert_binding_idx(deferred.bound_name_idx, Binding::ForwardToFirstUse(def_idx));
         } else {
-            let binding = if deferred.promote {
+            let orig_binding = self.idx_to_binding(default_idx);
+            let binding = if let Some(b) = orig_binding
+                && matches!(b, Binding::LambdaParameter(..))
+            {
+                // Lambda parameters have special handling in Key::check_shortcut.
+                // We bind directly to the definition to ensure the shortcut is always detected.
+                b.clone()
+            } else if deferred.promote {
                 Binding::PromoteForward(default_idx)
             } else {
                 Binding::Forward(default_idx)
@@ -1626,20 +1686,25 @@ impl<'a> BindingsBuilder<'a> {
         let prev_idx = self.scopes.current_flow_idx(name);
         if let Some(prev_idx) = prev_idx
             && let Some(Binding::Import(prev)) = self.idx_to_binding(prev_idx)
-            && self.lookup.is_final(prev.0, &prev.1)
         {
-            // A duplicate import of the same symbol is not a reassignment.
+            // A duplicate import of the same symbol is not a reassignment;
+            // skip the cross-module `is_final` lookup in that case so that
+            // repeated `from X import Y` blocks (common in
+            // `if TYPE_CHECKING:` and method-local imports) don't force
+            // `Step::Exports` on the import target.
             if let Some(Binding::Import(cur)) = self.idx_to_binding(idx)
-                && cur.0 == prev.0
-                && cur.1 == prev.1
+                && cur.module == prev.module
+                && cur.name == prev.name
             {
                 return;
             }
-            self.error(
-                self.idx_to_key(idx).range(),
-                ErrorInfo::Kind(ErrorKind::BadAssignment),
-                format!("Cannot assign to `{name}` because it is imported as final"),
-            );
+            if self.lookup.is_final(prev.module, &prev.name) {
+                self.error(
+                    self.idx_to_key(idx).range(),
+                    ErrorInfo::Kind(ErrorKind::BadAssignment),
+                    format!("Cannot assign to `{name}` because it is imported as final"),
+                );
+            }
         }
     }
 
@@ -2076,8 +2141,7 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::TypeVar(..)
                     | Binding::ParamSpec(..)
                     | Binding::TypeVarTuple(..)
-                    | Binding::Import(..)
-                    | Binding::ImportViaGetattr(..),
+                    | Binding::Import(..),
                 )
                 | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(name)),

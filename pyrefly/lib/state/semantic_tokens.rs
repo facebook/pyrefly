@@ -543,7 +543,7 @@ impl SemanticTokenBuilder {
 
     pub fn all_tokens_sorted(self) -> Vec<SemanticTokenWithFullRange> {
         let mut tokens = self.tokens;
-        tokens.sort_by(|a, b| a.range.start().cmp(&b.range.start()));
+        tokens.sort_by_key(|a| a.range.start());
         tokens
     }
 }

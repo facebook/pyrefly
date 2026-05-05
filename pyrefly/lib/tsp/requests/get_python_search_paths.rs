@@ -16,11 +16,11 @@ use lsp_types::Url;
 use tsp_types::protocol::GetPythonSearchPathsParams;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspServer;
+use crate::tsp::server::TspConnection;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     /// Handle a `typeServer/getPythonSearchPaths` request.
     ///
     /// Validates the snapshot, parses the `from_uri`, and delegates to
@@ -53,7 +53,7 @@ impl<T: TspInterface> TspServer<T> {
         // notebook's filesystem path so we return the right search paths.
         let resolved_url = if url.scheme() != "file" {
             match self
-                .inner
+                .inner()
                 .resolve_uri_to_path(&url)
                 .and_then(|p| Url::from_file_path(p).ok())
             {
@@ -68,7 +68,7 @@ impl<T: TspInterface> TspServer<T> {
             url
         };
 
-        match self.inner.get_python_search_paths(&resolved_url) {
+        match self.inner().get_python_search_paths(&resolved_url) {
             Ok(paths) => self.send_ok(id, paths),
             Err(detail) => self.send_err(id, internal_error(&detail)),
         }

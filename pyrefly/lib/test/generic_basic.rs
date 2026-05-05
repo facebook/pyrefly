@@ -509,6 +509,17 @@ assert_type(f(1, None), int)
 );
 
 testcase!(
+    test_typevar_or_none_from_call,
+    r#"
+from typing import assert_type
+class C: ...
+def unwrap[T](value: T | None) -> T: ...
+def get() -> C | None: ...
+assert_type(unwrap(get()), C)
+    "#,
+);
+
+testcase!(
     test_typevar_solved_in_one_path,
     r#"
 from typing import assert_type

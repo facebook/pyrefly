@@ -312,6 +312,10 @@ class RMSNorm(Module):
 
 class GroupNorm(Module):
     """Applies Group Normalization"""
+
+    weight: Tensor
+    bias: Tensor
+
     def __init__(
         self,
         num_groups: int,
@@ -503,6 +507,7 @@ class Conv2d[InC, OutC, K, S = 1, P = 0, D = 1](Module):
     """
 
     weight: Tensor[OutC, InC, K, K]
+    bias: Tensor[OutC] | None
 
     def __init__(
         self,

@@ -142,7 +142,6 @@ from typing import assert_type, Literal
 t = ("a", "b")
 assert_type(t[False], Literal["a"])
 assert_type(t[True], Literal["b"])
-
 "#,
 );
 
@@ -166,7 +165,7 @@ testcase!(
 from typing import Literal
 
 good: Literal[Literal[Literal[1, 2, 3], "foo"], 5, None] = "foo"
-bad: Literal[Literal, 3]  # E: Expected a type argument for `Literal`  # E: Invalid type inside literal, `Literal`
+bad: Literal[Literal, 3]  # E: Expected a type argument for `Literal`
 "#,
 );
 
@@ -367,7 +366,6 @@ testcase!(
     test_partial_inference_literalstring_join,
     r#"
 from typing import assert_type, LiteralString, reveal_type
-
 
 def f(x1: list[str], x2: list[LiteralString]):
     x3 = []

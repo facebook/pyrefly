@@ -38,6 +38,8 @@ use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::args::clap_env;
+use pyrefly_util::demand_tree::DemandCollector;
+use pyrefly_util::demand_tree::report_json;
 use pyrefly_util::display;
 use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
@@ -75,7 +77,9 @@ use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
-use crate::state::subscriber::ProgressBarSubscriber;
+use crate::state::steps::Step;
+use crate::state::subscriber::ProgressBarStyle;
+use crate::state::subscriber::TestSubscriber;
 
 /// Result data from a non-watch check run, used for telemetry logging.
 pub struct CheckResult {
@@ -262,6 +266,10 @@ struct OutputArgs {
     /// Format for pysa report output (json or capnp)
     #[arg(long, value_enum, default_value_t = report::pysa::PysaFormat::Capnp)]
     report_pysa_format: report::pysa::PysaFormat,
+    /// Report the cross-module demand tree (aggregated summary of LookupAnswer
+    /// and LookupExport calls). Useful for analyzing laziness properties.
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    report_demand_tree: Option<PathBuf>,
     /// Generate a CinderX-format type report (experimental, internal-only).
     #[arg(long, value_name = "OUTPUT_DIR", hide = true)]
     report_cinderx: Option<PathBuf>,
@@ -319,9 +327,16 @@ struct OutputArgs {
     )]
     summary: Summary,
 
-    /// Suppress the progress bar during type checking.
-    #[arg(long)]
+    /// Suppress the progress bar during type checking. Deprecated: use `--progress-bar=no` instead.
+    #[arg(long, hide = true)]
     no_progress_bar: bool,
+
+    /// Set the progress bar style.
+    /// `interactive` (default) shows a visual progress bar.
+    /// `simple` prints periodic log-style progress messages (suitable for piping or non-interactive use).
+    /// `no` disables progress reporting entirely.
+    #[arg(long, value_enum)]
+    progress_bar: Option<ProgressBarStyle>,
 
     /// When specified, strip this prefix from any paths in the output.
     /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
@@ -357,6 +372,18 @@ impl OutputArgs {
 
     fn output_format(&self) -> OutputFormat {
         self.output_format.unwrap_or_default()
+    }
+
+    /// Resolve the effective progress bar style, taking deprecated flags into account.
+    fn progress_bar_style(&self) -> ProgressBarStyle {
+        if let Some(style) = &self.progress_bar {
+            return style.clone();
+        }
+        if self.no_progress_bar || self.summary == Summary::None {
+            ProgressBarStyle::No
+        } else {
+            ProgressBarStyle::Interactive
+        }
     }
 }
 
@@ -722,16 +749,14 @@ impl CheckArgs {
             ));
         }
 
-        let holder = Forgetter::new(State::new(config_finder, thread_count), true);
+        let state = Forgetter::new(State::new(config_finder, thread_count), true);
         let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
-            holder
-                .as_ref()
-                .new_transaction(require_levels.default, None),
+            state.as_ref().new_transaction(require_levels.default, None),
             true,
         );
-        let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
+        let (loaded_handles, _, sourcedb_errors) = handles.all(state.as_ref().config_finder());
 
         // Project-level output settings can come from config when CLI flags are absent.
         if (self.output.baseline.is_none()
@@ -739,7 +764,7 @@ impl CheckArgs {
             || self.output.min_severity.is_none())
             && let Some(handle) = loaded_handles.first()
         {
-            let config = holder.as_ref().config_finder().python_file(
+            let config = state.as_ref().config_finder().python_file(
                 ModuleNameWithKind::guaranteed(handle.module()),
                 handle.path(),
             );
@@ -875,7 +900,7 @@ impl CheckArgs {
             let events = get_watcher_events(&mut watcher).await?;
             transaction = state.new_committable_transaction(
                 require_levels.default,
-                Some(Box::new(ProgressBarSubscriber::new())),
+                self.output.progress_bar_style().make_subscriber(),
             );
             let new_transaction_mut = transaction.as_mut();
             new_transaction_mut.invalidate_events(&events);
@@ -949,15 +974,17 @@ impl CheckArgs {
         }
 
         let type_check_start = Instant::now();
-        let show_progress_bar =
-            self.output.summary != Summary::None && !self.output.no_progress_bar;
-        if show_progress_bar {
-            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
-        }
+        let demand_tree_subscriber = if self.output.report_demand_tree.is_some() {
+            transaction.set_demand_collector(Some(DemandCollector::new()));
+            let sub = TestSubscriber::new();
+            transaction.set_subscriber(Some(Box::new(sub.dupe())));
+            Some(sub)
+        } else {
+            transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
+            None
+        };
         transaction.run(handles, require, None);
-        if show_progress_bar {
-            transaction.set_subscriber(None);
-        }
+        transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
@@ -1161,7 +1188,7 @@ impl CheckArgs {
         }
         if let Some(output_path) = &self.output.report_timings {
             eprintln!("Computing timing information");
-            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+            transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
             transaction.report_timings(output_path)?;
             transaction.set_subscriber(None);
         }
@@ -1200,6 +1227,20 @@ impl CheckArgs {
                 path,
                 report::dependency_graph::dependency_graph(transaction, handles),
             )?;
+        }
+        if let Some(path) = &self.output.report_demand_tree {
+            let roots = transaction.take_demand_roots();
+            let module_steps: Vec<(String, &'static str)> = demand_tree_subscriber
+                .expect("demand_tree_subscriber is set when report_demand_tree is Some")
+                .finish_detailed()
+                .into_iter()
+                .map(|(handle, info)| {
+                    let label = info.last_step.map_or("Nothing", Step::label);
+                    (handle.module().as_str().to_owned(), label)
+                })
+                .collect();
+            let output = report_json(&roots, &module_steps);
+            fs_anyhow::write(path, output)?;
         }
         if self.behavior.expectations {
             loads.check_against_expectations()?;

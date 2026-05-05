@@ -16,6 +16,8 @@ use std::io::Stdin;
 use std::io::Write;
 use std::iter::once;
 use std::num::NonZeroUsize;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,6 +69,7 @@ use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
+use lsp_types::DocumentHighlightKind;
 use lsp_types::DocumentHighlightParams;
 use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
@@ -393,7 +396,7 @@ impl TypeErrorDisplayStatus {
 }
 
 /// Interface exposed for TSP to interact with the LSP server
-pub trait TspInterface: Send + Sync {
+pub trait TspInterface: Send + Sync + 'static {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
@@ -475,6 +478,17 @@ pub trait TspInterface: Send + Sync {
         func_id: &pyrefly_types::callable::FuncId,
     ) -> Option<TextRange>;
 
+    /// Resolve an importable module to its backing filesystem path using the
+    /// import-resolution context of `source_uri`.
+    ///
+    /// Returns `None` when the source URI is invalid, cannot be mapped to a
+    /// path, or the target module cannot be resolved.
+    fn resolve_module_uri(
+        &self,
+        source_uri: &str,
+        module: &pyrefly_types::module::ModuleType,
+    ) -> Option<PathBuf>;
+
     /// Resolve a URI to a filesystem path.
     ///
     /// Handles both `file://` URIs (via [`Url::to_file_path`]) and notebook
@@ -484,7 +498,7 @@ pub trait TspInterface: Send + Sync {
 
     /// Return the cell index if `uri` is an open notebook cell, or `None`
     /// for regular file URIs.
-    fn maybe_get_cell_index(&self, uri: &Url) -> Option<usize>;
+    fn maybe_get_code_cell_index(&self, uri: &Url) -> Option<usize>;
 }
 
 pub struct Connection {
@@ -505,6 +519,9 @@ pub struct Connection {
 pub enum MessageReader {
     Channel(Receiver<Message>),
     Stdio(BufReader<Stdin>),
+    /// A generic byte stream, used for IPC transports (Unix domain sockets,
+    /// Windows named pipes).
+    Stream(BufReader<Box<dyn std::io::Read + Send>>),
 }
 
 impl MessageReader {
@@ -515,6 +532,7 @@ impl MessageReader {
         match self {
             MessageReader::Channel(r) => r.recv().ok(),
             MessageReader::Stdio(r) => read_lsp_message(r).ok().flatten(),
+            MessageReader::Stream(r) => read_lsp_message(r).ok().flatten(),
         }
     }
 }
@@ -553,6 +571,66 @@ impl Connection {
             MessageReader::Stdio(BufReader::new(std::io::stdin())),
             IoThread { writer },
         )
+    }
+
+    /// Create a connection over a local IPC mechanism (Unix domain socket on
+    /// Unix, named pipe on Windows). The `pipe_name` is a socket path on Unix
+    /// or a pipe name on Windows (automatically prefixed with `\\.\pipe\`).
+    pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
+        let (writer_stream, reader_stream) = Self::connect_ipc(pipe_name)?;
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let writer = std::thread::spawn(move || {
+            let mut output = writer_stream;
+            while let Ok(msg) = writer_receiver.recv() {
+                write_lsp_message(&mut output, msg)?;
+            }
+            Ok(())
+        });
+        Ok((
+            Self {
+                sender: writer_sender,
+                channel_receiver: None,
+            },
+            MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
+            IoThread { writer },
+        ))
+    }
+
+    #[cfg(unix)]
+    fn connect_ipc(
+        pipe_name: &str,
+    ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
+        let stream = UnixStream::connect(pipe_name)?;
+        let reader = stream.try_clone()?;
+        Ok((Box::new(stream), Box::new(reader)))
+    }
+
+    #[cfg(windows)]
+    fn connect_ipc(
+        pipe_name: &str,
+    ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
+        use std::fs::OpenOptions;
+        let stream = OpenOptions::new().read(true).write(true).open(&pipe_name)?;
+        let reader = stream.try_clone()?;
+        Ok((Box::new(stream), Box::new(reader)))
+    }
+
+    /// Create a connection from a transport specification string.
+    /// Supported values: `"stdio"` for stdin/stdout, or `"ipc://<name>"` for a
+    /// local socket / named pipe.
+    pub fn from_transport(transport: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
+        if transport == "stdio" {
+            return Ok(Self::stdio());
+        }
+
+        if let Some(pipe_name) = transport.strip_prefix("ipc://") {
+            return Self::ipc(pipe_name);
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Unsupported TSP transport: {transport}"),
+        ))
     }
 
     pub fn memory() -> ((Self, MessageReader), (Self, MessageReader)) {
@@ -647,11 +725,9 @@ struct LspProgressState {
 
 impl LspProgressState {
     fn snapshot(&mut self) -> (String, u32) {
-        let mut percentage = if self.started == 0 {
-            0
-        } else {
-            (((self.finished * 100) / self.started) as u32).min(99)
-        };
+        let mut percentage = (self.finished * 100)
+            .checked_div(self.started)
+            .map_or(0, |v| (v as u32).min(99));
         if percentage < self.last_percentage {
             percentage = self.last_percentage;
         }
@@ -850,7 +926,11 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::CodeActionKind;
+
+    use super::SOURCE_FIX_ALL_PYREFLY;
     use super::format_diagnostic_message_for_markdown;
+    use super::matches_fix_all_kind;
 
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
@@ -890,6 +970,26 @@ mod tests {
     #[test]
     fn test_format_only_special_characters() {
         assert_eq!(format_diagnostic_message_for_markdown("***"), "\\*\\*\\*");
+    }
+
+    #[test]
+    fn test_fix_all_kind_filter_matches_supported_kinds() {
+        assert!(matches_fix_all_kind(&CodeActionKind::SOURCE_FIX_ALL));
+        assert!(matches_fix_all_kind(&CodeActionKind::new(
+            SOURCE_FIX_ALL_PYREFLY,
+        )));
+    }
+
+    #[test]
+    fn test_fix_all_kind_filter_rejects_unsupported_kinds() {
+        assert!(!matches_fix_all_kind(&CodeActionKind::new(
+            "source.fixAll.pyrefly.foo",
+        )));
+        assert!(!matches_fix_all_kind(&CodeActionKind::new(
+            "source.fixAll.pyreflyyyyyy",
+        )));
+        assert!(!matches_fix_all_kind(&CodeActionKind::QUICKFIX));
+        assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
     }
 }
 
@@ -1032,10 +1132,7 @@ pub fn initialize_start(
     sender: &Sender<Message>,
     reader: &mut MessageReader,
 ) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
-    loop {
-        let Some(msg) = reader.recv() else {
-            break;
-        };
+    while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
                 if x.method == Initialize::METHOD {
@@ -1093,6 +1190,12 @@ pub struct ServerCapabilitiesWithTypeHierarchy {
     type_hierarchy_provider: Option<bool>,
 }
 
+impl ServerCapabilitiesWithTypeHierarchy {
+    pub fn set_experimental(&mut self, value: Value) {
+        self.base.experimental = Some(value);
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InitializeResult<C> {
@@ -1116,10 +1219,7 @@ pub fn initialize_finish<C: Serialize>(
     if sender.send(response.into()).is_err() {
         return Ok(false);
     }
-    loop {
-        let Some(msg) = reader.recv() else {
-            break;
-        };
+    while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
                 error!("Unexpected request before initialized: {x:?}");
@@ -1313,6 +1413,7 @@ pub fn capabilities(
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
                 CodeActionKind::SOURCE_FIX_ALL,
+                CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY),
             ]),
             ..Default::default()
         })),
@@ -1422,6 +1523,11 @@ pub enum ProcessEvent {
 }
 
 const PYTHON_SECTION: &str = "python";
+const SOURCE_FIX_ALL_PYREFLY: &str = "source.fixAll.pyrefly";
+
+fn matches_fix_all_kind(kind: &CodeActionKind) -> bool {
+    kind == &CodeActionKind::SOURCE_FIX_ALL || kind.as_str() == SOURCE_FIX_ALL_PYREFLY
+}
 
 struct TypeHierarchyTarget {
     def_index: ClassDefIndex,
@@ -1877,7 +1983,7 @@ impl Server {
                             url
                         )
                     })?;
-                    for cell_url in lsp_notebook.cell_urls() {
+                    for cell_url in lsp_notebook.code_cell_urls() {
                         self.open_notebook_cells
                             .write()
                             .insert(cell_url.clone(), notebook_path.clone());
@@ -2821,7 +2927,7 @@ impl Server {
                 return match &**lsp_file {
                     LspFile::Notebook(notebook) => {
                         let error_cell = e.get_notebook_cell()?;
-                        let error_cell_uri = notebook.get_cell_url(error_cell)?;
+                        let error_cell_uri = notebook.get_code_cell_url(error_cell)?;
                         if let Some(filter_cell) = cell_uri
                             && error_cell_uri != filter_cell
                         {
@@ -2956,7 +3062,7 @@ impl Server {
             if let Some(lsp_file) = open_files.get(&handle_path_buf) {
                 match &**lsp_file {
                     LspFile::Notebook(notebook) => {
-                        for url in notebook.cell_urls() {
+                        for url in notebook.code_cell_urls() {
                             diags.insert(PathBuf::from(url.to_string()), Vec::new());
                         }
                     }
@@ -3881,7 +3987,7 @@ impl Server {
         match entry.get().as_ref() {
             LspFile::Notebook(notebook) => match kind {
                 DidCloseKind::NotebookDocument => {
-                    let cell_urls: Vec<_> = notebook.cell_urls().to_vec();
+                    let cell_urls: Vec<_> = notebook.code_cell_urls().to_vec();
                     for cell in cell_urls {
                         self.publish_diagnostics_for_uri(
                             cell.clone(),
@@ -4294,7 +4400,7 @@ impl Server {
                             if let Some(cell_idx) = info.to_cell_for_lsp(range.start())
                                 && let Some(path) = to_real_path(info.path())
                                 && let Some(notebook) = open_notebooks.get(&path)
-                                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                                && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
                             {
                                 uri = cell_url.clone();
                             }
@@ -4381,11 +4487,7 @@ impl Server {
         let only_kinds = params.context.only.as_ref();
         let allow_quickfix = only_kinds
             .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QUICKFIX));
-        let allow_fix_all = only_kinds.is_none_or(|kinds| {
-            kinds
-                .iter()
-                .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
-        });
+        let allow_fix_all = only_kinds.is_none_or(|kinds| kinds.iter().any(matches_fix_all_kind));
         let allow_refactor = only_kinds.is_none_or(|kinds| {
             kinds
                 .iter()
@@ -4403,7 +4505,7 @@ impl Server {
             // If the code action is triggered from a notebook cell, we need the cell's
             // index so that import quick-fixes can be redirected to the current cell
             // instead of always targeting cell 1 (position 0 of the combined AST).
-            let triggered_cell_index = self.maybe_get_cell_index(uri);
+            let triggered_cell_index = self.maybe_get_code_cell_index(uri);
             if let Some(quickfixes) = transaction.local_quickfix_code_actions_sorted(
                 &handle,
                 range,
@@ -4433,7 +4535,7 @@ impl Server {
                                     if let Some(LspFile::Notebook(notebook)) =
                                         open_files.get(&path).map(|f| &**f)
                                     {
-                                        notebook.get_cell_url(current_cell_idx).cloned()
+                                        notebook.get_code_cell_url(current_cell_idx).cloned()
                                     } else {
                                         None
                                     }
@@ -4487,7 +4589,7 @@ impl Server {
                 if !changes.is_empty() {
                     actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                         title: "Remove all redundant casts".to_owned(),
-                        kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                        kind: Some(CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY)),
                         edit: Some(WorkspaceEdit {
                             changes: Some(changes),
                             ..Default::default()
@@ -4650,7 +4752,18 @@ impl Server {
                 .find_local_references(&handle, position, true)
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
-                    kind: None,
+                    kind: Some(
+                        if transaction
+                            .identifier_at(&handle, range.start())
+                            .expect("local references should point at identifiers")
+                            .context
+                            .is_write()
+                        {
+                            DocumentHighlightKind::WRITE
+                        } else {
+                            DocumentHighlightKind::READ
+                        },
+                    ),
                 }),
         ))
     }
@@ -4698,9 +4811,11 @@ impl Server {
                 return Err(reason);
             }
         };
+        let uri_for_telemetry = uri.clone();
         self.find_reference_queue.queue_task(
             TelemetryEventKind::FindFromDefinition,
             Box::new(move |server, telemetry, telemetry_event| {
+                server.set_file_stats(uri_for_telemetry, telemetry_event);
                 telemetry_event.set_activity_key(activity_key);
                 let mut transaction = server.state.cancellable_transaction();
                 server
@@ -4826,7 +4941,7 @@ impl Server {
                             if let Some(cell_idx) = info.to_cell_for_lsp(range.start())
                                 && let Some(path) = to_real_path(info.path())
                                 && let Some(notebook) = open_notebooks.get(&path)
-                                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                                && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
                             {
                                 uri = cell_url.clone();
                             }
@@ -4976,7 +5091,7 @@ impl Server {
         params: InlayHintParams,
     ) -> Result<Option<Vec<InlayHint>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let range = &params.range;
         let (handle, lsp_analysis_config) = self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(InlayHintRequest::METHOD))?;
@@ -5058,7 +5173,7 @@ impl Server {
         let runnable_code_lens = self
             .workspaces
             .get_with(path.clone(), |(_, workspace)| workspace.runnable_code_lens);
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self
             .make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))
             .ok()?;
@@ -5084,7 +5199,7 @@ impl Server {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
@@ -5100,7 +5215,7 @@ impl Server {
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction
             .get_module_info(&handle)
@@ -5120,7 +5235,7 @@ impl Server {
         params: DocumentSymbolParams,
     ) -> Result<Option<Vec<DocumentSymbol>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let path = self
             .path_for_uri_or_notebook_cell(uri)
             .ok_or(EmptyResponseReason::NoFilePath)?;
@@ -5324,7 +5439,7 @@ impl Server {
         text_document: &TextDocumentIdentifier,
     ) -> Option<Vec<Range>> {
         let uri = &text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, None).ok()?;
         let module = transaction.get_module_info(&handle)?;
         let docstring_ranges = transaction.docstring_ranges(&handle)?;
@@ -5346,7 +5461,7 @@ impl Server {
         params: FoldingRangeParams,
     ) -> Result<Option<Vec<FoldingRange>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(FoldingRangeRequest::METHOD))?;
         let module = transaction
             .get_module_info(&handle)
@@ -5674,7 +5789,7 @@ impl Server {
             // we don't know what URI refers to which cell.
             let path = to_real_path(definition_module_info.path())?;
             if let LspFile::Notebook(notebook) = &**self.open_files.read().get(&path)?
-                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
             {
                 uri = cell_url.clone();
             }
@@ -5687,13 +5802,13 @@ impl Server {
 
     /// If the uri is an open notebook cell, return the index of the cell within the notebook
     /// otherwise, return None.
-    fn maybe_get_cell_index(&self, cell_uri: &Url) -> Option<usize> {
+    fn maybe_get_code_cell_index(&self, cell_uri: &Url) -> Option<usize> {
         self.open_notebook_cells
             .read()
             .get(cell_uri)
             .and_then(|path| self.open_files.read().get(path).duped())
             .and_then(|file| match &*file {
-                LspFile::Notebook(notebook) => notebook.get_cell_index(cell_uri),
+                LspFile::Notebook(notebook) => notebook.get_code_cell_index(cell_uri),
                 _ => None,
             })
     }
@@ -5704,12 +5819,12 @@ impl Server {
         module: &ModuleInfo,
         position: Position,
     ) -> TextSize {
-        let notebook_cell = self.maybe_get_cell_index(uri);
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
         module.from_lsp_position(position, notebook_cell)
     }
 
     pub fn from_lsp_range(&self, uri: &Url, module: &ModuleInfo, position: Range) -> TextRange {
-        let notebook_cell = self.maybe_get_cell_index(uri);
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
         module.from_lsp_range(position, notebook_cell)
     }
 
@@ -6289,7 +6404,7 @@ impl TspInterface for Server {
             .ok()
             .or_else(|| Url::from_file_path(uri).ok())?;
         let path = self.path_for_uri_or_notebook_cell(&url)?;
-        let notebook_cell = self.maybe_get_cell_index(&url);
+        let notebook_cell = self.maybe_get_code_cell_index(&url);
 
         let handle = make_open_handle(&self.state, &path);
         let transaction = self.state.transaction();
@@ -6312,11 +6427,32 @@ impl TspInterface for Server {
         Some(bindings.get(idx).0.range())
     }
 
+    fn resolve_module_uri(
+        &self,
+        source_uri: &str,
+        module: &pyrefly_types::module::ModuleType,
+    ) -> Option<PathBuf> {
+        let url = Url::parse(source_uri)
+            .ok()
+            .or_else(|| Url::from_file_path(source_uri).ok())?;
+        let source_path = self.path_for_uri_or_notebook_cell(&url)?;
+
+        let source_handle = make_open_handle(&self.state, &source_path);
+        let transaction = self.state.transaction();
+        let module_name = ModuleName::from_str(&module.to_string());
+        let finding = transaction
+            .import_handle(&source_handle, module_name, None)
+            .finding()?;
+
+        let path = to_real_path(finding.path())?;
+        Some(path.canonicalize().unwrap_or(path))
+    }
+
     fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {
         self.path_for_uri_or_notebook_cell(uri)
     }
 
-    fn maybe_get_cell_index(&self, uri: &Url) -> Option<usize> {
-        Self::maybe_get_cell_index(self, uri)
+    fn maybe_get_code_cell_index(&self, uri: &Url) -> Option<usize> {
+        Self::maybe_get_code_cell_index(self, uri)
     }
 }

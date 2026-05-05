@@ -33,7 +33,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
 use crate::alt::expr::TypeOrExpr;
-use crate::alt::unwrap::HintRefOld;
+use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -236,7 +236,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         // If we're constructing a class, its type arguments. A successful call will fill these in.
         ctor_targs: Option<&mut TArgs>,
     ) -> (Type, Callable) {
@@ -520,7 +520,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         errors: &ErrorCollector,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
     ) -> (CalledOverload<'c>, bool) {
         // Collect placeholder vars so we can save/restore them around each overload evaluation. This
@@ -815,7 +815,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         errors: &ErrorCollector,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
     ) -> CalledOverload<'c> {
         // Create a copy of the class type arguments (if any) that should be filled in by this call.

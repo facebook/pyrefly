@@ -216,6 +216,64 @@ impl TestTspServer {
         }));
     }
 
+    /// Returns the `vscode-notebook-cell:` URI for a notebook cell.
+    pub fn cell_uri(&self, file_name: &str, cell_name: &str) -> Url {
+        let root = self.get_root_or_panic();
+        let file_uri = Url::from_file_path(root.join(file_name)).unwrap();
+        Url::parse(&format!(
+            "vscode-notebook-cell://{}#{}",
+            file_uri.path(),
+            cell_name
+        ))
+        .unwrap()
+    }
+
+    /// Open a notebook document with the given cell contents.
+    /// Each string becomes a separate code cell. The notebook is
+    /// registered via `notebookDocument/didOpen` so the server tracks
+    /// the cell URIs in `open_notebook_cells`.
+    pub fn open_notebook(&self, file_name: &str, cell_contents: Vec<&str>) {
+        let root = self.get_root_or_panic();
+        let notebook_path = root.join(file_name);
+        let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+
+        let mut cells = Vec::new();
+        let mut cell_text_documents = Vec::new();
+
+        for (i, text) in cell_contents.iter().enumerate() {
+            let cell_uri = self.cell_uri(file_name, &format!("cell{}", i + 1));
+            cells.push(serde_json::json!({
+                "kind": 2,
+                "document": cell_uri,
+            }));
+            cell_text_documents.push(serde_json::json!({
+                "uri": cell_uri,
+                "languageId": "python",
+                "version": 1,
+                "text": *text,
+            }));
+        }
+
+        self.send_message(Message::Notification(Notification {
+            method: "notebookDocument/didOpen".to_owned(),
+            params: serde_json::json!({
+                "notebookDocument": {
+                    "uri": notebook_uri,
+                    "notebookType": "jupyter-notebook",
+                    "version": 1,
+                    "metadata": {
+                        "language_info": {
+                            "name": "python"
+                        }
+                    },
+                    "cells": cells,
+                },
+                "cellTextDocuments": cell_text_documents,
+            }),
+            activity_key: None,
+        }));
+    }
+
     pub fn did_open(&self, file: &'static str) {
         let path = self.get_root_or_panic().join(file);
         self.send_message(Message::Notification(Notification {
@@ -480,6 +538,7 @@ impl TspInteraction {
         let args = TspArgs {
             indexing_mode: IndexingMode::LazyBlocking,
             workspace_indexing_limit: 0,
+            transport: "stdio".to_owned(),
         };
 
         let args = args.clone();

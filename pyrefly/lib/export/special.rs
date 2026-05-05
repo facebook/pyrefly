@@ -48,7 +48,6 @@ pub enum SpecialExport {
     Overload,
     Override,
     AbstractMethod,
-    SelfType,
     Generic,
     Protocol,
     PydanticConfigDict,
@@ -91,7 +90,6 @@ impl SpecialExport {
             "TypedDict" => Some(Self::TypedDict),
             "namedtuple" => Some(Self::CollectionsNamedTuple),
             "NamedTuple" => Some(Self::TypingNamedTuple),
-            "Self" => Some(Self::SelfType),
             "assert_type" => Some(Self::AssertType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
@@ -158,7 +156,6 @@ impl SpecialExport {
             | Self::NoTypeCheck
             | Self::Overload
             | Self::Override
-            | Self::SelfType
             | Self::Cast
             | Self::Generic
             | Self::Protocol
@@ -205,6 +202,30 @@ impl SpecialExport {
             ),
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
         }
+    }
+
+    /// Returns true if subscripting this export produces a type expression,
+    /// even in a value context (e.g. `list["A | B"]`).
+    pub fn is_static_type_subscript(self) -> bool {
+        matches!(
+            self,
+            Self::Union
+                | Self::Optional
+                | Self::Annotated
+                | Self::Callable
+                | Self::BuiltinsDict
+                | Self::TypingDict
+                | Self::BuiltinsList
+                | Self::TypingList
+                | Self::BuiltinsTuple
+                | Self::TypingTuple
+                | Self::BuiltinsType
+                | Self::TypingType
+                | Self::BuiltinsSet
+                | Self::BuiltinsFrozenset
+                | Self::TypingMapping
+                | Self::TypeForm
+        )
     }
 
     /// Returns true if this is a builtin type that has a single positional

@@ -10,7 +10,6 @@ use crate::testcase;
 testcase!(
     test_missing_return,
     r#"
-
 def f() -> int:  # E: Function declared to return `int` but is missing an explicit `return`
     pass
 "#,

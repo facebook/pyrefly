@@ -41,7 +41,7 @@ use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::nn_module_specials::is_nn_sequential;
 use crate::alt::unwrap::HintRef;
-use crate::alt::unwrap::HintRefOld;
+use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -63,6 +63,7 @@ use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
+use crate::types::types::CallableResidualKind;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
@@ -177,6 +178,16 @@ impl ConstructedInstance {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn type_contains_overload_callable_residual(&self, ty: &Type) -> bool {
+        ty.any(|inner| {
+            matches!(
+                inner,
+                Type::CallableResidual(residual)
+                    if matches!(&residual.kind, CallableResidualKind::Overload { .. })
+            )
+        })
+    }
+
     fn error_call_target(
         &self,
         errors: &ErrorCollector,
@@ -243,7 +254,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )))
             }
             Type::BoundMethod(bm) => {
-                let BoundMethod { obj, func } = *bm;
+                let bound_method = *bm;
+                if self.type_contains_overload_callable_residual(&bound_method.obj) {
+                    let mut is_subset = |got: &Type, want: &Type| self.is_subset_eq(got, want);
+                    if let Some(bound) = self.bind_boundmethod(&bound_method, &mut is_subset) {
+                        return self.as_call_target_impl(bound, quantified);
+                    }
+                }
+                let BoundMethod { obj, func } = bound_method;
                 match self.as_call_target_impl(func.as_type(), quantified) {
                     CallTargetLookup::Ok(box CallTarget::Function(func)) => {
                         CallTargetLookup::Ok(Box::new(CallTarget::BoundMethod(obj, func)))
@@ -660,7 +678,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[CallKeyword],
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
     ) -> Option<Type> {
         let dunder_call = self.get_metaclass_dunder_call(cls)?;
         // Clone targs because we don't want instantiations from metaclass __call__
@@ -695,19 +713,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
     ) {
         for e in specialization_errors {
+            let kind = e.error_kind();
             self.error(
                 errors,
                 range,
-                ErrorInfo::new(ErrorKind::BadSpecialization, context),
+                ErrorInfo::new(kind, context),
                 e.to_error_msg(self),
             );
         }
     }
-
-    /// Maximum size for a union hint in construction. Hints wider than this are ignored.
-    /// Overly wide unions don't provide a useful hint (we actually get fewer errors on mypy_primer
-    /// when we cap the hint width) and lead to prohibitively expensive construction calls.
-    const MAX_CONSTRUCTION_HINT_WIDTH: usize = 4;
 
     /// Handles union hint decomposition for class and TypedDict construction.
     /// When the hint is a union, tries each member independently and keeps only
@@ -719,13 +733,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         construct: impl Fn(Option<&Type>) -> ConstructedInstance,
     ) -> Type {
-        let hint = hint.map(HintRef::from_old);
         if let Some(hint) = hint
             && let hints = hint.types()
-            && hints.len() <= Self::MAX_CONSTRUCTION_HINT_WIDTH
+            && hints.len() <= MAX_CALL_HINT_WIDTH
         {
             let mut ret_no_match_hint = None;
             for member_hint in hints.iter() {
@@ -764,7 +777,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
     ) -> Type {
         self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
             self.construct_class_inner(
@@ -837,7 +850,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if class_metadata.is_enum() {
                 let specialization_errors = self
                     .solver()
-                    .finish_quantified(vs, self.solver().infer_with_first_use)
+                    .finish_quantified_with_type_order(
+                        vs,
+                        self.solver().infer_with_first_use,
+                        self.type_order(),
+                    )
                     .err();
                 return ConstructedInstance {
                     ty: ret,
@@ -850,7 +867,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Got something other than an instance of the class under construction.
                 let specialization_errors = self
                     .solver()
-                    .finish_quantified(vs, self.solver().infer_with_first_use)
+                    .finish_quantified_with_type_order(
+                        vs,
+                        self.solver().infer_with_first_use,
+                        self.type_order(),
+                    )
                     .err();
                 return ConstructedInstance {
                     ty: ret,
@@ -913,7 +934,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .finish_class_targs(cls.targs_mut(), self.uniques);
                     let specialization_errors = self
                         .solver()
-                        .finish_quantified(vs, self.solver().infer_with_first_use)
+                        .finish_quantified_with_type_order(
+                            vs,
+                            self.solver().infer_with_first_use,
+                            self.type_order(),
+                        )
                         .err();
                     return ConstructedInstance {
                         ty: ret.subst(&cls.targs().substitution_map()),
@@ -978,7 +1003,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .finish_class_targs(cls.targs_mut(), self.uniques);
         let specialization_errors = self
             .solver()
-            .finish_quantified(vs, self.solver().infer_with_first_use)
+            .finish_quantified_with_type_order(
+                vs,
+                self.solver().infer_with_first_use,
+                self.type_order(),
+            )
             .err();
         let result = if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
@@ -1089,7 +1118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
     ) -> Type {
         self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
             self.construct_typed_dict_inner(
@@ -1145,7 +1174,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .finish_class_targs(typed_dict.targs_mut(), self.uniques);
         let specialization_errors = self
             .solver()
-            .finish_quantified(vs, self.solver().infer_with_first_use)
+            .finish_quantified_with_type_order(
+                vs,
+                self.solver().infer_with_first_use,
+                self.type_order(),
+            )
             .err();
         ConstructedInstance {
             ty: Type::TypedDict(TypedDict::TypedDict(typed_dict)),
@@ -1206,7 +1239,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         callee_range: Option<TextRange>,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         let metadata = call_target.function_metadata();
@@ -1471,7 +1504,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         // First try the call without the hint to see if it succeeds.
@@ -1539,7 +1572,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         arguments_range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
         self.call_infer_with_callee_range(
@@ -1783,7 +1816,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         x: &ExprCall,
         mut callee_ty: Type,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
         // nn.Sequential chain: thread input through each module's forward method.
@@ -1956,7 +1989,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         kws: &[CallKeyword],
         callee_range: TextRange,
         arg_range: TextRange,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
         let callable =

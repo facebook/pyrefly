@@ -207,21 +207,17 @@ fn references_in_nested_scope(
 fn collect_nested_scopes(stmts: &[Stmt], scope_range: TextRange, ranges: &mut Vec<TextRange>) {
     for stmt in stmts {
         match stmt {
-            Stmt::FunctionDef(function_def) => {
-                if scope_range.contains_range(function_def.range()) {
-                    if function_def.range() != scope_range {
-                        ranges.push(function_def.range());
-                    }
-                    collect_nested_scopes(&function_def.body, scope_range, ranges);
+            Stmt::FunctionDef(function_def) if scope_range.contains_range(function_def.range()) => {
+                if function_def.range() != scope_range {
+                    ranges.push(function_def.range());
                 }
+                collect_nested_scopes(&function_def.body, scope_range, ranges);
             }
-            Stmt::ClassDef(class_def) => {
-                if scope_range.contains_range(class_def.range()) {
-                    if class_def.range() != scope_range {
-                        ranges.push(class_def.range());
-                    }
-                    collect_nested_scopes(&class_def.body, scope_range, ranges);
+            Stmt::ClassDef(class_def) if scope_range.contains_range(class_def.range()) => {
+                if class_def.range() != scope_range {
+                    ranges.push(class_def.range());
                 }
+                collect_nested_scopes(&class_def.body, scope_range, ranges);
             }
             _ => {}
         }

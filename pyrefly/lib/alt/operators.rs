@@ -36,7 +36,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::MAX_TUPLE_LENGTH;
-use crate::alt::unwrap::HintRefOld;
+use crate::alt::unwrap::HintRef;
 use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -353,7 +353,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn binop_infer(
         &self,
         x: &ExprBinOp,
-        hint: Option<HintRefOld>,
+        hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
         let lhs;
@@ -468,10 +468,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     self.heap.mk_type_of(self.union(l, r))
                 } else if x.op == Operator::Add
-                    && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
-                        || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))
+                    && let Some(lhs_style) = lhs.lit_string_style()
+                    && let Some(rhs_style) = rhs.lit_string_style()
                 {
-                    self.heap.mk_literal_string(LitStyle::Implicit)
+                    self.heap.mk_literal_string(match (lhs_style, rhs_style) {
+                        (LitStyle::Explicit, LitStyle::Explicit) => LitStyle::Explicit,
+                        _ => LitStyle::Implicit,
+                    })
                 } else if x.op == Operator::Add
                     && let Type::Tuple(l) = lhs
                     && let Type::Tuple(r) = rhs
@@ -613,10 +616,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if let Type::Any(style) = &rhs {
                     style.propagate()
                 } else if x.op == Operator::Add
-                    && base.is_literal_string()
-                    && rhs.is_literal_string()
+                    && let Some(lhs_style) = lhs.lit_string_style()
+                    && let Some(rhs_style) = rhs.lit_string_style()
                 {
-                    self.heap.mk_literal_string(LitStyle::Implicit)
+                    self.heap.mk_literal_string(match (lhs_style, rhs_style) {
+                        (LitStyle::Explicit, LitStyle::Explicit) => LitStyle::Explicit,
+                        _ => LitStyle::Implicit,
+                    })
                 } else if x.op == Operator::Add
                     && let Type::Tuple(ref l) = base
                     && let Type::Tuple(r) = rhs

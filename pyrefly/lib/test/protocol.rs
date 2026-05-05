@@ -424,41 +424,6 @@ issubclass(ConcreteClass, RuntimeProtocol)
 );
 
 testcase!(
-    test_protocol_data_protocol_issubclass,
-    r#"
-from typing import Protocol, runtime_checkable
-
-# Data protocol (has non-method members)
-@runtime_checkable
-class DataProtocol(Protocol):
-    x: int
-    def method(self) -> str: ...
-
-# Non-data protocol (only methods)
-@runtime_checkable
-class NonDataProtocol(Protocol):
-    def method(self) -> str: ...
-
-class ConcreteClass:
-    x: int = 42
-    def method(self) -> str:
-        return "hello"
-
-obj = ConcreteClass()
-
-# isinstance should work for both data and non-data protocols
-isinstance(obj, DataProtocol)
-isinstance(obj, NonDataProtocol)
-
-# issubclass should work for non-data protocols
-issubclass(ConcreteClass, NonDataProtocol)
-
-# issubclass should fail for data protocols
-issubclass(ConcreteClass, DataProtocol)  # E: Protocol `DataProtocol` has non-method members and cannot be used with issubclass()
-"#,
-);
-
-testcase!(
     test_protocol_union_isinstance,
     r#"
 from typing import Protocol, runtime_checkable, Union

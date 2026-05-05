@@ -24,7 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 # Import the lsprotocol generator modules
 
@@ -431,7 +431,7 @@ def generate_constants_rust(tsp_json: Dict[str, Any]) -> str:
     return rust_code + "\n"
 
 
-def generate_request_enum(content: str, requests: list[model.Request]) -> str:
+def generate_request_enum(content: str, requests: List[model.Request]) -> str:
     # Put a new enum right after the LSPRequestMethods
 
     offset = content.find("pub enum LSPRequestMethods")

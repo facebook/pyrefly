@@ -1,5 +1,6 @@
 {
   "name": "test",
+  "path": "test.py",
   "names": [
     "test.WithDunderAttrs.x",
     "test.WithAnnotatedDunder.regular_attr",

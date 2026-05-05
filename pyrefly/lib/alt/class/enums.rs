@@ -33,6 +33,7 @@ use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
+use crate::types::types::Union;
 
 /// The `_value_` attribute in enums is reserved, and can be annotated to
 /// indicate an explicit type restriction on enum members. Looking it up
@@ -44,6 +45,34 @@ pub const VALUE_PROP: Name = Name::new_static("value");
 pub const GENERATE_NEXT_VALUE: Name = Name::new_static("_generate_next_value_");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    /// Suggest an enum member when a raw literal matches exactly one expected enum value.
+    pub fn suggest_enum_member_for_value(&self, got: &Type, want: &Type) -> Option<String> {
+        match want {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                self.suggest_enum_member_for_class_value(cls.class_object(), got)
+            }
+            Type::Literal(lit) => match &lit.value {
+                Lit::Enum(lit_enum) => {
+                    self.suggest_enum_member_for_class_value(lit_enum.class.class_object(), got)
+                }
+                _ => None,
+            },
+            Type::Union(box Union { members, .. }) => {
+                let mut suggestion = None;
+                for member in members {
+                    if let Some(candidate) = self.suggest_enum_member_for_value(got, member) {
+                        match &suggestion {
+                            Some(existing) if existing != &candidate => return None,
+                            _ => suggestion = Some(candidate),
+                        }
+                    }
+                }
+                suggestion
+            }
+            _ => None,
+        }
+    }
+
     pub fn get_enum_member(&self, cls: &Class, name: &Name) -> Option<Lit> {
         self.get_field_from_current_class_only(cls, name)
             .and_then(|field| self.as_enum_member(Arc::unwrap_or_clone(field), cls))
@@ -58,6 +87,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn suggest_enum_member_for_class_value(&self, cls: &Class, got: &Type) -> Option<String> {
+        let is_django = self.get_metadata_for_class(cls).enum_metadata()?.is_django;
+        let mut suggestion = None;
+        for lit in self.get_enum_members(cls) {
+            let Lit::Enum(lit_enum) = lit else {
+                unreachable!("enum members must be represented as enum literals");
+            };
+            let value_ty = self.enum_literal_to_value_type((*lit_enum).clone(), is_django);
+            if self.is_equivalent(got, &value_ty) {
+                let candidate = format!("{}.{}", lit_enum.class.name(), lit_enum.member);
+                match &suggestion {
+                    Some(existing) if existing != &candidate => return None,
+                    _ => suggestion = Some(candidate),
+                }
+            }
+        }
+        suggestion
     }
 
     fn is_valid_enum_member(

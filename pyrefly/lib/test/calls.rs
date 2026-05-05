@@ -234,6 +234,18 @@ reduce(max, [1,2])
 );
 
 testcase!(
+    test_call_arg_lambda_contextual_typing,
+    r#"
+from typing import Callable
+
+def takes(cb: Callable[[int], int]) -> None: ...
+
+# This only errors because we're able to pass down the `int` hint through contextual typing.
+takes(lambda x: x + "")  # E:  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`
+    "#,
+);
+
+testcase!(
     test_union_with_type,
     r#"
 from typing import assert_type

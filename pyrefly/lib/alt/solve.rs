@@ -63,7 +63,7 @@ use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
 use crate::alt::types::yields::YieldFromResult;
 use crate::alt::types::yields::YieldResult;
-use crate::alt::unwrap::HintRefOld;
+use crate::alt::unwrap::HintRef;
 use crate::binding::binding::AnnAssignHasValue;
 use crate::binding::binding::AnnotationStyle;
 use crate::binding::binding::AnnotationTarget;
@@ -93,6 +93,8 @@ use crate::binding::binding::EmptyAnswer;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
+use crate::binding::binding::ImportBinding;
+use crate::binding::binding::ImportFallback;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
@@ -131,6 +133,8 @@ use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::solver::solver::PinError;
 use crate::solver::solver::SubsetError;
+use crate::state::loader::FindError;
+use crate::state::loader::FindingOrError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
@@ -329,6 +333,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             decorators,
             is_new_type,
             pydantic_config_dict,
+            pydantic_before_validator_fields,
             django_field_info,
         } = binding;
         let metadata = match &self.get_idx(*k).0 {
@@ -340,6 +345,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 decorators,
                 *is_new_type,
                 pydantic_config_dict,
+                pydantic_before_validator_fields,
                 django_field_info,
                 errors,
             ),
@@ -425,7 +431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(ty) = &mut ann.ty
                     && ty.any(|t| matches!(t, Type::SpecialForm(SpecialForm::SelfType)))
                 {
-                    // The binding phase reports invalid uses of `Self` (for example, outside a class).
+                    // `untype_self` reports invalid uses of `Self` (for example, outside a class).
                     // Replace any unresolved `Self` special forms with `Any` so they do not leak into
                     // later phases as internal errors.
                     ty.subst_self_special_form_mut(&self.heap.mk_any_error());
@@ -2417,7 +2423,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 is_explicit,
                 ..
             } => {
-                let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, errors);
+                let (annot, ty) =
+                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, errors);
                 if let Some(annot) = &annot
                     && let Some((AnnotationStyle::Forwarded, _)) = annot_key
                 {
@@ -2502,8 +2509,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return; // Valid private attribute access
             }
         }
-        if !self.has_attr(&value_type, &expect.attr.id) {
-            return; // Don't report this error if the attribute doesn't exist
+        // No defining class to restrict access to — the attribute is only
+        // reachable via dynamic fallback (__getattr__/__getattribute__), so
+        // name mangling is irrelevant.
+        if !self.has_attr_without_dynamic_fallback(&value_type, &expect.attr.id) {
+            return;
         }
         self.error(
             errors,
@@ -2712,6 +2722,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     fields = fields.combine(new_fields);
                 }
                 if let Some(new_fields) = self.get_django_model_synthesized_fields(cls) {
+                    fields = fields.combine(new_fields);
+                }
+                if let Some(new_fields) = self.get_factory_boy_synthesized_fields(cls) {
                     fields = fields.combine(new_fields);
                 }
                 fields
@@ -3220,9 +3233,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Name,
         annot_key: Option<&(AnnotationStyle, Idx<KeyAnnotation>)>,
+        receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
         errors: &ErrorCollector,
     ) -> (Option<Arc<AnnotationWithTarget>>, Type) {
+        // Receiver-constrained class assignment: a same-scope rebind of a
+        // name originally bound by a `class` definition. The receiver acts
+        // like an implicit annotation, so the RHS is checked against it but
+        // an incompatible RHS does not change the visible binding.
+        //
+        // The plan keeps this path mutually exclusive with explicit
+        // annotations, so we expect `annot_key` to be `None` here. We solve
+        // the RHS once with the receiver as a hint so the standard
+        // assignment diagnostic fires for incompatible writes, then pick the
+        // visible type based on subset compatibility.
+        if let Some(receiver_idx) = receiver_idx {
+            let receiver_ty = self.get_idx(receiver_idx).arc_clone_ty();
+            let tcc: &dyn Fn() -> TypeCheckContext =
+                &|| TypeCheckContext::of_kind(TypeCheckKind::AnnotatedName(name.clone()));
+            let expr_ty = self.expr(expr, Some((&receiver_ty, tcc)), errors);
+            let visible_ty = if self.is_subset_eq(&expr_ty, &receiver_ty) {
+                expr_ty
+            } else {
+                receiver_ty
+            };
+            return (None, visible_ty);
+        }
         match annot_key {
             // First infer the type as a normal value
             Some((style, k)) => {
@@ -3276,12 +3312,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: &Name,
         annot_key: Option<(AnnotationStyle, Idx<KeyAnnotation>)>,
+        receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
         legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         is_in_function_scope: bool,
         errors: &ErrorCollector,
     ) -> Type {
-        let (annot, ty) = self.name_assign_infer(name, annot_key.as_ref(), expr, errors);
+        let (annot, ty) =
+            self.name_assign_infer(name, annot_key.as_ref(), receiver_idx, expr, errors);
         if let Some(annot) = &annot
             && let Some((AnnotationStyle::Forwarded, _)) = annot_key
         {
@@ -3292,8 +3330,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &ty,
                 Type::Type(inner) if matches!(inner.as_ref(), Type::SpecialForm(_))
             );
+        // Both annotated assigns and receiver-constrained class assigns pin
+        // the visible type via an external constraint, so a pinned RHS must
+        // not be reinterpreted as an implicit type alias.
+        let is_pinned = annot_key.is_some() || receiver_idx.is_some();
         if !is_bare_special_form
-            && annot.is_none()
+            && !is_pinned
             && self.may_be_implicit_type_alias(&ty)
             && !is_in_function_scope
             && self.has_valid_annotation_syntax(expr, &self.error_swallower())
@@ -3477,7 +3519,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_none()
             }
         } else if x.is_generator {
-            let hint = hint.and_then(|ty| self.decompose_generator(&ty).map(|(_, _, r)| r));
+            let hint = hint.as_ref().map(HintRef::soft).and_then(|hint| {
+                let hints = self.decompose_hint(hint, |hint| {
+                    self.decompose_generator(hint).map(|(_, _, r)| r)
+                });
+                (!hints.is_empty()).then(|| self.unions(hints))
+            });
             let annot_range = x.annot.and_then(|k| self.annotation_range(k));
             let tcc: &dyn Fn() -> TypeCheckContext = &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::ExplicitFunctionReturn)
@@ -3718,7 +3765,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 })
             });
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRefOld::soft), errors);
+                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
             self.async_iterate(&iterable, e.range(), errors)
         } else {
             let infer_hint = ann.clone().and_then(|x| {
@@ -3726,7 +3773,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .map(|ty| self.heap.mk_class_type(self.stdlib.iterable(ty.clone())))
             });
             let iterable =
-                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRefOld::soft), errors);
+                self.expr_infer_with_hint(e, infer_hint.as_ref().map(HintRef::soft), errors);
             self.iterate(&iterable, e.range(), errors, None)
         };
         let value = self.get_produced_type(iterables);
@@ -3886,49 +3933,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         ty.clone()
-    }
-
-    /// Handle `Binding::SelfTypeLiteral` - create Self type for class.
-    /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
-    #[inline(never)]
-    fn binding_to_type_self_type_literal(
-        &self,
-        class_key: Idx<KeyClass>,
-        r: TextRange,
-        errors: &ErrorCollector,
-    ) -> Type {
-        if let Some(cls) = &self.get_idx(class_key).as_ref().0 {
-            let metadata = self.get_metadata_for_class(cls);
-            if metadata.is_metaclass() {
-                self.error(
-                    errors,
-                    r,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    "`Self` cannot be used in a metaclass".to_owned(),
-                );
-            }
-            match self.instantiate(cls) {
-                Type::ClassType(class_type) => {
-                    self.heap.mk_type_of(self.heap.mk_self_type(class_type))
-                }
-                ty => self.error(
-                    errors,
-                    r,
-                    ErrorInfo::Kind(ErrorKind::InvalidSelfType),
-                    format!(
-                        "Cannot apply `typing.Self` to non-class-instance type `{}`",
-                        self.for_display(ty)
-                    ),
-                ),
-            }
-        } else {
-            self.error(
-                errors,
-                r,
-                ErrorInfo::Kind(ErrorKind::InvalidSelfType),
-                "Could not resolve the class for `typing.Self` (may indicate unexpected recursion resolving types)".to_owned(),
-            )
-        }
     }
 
     /// Handle `Binding::ClassBodyUnknownName` - resolve unknown name in class body.
@@ -4112,7 +4116,131 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         result
     }
 
-    /// Handle `Binding::Module` - create module type.
+    /// Resolve a `Binding::Import`. Two modes:
+    ///
+    /// * `fallback = None`: the name was pre-verified at bind time
+    ///   (wildcards, builtins injection, legacy typing aliases). Demand
+    ///   `KeyExport(name)` directly.
+    ///
+    /// * `fallback = Some`: run the full cascade. Order depends on
+    ///   whether this is a self-import (`from x import y` while we are
+    ///   checking module `x`):
+    ///
+    ///   * Cross-module: exported name → submodule `m.name` →
+    ///     `m.__getattr__` → missing-attribute (with `Any` fallback).
+    ///   * Self-import: skip the export check (Python prefers the
+    ///     submodule when both an `__init__.py`-defined name and a
+    ///     submodule of the same name exist), so submodule →
+    ///     `__getattr__` → missing-attribute.
+    ///
+    /// `check_deprecated` is set only for user-written explicit
+    /// `from X import Y`; implicit bindings (builtins wildcard, legacy
+    /// typing aliases, `from X import *`) skip the deprecation check so
+    /// no new warnings appear for symbols the user never named.
+    fn solve_import(&self, x: &ImportBinding, errors: &ErrorCollector) -> Type {
+        let m = x.module;
+        let name = &x.name;
+        let resolve_export = || {
+            if let Some(range) = x.check_deprecated
+                && let Some(deprecation) = self.exports.get_deprecated(m, name)
+            {
+                let msg = deprecation.as_error_message(format!("`{name}` is deprecated"));
+                errors.add(range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
+            }
+            self.get_from_export(m, None, &KeyExport(name.clone()))
+                .arc_clone()
+        };
+        let Some(fallback) = &x.fallback else {
+            // Pre-verified existence: fast path.
+            return resolve_export();
+        };
+        let is_self_import = m == self.module().name();
+        // Cross-module imports check the export first; self-imports
+        // skip directly to the submodule (matches Python: when both an
+        // `__init__.py`-defined name and a submodule of the same name
+        // exist, Python prefers the submodule).
+        if !is_self_import && self.exports.export_exists(m, name) {
+            return resolve_export();
+        }
+        // Submodule lookup.
+        let submodule_name = m.append(name);
+        let submodule_error = match self.exports.module_exists(submodule_name) {
+            FindingOrError::Finding(_) => {
+                return self.binding_to_type_module(
+                    submodule_name,
+                    &submodule_name.components(),
+                    None,
+                );
+            }
+            FindingOrError::Error(e) => e,
+        };
+        // `__getattr__` fallback: a module-level `__getattr__` makes
+        // any attribute access succeed at runtime via its return type.
+        if self.exports.export_exists(m, &dunder::GETATTR) {
+            let getattr_ty = self
+                .get_from_export(m, None, &KeyExport(dunder::GETATTR.clone()))
+                .arc_clone();
+            return getattr_ty
+                .callable_return_type(self.heap)
+                .unwrap_or_else(|| self.heap.mk_any_implicit());
+        }
+        self.solve_import_missing(name, m, fallback, submodule_error, errors)
+    }
+
+    /// Final missing-attribute step of `solve_import`'s cascade. Emits
+    /// `MissingModuleAttribute` (suppressed in dead code) and returns
+    /// `Any(Error)`. The other failure mode — `m` itself can't be
+    /// found — is handled out-of-band by the per-statement
+    /// `Binding::Module` that `bind_module_exports` inserts; this
+    /// method stays silent in that case (returns `Any(Error)`) so we
+    /// don't double-emit.
+    fn solve_import_missing(
+        &self,
+        name: &Name,
+        m: ModuleName,
+        fallback: &ImportFallback,
+        submodule_error: FindError,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if matches!(self.exports.module_exists(m), FindingOrError::Error(..)) {
+            // The per-statement `Binding::Module` reports the
+            // missing-module diagnostic; nothing to do here.
+            return self.heap.mk_any_error();
+        }
+        if matches!(submodule_error, FindError::MissingImport(..)) {
+            if !fallback.is_unreachable {
+                errors.add(
+                    fallback.stmt_range,
+                    ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                    vec1![format!("Could not import `{name}` from `{m}`")],
+                );
+            }
+            self.heap.mk_any_error()
+        } else {
+            self.heap.mk_any_implicit()
+        }
+    }
+
+    /// Emit any `FindError` associated with `m` at `range`. Called from
+    /// the `Binding::Module` solver so the missing-module diagnostic
+    /// only fires for bindings that are actually solved — unused
+    /// `import X` in a transitive dep stays at `Step::Nothing`. The
+    /// `module_exists` call still demands `Step::Load` so incremental
+    /// re-check picks up edits to `m`.
+    fn report_module_find_error(&self, m: ModuleName, range: TextRange, errors: &ErrorCollector) {
+        let result = self.exports.module_exists(m);
+        let error = match &result {
+            FindingOrError::Finding(f) => f.error.as_ref(),
+            FindingOrError::Error(e) => Some(e),
+        };
+        if let Some(error) = error
+            && let Some(kind) = error.kind()
+        {
+            let (ctx, msg) = error.display();
+            errors.add(range, ErrorInfo::new(kind, ctx.as_deref()), msg);
+        }
+    }
+
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
     fn binding_to_type_module(&self, m: ModuleName, path: &[Name], prev: Option<Idx<Key>>) -> Type {
@@ -4416,7 +4544,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::LoopPhi(default, ks) => self.binding_to_type_info_loop_phi(*default, ks),
             Binding::NameAssign(x) => {
-                self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
+                // Receiver-constrained class assignments behave like
+                // annotated names: the implicit class receiver pins the
+                // visible type, and any RHS-derived dict-literal facets
+                // would either contradict the receiver or describe a
+                // value that the receiver fallback discards. Skip the
+                // facet walk and use the bare solved type.
+                if x.receiver_idx.is_some() {
+                    TypeInfo::of_ty(self.binding_to_type(binding, errors))
+                } else {
+                    self.binding_to_type_info_name_assign(binding, x.expr.as_ref(), errors)
+                }
             }
             Binding::AssignToAttribute(x) => self.binding_to_type_info_assign_to_attribute(
                 &x.attr,
@@ -4707,7 +4845,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         if is_async && is_generator {
-            if self.decompose_async_generator(annotation).is_none() {
+            let hints = self.decompose_hint(HintRef::soft(annotation), |hint| {
+                self.decompose_async_generator(hint)
+            });
+            if hints.is_empty() {
                 self.error(
                     errors,
                     range,
@@ -4716,12 +4857,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         } else if is_generator {
-            if let Some((_, _, return_ty)) = self.decompose_generator(annotation) {
-                self.check_type(implicit_return.ty(), &return_ty, range, errors, &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::ImplicitFunctionReturn(
-                        has_explicit_returns,
-                    ))
-                });
+            let hint = HintRef::soft(annotation);
+            let return_tys = self.decompose_hint(hint, |hint| {
+                self.decompose_generator(hint).map(|(_, _, r)| r)
+            });
+            if !return_tys.is_empty() {
+                self.check_type(
+                    implicit_return.ty(),
+                    &self.unions(return_tys),
+                    range,
+                    errors,
+                    &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::ImplicitFunctionReturn(
+                            has_explicit_returns,
+                        ))
+                    },
+                );
             } else {
                 self.error(
                     errors,
@@ -4792,7 +4943,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match self.solver().pin_placeholder_type(var, pin_partial_types) {
                 Some(PinError::ImplicitPartialContained(container_range)) => errors.add(
                     container_range,
-                    ErrorInfo::Kind(ErrorKind::ImplicitAny),
+                    ErrorInfo::Kind(ErrorKind::ImplicitAnyEmptyContainer),
                     vec1![
                         "Cannot infer type of empty container; it will be treated as containing `Any`".to_owned(),
                         "Consider adding a type annotation or initializing with a non-empty value".to_owned(),
@@ -4840,9 +4991,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // are handled in `binding_to_type_info`
                 self.binding_to_type_info(binding, errors).into_ty()
             }
-            Binding::SelfTypeLiteral(class_key, r) => {
-                self.binding_to_type_self_type_literal(*class_key, *r, errors)
-            }
             Binding::ClassBodyUnknownName(x) => {
                 self.binding_to_type_class_body_unknown_name(x.0, &x.1, &x.2, errors)
             }
@@ -4883,6 +5031,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::NameAssign(x) => self.binding_to_type_name_assign(
                 &x.name,
                 x.annotation,
+                x.receiver_idx,
                 &x.expr,
                 &x.legacy_tparams,
                 x.is_in_function_scope,
@@ -4961,19 +5110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let def = self.get_decorated_function(idx);
                 self.solve_function_binding(def, &mut pred, class_meta.as_ref(), errors)
             }
-            Binding::Import(x) => self
-                .get_from_export(x.0, None, &KeyExport(x.1.clone()))
-                .arc_clone(),
-            Binding::ImportViaGetattr(x) => {
-                // Import via module-level __getattr__ for incomplete stubs.
-                // Get the return type of __getattr__.
-                let getattr_ty = self
-                    .get_from_export(x.0, None, &KeyExport(dunder::GETATTR.clone()))
-                    .arc_clone();
-                getattr_ty
-                    .callable_return_type(self.heap)
-                    .unwrap_or_else(|| self.heap.mk_any_implicit())
-            }
+            Binding::Import(x) => self.solve_import(x, errors),
             Binding::ClassDef(x, _decorators) => match &self.get_idx(*x).0 {
                 None => self.heap.mk_any_implicit(),
                 Some(cls) => {
@@ -5019,7 +5156,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::TypeParameter(tp) => {
                 self.quantified_from_type_parameter(tp, errors).to_value()
             }
-            Binding::Module(x) => self.binding_to_type_module(x.0, &x.1, x.2),
+            Binding::Module(x) => {
+                if let Some(error_range) = x.3 {
+                    self.report_module_find_error(x.0, error_range, errors);
+                }
+                self.binding_to_type_module(x.0, &x.1, x.2)
+            }
             Binding::TypeAlias(x) => self.wrap_type_alias(
                 &x.name,
                 (*self.get_idx(x.key_type_alias)).clone(),
@@ -5110,22 +5252,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BindingYield::Yield(annot, x) => {
                 // TODO: Keep track of whether the function is async in the binding, decompose hint
                 // appropriately instead of just trying both.
-                let annot = annot.map(|k| self.get_idx(k));
-                let hint = annot
-                    .as_ref()
-                    .and_then(|x| x.ty(self.heap, self.stdlib))
-                    .and_then(|ty| {
-                        if let Some((yield_ty, send_ty, _)) = self.decompose_generator(&ty) {
+                let annot = annot
+                    .map(|k| self.get_idx(k))
+                    .and_then(|x| x.ty(self.heap, self.stdlib));
+                let hints = annot.as_ref().map(HintRef::soft).and_then(|hint| {
+                    let hints = self.decompose_hint(hint, |ty| {
+                        if let Some((yield_ty, send_ty, _)) = self.decompose_generator(ty) {
                             Some((yield_ty, send_ty))
                         } else {
-                            self.decompose_async_generator(&ty)
+                            self.decompose_async_generator(ty)
                         }
                     });
-                if let Some((yield_hint, send_ty)) = hint {
+                    (!hints.is_empty()).then_some(hints)
+                });
+                if let Some(hints) = hints {
+                    let (yield_hints, send_tys) = hints.into_iter().unzip();
                     let yield_ty = if let Some(expr) = x.value.as_ref() {
                         self.expr(
                             expr,
-                            Some((&yield_hint, &|| {
+                            Some((&self.unions(yield_hints), &|| {
                                 TypeCheckContext::of_kind(TypeCheckKind::YieldValue)
                             })),
                             errors,
@@ -5133,13 +5278,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         self.check_and_return_type(
                             self.heap.mk_none(),
-                            &yield_hint,
+                            &self.unions(yield_hints),
                             x.range,
                             errors,
                             &|| TypeCheckContext::of_kind(TypeCheckKind::UnexpectedBareYield),
                         )
                     };
-                    Arc::new(YieldResult { yield_ty, send_ty })
+                    Arc::new(YieldResult {
+                        yield_ty,
+                        send_ty: self.unions(send_tys),
+                    })
                 } else {
                     let yield_ty = if let Some(expr) = x.value.as_ref() {
                         self.expr_infer(expr, errors)
@@ -5192,11 +5340,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Invalid `yield from` in async function".to_owned(),
                     );
                 }
-                let annot = annot.map(|k| self.get_idx(k));
-                let want = annot
-                    .as_ref()
-                    .and_then(|x| x.ty(self.heap, self.stdlib))
-                    .and_then(|ty| self.decompose_generator(&ty));
 
                 let mut ty = self.expr_infer(&x.value, errors);
                 let res = if let Some(generator) = self.unwrap_generator(&ty) {
@@ -5208,11 +5351,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // with a `None` send type.
                     // TODO: This might cause confusing type errors.
                     let none = self.heap.mk_none();
-                    ty = self.heap.mk_class_type(self.stdlib.generator(
-                        yield_ty.clone(),
-                        none.clone(),
-                        none,
-                    ));
+                    ty = self.distribute_over_union(&yield_ty, |yield_ty: &Type| {
+                        self.heap.mk_class_type(self.stdlib.generator(
+                            yield_ty.clone(),
+                            none.clone(),
+                            none.clone(),
+                        ))
+                    });
                     YieldFromResult::from_iterable(self.heap, yield_ty)
                 } else {
                     ty = if is_async.is_async() {
@@ -5231,13 +5376,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     };
                     YieldFromResult::any_error(self.heap)
                 };
-                if let Some((want_yield, want_send, _)) = want {
-                    // We don't need to be compatible with the expected generator return type.
-                    let want = self.heap.mk_class_type(self.stdlib.generator(
-                        want_yield,
-                        want_send,
-                        self.heap.mk_any_implicit(),
-                    ));
+
+                let annot = annot
+                    .map(|k| self.get_idx(k))
+                    .and_then(|x| x.ty(self.heap, self.stdlib));
+                let want = annot.as_ref().map(HintRef::soft).and_then(|hint| {
+                    let hints = self.decompose_hint(hint, |hint| {
+                        self.decompose_generator(hint)
+                            .map(|(want_yield, want_send, _)| {
+                                // We don't need to be compatible with the expected generator return type.
+                                self.heap.mk_class_type(self.stdlib.generator(
+                                    want_yield,
+                                    want_send,
+                                    self.heap.mk_any_implicit(),
+                                ))
+                            })
+                    });
+                    (!hints.is_empty()).then(|| self.unions(hints))
+                });
+                if let Some(want) = want {
                     self.check_type(&ty, &want, x.range, errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::YieldFrom)
                     });
@@ -5286,6 +5443,57 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             )
         }
+    }
+
+    /// Untype a `typing.Self` special form by substituting the concrete
+    /// `Type::SelfType` for the enclosing class. Called from
+    /// `untype_opt`'s `Type::Type[SpecialForm(SelfType)]` arm. The
+    /// enclosing class is recovered from the bind-time `class_scopes`
+    /// side table on `Bindings`.
+    fn untype_self(&self, range: TextRange, errors: &ErrorCollector) -> Type {
+        let Some(class_idx) = self.bindings().enclosing_class(range) else {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                "`Self` must appear within a class".to_owned(),
+            );
+            // Pass the unsubstituted `SpecialForm(SelfType)` through so
+            // downstream type-form checks (e.g. base class parsing,
+            // which rejects `class C(Self): ...` with `Invalid base
+            // class: Self`) still see the unresolved form and can
+            // emit their own diagnostics. `solve_annotation` has a
+            // fallback that replaces any lingering
+            // `SpecialForm(SelfType)` with `Any(Error)` before the
+            // type leaks into later phases.
+            return Type::SpecialForm(SpecialForm::SelfType);
+        };
+        let class = self.get_idx(class_idx);
+        let Some(cls) = &class.as_ref().0 else {
+            // The class binding was solved but produced no class
+            // object — this happens when Self resolution recurses into
+            // a class still mid-resolution.
+            return self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidSelfType),
+                "Could not resolve the class for `typing.Self` (may indicate unexpected recursion resolving types)".to_owned(),
+            );
+        };
+        let metadata = self.get_metadata_for_class(cls);
+        if metadata.is_metaclass() {
+            self.error(
+                errors,
+                range,
+                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                "`Self` cannot be used in a metaclass".to_owned(),
+            );
+        }
+        // `as_class_type_unchecked` matches what `solve_annotation` uses
+        // for annotation-time Self substitution and avoids the cycle that
+        // `instantiate(cls)` can hit when this fires while solving the
+        // same class's own annotations.
+        Type::SelfType(self.as_class_type_unchecked(cls))
     }
 
     pub fn untype_opt(
@@ -5341,6 +5549,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Bare TypeForm (no subscript) is equivalent to TypeForm[Any]
                 if let Type::SpecialForm(SpecialForm::TypeForm) = t.as_ref() {
                     return Some(Type::TypeForm(Box::new(Type::Any(AnyStyle::Implicit))));
+                }
+                // `typing.Self` substitutes to the concrete `SelfType` of
+                // the enclosing class, recovered from the bind-time
+                // `class_scopes` side table on `Bindings`.
+                if let Type::SpecialForm(SpecialForm::SelfType) = t.as_ref() {
+                    return Some(self.untype_self(range, errors));
                 }
                 Some(*t)
             }
@@ -5552,15 +5766,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Type::SpecialForm(special_form) = ty
             && !type_form_context.is_valid_unparameterized_annotation(special_form)
         {
+            // Recover by returning the error sentinel rather than letting the
+            // bare `Type::SpecialForm(_)` propagate. Without this, downstream
+            // code (e.g. `type[TypedDict]` -> attribute access) sees a
+            // `Type::Type(box Type::SpecialForm(_))` it cannot normalize and
+            // emits an internal-error.
             if special_form.can_be_subscripted() {
-                self.error(
+                return self.error(
                     errors,
                     range,
                     ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                     format!("Expected a type argument for `{special_form}`"),
                 );
             } else {
-                self.error(
+                return self.error(
                     errors,
                     range,
                     ErrorInfo::Kind(ErrorKind::InvalidAnnotation),

@@ -25,7 +25,6 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(box_patterns)]
 #![feature(closure_lifetime_binder)]
-#![feature(if_let_guard)]
 
 pub mod alt;
 mod binding;

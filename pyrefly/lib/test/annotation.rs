@@ -11,7 +11,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "conformance: Type quotes incorrectly referring to shadowing class member. Note that this test is likely to be removed: https://github.com/python/typing/pull/2144",
     test_class_scope_quoted_annotation_bypasses_shadowing,
     r#"
 from typing import assert_type

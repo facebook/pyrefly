@@ -270,15 +270,15 @@ fn position_is_in_docstring(
         }
         for stmt in body {
             match stmt {
-                Stmt::FunctionDef(func) => {
-                    if body_contains_docstring(func.body.as_slice(), position) {
-                        return true;
-                    }
+                Stmt::FunctionDef(func)
+                    if body_contains_docstring(func.body.as_slice(), position) =>
+                {
+                    return true;
                 }
-                Stmt::ClassDef(class_def) => {
-                    if body_contains_docstring(class_def.body.as_slice(), position) {
-                        return true;
-                    }
+                Stmt::ClassDef(class_def)
+                    if body_contains_docstring(class_def.body.as_slice(), position) =>
+                {
+                    return true;
                 }
                 _ => {}
             }
@@ -504,7 +504,8 @@ pub fn get_hover(
     // Check if hovering over `in` keyword in for loop or comprehension. These `in`s are different
     // from using `in` as a binary comparison operator and therefore needs some special handling.
     if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position)
-        && let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start())
+        && let Some(iterable_type) =
+            transaction.get_type_at_for_display(handle, iterable_range.start())
     {
         return Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -519,7 +520,7 @@ pub fn get_hover(
     }
 
     // Otherwise, fall through to the existing type hover logic
-    let mut type_ = transaction.get_type_at(handle, position)?;
+    let mut type_ = transaction.get_type_at_for_display(handle, position)?;
 
     // Helper function to check if we're hovering over a callee and get its range
     let find_callee_range_at_position = || -> Option<TextRange> {

@@ -75,9 +75,12 @@ use crate::dispatch_anyidx;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
+use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::CallContext;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
@@ -3012,6 +3015,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn check_and_return_type_info_with_call_context(
+        &self,
+        got: TypeInfo,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> TypeInfo {
+        if self.check_type_with_call_context(got.ty(), want, loc, errors, tcc, call_context) {
+            got
+        } else {
+            got.with_ty(want.clone())
+        }
+    }
+
     /// Check if `got` matches `want`, returning `want` if the check fails.
     pub fn check_and_return_type(
         &self,
@@ -3028,6 +3047,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn check_and_return_type_with_call_context(
+        &self,
+        got: Type,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> Type {
+        if self.check_type_with_call_context(&got, want, loc, errors, tcc, call_context) {
+            got
+        } else {
+            want.clone()
+        }
+    }
+
     /// Check if `got` matches `want`, returning `true` on success and `false` on failure.
     pub fn check_type(
         &self,
@@ -3037,10 +3072,57 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
-        match self.is_subset_eq_with_reason(got, want) {
+        let subset_result = match tcc().kind {
+            TypeCheckKind::CallArgument(..)
+            | TypeCheckKind::CallVarArgs(..)
+            | TypeCheckKind::CallKwArgs(..)
+            | TypeCheckKind::CallUnpackKwArg(..) => {
+                let mut call_context = CallContext::outside();
+                call_context.set_argument_side(ArgumentSide::Got);
+                self.solver().is_subset_eq_with_call_context(
+                    got,
+                    want,
+                    self.type_order(),
+                    &call_context,
+                )
+            }
+            _ => self.is_subset_eq_with_reason(got, want),
+        };
+        match subset_result {
             Ok(()) => true,
             Err(error) => {
-                self.solver().error(got, want, errors, loc, tcc, error);
+                let note = self
+                    .suggest_enum_member_for_value(got, want)
+                    .map(|s| format!("Did you mean `{s}`?"));
+                self.solver()
+                    .error(got, want, errors, loc, tcc, error, note);
+                false
+            }
+        }
+    }
+
+    pub fn check_type_with_call_context(
+        &self,
+        got: &Type,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> bool {
+        match self.solver().is_subset_eq_with_call_context(
+            got,
+            want,
+            self.type_order(),
+            call_context,
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                let note = self
+                    .suggest_enum_member_for_value(got, want)
+                    .map(|s| format!("Did you mean `{s}`?"));
+                self.solver()
+                    .error(got, want, errors, loc, tcc, error, note);
                 false
             }
         }
@@ -3134,7 +3216,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
     }
 
-    /// Add an implicit-any error for a generic entity without explicit type arguments.
+    /// Add an `implicit-any-type-argument` error for a generic entity used
+    /// without explicit type arguments.
     pub fn add_implicit_any_error(
         errors: &ErrorCollector,
         range: TextRange,
@@ -3154,7 +3237,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         errors.add(
             range,
-            ErrorInfo::Kind(ErrorKind::ImplicitAny),
+            ErrorInfo::Kind(ErrorKind::ImplicitAnyTypeArgument),
             vec1![
                 msg,
                 "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),

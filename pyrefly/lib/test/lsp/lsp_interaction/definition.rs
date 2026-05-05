@@ -183,23 +183,6 @@ fn test_go_to_def_relative_path() {
 }
 
 #[test]
-fn test_go_to_def_relative_path_helper() {
-    let root = get_test_files_root();
-    let basic_root = root.path().join("basic");
-    test_go_to_def(
-        basic_root,
-        None,
-        "foo_relative.py",
-        vec![
-            (5, 14, "bar.py", 0, 0, 0, 0),
-            (6, 17, "bar.py", 6, 6, 6, 9),
-            (8, 9, "bar.py", 7, 4, 7, 7),
-            (9, 7, "bar.py", 6, 6, 6, 9),
-        ],
-    );
-}
-
-#[test]
 fn definition_in_builtins() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
@@ -846,6 +829,54 @@ fn definition_relative_import_outside_search_path() {
         .expect_hover_response_with_markup(|value| {
             value
                 .is_some_and(|text| text.contains("(class) MyClass: def MyClass() -> MyClass: ..."))
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// Relative imports in site-packages nested under the project root (e.g. in a
+/// venv) should resolve correctly for go-to-definition, even when a
+/// pyproject.toml establishes the project root as import_root.
+#[test]
+fn definition_site_packages_relative_import() {
+    let root = get_test_files_root();
+    let root_path = root
+        .path()
+        .join("site_packages_relative_import")
+        .to_path_buf();
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let init_file = "venv/lib/python3.13/site-packages/fake_site_package/__init__.py";
+    interaction.client.did_open(init_file);
+
+    // Go-to-definition on `relative` in `from .relative import Foo` (line 0, char 6).
+    interaction
+        .client
+        .definition(init_file, 0, 6)
+        .expect_definition_response_from_root(
+            "venv/lib/python3.13/site-packages/fake_site_package/relative.py",
+            0,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+
+    // Hover on `Foo` in `from .relative import Foo` (line 0, char 22).
+    interaction
+        .client
+        .hover(init_file, 0, 22)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("(class) Foo") && !text.contains("Unknown"))
         })
         .unwrap();
 

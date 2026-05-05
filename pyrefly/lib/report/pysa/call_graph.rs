@@ -113,6 +113,7 @@ pub enum OriginKind {
     AugmentedAssignStatement,
     ForIter,
     ForNext,
+    ForAssign,
     ReprCall,
     AbsCall,
     IterCall,
@@ -145,6 +146,7 @@ impl std::fmt::Display for OriginKind {
             Self::AugmentedAssignStatement => write!(f, "augmented-assign-statement"),
             Self::ForIter => write!(f, "for-iter"),
             Self::ForNext => write!(f, "for-next"),
+            Self::ForAssign => write!(f, "for-assign"),
             Self::ReprCall => write!(f, "repr-call"),
             Self::AbsCall => write!(f, "abs-call"),
             Self::IterCall => write!(f, "iter-call"),
@@ -1682,6 +1684,9 @@ impl<'a> CallGraphVisitor<'a> {
             ..
         } = self.receiver_class_from_type(receiver_type, callee_definition.is_classmethod);
         if receiver_class.is_none() {
+            return Target::Function(callee);
+        }
+        if callee_definition.defining_class.is_none() {
             return Target::Function(callee);
         }
         // Pysa is responsible for filtering the overridden methods
@@ -3316,6 +3321,19 @@ impl<'a> CallGraphVisitor<'a> {
                 Origin {
                     kind: OriginKind::SubscriptSetItem,
                     location: self.pysa_location(assign.range()),
+                },
+            ),
+            Some(Stmt::For(stmt_for)) if stmt_for.target.range() == subscript_range => (
+                dunder::SETITEM,
+                Origin {
+                    kind: OriginKind::Nested {
+                        head: Box::new(OriginKind::SubscriptSetItem),
+                        tail: Box::new(OriginKind::ForAssign),
+                    },
+                    location: self.pysa_location(TextRange::new(
+                        stmt_for.target.start(),
+                        stmt_for.iter.end(),
+                    )),
                 },
             ),
             _ => (

@@ -1,6 +1,9 @@
 # Test configuration file for pyrefly.toml schema validation
 # This file contains examples of all configuration options
 
+# Preset (named collection of defaults applied as the base config)
+preset = "legacy"
+
 # Basic project configuration
 project-includes = ["src", "tests"]
 project-excludes = ["**/node_modules", "**/__pycache__"]

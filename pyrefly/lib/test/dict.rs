@@ -151,3 +151,20 @@ assert_type(f(d), TD)  # E: assert_type(dict[str, int], TD)
 assert_type(f({"x": 0}), TD)  # E: `dict[str, int]` is not assignable to upper bound `TD`  # E: assert_type(dict[str, int], TD)
     "#,
 );
+
+// Regression test: deeply nested dict literals previously caused exponential memory growth
+// because AnonymousTypedDictInner stored the value type both in `fields` and a redundant
+// `value_type` field, doubling the cloned type tree at each nesting level. The fix removed
+// the redundant field and computes the value type on demand from `fields`.
+//
+// Depth 15 is used for CI speed. The fix was verified at depth 25 (239 MB, down from 7.7 GB)
+// and depth 50 (236 MB), confirming linear rather than exponential growth.
+testcase!(
+    test_deeply_nested_dict_literal,
+    r#"
+from typing import assert_type
+
+x = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": "deep"}}}}}}}}}}}}}}}
+assert_type(x, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]]]]]]]]]])
+"#,
+);

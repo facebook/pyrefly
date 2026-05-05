@@ -251,7 +251,25 @@ class Model(BaseModel, strict=True):
     x: OuterModel
 
 m1 = Model(x=OuterModel(InnerModel(5)))
-m2 = Model(x=InnerModel(5))  
+m2 = Model(x=InnerModel(5))
 m3 = Model(x=5)
+    "#,
+);
+
+pydantic_testcase!(
+    test_root_model_dict_field,
+    r#"
+from pydantic import BaseModel, RootModel
+
+class InnerModel(BaseModel):
+    a: int
+
+InnerModelDict = RootModel[dict[str, InnerModel]]
+
+class OuterModel(BaseModel):
+    data: InnerModelDict
+
+def serialize(d: InnerModelDict) -> OuterModel:
+    return OuterModel(data=d)
     "#,
 );

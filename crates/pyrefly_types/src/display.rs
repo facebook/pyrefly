@@ -26,6 +26,7 @@ use starlark_map::smallmap;
 
 use crate::callable::Function;
 use crate::class::Class;
+use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedIdentity;
@@ -38,10 +39,12 @@ use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
 use crate::type_var::Restriction;
+use crate::typed_dict::AnonymousTypedDictInner;
 use crate::typed_dict::TypedDict;
 use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::BoundMethodType;
+use crate::types::CallableResidualKind;
 use crate::types::Forall;
 use crate::types::Forallable;
 use crate::types::NeverStyle;
@@ -362,7 +365,10 @@ impl<'a> TypeDisplayContext<'a> {
             let needs_parens = wrap_callables_and_intersect
                 && matches!(
                     t,
-                    Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                    Type::Callable(_)
+                        | Type::CallableResidual(_)
+                        | Type::Function(_)
+                        | Type::Intersect(_)
                 );
             if needs_parens {
                 output.write_str("(")?;
@@ -415,6 +421,21 @@ impl<'a> TypeDisplayContext<'a> {
             vec: &self.forall_tparam_uniques,
             prev_len,
         }
+    }
+
+    /// Format the value type of an anonymous typed dict by computing the union
+    /// of all field types on-the-fly. This avoids storing a redundant clone in the
+    /// type tree (which caused exponential memory growth for nested dict literals).
+    /// Delegates to `compute_value_type` + `fmt_helper_generic` so that union
+    /// display (dedup, literal grouping, etc.) stays in one place.
+    fn fmt_anonymous_typed_dict_value_type(
+        &self,
+        inner: &AnonymousTypedDictInner,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        let heap = TypeHeap::new();
+        let value_type = inner.compute_value_type(&heap);
+        self.fmt_helper_generic(&value_type, false, output)
     }
 
     /// Core formatting logic for types that works with any `TypeOutput` implementation.
@@ -503,7 +524,7 @@ impl<'a> TypeDisplayContext<'a> {
                     let str_qname = self.stdlib.map(|s| s.str().qname());
                     output.write_builtin("str", str_qname)?;
                     output.write_str(", ")?;
-                    self.fmt_helper_generic(&inner.value_type, false, output)?;
+                    self.fmt_anonymous_typed_dict_value_type(inner, output)?;
                     output.write_str("]")
                 }
             },
@@ -519,7 +540,7 @@ impl<'a> TypeDisplayContext<'a> {
                     let str_qname = self.stdlib.map(|s| s.str().qname());
                     output.write_builtin("str", str_qname)?;
                     output.write_str(", ")?;
-                    self.fmt_helper_generic(&inner.value_type, false, output)?;
+                    self.fmt_anonymous_typed_dict_value_type(inner, output)?;
                     output.write_str("]")
                 }
             },
@@ -598,6 +619,22 @@ impl<'a> TypeDisplayContext<'a> {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
             }
+            Type::CallableResidual(box residual) => match &residual.kind {
+                CallableResidualKind::Generic { quantified } => {
+                    output.write_str("GenericResidual@")?;
+                    write!(output, "{quantified}")
+                }
+                CallableResidualKind::Overload { branches, .. } => {
+                    output.write_str("OverloadResidual@[")?;
+                    for (i, branch) in branches.iter().enumerate() {
+                        if i > 0 {
+                            output.write_str(", ")?;
+                        }
+                        self.fmt_helper_generic(&branch.ty, false, output)?;
+                    }
+                    output.write_str("]")
+                }
+            },
             Type::Function(box Function {
                 signature,
                 metadata,
@@ -830,7 +867,10 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => {
+                        Type::Callable(_)
+                        | Type::CallableResidual(_)
+                        | Type::Function(_)
+                        | Type::Intersect(_) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -893,7 +933,10 @@ impl<'a> TypeDisplayContext<'a> {
                             // Regular union member - use helper for just this one
                             let needs_parens = matches!(
                                 t,
-                                Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                                Type::Callable(_)
+                                    | Type::CallableResidual(_)
+                                    | Type::Function(_)
+                                    | Type::Intersect(_)
                             );
                             if needs_parens {
                                 output.write_str("(")?;

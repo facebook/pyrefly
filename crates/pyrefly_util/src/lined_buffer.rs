@@ -707,4 +707,86 @@ mod tests {
         let offset = lined_buffer.from_lsp_position(position, None);
         assert_eq!(offset, TextSize::new(contents.len() as u32));
     }
+
+    /// Bug: `LspNotebook::get_code_cell_index` returns an index among ALL cells
+    /// (code + markdown), but `Notebook::cell_offsets()` is indexed by valid
+    /// CODE cells only. When a notebook has markdown cells interspersed with
+    /// code cells, the all-cells index doesn't match the code-cell index,
+    /// causing `from_lsp_position` to resolve to the wrong offset or panic.
+    ///
+    /// For a notebook [code_0, markdown, code_1]:
+    ///   - `get_code_cell_index` returns 2 for code_1 (its position among all cells)
+    ///   - `cell_offsets` has 3 entries: [0, end_of_code_0, total_len]
+    ///   - `cell_offsets[2]` is the trailing sentinel (source length), not the
+    ///     start of code_1 — giving the wrong concatenated line
+    #[test]
+    fn test_from_lsp_position_notebook_cell_index_mismatch() {
+        use ruff_notebook::Cell;
+        use ruff_notebook::CellMetadata;
+        use ruff_notebook::CodeCell;
+        use ruff_notebook::MarkdownCell;
+        use ruff_notebook::Notebook;
+        use ruff_notebook::RawNotebook;
+        use ruff_notebook::RawNotebookMetadata;
+        use ruff_notebook::SourceValue;
+
+        let raw = RawNotebook {
+            cells: vec![
+                Cell::Code(CodeCell {
+                    execution_count: None,
+                    id: None,
+                    metadata: CellMetadata::default(),
+                    outputs: vec![],
+                    source: SourceValue::String("x = 1".to_owned()),
+                }),
+                Cell::Markdown(MarkdownCell {
+                    attachments: None,
+                    id: None,
+                    metadata: CellMetadata::default(),
+                    source: SourceValue::String("# heading".to_owned()),
+                }),
+                Cell::Code(CodeCell {
+                    execution_count: None,
+                    id: None,
+                    metadata: CellMetadata::default(),
+                    outputs: vec![],
+                    source: SourceValue::String("y = 2".to_owned()),
+                }),
+            ],
+            metadata: RawNotebookMetadata::default(),
+            nbformat: 4,
+            nbformat_minor: 5,
+        };
+        let notebook = Notebook::from_raw_notebook(raw, false).unwrap();
+        // source_code() concatenates only code cells: "x = 1\ny = 2\n"
+        let source = notebook.source_code().to_owned();
+        assert_eq!(source, "x = 1\ny = 2\n");
+        let lined_buffer = LinedBuffer::new(Arc::new(source.clone()));
+
+        let position = lsp_types::Position {
+            line: 0,
+            character: 0,
+        };
+
+        // Correct: code_1 is at code-cell index 1, so cell_offsets[1] points
+        // to the start of "y = 2".
+        let correct_offset = lined_buffer.from_lsp_position(position, Some((&notebook, 1)));
+        assert_eq!(correct_offset, TextSize::new(6)); // offset of 'y'
+        assert_eq!(
+            &source[correct_offset.to_usize()..correct_offset.to_usize() + 5],
+            "y = 2"
+        );
+
+        // If the all-cells index (2) were used instead of the code-cell index
+        // (1), cell_offsets[2] would be the trailing sentinel (12 = source
+        // length) and from_lsp_position would resolve to EOF. This is
+        // prevented by LspNotebook::get_code_cell_index translating to the
+        // code-cell index.
+        let wrong_offset = lined_buffer.from_lsp_position(position, Some((&notebook, 2)));
+        assert_ne!(
+            correct_offset, wrong_offset,
+            "all-cells index 2 must differ from code-cell index 1 — \
+             callers must translate via get_code_cell_index"
+        );
+    }
 }

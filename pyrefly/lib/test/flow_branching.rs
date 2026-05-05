@@ -1488,6 +1488,96 @@ def f(a: int) -> int:
 );
 
 testcase!(
+    test_walrus_in_while_post_loop,
+    r#"
+from typing import Callable, Any
+
+class Cat:
+    def equals(self, other: Any) -> bool:
+        return False
+
+def main(f: Callable[[], Cat]) -> None:
+    while (a := f()).equals(1):
+        break
+    print(a)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_simple,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    while (x := f()) > 0:
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_with_else,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    while (x := f()) > 0:
+        pass
+    else:
+        pass
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_pre_declared_uninitialized,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    x: int
+    while (x := f()) > 0:
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
+    bug = "walrus in while overwrites pre-bound type instead of narrowing; yields str | int",
+    test_walrus_in_while_pre_bound_type_precision,
+    r#"
+from typing import assert_type
+
+def f_int() -> int:
+    return 1
+
+def main() -> None:
+    x = ""
+    while (x := f_int()) > 0:
+        break
+    assert_type(x, int)  # E: assert_type(Literal[''] | int, int) failed
+    "#,
+);
+
+testcase!(
+    bug =
+        "BoolOp laxness causes false negative for walrus in while short-circuit context, see #1251",
+    test_walrus_in_while_bool_op,
+    r#"
+def cond() -> bool: ...
+def get() -> int: ...
+
+def main() -> None:
+    while cond() and (x := get()):
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
     test_trycatch_implicit_return,
     r#"
 def f() -> int:
@@ -2194,7 +2284,6 @@ testcase!(
 import types
 from dataclasses import dataclass
 from typing import Any, TypeIs, assert_never
-
 
 def is_instance_union_aware[T](
     value: Any, target_type: type[T] | tuple[type[T], ...]

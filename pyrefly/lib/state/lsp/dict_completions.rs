@@ -289,7 +289,7 @@ impl<'a> Transaction<'a> {
                         }
                     }
                     Type::Union(box Union { members, .. }) => {
-                        stack.extend(members.into_iter());
+                        stack.extend(members);
                     }
                     _ => {}
                 }

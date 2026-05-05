@@ -229,10 +229,8 @@ impl Ast {
     /// Calls a function on all of the names bound by this lvalue expression.
     pub fn expr_lvalue<'a>(x: &'a Expr, f: &mut impl FnMut(&'a ExprName)) {
         match x {
-            Expr::Name(x) => {
-                if !Self::is_synthesized_empty_name(x) {
-                    f(x);
-                }
+            Expr::Name(x) if !Self::is_synthesized_empty_name(x) => {
+                f(x);
             }
             Expr::Tuple(x) => {
                 for x in &x.elts {

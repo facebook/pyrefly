@@ -116,7 +116,7 @@ assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
-assert_words!(BindingClassMetadata, 9);
+assert_words!(BindingClassMetadata, 11);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_words!(BindingClassField, 11);
@@ -873,8 +873,6 @@ pub enum Key {
     UsageLink(TextRange),
     /// A yield link - a placeholder used for first-usage type inference specifically for yield expressions.
     YieldLink(TextRange),
-    /// A use of `typing.Self` in an expression. Used to redirect to the appropriate type (which is aware of the current class).
-    SelfTypeLiteral(TextRange),
     /// I am the type of a name that may involve a legacy type param (this may involve attribute narrows
     /// of a module in the case of imported names like `foo.T`).
     ///
@@ -919,7 +917,6 @@ impl Ranged for Key {
             Self::UsageLink(r) => *r,
             Self::YieldLink(r) => *r,
             Self::Delete(r) => *r,
-            Self::SelfTypeLiteral(r) => *r,
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
@@ -960,7 +957,6 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::UsageLink(r) => write!(f, "Key::UsageLink({})", ctx.display(r)),
             Self::YieldLink(r) => write!(f, "Key::YieldLink({})", ctx.display(r)),
             Self::Delete(r) => write!(f, "Key::Delete({})", ctx.display(r)),
-            Self::SelfTypeLiteral(r) => write!(f, "Key::SelfTypeLiteral({})", ctx.display(r)),
             Self::PossibleLegacyTParam(r) => {
                 write!(f, "Key::PossibleLegacyTParam({})", ctx.display(r))
             }
@@ -1982,6 +1978,29 @@ pub struct NameAssign {
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
     pub def_idx: Option<Idx<Key>>,
+    /// If `Some`, this assignment has an implicit receiver derived from
+    /// flow state (currently: a same-scope `class` definition for the same
+    /// name). The receiver provides contextual typing for the RHS and acts
+    /// like an implicit annotation: incompatible writes do not change the
+    /// visible binding, and the receiver type is preserved across same-scope
+    /// rebinds.
+    ///
+    /// The idx points at the canonical class-object binding of the original
+    /// class. The receiver-constrained semantics live entirely in the solver;
+    /// the textual assignment is still bound as a real `NameAssign` so the
+    /// RHS remains available for its own diagnostics and bookkeeping.
+    pub receiver_idx: Option<Idx<Key>>,
+}
+
+impl NameAssign {
+    /// True if the visible binding is pinned by an external constraint —
+    /// either an explicit annotation or an implicit class receiver. Pinned
+    /// assignments skip implicit-type-alias wrapping and inlay-hint
+    /// suggestions, since the pinning constraint already authoritatively
+    /// describes the variable's type.
+    pub fn is_pinned(&self) -> bool {
+        self.annotation.is_some() || self.receiver_idx.is_some()
+    }
 }
 
 /// Data for a type alias binding.
@@ -2023,6 +2042,51 @@ pub struct ExhaustiveBinding {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LambdaParamId(pub u32);
+
+/// Data for `Binding::Import`. Carries the `(module, name)` of an imported
+/// symbol, plus metadata for downstream consumers.
+#[derive(Clone, Debug)]
+pub struct ImportBinding {
+    /// The module being imported from.
+    pub module: ModuleName,
+    /// The name being imported.
+    pub name: Name,
+    /// The original name's location for renamed imports. For example, in
+    /// `from foo import bar as baz`, this is the range of `bar`. `None`
+    /// for non-renamed imports.
+    pub original_name_range: Option<TextRange>,
+    /// `Some(range)` for user-written explicit `from X import Y` forms,
+    /// where a deprecation warning should fire at solve time, attached
+    /// to `range`. `None` for implicit synthetic imports (builtins
+    /// wildcard injection, `typing.List` → `builtins.list` legacy
+    /// aliases, and `from X import *` wildcards) where emitting
+    /// per-name deprecation would be noise.
+    pub check_deprecated: Option<TextRange>,
+    /// If `Some`, the caller did NOT verify the name exists at bind
+    /// time (so that the target module's Exports were not forced). At
+    /// solve time, if the name is missing from the module's Exports,
+    /// the solver falls back to the submodule / `__getattr__` /
+    /// missing-attribute cascade. If `None`, the caller verified
+    /// existence (wildcards, builtins injection, legacy typing aliases)
+    /// and the solver may safely assume the export exists.
+    pub fallback: Option<ImportFallback>,
+}
+
+/// Information required by the solve-time fallback cascade for
+/// [`ImportBinding::fallback`].
+#[derive(Clone, Debug)]
+pub struct ImportFallback {
+    /// Per-name range (the `Alias` range, e.g. just `Y` or `Y as Z`).
+    /// Used to anchor a `MissingModuleAttribute` error if the imported
+    /// name can't be resolved inside an existing module. The
+    /// missing-module error itself is handled by a separate
+    /// per-statement `Binding::Module`.
+    pub stmt_range: TextRange,
+    /// If true, the import site is dead code (statically unreachable).
+    /// Suppress the missing-attribute error in that case — the bind-time
+    /// logic did the same via `is_unreachable_from_static_test`.
+    pub is_unreachable: bool,
+}
 
 #[derive(Clone, Debug)]
 pub enum Binding {
@@ -2092,13 +2156,8 @@ pub enum Binding {
         Option<Idx<Key>>,
         Option<Idx<KeyClassMetadata>>,
     ),
-    /// An import statement, typically with Self::Import.
-    /// The option range tracks the original name's location for renamed import.
-    /// e.g. in `from foo import bar as baz`, we should track the range of `bar`.
-    Import(Box<(ModuleName, Name, Option<TextRange>)>),
-    /// An import via module-level __getattr__ for incomplete stubs.
-    /// See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
-    ImportViaGetattr(Box<(ModuleName, Name)>),
+    /// An import statement, typically with `Self::Import`.
+    Import(Box<ImportBinding>),
     /// A class definition, points to a BindingClass and any decorators.
     ClassDef(Idx<KeyClass>, Box<[Idx<KeyDecorator>]>),
     /// A forward reference to another binding.
@@ -2119,9 +2178,16 @@ pub enum Binding {
     /// A narrowed type.
     Narrow(Idx<Key>, Box<NarrowOp>, NarrowUseLocation),
     /// An import of a module.
-    /// Also contains the path along the module to bind, and optionally a key
-    /// with the previous import to this binding (in which case merge the modules).
-    Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>)>),
+    /// Also contains the path along the module to bind, optionally a key
+    /// with the previous import to this binding (in which case merge the
+    /// modules), and optionally a `TextRange` at which to emit a
+    /// missing-module diagnostic if `module_exists` returns a `FindError`
+    /// at solve time. The range is `Some` for top-level `import X`
+    /// statements and `None` when the binding is constructed
+    /// internally — for example by `solve_import`'s submodule fallback,
+    /// where the cascade is responsible for any missing-module
+    /// diagnostic.
+    Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
     /// The TextRange is optional and controls whether to produce an error
     /// saying there are scoped type parameters for this function / class, and
@@ -2165,11 +2231,6 @@ pub enum Binding {
     /// example, forcing a `BindingExpect` to be solved) in the context of first-usage-based
     /// inference of partial types.
     UsageLink(LinkedKey),
-    /// Inside of a class body, we check whether an expression resolves to the `SelfType` special
-    /// export. If so, we create a `SelfTypeLiteral` key/binding pair so that the AnswersSolver can
-    /// later synthesize the correct `Type::SelfType` (this binding is needed
-    /// because we need access to the current class to do so).
-    SelfTypeLiteral(Idx<KeyClass>, TextRange),
     /// `del` statement
     Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
@@ -2266,12 +2327,15 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
             Self::Import(x) => {
-                let (m, n, original_name) = x.as_ref();
-                write!(f, "Import({m}, {n}, {original_name:?})")
-            }
-            Self::ImportViaGetattr(x) => {
-                let (m, n) = x.as_ref();
-                write!(f, "ImportViaGetattr({m}, {n})")
+                write!(
+                    f,
+                    "Import({}, {}, {:?}, check_dep={:?}, fallback={})",
+                    x.module,
+                    x.name,
+                    x.original_name_range,
+                    x.check_deprecated,
+                    x.fallback.is_some()
+                )
             }
             Self::ClassDef(x, _) => write!(f, "ClassDef({})", ctx.display(*x)),
             Self::Forward(k) => write!(f, "Forward({})", ctx.display(*k)),
@@ -2298,7 +2362,7 @@ impl DisplayWith<Bindings> for Binding {
                 )
             }
             Self::Module(x) => {
-                let (m, path, key) = x.as_ref();
+                let (m, path, key, _) = x.as_ref();
                 write!(
                     f,
                     "Module({m}, {}, {})",
@@ -2429,14 +2493,6 @@ impl DisplayWith<Bindings> for Binding {
                 }
                 write!(f, ")")
             }
-            Self::SelfTypeLiteral(class_key, r) => {
-                write!(
-                    f,
-                    "SelfTypeLiteral({}, {})",
-                    m.display(ctx.idx_to_key(*class_key)),
-                    m.display(r)
-                )
-            }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
             Self::ClassBodyUnknownName(x) => {
                 let (class_key, name, suggestion) = x.as_ref();
@@ -2489,7 +2545,7 @@ impl Binding {
                     Some(SymbolKind::Function)
                 }
             }
-            Binding::Import(_) | Binding::ImportViaGetattr(_) => {
+            Binding::Import(_) => {
                 // TODO: maybe we can resolve it to see its symbol kind
                 Some(SymbolKind::Variable)
             }
@@ -2497,6 +2553,11 @@ impl Binding {
             Binding::Module(_) => Some(SymbolKind::Module),
             Binding::TypeAlias(_) => Some(SymbolKind::TypeAlias),
             Binding::TypeAliasRef(_) => Some(SymbolKind::TypeAlias),
+            // A receiver-constrained class assignment is class-shaped (the
+            // visible result is whichever class the receiver-compatibility
+            // decision chose), so present it as a class in IDE metadata
+            // rather than a constant/variable assignment.
+            Binding::NameAssign(x) if x.receiver_idx.is_some() => Some(SymbolKind::Class),
             Binding::NameAssign(x) if x.name.as_str() == x.name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
@@ -2542,7 +2603,6 @@ impl Binding {
             | Binding::SuperInstance(_)
             | Binding::AssignToAttribute(_)
             | Binding::UsageLink(_)
-            | Binding::SelfTypeLiteral(..)
             | Binding::AssignToSubscript(_)
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
@@ -2975,6 +3035,9 @@ pub struct BindingClassMetadata {
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
     pub is_new_type: bool,
     pub pydantic_config_dict: PydanticConfigDict,
+    /// Field names targeted by `@field_validator(..., mode='before'|'plain')` decorators.
+    /// These fields accept `Any` in `__init__` because the validator can transform arbitrary input.
+    pub pydantic_before_validator_fields: Box<[Name]>,
     /// Django-specific field information.
     pub django_field_info: Box<DjangoFieldInfo>,
 }

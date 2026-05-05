@@ -607,7 +607,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     p.name().range(),
-                    ErrorInfo::Kind(ErrorKind::UnannotatedParameter),
+                    ErrorInfo::Kind(ErrorKind::ImplicitAnyParameter),
                     format!(
                         "`{}` is missing an annotation for parameter `{name}`",
                         stmt.name

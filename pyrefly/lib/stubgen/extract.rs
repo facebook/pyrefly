@@ -217,10 +217,8 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
                 let text = source_text(ctx.module_info, type_alias.range()).to_owned();
                 items.push(StubItem::TypeAlias(StubTypeAlias { text }));
             }
-            Stmt::If(if_stmt) => {
-                if is_type_checking_guard(&if_stmt.test) {
-                    items.extend(extract_stmts(&if_stmt.body, ctx, in_class));
-                }
+            Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test) => {
+                items.extend(extract_stmts(&if_stmt.body, ctx, in_class));
             }
             _ => {}
         }

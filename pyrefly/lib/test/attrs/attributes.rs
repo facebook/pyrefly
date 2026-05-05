@@ -35,7 +35,6 @@ class A:
     x: int
     y: int | None = None
 
-
 reveal_type(A.__init__)  # E: revealed type: (self: A, x: int, y: int | None = ...) -> None
 
 a = A(1)
@@ -56,7 +55,6 @@ class A:
     x: int = attr.ib()
     y: int | None = attr.ib(None)
 
-
 a = A(1)
 assert_type(a.x, int)
 assert_type(a.y, int | None)
@@ -75,7 +73,6 @@ import attr
 class A:
     x: int = attr.ib()
     y: int | None = attr.ib(None)
-
 
 reveal_type(A.__init__)  # E: revealed type: (self: A, x: Unknown, y: Unknown = ...) -> None
 "#,

@@ -1,5 +1,6 @@
 {
   "name": "test",
+  "path": "test.py",
   "names": [
     "test.Complete.method",
     "test.Incomplete.method_unannotated",

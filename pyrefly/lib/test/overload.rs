@@ -31,6 +31,22 @@ def anywhere():
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2867
+testcase!(
+    test_urlunparse_prefers_string_overload_for_parse_result,
+    r#"
+from typing import assert_type
+from urllib.parse import urlparse, urlunparse
+
+def sanitize_url(url: str) -> str:
+    parsed = urlparse(url)
+    assert_type(urlunparse(parsed), str)
+    sanitized = parsed._replace(netloc="example.com")
+    assert_type(urlunparse(sanitized), str)
+    return urlunparse(sanitized)
+    "#,
+);
+
 testcase!(
     test_branches,
     r#"
