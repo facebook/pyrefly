@@ -237,6 +237,33 @@ class Container[T]:
 );
 
 testcase!(
+    test_self_return_concrete_class_object,
+    r#"
+from typing import Self
+
+class C:
+    @classmethod
+    def make(cls) -> type[Self]:
+        x: type[C] = C
+        return x  # E: Returned type `type[C]` is not assignable to declared return type `type[Self@C]`
+"#,
+);
+
+testcase!(
+    test_self_return_concrete_class_object_final_ok,
+    r#"
+from typing import Self, final
+
+@final
+class C:
+    @classmethod
+    def make(cls) -> type[Self]:
+        x: type[C] = C
+        return x
+"#,
+);
+
+testcase!(
     test_self_in_class_body_expression,
     r#"
 from typing import Self, assert_type

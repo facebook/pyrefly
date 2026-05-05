@@ -2038,10 +2038,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     && (got_cls != want_cls || self.type_order.is_final(want_cls));
                 ok_or(ok, SubsetError::Other)
             }
-            (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => ok_or(
-                self.type_order.has_metaclass(got.class_object(), want),
-                SubsetError::Other,
-            ),
+            (Type::Type(box Type::ClassType(got)), Type::SelfType(want)) => {
+                // Parallel to the `ClassType <: SelfType` arm above: `Self` ranges over
+                // every subclass, so a concrete metaclass relationship is only safe when
+                // `want` cannot be further subclassed.
+                let got_cls = got.class_object();
+                let want_cls = want.class_object();
+                let ok = self.type_order.has_metaclass(got_cls, want)
+                    && (got_cls != want_cls || self.type_order.is_final(want_cls));
+                ok_or(ok, SubsetError::Other)
+            }
             (Type::SelfType(_), Type::SelfType(_)) => Ok(()),
             (Type::SelfType(got), _) => self.is_subset_eq(&Type::ClassType(got.clone()), want),
             (Type::Tuple(l), Type::Tuple(u)) => self.is_subset_tuple(l, u),
