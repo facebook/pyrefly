@@ -4,7 +4,7 @@
 
 - [Infer](autotype): Automatically add type annotations to your code with the Pyrefly infer feature.
 - [Configuration](configuration): Configure Pyrefly settings and options
-- [Experimental Django Support](django): Pyrefly experimental support for Django ORM.
+- [Django Support](django): Pyrefly support for Django ORM.
 - [Pyrefly Error Kinds](error-kinds): Pyrefly error categories and suppression codes
 - [Pyrefly Error Suppressions](error-suppressions): Learn how to suppress type check errors in Pyrefly with code comments and baseline files.
 - [IDE Installation](IDE): How to add Pyrefly Language Server and Typechecking to your IDE
@@ -15,7 +15,7 @@
 - [Migrating from Mypy](migrating-from-mypy): How to switch your type checker configuration from Mypy to Pyrefly
 - [Migrating from Pyright](migrating-from-pyright): How to switch your type checker configuration from Pyright to Pyrefly
 - [Migration Guides](migrating-to-pyrefly): How to switch from another type checker to Pyrefly
-- [Experimental Pydantic Support](pydantic): Pyrefly experimental support for Pydantic.
+- [Pydantic Support](pydantic): Pyrefly support for Pydantic.
 - [Pydantic Lax Mode Type Conversions](pydantic-lax-conversions): Complete reference of how Pyrefly converts types in Pydantic lax mode.
 - [FAQ](pyrefly-faq): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
 - [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
