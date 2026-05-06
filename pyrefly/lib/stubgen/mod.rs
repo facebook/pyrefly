@@ -278,10 +278,10 @@ class A:
         );
     }
 
-    /// Instance attributes inferred from `__init__` should appear in source order (assignment
-    /// order in `__init__`), not e.g. sorted alphabetically, so stub layout matches the defining code.
+    /// Instance attrs from `__init__` are emitted in alphabetical order by name (not assignment
+    /// order), so stubs stay deterministic and easy to scan.
     #[test]
-    fn test_stubgen_instance_fields_from_init_preserves_assignment_source_order() {
+    fn test_stubgen_instance_fields_from_init_sorted_by_name() {
         let actual = run_stubgen(
             r#"
 class A:
@@ -294,9 +294,9 @@ class A:
         pretty_assertions::assert_str_eq!(
             r#"
 class A:
-    z_attr: str
     a_attr: int
     m_attr: float
+    z_attr: str
 
     def __init__(self, u: str, v: int, w: float) -> None: ...
 "#

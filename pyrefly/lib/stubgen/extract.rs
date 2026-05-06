@@ -498,6 +498,8 @@ fn stub_class_level_variable_names(body: &[StubItem]) -> HashSet<&str> {
 
 /// Instance attributes inferred from methods (e.g. `self.name` in `__init__`) that
 /// are not already declared in the class body, materialized as stub `name: T` lines.
+///
+/// Emitted in alphabetical order by field name (stable regardless of map / inference order).
 fn extract_instance_attr_stubs_from_class_fields(
     class_def: &StmtClassDef,
     class_body: &[StubItem],
