@@ -666,7 +666,7 @@ pub trait TspInterface: Send + Sync + 'static {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
-    fn sender(&self) -> &MessageSender;
+    fn sender(&self) -> &Sender<Message>;
 
     fn lsp_queue(&self) -> &LspQueue;
 
@@ -768,120 +768,11 @@ pub trait TspInterface: Send + Sync + 'static {
 }
 
 pub struct Connection {
-    pub sender: MessageSender,
+    pub sender: Sender<Message>,
     /// Channel receiver, only present for test connections created via
     /// `Connection::memory()`. The test client reads from this to observe
     /// messages sent by the server.
     channel_receiver: Option<Receiver<Message>>,
-}
-
-#[derive(Clone)]
-pub enum MessageSender {
-    Channel(Sender<Message>),
-    BlockingWriter(Sender<MessageWriter>),
-}
-
-#[derive(Debug)]
-pub enum MessageSendError {
-    Disconnected,
-    Timeout,
-    WriteFailed(std::io::Error),
-}
-
-impl std::fmt::Display for MessageSendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Disconnected => write!(f, "message sender disconnected"),
-            Self::Timeout => write!(f, "message send timed out"),
-            Self::WriteFailed(error) => write!(f, "message write failed: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for MessageSendError {}
-
-impl MessageSender {
-    pub fn send(&self, message: Message) -> Result<(), MessageSendError> {
-        match self {
-            Self::Channel(sender) => sender
-                .send(message)
-                .map_err(|_| MessageSendError::Disconnected),
-            Self::BlockingWriter(sender) => {
-                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
-                sender
-                    .send(MessageWriter {
-                        message,
-                        result_sender,
-                    })
-                    .map_err(|_| MessageSendError::Disconnected)?;
-
-                match result_receiver.recv() {
-                    Ok(Ok(())) => Ok(()),
-                    Ok(Err(error)) => Err(MessageSendError::WriteFailed(error)),
-                    Err(_) => Err(MessageSendError::Disconnected),
-                }
-            }
-        }
-    }
-
-    pub fn send_timeout(
-        &self,
-        message: Message,
-        timeout: Duration,
-    ) -> Result<(), MessageSendError> {
-        match self {
-            Self::Channel(sender) => {
-                sender
-                    .send_timeout(message, timeout)
-                    .map_err(|error| match error {
-                        crossbeam_channel::SendTimeoutError::Timeout(_) => {
-                            MessageSendError::Timeout
-                        }
-                        crossbeam_channel::SendTimeoutError::Disconnected(_) => {
-                            MessageSendError::Disconnected
-                        }
-                    })
-            }
-            Self::BlockingWriter(sender) => {
-                let deadline = Instant::now() + timeout;
-                let (result_sender, result_receiver) = crossbeam_channel::bounded(1);
-                sender
-                    .send_timeout(
-                        MessageWriter {
-                            message,
-                            result_sender,
-                        },
-                        timeout,
-                    )
-                    .map_err(|error| match error {
-                        crossbeam_channel::SendTimeoutError::Timeout(_) => {
-                            MessageSendError::Timeout
-                        }
-                        crossbeam_channel::SendTimeoutError::Disconnected(_) => {
-                            MessageSendError::Disconnected
-                        }
-                    })?;
-
-                match result_receiver
-                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                {
-                    Ok(Ok(())) => Ok(()),
-                    Ok(Err(error)) => Err(MessageSendError::WriteFailed(error)),
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        Err(MessageSendError::Disconnected)
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        Err(MessageSendError::Timeout)
-                    }
-                }
-            }
-        }
-    }
-}
-
-pub struct MessageWriter {
-    message: Message,
-    result_sender: Sender<std::io::Result<()>>,
 }
 
 /// Owns the message source for the LSP/TSP server. Either a crossbeam channel
@@ -916,6 +807,40 @@ pub struct IoThread {
     writer: JoinHandle<std::io::Result<()>>,
 }
 
+#[cfg(any(test, windows))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowsNamedPipeExpectedAccess {
+    Read,
+    Write,
+}
+
+#[cfg(windows)]
+impl WindowsNamedPipeExpectedAccess {
+    fn open(self, pipe_name: &str) -> std::io::Result<std::fs::File> {
+        use std::fs::OpenOptions;
+
+        let mut options = OpenOptions::new();
+        match self {
+            Self::Read => {
+                options.read(true);
+            }
+            Self::Write => {
+                options.write(true);
+            }
+        }
+        options.open(pipe_name)
+    }
+}
+
+#[cfg(any(test, windows))]
+fn open_windows_split_pipe_with<T>(
+    expected_access: WindowsNamedPipeExpectedAccess,
+    open_duplex: impl FnOnce() -> std::io::Result<T>,
+    open_expected: impl FnOnce(WindowsNamedPipeExpectedAccess) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    open_duplex().or_else(|_| open_expected(expected_access))
+}
+
 impl IoThread {
     pub fn join(self) -> std::io::Result<()> {
         match self.writer.join() {
@@ -926,6 +851,28 @@ impl IoThread {
 }
 
 impl Connection {
+    fn from_ipc_streams(
+        writer_stream: Box<dyn Write + Send>,
+        reader_stream: Box<dyn std::io::Read + Send>,
+    ) -> (Self, MessageReader, IoThread) {
+        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
+        let writer = std::thread::spawn(move || {
+            let mut output = writer_stream;
+            while let Ok(msg) = writer_receiver.recv() {
+                write_lsp_message(&mut output, msg)?;
+            }
+            Ok(())
+        });
+        (
+            Self {
+                sender: writer_sender,
+                channel_receiver: None,
+            },
+            MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
+            IoThread { writer },
+        )
+    }
+
     /// Create a connection that reads directly from stdin and writes to stdout.
     /// Only the writer uses a background thread; reads happen inline in the
     /// calling thread, eliminating a context switch per LSP message.
@@ -940,7 +887,7 @@ impl Connection {
         });
         (
             Self {
-                sender: MessageSender::Channel(writer_sender),
+                sender: writer_sender,
                 channel_receiver: None,
             },
             MessageReader::Stdio(BufReader::new(std::io::stdin())),
@@ -953,34 +900,18 @@ impl Connection {
     /// or a pipe name on Windows (automatically prefixed with `\\.\pipe\`).
     pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
         let (writer_stream, reader_stream) = Self::connect_ipc(pipe_name)?;
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
-        let writer = std::thread::spawn(move || {
-            let mut output = writer_stream;
-            while let Ok(writer_message) = writer_receiver.recv() {
-                match write_lsp_message(&mut output, writer_message.message) {
-                    Ok(()) => {
-                        let _ = writer_message.result_sender.send(Ok(()));
-                    }
-                    Err(error) => {
-                        let error_kind = error.kind();
-                        let error_message = error.to_string();
-                        let _ = writer_message
-                            .result_sender
-                            .send(Err(std::io::Error::new(error_kind, error_message)));
-                        return Err(error);
-                    }
-                }
-            }
-            Ok(())
-        });
-        Ok((
-            Self {
-                sender: MessageSender::BlockingWriter(writer_sender),
-                channel_receiver: None,
-            },
-            MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
-            IoThread { writer },
-        ))
+        Ok(Self::from_ipc_streams(writer_stream, reader_stream))
+    }
+
+    /// Create a connection over IPC endpoints that may be provided either as
+    /// one full-duplex endpoint or as separate inbound and outbound endpoints.
+    pub fn ipc_split(
+        input_pipe_name: &str,
+        output_pipe_name: &str,
+    ) -> std::io::Result<(Self, MessageReader, IoThread)> {
+        let writer_stream = Self::connect_ipc_writer(output_pipe_name)?;
+        let reader_stream = Self::connect_ipc_reader(input_pipe_name)?;
+        Ok(Self::from_ipc_streams(writer_stream, reader_stream))
     }
 
     #[cfg(unix)]
@@ -992,14 +923,78 @@ impl Connection {
         Ok((Box::new(stream), Box::new(reader)))
     }
 
+    #[cfg(unix)]
+    fn connect_ipc_reader(pipe_name: &str) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        Ok(Box::new(UnixStream::connect(pipe_name)?))
+    }
+
+    #[cfg(unix)]
+    fn connect_ipc_writer(pipe_name: &str) -> std::io::Result<Box<dyn Write + Send>> {
+        Ok(Box::new(UnixStream::connect(pipe_name)?))
+    }
+
     #[cfg(windows)]
     fn connect_ipc(
         pipe_name: &str,
     ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
-        use std::fs::OpenOptions;
-        let stream = OpenOptions::new().read(true).write(true).open(pipe_name)?;
+        let stream = Self::open_windows_named_pipe(pipe_name)?;
         let reader = stream.try_clone()?;
         Ok((Box::new(stream), Box::new(reader)))
+    }
+
+    #[cfg(windows)]
+    fn connect_ipc_reader(pipe_name: &str) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        Ok(Box::new(Self::open_windows_split_named_pipe(
+            pipe_name,
+            WindowsNamedPipeExpectedAccess::Read,
+        )?))
+    }
+
+    #[cfg(windows)]
+    fn connect_ipc_writer(pipe_name: &str) -> std::io::Result<Box<dyn Write + Send>> {
+        Ok(Box::new(Self::open_windows_split_named_pipe(
+            pipe_name,
+            WindowsNamedPipeExpectedAccess::Write,
+        )?))
+    }
+
+    #[cfg(windows)]
+    fn open_windows_named_pipe(pipe_name: &str) -> std::io::Result<std::fs::File> {
+        use std::fs::OpenOptions;
+
+        OpenOptions::new().read(true).write(true).open(pipe_name)
+    }
+
+    #[cfg(windows)]
+    fn open_windows_split_named_pipe(
+        pipe_name: &str,
+        expected_access: WindowsNamedPipeExpectedAccess,
+    ) -> std::io::Result<std::fs::File> {
+        // This workaround is needed because of a few limitations on Windows.
+        //
+        // Windows named pipes do not support synchronous concurrent reads and
+        // writes on the same handle, so we cannot use a single named pipe for
+        // full-duplex communication here. Windows does support concurrent
+        // reads and writes through async APIs, but Pyrefly has a synchronous
+        // codebase, so that approach is not available to us.
+        //
+        // There is also a Node.js limitation. To work around the Windows
+        // limitation, we support using two IPC channels separately for inbound
+        // and outbound communication, similar to stdin and stdout in stdio.
+        // However, Node.js does not allow creating a Windows IPC named pipe
+        // that is only inbound or only outbound; it always creates a
+        // full-duplex pipe. Also, we cannot know how the pipe was created
+        // until we open it.
+        //
+        // Because of these two constraints, we use this workaround on
+        // Windows: we first try to open the pipe with both read and write
+        // access. If that fails, we open it only with the expected access for
+        // clients that can create a named pipe with specific access permissions.
+        open_windows_split_pipe_with(
+            expected_access,
+            || Self::open_windows_named_pipe(pipe_name),
+            |expected_access| expected_access.open(pipe_name),
+        )
     }
 
     /// Create a connection from a transport specification string.
@@ -1026,14 +1021,14 @@ impl Connection {
         (
             (
                 Self {
-                    sender: MessageSender::Channel(s1),
+                    sender: s1,
                     channel_receiver: Some(r2.clone()),
                 },
                 MessageReader::Channel(r2),
             ),
             (
                 Self {
-                    sender: MessageSender::Channel(s2),
+                    sender: s2,
                     channel_receiver: Some(r1.clone()),
                 },
                 MessageReader::Channel(r1),
@@ -1313,118 +1308,16 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io;
-    use std::time::Duration;
 
     use lsp_types::CodeActionKind;
 
-    use super::MessageSendError;
-    use super::MessageSender;
-    use super::MessageWriter;
     use super::SOURCE_FIX_ALL_PYREFLY;
+    use super::WindowsNamedPipeExpectedAccess;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
-    use crate::lsp::non_wasm::protocol::Message;
-    use crate::lsp::non_wasm::protocol::Notification;
-
-    fn test_message() -> Message {
-        Message::Notification(Notification {
-            method: "test/message".to_owned(),
-            params: serde_json::Value::Null,
-            activity_key: None,
-        })
-    }
-
-    #[test]
-    fn test_channel_send_reports_disconnected() {
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        drop(receiver);
-
-        let error = MessageSender::Channel(sender)
-            .send(test_message())
-            .unwrap_err();
-
-        assert!(matches!(error, MessageSendError::Disconnected));
-    }
-
-    #[test]
-    fn test_blocking_writer_send_waits_for_write_result() {
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
-        let sender = MessageSender::BlockingWriter(writer_sender);
-        let (done_sender, done_receiver) = crossbeam_channel::bounded(1);
-
-        std::thread::spawn(move || {
-            done_sender
-                .send(sender.send(test_message()))
-                .expect("test result receiver should stay open");
-        });
-
-        let writer_message = writer_receiver
-            .recv_timeout(Duration::from_secs(1))
-            .expect("blocking writer should receive the message");
-        assert!(
-            done_receiver.try_recv().is_err(),
-            "send should wait until the writer reports the write result"
-        );
-
-        writer_message
-            .result_sender
-            .send(Ok(()))
-            .expect("send result receiver should stay open");
-
-        assert!(
-            done_receiver
-                .recv_timeout(Duration::from_secs(1))
-                .expect("send should complete after write acknowledgement")
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_blocking_writer_send_reports_write_failure() {
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
-        let sender = MessageSender::BlockingWriter(writer_sender);
-        let (done_sender, done_receiver) = crossbeam_channel::bounded(1);
-
-        std::thread::spawn(move || {
-            done_sender
-                .send(sender.send(test_message()))
-                .expect("test result receiver should stay open");
-        });
-
-        let writer_message = writer_receiver
-            .recv_timeout(Duration::from_secs(1))
-            .expect("blocking writer should receive the message");
-        writer_message
-            .result_sender
-            .send(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "broken pipe",
-            )))
-            .expect("send result receiver should stay open");
-
-        let error = done_receiver
-            .recv_timeout(Duration::from_secs(1))
-            .expect("send should complete after write failure")
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            MessageSendError::WriteFailed(error) if error.kind() == io::ErrorKind::BrokenPipe
-        ));
-    }
-
-    #[test]
-    fn test_blocking_writer_send_timeout_waits_for_write_result() {
-        let (writer_sender, _writer_receiver) = crossbeam_channel::unbounded::<MessageWriter>();
-        let sender = MessageSender::BlockingWriter(writer_sender);
-
-        let error = sender
-            .send_timeout(test_message(), Duration::from_millis(10))
-            .unwrap_err();
-
-        assert!(matches!(error, MessageSendError::Timeout));
-    }
-
+    use super::open_windows_split_pipe_with;
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
         let input = "__init__ *args **kwargs list[int] `list[int]`";
@@ -1483,6 +1376,247 @@ mod tests {
         )));
         assert!(!matches_fix_all_kind(&CodeActionKind::QUICKFIX));
         assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
+    }
+
+    #[cfg(unix)]
+    mod ipc_transport_unix {
+        use std::env;
+        use std::io;
+        use std::io::BufReader;
+        use std::os::unix::net::UnixListener;
+        use std::path::PathBuf;
+        use std::thread;
+
+        use serde_json::Value;
+        use uuid::Uuid;
+
+        use super::super::Connection;
+        use crate::lsp::non_wasm::protocol::Message;
+        use crate::lsp::non_wasm::protocol::Notification;
+        use crate::lsp::non_wasm::protocol::read_lsp_message;
+        use crate::lsp::non_wasm::protocol::write_lsp_message;
+
+        fn socket_path(label: &str) -> PathBuf {
+            env::temp_dir().join(format!(
+                "pyrefly-{label}-{}-{}.sock",
+                std::process::id(),
+                Uuid::new_v4()
+            ))
+        }
+
+        fn notification_message(method: &str) -> Message {
+            Message::Notification(Notification {
+                method: method.to_owned(),
+                params: Value::Null,
+                activity_key: None,
+            })
+        }
+
+        fn assert_notification_method(message: Message, expected: &str) {
+            match message {
+                Message::Notification(notification) => {
+                    assert_eq!(notification.method, expected);
+                }
+                other => panic!("expected notification, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn test_ipc_single_endpoint_is_full_duplex_on_unix() -> io::Result<()> {
+            let path = socket_path("single");
+            let listener = UnixListener::bind(&path)?;
+            let peer = thread::spawn(move || -> io::Result<Message> {
+                let (mut stream, _) = listener.accept()?;
+                write_lsp_message(&mut stream, notification_message("client/to/server"))?;
+                let mut reader = BufReader::new(stream.try_clone()?);
+                read_lsp_message(&mut reader)?.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "expected a message from the server writer",
+                    )
+                })
+            });
+
+            let (connection, mut reader, io_thread) = Connection::ipc(path.to_str().unwrap())?;
+            assert_notification_method(
+                reader.recv().expect("expected a message from the peer"),
+                "client/to/server",
+            );
+
+            connection
+                .sender
+                .send(notification_message("server/to/client"))
+                .expect("test connection should stay open");
+            drop(connection);
+            io_thread.join()?;
+
+            let outbound = peer.join().expect("unix IPC peer panicked")?;
+            assert_notification_method(outbound, "server/to/client");
+            std::fs::remove_file(path).ok();
+            Ok(())
+        }
+
+        #[test]
+        fn test_ipc_split_uses_separate_unix_endpoints() -> io::Result<()> {
+            let input_path = socket_path("split-input");
+            let output_path = socket_path("split-output");
+            let input_listener = UnixListener::bind(&input_path)?;
+            let output_listener = UnixListener::bind(&output_path)?;
+            let peer = thread::spawn(move || -> io::Result<Message> {
+                let (output_stream, _) = output_listener.accept()?;
+                let (mut input_stream, _) = input_listener.accept()?;
+                write_lsp_message(&mut input_stream, notification_message("client/to/server"))?;
+                let mut output_reader = BufReader::new(output_stream);
+                read_lsp_message(&mut output_reader)?.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "expected a message on the output endpoint",
+                    )
+                })
+            });
+
+            let (connection, mut reader, io_thread) =
+                Connection::ipc_split(input_path.to_str().unwrap(), output_path.to_str().unwrap())?;
+            assert_notification_method(
+                reader
+                    .recv()
+                    .expect("expected a message from the input endpoint"),
+                "client/to/server",
+            );
+
+            connection
+                .sender
+                .send(notification_message("server/to/client"))
+                .expect("test connection should stay open");
+            drop(connection);
+            io_thread.join()?;
+
+            let outbound = peer.join().expect("unix split IPC peer panicked")?;
+            assert_notification_method(outbound, "server/to/client");
+            std::fs::remove_file(input_path).ok();
+            std::fs::remove_file(output_path).ok();
+            Ok(())
+        }
+
+        #[test]
+        fn test_ipc_single_endpoint_reports_missing_unix_socket() {
+            let path = socket_path("missing-single");
+
+            let error = Connection::ipc(path.to_str().unwrap())
+                .expect_err("missing socket should fail to open");
+
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        }
+
+        #[test]
+        fn test_ipc_split_reports_missing_unix_output_socket() -> io::Result<()> {
+            let input_path = socket_path("split-existing-input");
+            let missing_output_path = socket_path("split-missing-output");
+            let _input_listener = UnixListener::bind(&input_path)?;
+
+            let error = Connection::ipc_split(
+                input_path.to_str().unwrap(),
+                missing_output_path.to_str().unwrap(),
+            )
+            .expect_err("missing output socket should fail to open");
+
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+            std::fs::remove_file(input_path).ok();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_windows_split_pipe_prefers_duplex_handle() {
+        let fallback_attempt = Cell::new(None);
+
+        let result = open_windows_split_pipe_with(
+            WindowsNamedPipeExpectedAccess::Read,
+            || Ok("duplex"),
+            |expected_access| {
+                fallback_attempt.set(Some(expected_access));
+                Ok("fallback")
+            },
+        )
+        .expect("duplex handle should succeed");
+
+        assert_eq!(result, "duplex");
+        assert_eq!(fallback_attempt.get(), None);
+    }
+
+    #[test]
+    fn test_windows_split_pipe_falls_back_to_inbound_permission() {
+        let fallback_attempt = Cell::new(None);
+
+        let result = open_windows_split_pipe_with(
+            WindowsNamedPipeExpectedAccess::Read,
+            || -> io::Result<&'static str> {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "duplex failed",
+                ))
+            },
+            |expected_access| {
+                fallback_attempt.set(Some(expected_access));
+                Ok("inbound")
+            },
+        )
+        .expect("inbound fallback should succeed");
+
+        assert_eq!(result, "inbound");
+        assert_eq!(
+            fallback_attempt.get(),
+            Some(WindowsNamedPipeExpectedAccess::Read)
+        );
+    }
+
+    #[test]
+    fn test_windows_split_pipe_falls_back_to_outbound_permission() {
+        let fallback_attempt = Cell::new(None);
+
+        let result = open_windows_split_pipe_with(
+            WindowsNamedPipeExpectedAccess::Write,
+            || -> io::Result<&'static str> {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "duplex failed",
+                ))
+            },
+            |expected_access| {
+                fallback_attempt.set(Some(expected_access));
+                Ok("outbound")
+            },
+        )
+        .expect("outbound fallback should succeed");
+
+        assert_eq!(result, "outbound");
+        assert_eq!(
+            fallback_attempt.get(),
+            Some(WindowsNamedPipeExpectedAccess::Write)
+        );
+    }
+
+    #[test]
+    fn test_windows_split_pipe_returns_fallback_error() {
+        let error = open_windows_split_pipe_with(
+            WindowsNamedPipeExpectedAccess::Write,
+            || -> io::Result<&'static str> {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "duplex failed",
+                ))
+            },
+            |expected_access| {
+                assert_eq!(expected_access, WindowsNamedPipeExpectedAccess::Write);
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "outbound endpoint missing",
+                ))
+            },
+        )
+        .expect_err("failing both open attempts should return an error");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
     /// Unit tests for the V2 status-bar response derivation. The test
@@ -1933,7 +2067,7 @@ pub struct Server {
     server_start_time: Instant,
 }
 
-pub fn shutdown_finish(sender: &MessageSender, reader: &mut MessageReader, id: RequestId) {
+pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id: RequestId) {
     let response = Response::new_ok(id, ());
     if sender.send(response.into()).is_err() {
         return;
@@ -1970,7 +2104,7 @@ pub fn shutdown_finish(sender: &MessageSender, reader: &mut MessageReader, id: R
 // If the connection is closed, or we receive an exit notification, returns None.
 // If we receive an unexpected shutdown notification, respond and wait for exit.
 pub fn initialize_start(
-    sender: &MessageSender,
+    sender: &Sender<Message>,
     reader: &mut MessageReader,
 ) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
     while let Some(msg) = reader.recv() {
@@ -2046,7 +2180,7 @@ struct InitializeResult<C> {
 }
 
 pub fn initialize_finish<C: Serialize>(
-    sender: &MessageSender,
+    sender: &Sender<Message>,
     reader: &mut MessageReader,
     id: RequestId,
     capabilities: C,
@@ -7164,7 +7298,7 @@ impl TspInterface for Server {
         self.send_response(response)
     }
 
-    fn sender(&self) -> &MessageSender {
+    fn sender(&self) -> &Sender<Message> {
         &self.connection.0.sender
     }
 

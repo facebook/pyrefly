@@ -16,6 +16,7 @@ use std::thread::{self};
 use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::Sender;
 use lsp_server::RequestId;
 use lsp_types::Url;
 use lsp_types::notification::Exit;
@@ -35,7 +36,6 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Connection;
-use crate::lsp::non_wasm::server::MessageSender;
 use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
@@ -51,7 +51,7 @@ pub struct InitializeSettings {
 }
 
 pub struct TestTspServer {
-    sender: MessageSender,
+    sender: Sender<Message>,
     timeout: Duration,
     /// Handle to the spawned server thread
     server_thread: Option<JoinHandle<Result<(), io::Error>>>,
@@ -61,7 +61,7 @@ pub struct TestTspServer {
 }
 
 impl TestTspServer {
-    pub fn new(sender: MessageSender, request_idx: Arc<Mutex<i32>>) -> Self {
+    pub fn new(sender: Sender<Message>, request_idx: Arc<Mutex<i32>>) -> Self {
         Self {
             sender,
             timeout: Duration::from_secs(25),
