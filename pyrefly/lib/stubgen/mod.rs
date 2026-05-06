@@ -277,4 +277,31 @@ class A:
             actual.trim(),
         );
     }
+
+    /// Instance attributes inferred from `__init__` should appear in source order (assignment
+    /// order in `__init__`), not e.g. sorted alphabetically, so stub layout matches the defining code.
+    #[test]
+    fn test_stubgen_instance_fields_from_init_preserves_assignment_source_order() {
+        let actual = run_stubgen(
+            r#"
+class A:
+    def __init__(self, u: str, v: int, w: float) -> None:
+        self.z_attr = u
+        self.a_attr = v
+        self.m_attr = w
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+class A:
+    z_attr: str
+    a_attr: int
+    m_attr: float
+
+    def __init__(self, u: str, v: int, w: float) -> None: ...
+"#
+            .trim(),
+            actual.trim(),
+        );
+    }
 }

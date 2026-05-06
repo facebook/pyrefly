@@ -19,7 +19,6 @@ use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Param;
-use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
@@ -34,9 +33,7 @@ use starlark_map::Hashed;
 
 use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
-use crate::binding::binding::BindingClass;
 use crate::binding::binding::Key;
-use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
@@ -488,23 +485,12 @@ fn extract_return_type(
     None
 }
 
-/// Resolves the per-module class index for a class statement (used to look up
-/// `KeyClassField` and `ClassFields` metadata).
-fn class_def_index(class_def: &StmtClassDef, ctx: &ExtractionContext) -> Option<ClassDefIndex> {
-    let key = KeyClass(ShortIdentifier::new(&class_def.name));
-    let idx = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
-    match ctx.bindings.get(idx) {
-        BindingClass::ClassDef(c) => Some(c.def_index),
-        BindingClass::FunctionalClassDef(d, ..) => Some(*d),
-    }
-}
-
 /// Names already represented as variables in the extracted class body.
-fn stub_class_level_variable_names(body: &[StubItem]) -> HashSet<String> {
+fn stub_class_level_variable_names(body: &[StubItem]) -> HashSet<&str> {
     let mut out = HashSet::new();
     for item in body {
         if let StubItem::Variable(v) = item {
-            out.insert(v.name.clone());
+            out.insert(v.name.as_str());
         }
     }
     out
@@ -513,10 +499,13 @@ fn stub_class_level_variable_names(body: &[StubItem]) -> HashSet<String> {
 /// Instance attributes inferred from methods (e.g. `self.name` in `__init__`) that
 /// are not already declared in the class body, materialized as stub `name: T` lines.
 fn extract_instance_attr_stubs_from_class_fields(
-    def_index: ClassDefIndex,
+    class_def: &StmtClassDef,
     class_body: &[StubItem],
     ctx: &mut ExtractionContext,
 ) -> Vec<StubVariable> {
+    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+        return Vec::new();
+    };
     let already = stub_class_level_variable_names(class_body);
     let class_fields = match ctx.bindings.get_class_fields(def_index) {
         Some(f) => f,
@@ -569,16 +558,12 @@ fn merge_instance_field_stubs(
     let synth: Vec<StubItem> = synthesized.into_iter().map(StubItem::Variable).collect();
     match init_idx {
         Some(i) => {
-            let mut tail = body.split_off(i);
-            let mut out = body;
-            out.extend(synth);
-            out.append(&mut tail);
-            out
+            body.splice(i..i, synth);
+            body
         }
         None => {
-            let mut out = synth;
-            out.append(&mut body);
-            out
+            body.splice(0..0, synth);
+            body
         }
     }
 }
@@ -633,12 +618,8 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
     let body = extract_stmts(&class_def.body, ctx, true);
-    let body = if let Some(def_index) = class_def_index(class_def, &*ctx) {
-        let extra = extract_instance_attr_stubs_from_class_fields(def_index, &body, ctx);
-        merge_instance_field_stubs(extra, body)
-    } else {
-        body
-    };
+    let extra = extract_instance_attr_stubs_from_class_fields(class_def, &body, ctx);
+    let body = merge_instance_field_stubs(extra, body);
 
     Some(StubClass {
         name: name.to_owned(),
