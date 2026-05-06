@@ -1007,6 +1007,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let flattened_items = Ast::flatten_dict_items(items);
+        let hint =
+            hint.filter(|hint| !matches!(hint.types(), [ty] if self.solver().is_partial(ty)));
         if let Some(hint) = hint {
             for hint_ty in hint.types() {
                 let (typed_dict, is_update) = match hint_ty {

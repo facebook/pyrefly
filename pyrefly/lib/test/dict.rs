@@ -106,6 +106,22 @@ for topic, token in items:
 );
 
 testcase!(
+    test_loop_assigned_heterogeneous_inner_dict,
+    r#"
+import datetime
+
+def bin_tasks(dates: list[datetime.date]) -> None:
+    bins = {}
+    for d in dates:
+        bins[d] = {"start": d, "tasks": []}
+
+    for val in bins.values():
+        for task in val["tasks"]:
+            print(task)
+"#,
+);
+
+testcase!(
     test_large_dict_literal_mixed_none,
     r#"
 # Regression test: dict literals with many entries of mixed str | None values
