@@ -156,10 +156,7 @@ pub struct TspConnection<T: TspInterface> {
 }
 
 impl<T: TspInterface> TspConnection<T> {
-    fn new(
-        server: Arc<TspServer<T>>,
-        response_sender: crossbeam_channel::Sender<Message>,
-    ) -> Self {
+    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
         Self {
             server,
             response_sender,
@@ -303,10 +300,7 @@ impl<T: TspInterface> TspConnection<T> {
 pub struct TspMainConnection<T: TspInterface>(TspConnection<T>);
 
 impl<T: TspInterface> TspMainConnection<T> {
-    fn new(
-        server: Arc<TspServer<T>>,
-        response_sender: crossbeam_channel::Sender<Message>,
-    ) -> Self {
+    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
         Self(TspConnection::new(server, response_sender))
     }
 }
@@ -493,10 +487,7 @@ impl<T: TspInterface> TspMainConnection<T> {
 struct TspExtraConnection<T: TspInterface>(TspConnection<T>);
 
 impl<T: TspInterface> TspExtraConnection<T> {
-    fn new(
-        server: Arc<TspServer<T>>,
-        response_sender: crossbeam_channel::Sender<Message>,
-    ) -> Self {
+    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
         Self(TspConnection::new(server, response_sender))
     }
 }

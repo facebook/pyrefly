@@ -1380,29 +1380,18 @@ mod tests {
 
     #[cfg(unix)]
     mod ipc_transport_unix {
-        use std::env;
         use std::io;
         use std::io::BufReader;
         use std::os::unix::net::UnixListener;
-        use std::path::PathBuf;
         use std::thread;
 
         use serde_json::Value;
-        use uuid::Uuid;
 
         use super::super::Connection;
         use crate::lsp::non_wasm::protocol::Message;
         use crate::lsp::non_wasm::protocol::Notification;
         use crate::lsp::non_wasm::protocol::read_lsp_message;
         use crate::lsp::non_wasm::protocol::write_lsp_message;
-
-        fn socket_path(label: &str) -> PathBuf {
-            env::temp_dir().join(format!(
-                "pyrefly-{label}-{}-{}.sock",
-                std::process::id(),
-                Uuid::new_v4()
-            ))
-        }
 
         fn notification_message(method: &str) -> Message {
             Message::Notification(Notification {
@@ -1421,9 +1410,17 @@ mod tests {
             }
         }
 
+        fn expect_io_error<T>(result: io::Result<T>, message: &str) -> io::Error {
+            match result {
+                Ok(_) => panic!("{message}"),
+                Err(error) => error,
+            }
+        }
+
         #[test]
         fn test_ipc_single_endpoint_is_full_duplex_on_unix() -> io::Result<()> {
-            let path = socket_path("single");
+            let tempdir = tempfile::tempdir()?;
+            let path = tempdir.path().join("single.sock");
             let listener = UnixListener::bind(&path)?;
             let peer = thread::spawn(move || -> io::Result<Message> {
                 let (mut stream, _) = listener.accept()?;
@@ -1452,14 +1449,14 @@ mod tests {
 
             let outbound = peer.join().expect("unix IPC peer panicked")?;
             assert_notification_method(outbound, "server/to/client");
-            std::fs::remove_file(path).ok();
             Ok(())
         }
 
         #[test]
         fn test_ipc_split_uses_separate_unix_endpoints() -> io::Result<()> {
-            let input_path = socket_path("split-input");
-            let output_path = socket_path("split-output");
+            let tempdir = tempfile::tempdir()?;
+            let input_path = tempdir.path().join("input.sock");
+            let output_path = tempdir.path().join("output.sock");
             let input_listener = UnixListener::bind(&input_path)?;
             let output_listener = UnixListener::bind(&output_path)?;
             let peer = thread::spawn(move || -> io::Result<Message> {
@@ -1493,35 +1490,38 @@ mod tests {
 
             let outbound = peer.join().expect("unix split IPC peer panicked")?;
             assert_notification_method(outbound, "server/to/client");
-            std::fs::remove_file(input_path).ok();
-            std::fs::remove_file(output_path).ok();
             Ok(())
         }
 
         #[test]
         fn test_ipc_single_endpoint_reports_missing_unix_socket() {
-            let path = socket_path("missing-single");
+            let tempdir = tempfile::tempdir().expect("tempdir should be created");
+            let path = tempdir.path().join("missing.sock");
 
-            let error = Connection::ipc(path.to_str().unwrap())
-                .expect_err("missing socket should fail to open");
+            let error = expect_io_error(
+                Connection::ipc(path.to_str().unwrap()),
+                "missing socket should fail to open",
+            );
 
             assert_eq!(error.kind(), io::ErrorKind::NotFound);
         }
 
         #[test]
         fn test_ipc_split_reports_missing_unix_output_socket() -> io::Result<()> {
-            let input_path = socket_path("split-existing-input");
-            let missing_output_path = socket_path("split-missing-output");
+            let tempdir = tempfile::tempdir()?;
+            let input_path = tempdir.path().join("input.sock");
+            let missing_output_path = tempdir.path().join("missing-output.sock");
             let _input_listener = UnixListener::bind(&input_path)?;
 
-            let error = Connection::ipc_split(
-                input_path.to_str().unwrap(),
-                missing_output_path.to_str().unwrap(),
-            )
-            .expect_err("missing output socket should fail to open");
+            let error = expect_io_error(
+                Connection::ipc_split(
+                    input_path.to_str().unwrap(),
+                    missing_output_path.to_str().unwrap(),
+                ),
+                "missing output socket should fail to open",
+            );
 
             assert_eq!(error.kind(), io::ErrorKind::NotFound);
-            std::fs::remove_file(input_path).ok();
             Ok(())
         }
     }
