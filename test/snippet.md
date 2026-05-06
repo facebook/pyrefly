@@ -122,7 +122,7 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=json
 ## Snippet with CodeClimate output format
 
 ```scrut
-$ $PYREFLY snippet "x: int = 'hello'" --output-format=codeclimate
+$ $PYREFLY snippet "x: int = 'hello'" --output-format=code-climate
 [
   {
     "type": "issue",
@@ -145,7 +145,7 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=codeclimate
       }
     },
     "severity": "major",
-    "fingerprint": "*" (glob)
+    "fingerprint": "b617fbb80219b6a3"
   }
 ] (no-eol)
 [1]

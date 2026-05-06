@@ -6,7 +6,7 @@
  */
 
 pub mod baseline;
-pub mod codeclimate;
+pub mod code_climate;
 pub mod collector;
 pub mod context;
 pub mod display;
