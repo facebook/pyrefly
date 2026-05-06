@@ -61,7 +61,7 @@
 <p>Type checking sits right in the sweet spot for agents. It's fast enough for iterating small fixes, robust enough to catch issues of varying complexity, and actionable enough for an agent to make changes. In this post, we walk through how to integrate Pyrefly into your agentic workflow so that every piece of generated code can get type checked automatically.</p>
 <p><strong>TL;DR</strong>: We recommend:</p>
 <ul>
-<li>Adding a skill file for your agent with an <code>agent.md</code> directive to ensure the project checks clean before finishing a feature.</li>
+<li>Adding a skill file for your agent with an <code>AGENTS.md</code> directive to ensure the project checks clean before finishing a feature.</li>
 <li>If your model doesn't trigger this reliably, set up a hook on the Stop event.</li>
 </ul>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="1-cli-skills">1. CLI Skills<a href="https://pyrefly.org/blog/pyrefly-agentic-loop/#1-cli-skills" class="hash-link" aria-label="Direct link to 1. CLI Skills" title="Direct link to 1. CLI Skills">​</a></h2>

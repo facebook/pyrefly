@@ -33,9 +33,10 @@
 <link rel="stylesheet" href="/css/code-block-buttons.css">
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
-<script src="/js/code-block-buttons.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.73258654.js" defer="defer"></script>
-<script src="/assets/js/main.82acbbea.js" defer="defer"></script>
+<script src="/js/code-block-buttons.js"></script>
+<script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
+<script src="/assets/js/runtime~main.0de54f33.js" defer="defer"></script>
+<script src="/assets/js/main.c2e5608c.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -44,7 +45,7 @@
 <p>Type checking sits right in the sweet spot for agents. It&#x27;s fast enough for iterating small fixes, robust enough to catch issues of varying complexity, and actionable enough for an agent to make changes. In this post, we walk through how to integrate Pyrefly into your agentic workflow so that every piece of generated code can get type checked automatically.</p>
 <p><strong>TL;DR</strong>: We recommend:</p>
 <ul>
-<li>Adding a skill file for your agent with an <code>agent.md</code> directive to ensure the project checks clean before finishing a feature.</li>
+<li>Adding a skill file for your agent with an <code>AGENTS.md</code> directive to ensure the project checks clean before finishing a feature.</li>
 <li>If your model doesn&#x27;t trigger this reliably, set up a hook on the Stop event.</li>
 </ul></div><footer class="row docusaurus-mt-lg"><div class="col col--9"><b>Tags:</b><ul class="tags_jXut padding--none margin-left--sm"><li class="tag_QGVx"><a class="tag_zVej tagRegular_sFm0" href="/blog/tags/typechecking/">typechecking</a></li><li class="tag_QGVx"><a class="tag_zVej tagRegular_sFm0" href="/blog/tags/ai-agents/">ai-agents</a></li><li class="tag_QGVx"><a class="tag_zVej tagRegular_sFm0" href="/blog/tags/developer-tools/">developer-tools</a></li></ul></div><div class="col text--right col--3"><a aria-label="Read more about Adding Pyrefly Type Checking to Your Agentic Loop" href="/blog/pyrefly-agentic-loop/"><b>Read more</b></a></div></footer></article><article class="margin-bottom--xl"><header><h2 class="title_f1Hy"><a href="/blog/speed-and-memory-comparison/">Python Type Checker Comparison: Speed and Memory Usage</a></h2><div class="container_mt6G margin-vert--md"><time datetime="2026-04-10T00:00:00.000Z">April 10, 2026</time> · <!-- -->10 min read</div><div class="margin-top--md margin-bottom--sm row"><div class="col col--12 authorCol_Hf19"><div class="avatar margin-bottom--sm"><div class="avatar__intro authorDetails_lV9A"><div class="avatar__name"><a href="https://github.com/lolpack" target="_blank" rel="noopener noreferrer"><span class="authorName_yefp">Aaron Pollack</span></a></div><div class="authorSocials_rSDt"></div></div></div></div></div></header><div class="markdown"><p><img decoding="async" loading="lazy" alt="Python Type Checker Comparison: Speed and Memory Usage" src="/assets/images/memory-speed-hero-b6db7eaa6051c561f2d5af0442e098de.png" width="1376" height="768" class="img_ev3q"></p>
 <p>We frequently hear from developers who are excited about the new generation of checkers (Ty and Pyrefly) and want to know how they stack up against each other and the existing, established tools (Mypy and Pyright). In this comparison, we&#x27;ll focus purely on performance (time to run a full check) and talk a little bit about how design choices, architecture, and features impact that latency.</p>

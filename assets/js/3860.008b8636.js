@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunknew_website=globalThis.webpackChunknew_website||[]).push([[3860],{43860(e,n,s){s.r(n),s.d(n,{default:()=>a});var t=s(96540),l=s(22195);function a(){const e=(0,l.W6)();return t.useEffect((()=>{e.replace("/en/docs/installation/")}),[e]),null}}}]);
