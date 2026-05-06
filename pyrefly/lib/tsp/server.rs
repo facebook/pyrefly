@@ -11,7 +11,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use crossbeam_channel::Sender;
 use lsp_server::ErrorCode;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
@@ -136,7 +135,7 @@ impl<T: TspInterface> TspServer<T> {
     /// Send a `snapshotChanged` notification to the main connection.
     fn broadcast_snapshot_changed(
         &self,
-        main_sender: &Sender<Message>,
+        main_sender: &crossbeam_channel::Sender<Message>,
         old_snapshot: i32,
         new_snapshot: i32,
     ) {
@@ -153,11 +152,14 @@ impl<T: TspInterface> TspServer<T> {
 /// `TspServer` core with all other connections.
 pub struct TspConnection<T: TspInterface> {
     pub(crate) server: Arc<TspServer<T>>,
-    response_sender: Sender<Message>,
+    response_sender: crossbeam_channel::Sender<Message>,
 }
 
 impl<T: TspInterface> TspConnection<T> {
-    fn new(server: Arc<TspServer<T>>, response_sender: Sender<Message>) -> Self {
+    fn new(
+        server: Arc<TspServer<T>>,
+        response_sender: crossbeam_channel::Sender<Message>,
+    ) -> Self {
         Self {
             server,
             response_sender,
@@ -301,7 +303,10 @@ impl<T: TspInterface> TspConnection<T> {
 pub struct TspMainConnection<T: TspInterface>(TspConnection<T>);
 
 impl<T: TspInterface> TspMainConnection<T> {
-    fn new(server: Arc<TspServer<T>>, response_sender: Sender<Message>) -> Self {
+    fn new(
+        server: Arc<TspServer<T>>,
+        response_sender: crossbeam_channel::Sender<Message>,
+    ) -> Self {
         Self(TspConnection::new(server, response_sender))
     }
 }
@@ -488,7 +493,10 @@ impl<T: TspInterface> TspMainConnection<T> {
 struct TspExtraConnection<T: TspInterface>(TspConnection<T>);
 
 impl<T: TspInterface> TspExtraConnection<T> {
-    fn new(server: Arc<TspServer<T>>, response_sender: Sender<Message>) -> Self {
+    fn new(
+        server: Arc<TspServer<T>>,
+        response_sender: crossbeam_channel::Sender<Message>,
+    ) -> Self {
         Self(TspConnection::new(server, response_sender))
     }
 }

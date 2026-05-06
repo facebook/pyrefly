@@ -16,7 +16,6 @@ use std::thread::{self};
 use std::time::Duration;
 
 use crossbeam_channel::RecvTimeoutError;
-use crossbeam_channel::Sender;
 use lsp_server::RequestId;
 use lsp_types::Url;
 use lsp_types::notification::Exit;
@@ -51,7 +50,7 @@ pub struct InitializeSettings {
 }
 
 pub struct TestTspServer {
-    sender: Sender<Message>,
+    sender: crossbeam_channel::Sender<Message>,
     timeout: Duration,
     /// Handle to the spawned server thread
     server_thread: Option<JoinHandle<Result<(), io::Error>>>,
@@ -61,7 +60,7 @@ pub struct TestTspServer {
 }
 
 impl TestTspServer {
-    pub fn new(sender: Sender<Message>, request_idx: Arc<Mutex<i32>>) -> Self {
+    pub fn new(sender: crossbeam_channel::Sender<Message>, request_idx: Arc<Mutex<i32>>) -> Self {
         Self {
             sender,
             timeout: Duration::from_secs(25),
