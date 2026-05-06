@@ -323,8 +323,5 @@
         "underscore": "^1.13.8",
         "vsce": "^2.15.0",
         "vscode-languageclient": "9.0.1"
-    },
-    "extensionDependencies": [
-        "ms-python.python"
-    ]
+    }
 }

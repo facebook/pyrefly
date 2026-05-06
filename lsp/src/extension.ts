@@ -30,7 +30,7 @@ import {runDocstringFoldingCommand} from './docstring';
 import {registerCodeLensCommands} from './codeLens';
 import {PythonEnvironment} from './python-environment';
 import {
-  triggerMsPythonRefreshLanguageServers,
+  triggerMsPythonRefreshLanguageServersIfInstalled,
   disableWindsurfPyrightIfInstalled,
   disableBasedPyrightIfInstalled,
   disableCursorPyrightIfInstalled,
@@ -112,7 +112,7 @@ export async function activate(context: ExtensionContext) {
     process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
   );
 
-  const pythonEnv = new PythonEnvironment();
+  const pythonEnv = new PythonEnvironment(context);
 
   // Otherwise to spawn the server
   let serverOptions: ServerOptions = {
@@ -258,12 +258,12 @@ export async function activate(context: ExtensionContext) {
 
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
-  await triggerMsPythonRefreshLanguageServers();
+  await triggerMsPythonRefreshLanguageServersIfInstalled();
 
   vscode.workspace.onDidChangeConfiguration(async e => {
     if (e.affectsConfiguration(`python.pyrefly.disableLanguageServices`)) {
       // TODO(kylei): remove this hack once ms-python has this behavior
-      await triggerMsPythonRefreshLanguageServers();
+      await triggerMsPythonRefreshLanguageServersIfInstalled();
     }
   });
 
