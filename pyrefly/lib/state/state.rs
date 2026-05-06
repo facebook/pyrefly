@@ -824,6 +824,12 @@ impl<'a> Transaction<'a> {
         self.data.todo.get_cancellation_handle()
     }
 
+    /// Replace the internal cancellation handle so that a previously cancelled
+    /// transaction can run work again.
+    pub fn reset_cancellation(&mut self) {
+        self.data.todo.reset_cancellation();
+    }
+
     /// Sets an instance of a [`SubTaskTelemetry`], which will enable the creation and logging of
     /// different sub-tasks that occur as part of this instance of a transaction before it's saved
     /// or dropped.

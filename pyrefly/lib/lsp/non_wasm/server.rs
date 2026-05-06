@@ -3070,6 +3070,14 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<ProvideType>(params, &x.id)
                     {
+                        // provide_type loads unopened files via transaction.run().
+                        // A concurrent config recheck can cancel the transaction,
+                        // silently aborting the load. Prevent this by detaching the
+                        // cancellation handle and resetting it before the handler runs.
+                        self.cancellation_handles
+                            .lock()
+                            .remove(&request_id_for_cancel);
+                        transaction.reset_cancellation();
                         self.send_response(new_response(
                             x.id,
                             Ok(self.provide_type(&mut transaction, params)),

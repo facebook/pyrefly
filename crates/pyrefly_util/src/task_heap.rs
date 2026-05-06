@@ -115,6 +115,12 @@ impl<K: Ord, V> TaskHeap<K, V> {
         self.cancellation_handle.dupe()
     }
 
+    /// Replace the cancellation handle with a fresh one, so that a previously
+    /// cancelled TaskHeap can process work again. The old handle becomes orphaned.
+    pub fn reset_cancellation(&mut self) {
+        self.cancellation_handle = CancellationHandle::new();
+    }
+
     pub fn is_empty(&self) -> bool {
         self.inner.lock().heap.is_empty()
     }
