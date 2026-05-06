@@ -807,7 +807,7 @@ pub struct IoThread {
     writer: JoinHandle<std::io::Result<()>>,
 }
 
-#[cfg(any(test, windows))]
+#[cfg(windows)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WindowsNamedPipeExpectedAccess {
     Read,
@@ -832,7 +832,7 @@ impl WindowsNamedPipeExpectedAccess {
     }
 }
 
-#[cfg(any(test, windows))]
+#[cfg(windows)]
 fn open_windows_split_pipe_with<T>(
     expected_access: WindowsNamedPipeExpectedAccess,
     open_duplex: impl FnOnce() -> std::io::Result<T>,
@@ -1308,16 +1308,40 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::io;
 
     use lsp_types::CodeActionKind;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
-    use super::WindowsNamedPipeExpectedAccess;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
-    use super::open_windows_split_pipe_with;
+    use crate::lsp::non_wasm::protocol::Message;
+    use crate::lsp::non_wasm::protocol::Notification;
+
+    fn notification_message(method: &str) -> Message {
+        Message::Notification(Notification {
+            method: method.to_owned(),
+            params: serde_json::Value::Null,
+            activity_key: None,
+        })
+    }
+
+    fn assert_notification_method(message: Message, expected: &str) {
+        match message {
+            Message::Notification(notification) => {
+                assert_eq!(notification.method, expected);
+            }
+            other => panic!("expected notification, got {other:?}"),
+        }
+    }
+
+    fn expect_io_error<T>(result: io::Result<T>, message: &str) -> io::Error {
+        match result {
+            Ok(_) => panic!("{message}"),
+            Err(error) => error,
+        }
+    }
+
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
         let input = "__init__ *args **kwargs list[int] `list[int]`";
@@ -1378,102 +1402,320 @@ mod tests {
         assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
     }
 
-    #[cfg(unix)]
-    mod ipc_transport_unix {
+    #[cfg(any(unix, windows))]
+    mod ipc_transport {
         use std::io;
         use std::io::BufReader;
-        use std::os::unix::net::UnixListener;
         use std::thread;
 
-        use serde_json::Value;
-
         use super::super::Connection;
+        use super::assert_notification_method;
+        use super::expect_io_error;
+        use super::notification_message;
         use crate::lsp::non_wasm::protocol::Message;
-        use crate::lsp::non_wasm::protocol::Notification;
         use crate::lsp::non_wasm::protocol::read_lsp_message;
         use crate::lsp::non_wasm::protocol::write_lsp_message;
 
-        fn notification_message(method: &str) -> Message {
-            Message::Notification(Notification {
-                method: method.to_owned(),
-                params: Value::Null,
-                activity_key: None,
-            })
+        #[derive(Clone, Copy)]
+        enum SplitEndpointMode {
+            Duplex,
+            Directional,
         }
 
-        fn assert_notification_method(message: Message, expected: &str) {
-            match message {
-                Message::Notification(notification) => {
-                    assert_eq!(notification.method, expected);
+        #[cfg(unix)]
+        mod platform {
+            use std::io;
+            use std::net::Shutdown;
+            use std::os::unix::net::UnixListener;
+            use std::os::unix::net::UnixStream;
+
+            use tempfile::TempDir;
+
+            use super::SplitEndpointMode;
+
+            pub type PeerStream = UnixStream;
+
+            pub struct SingleEndpoint {
+                pub name: String,
+                listener: UnixListener,
+                _tempdir: TempDir,
+            }
+
+            pub struct SplitEndpoint {
+                pub input_name: String,
+                pub output_name: String,
+                mode: SplitEndpointMode,
+                input_listener: UnixListener,
+                output_listener: UnixListener,
+                _tempdir: TempDir,
+            }
+
+            pub struct MissingSplitOutputEndpoint {
+                pub input_name: String,
+                pub output_name: String,
+                _input_listener: UnixListener,
+                _tempdir: TempDir,
+            }
+
+            fn socket_name(tempdir: &TempDir, name: &str) -> String {
+                tempdir
+                    .path()
+                    .join(name)
+                    .to_str()
+                    .expect("temporary Unix socket path should be valid UTF-8")
+                    .to_owned()
+            }
+
+            pub fn single_endpoint(_label: &str) -> io::Result<SingleEndpoint> {
+                let tempdir = tempfile::tempdir()?;
+                let name = socket_name(&tempdir, "single.sock");
+                let listener = UnixListener::bind(&name)?;
+                Ok(SingleEndpoint {
+                    name,
+                    listener,
+                    _tempdir: tempdir,
+                })
+            }
+
+            pub fn accept_single_endpoint(endpoint: SingleEndpoint) -> io::Result<PeerStream> {
+                let (stream, _) = endpoint.listener.accept()?;
+                Ok(stream)
+            }
+
+            pub fn split_endpoint(
+                label: &str,
+                mode: SplitEndpointMode,
+            ) -> io::Result<SplitEndpoint> {
+                let tempdir = tempfile::tempdir()?;
+                let input_name = socket_name(&tempdir, &format!("{label}-i.sock"));
+                let output_name = socket_name(&tempdir, &format!("{label}-o.sock"));
+                let input_listener = UnixListener::bind(&input_name)?;
+                let output_listener = UnixListener::bind(&output_name)?;
+                Ok(SplitEndpoint {
+                    input_name,
+                    output_name,
+                    mode,
+                    input_listener,
+                    output_listener,
+                    _tempdir: tempdir,
+                })
+            }
+
+            pub fn accept_split_endpoint(
+                endpoint: SplitEndpoint,
+            ) -> io::Result<(PeerStream, PeerStream)> {
+                let (output_stream, _) = endpoint.output_listener.accept()?;
+                let (input_stream, _) = endpoint.input_listener.accept()?;
+                match endpoint.mode {
+                    SplitEndpointMode::Duplex => {}
+                    SplitEndpointMode::Directional => {
+                        input_stream.shutdown(Shutdown::Read)?;
+                        output_stream.shutdown(Shutdown::Write)?;
+                    }
                 }
-                other => panic!("expected notification, got {other:?}"),
+                Ok((input_stream, output_stream))
             }
-        }
 
-        fn expect_io_error<T>(result: io::Result<T>, message: &str) -> io::Error {
-            match result {
-                Ok(_) => panic!("{message}"),
-                Err(error) => error,
+            pub fn missing_endpoint_name(_label: &str) -> io::Result<String> {
+                let tempdir = tempfile::tempdir()?;
+                Ok(socket_name(&tempdir, "missing.sock"))
             }
-        }
 
-        #[test]
-        fn test_ipc_single_endpoint_is_full_duplex_on_unix() -> io::Result<()> {
-            let tempdir = tempfile::tempdir()?;
-            let path = tempdir.path().join("single.sock");
-            let listener = UnixListener::bind(&path)?;
-            let peer = thread::spawn(move || -> io::Result<Message> {
-                let (mut stream, _) = listener.accept()?;
-                write_lsp_message(&mut stream, notification_message("client/to/server"))?;
-                let mut reader = BufReader::new(stream.try_clone()?);
-                read_lsp_message(&mut reader)?.ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "expected a message from the server writer",
-                    )
+            pub fn missing_split_output_endpoint() -> io::Result<MissingSplitOutputEndpoint> {
+                let tempdir = tempfile::tempdir()?;
+                let input_name = socket_name(&tempdir, "input.sock");
+                let output_name = socket_name(&tempdir, "missing-output.sock");
+                let input_listener = UnixListener::bind(&input_name)?;
+                Ok(MissingSplitOutputEndpoint {
+                    input_name,
+                    output_name,
+                    _input_listener: input_listener,
+                    _tempdir: tempdir,
                 })
-            });
-
-            let (connection, mut reader, io_thread) = Connection::ipc(path.to_str().unwrap())?;
-            assert_notification_method(
-                reader.recv().expect("expected a message from the peer"),
-                "client/to/server",
-            );
-
-            connection
-                .sender
-                .send(notification_message("server/to/client"))
-                .expect("test connection should stay open");
-            drop(connection);
-            io_thread.join()?;
-
-            let outbound = peer.join().expect("unix IPC peer panicked")?;
-            assert_notification_method(outbound, "server/to/client");
-            Ok(())
+            }
         }
 
-        #[test]
-        fn test_ipc_split_uses_separate_unix_endpoints() -> io::Result<()> {
-            let tempdir = tempfile::tempdir()?;
-            let input_path = tempdir.path().join("input.sock");
-            let output_path = tempdir.path().join("output.sock");
-            let input_listener = UnixListener::bind(&input_path)?;
-            let output_listener = UnixListener::bind(&output_path)?;
+        #[cfg(windows)]
+        mod platform {
+            use std::ffi::OsStr;
+            use std::ffi::c_void;
+            use std::fs::File;
+            use std::io;
+            use std::os::windows::ffi::OsStrExt;
+            use std::os::windows::io::AsRawHandle;
+            use std::os::windows::io::FromRawHandle;
+            use std::ptr::null_mut;
+
+            use uuid::Uuid;
+
+            use super::SplitEndpointMode;
+
+            pub type PeerStream = File;
+
+            pub struct SingleEndpoint {
+                pub name: String,
+                pipe: File,
+            }
+
+            pub struct SplitEndpoint {
+                pub input_name: String,
+                pub output_name: String,
+                input_pipe: File,
+                output_pipe: File,
+            }
+
+            pub struct MissingSplitOutputEndpoint {
+                pub input_name: String,
+                pub output_name: String,
+                _input_pipe: File,
+            }
+
+            const ERROR_PIPE_CONNECTED: i32 = 535;
+            const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
+            const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
+            const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+            const PIPE_TYPE_BYTE: u32 = 0x0000_0000;
+            const PIPE_READMODE_BYTE: u32 = 0x0000_0000;
+            const PIPE_WAIT: u32 = 0x0000_0000;
+            const INVALID_HANDLE_VALUE: *mut c_void = -1_isize as *mut c_void;
+
+            unsafe extern "system" {
+                fn CreateNamedPipeW(
+                    lp_name: *const u16,
+                    dw_open_mode: u32,
+                    dw_pipe_mode: u32,
+                    n_max_instances: u32,
+                    n_out_buffer_size: u32,
+                    n_in_buffer_size: u32,
+                    n_default_time_out: u32,
+                    lp_security_attributes: *mut c_void,
+                ) -> *mut c_void;
+
+                fn ConnectNamedPipe(h_named_pipe: *mut c_void, lp_overlapped: *mut c_void) -> i32;
+            }
+
+            fn pipe_name(label: &str) -> String {
+                format!(
+                    r"\\.\pipe\pyrefly-{label}-{}-{}",
+                    std::process::id(),
+                    Uuid::new_v4()
+                )
+            }
+
+            fn wide_null(value: &str) -> Vec<u16> {
+                OsStr::new(value).encode_wide().chain(Some(0)).collect()
+            }
+
+            fn create_named_pipe(pipe_name: &str, access: u32) -> io::Result<File> {
+                let pipe_name = wide_null(pipe_name);
+                let handle = unsafe {
+                    CreateNamedPipeW(
+                        pipe_name.as_ptr(),
+                        access,
+                        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                        1,
+                        4096,
+                        4096,
+                        0,
+                        null_mut(),
+                    )
+                };
+                if handle == INVALID_HANDLE_VALUE {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(unsafe { File::from_raw_handle(handle) })
+                }
+            }
+
+            fn connect_named_pipe(pipe: &File) -> io::Result<()> {
+                let connected = unsafe { ConnectNamedPipe(pipe.as_raw_handle(), null_mut()) };
+                if connected != 0 {
+                    return Ok(());
+                }
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(ERROR_PIPE_CONNECTED) {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+
+            pub fn single_endpoint(label: &str) -> io::Result<SingleEndpoint> {
+                let name = pipe_name(label);
+                let pipe = create_named_pipe(&name, PIPE_ACCESS_DUPLEX)?;
+                Ok(SingleEndpoint { name, pipe })
+            }
+
+            pub fn accept_single_endpoint(endpoint: SingleEndpoint) -> io::Result<PeerStream> {
+                connect_named_pipe(&endpoint.pipe)?;
+                Ok(endpoint.pipe)
+            }
+
+            pub fn split_endpoint(
+                label: &str,
+                mode: SplitEndpointMode,
+            ) -> io::Result<SplitEndpoint> {
+                let (input_access, output_access) = match mode {
+                    SplitEndpointMode::Duplex => (PIPE_ACCESS_DUPLEX, PIPE_ACCESS_DUPLEX),
+                    SplitEndpointMode::Directional => (PIPE_ACCESS_OUTBOUND, PIPE_ACCESS_INBOUND),
+                };
+                let input_name = pipe_name(&format!("{label}-input"));
+                let output_name = pipe_name(&format!("{label}-output"));
+                let input_pipe = create_named_pipe(&input_name, input_access)?;
+                let output_pipe = create_named_pipe(&output_name, output_access)?;
+                Ok(SplitEndpoint {
+                    input_name,
+                    output_name,
+                    input_pipe,
+                    output_pipe,
+                })
+            }
+
+            pub fn accept_split_endpoint(
+                endpoint: SplitEndpoint,
+            ) -> io::Result<(PeerStream, PeerStream)> {
+                connect_named_pipe(&endpoint.output_pipe)?;
+                connect_named_pipe(&endpoint.input_pipe)?;
+                Ok((endpoint.input_pipe, endpoint.output_pipe))
+            }
+
+            pub fn missing_endpoint_name(label: &str) -> io::Result<String> {
+                Ok(pipe_name(label))
+            }
+
+            pub fn missing_split_output_endpoint() -> io::Result<MissingSplitOutputEndpoint> {
+                let input_name = pipe_name("existing-input");
+                let output_name = pipe_name("missing-output");
+                let input_pipe = create_named_pipe(&input_name, PIPE_ACCESS_OUTBOUND)?;
+                Ok(MissingSplitOutputEndpoint {
+                    input_name,
+                    output_name,
+                    _input_pipe: input_pipe,
+                })
+            }
+        }
+
+        fn read_message_from_peer(
+            stream: platform::PeerStream,
+            missing_message: &str,
+        ) -> io::Result<Message> {
+            let mut reader = BufReader::new(stream);
+            read_lsp_message(&mut reader)?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, missing_message))
+        }
+
+        fn run_split_endpoint_test(mode: SplitEndpointMode, label: &str) -> io::Result<()> {
+            let endpoint = platform::split_endpoint(label, mode)?;
+            let input_name = endpoint.input_name.clone();
+            let output_name = endpoint.output_name.clone();
             let peer = thread::spawn(move || -> io::Result<Message> {
-                let (output_stream, _) = output_listener.accept()?;
-                let (mut input_stream, _) = input_listener.accept()?;
+                let (mut input_stream, output_stream) = platform::accept_split_endpoint(endpoint)?;
                 write_lsp_message(&mut input_stream, notification_message("client/to/server"))?;
-                let mut output_reader = BufReader::new(output_stream);
-                read_lsp_message(&mut output_reader)?.ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "expected a message on the output endpoint",
-                    )
-                })
+                read_message_from_peer(output_stream, "expected a message on the output endpoint")
             });
 
             let (connection, mut reader, io_thread) =
-                Connection::ipc_split(input_path.to_str().unwrap(), output_path.to_str().unwrap())?;
+                Connection::ipc_split(&input_name, &output_name)?;
             assert_notification_method(
                 reader
                     .recv()
@@ -1488,135 +1730,71 @@ mod tests {
             drop(connection);
             io_thread.join()?;
 
-            let outbound = peer.join().expect("unix split IPC peer panicked")?;
+            let outbound = peer.join().expect("split IPC peer panicked")?;
             assert_notification_method(outbound, "server/to/client");
             Ok(())
         }
 
         #[test]
-        fn test_ipc_single_endpoint_reports_missing_unix_socket() {
-            let tempdir = tempfile::tempdir().expect("tempdir should be created");
-            let path = tempdir.path().join("missing.sock");
+        fn test_ipc_single_endpoint_is_full_duplex() -> io::Result<()> {
+            let endpoint = platform::single_endpoint("single")?;
+            let name = endpoint.name.clone();
+            let peer = thread::spawn(move || -> io::Result<Message> {
+                let mut stream = platform::accept_single_endpoint(endpoint)?;
+                write_lsp_message(&mut stream, notification_message("client/to/server"))?;
+                read_message_from_peer(stream, "expected a message from the server writer")
+            });
 
-            let error = expect_io_error(
-                Connection::ipc(path.to_str().unwrap()),
-                "missing socket should fail to open",
+            let (connection, mut reader, io_thread) = Connection::ipc(&name)?;
+            assert_notification_method(
+                reader.recv().expect("expected a message from the peer"),
+                "client/to/server",
             );
 
-            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+            connection
+                .sender
+                .send(notification_message("server/to/client"))
+                .expect("test connection should stay open");
+            drop(connection);
+            io_thread.join()?;
+
+            let outbound = peer.join().expect("IPC peer panicked")?;
+            assert_notification_method(outbound, "server/to/client");
+            Ok(())
         }
 
         #[test]
-        fn test_ipc_split_reports_missing_unix_output_socket() -> io::Result<()> {
-            let tempdir = tempfile::tempdir()?;
-            let input_path = tempdir.path().join("input.sock");
-            let missing_output_path = tempdir.path().join("missing-output.sock");
-            let _input_listener = UnixListener::bind(&input_path)?;
+        fn test_ipc_split_uses_duplex_endpoints() -> io::Result<()> {
+            run_split_endpoint_test(SplitEndpointMode::Duplex, "duplex")
+        }
+
+        #[test]
+        fn test_ipc_split_uses_directional_endpoints() -> io::Result<()> {
+            run_split_endpoint_test(SplitEndpointMode::Directional, "directional")
+        }
+
+        #[test]
+        fn test_ipc_single_endpoint_reports_missing_endpoint() -> io::Result<()> {
+            let name = platform::missing_endpoint_name("missing-single")?;
+
+            let error = expect_io_error(Connection::ipc(&name), "missing endpoint should fail");
+
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+            Ok(())
+        }
+
+        #[test]
+        fn test_ipc_split_reports_missing_output_endpoint() -> io::Result<()> {
+            let endpoint = platform::missing_split_output_endpoint()?;
 
             let error = expect_io_error(
-                Connection::ipc_split(
-                    input_path.to_str().unwrap(),
-                    missing_output_path.to_str().unwrap(),
-                ),
-                "missing output socket should fail to open",
+                Connection::ipc_split(&endpoint.input_name, &endpoint.output_name),
+                "missing output endpoint should fail",
             );
 
             assert_eq!(error.kind(), io::ErrorKind::NotFound);
             Ok(())
         }
-    }
-
-    #[test]
-    fn test_windows_split_pipe_prefers_duplex_handle() {
-        let fallback_attempt = Cell::new(None);
-
-        let result = open_windows_split_pipe_with(
-            WindowsNamedPipeExpectedAccess::Read,
-            || Ok("duplex"),
-            |expected_access| {
-                fallback_attempt.set(Some(expected_access));
-                Ok("fallback")
-            },
-        )
-        .expect("duplex handle should succeed");
-
-        assert_eq!(result, "duplex");
-        assert_eq!(fallback_attempt.get(), None);
-    }
-
-    #[test]
-    fn test_windows_split_pipe_falls_back_to_inbound_permission() {
-        let fallback_attempt = Cell::new(None);
-
-        let result = open_windows_split_pipe_with(
-            WindowsNamedPipeExpectedAccess::Read,
-            || -> io::Result<&'static str> {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "duplex failed",
-                ))
-            },
-            |expected_access| {
-                fallback_attempt.set(Some(expected_access));
-                Ok("inbound")
-            },
-        )
-        .expect("inbound fallback should succeed");
-
-        assert_eq!(result, "inbound");
-        assert_eq!(
-            fallback_attempt.get(),
-            Some(WindowsNamedPipeExpectedAccess::Read)
-        );
-    }
-
-    #[test]
-    fn test_windows_split_pipe_falls_back_to_outbound_permission() {
-        let fallback_attempt = Cell::new(None);
-
-        let result = open_windows_split_pipe_with(
-            WindowsNamedPipeExpectedAccess::Write,
-            || -> io::Result<&'static str> {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "duplex failed",
-                ))
-            },
-            |expected_access| {
-                fallback_attempt.set(Some(expected_access));
-                Ok("outbound")
-            },
-        )
-        .expect("outbound fallback should succeed");
-
-        assert_eq!(result, "outbound");
-        assert_eq!(
-            fallback_attempt.get(),
-            Some(WindowsNamedPipeExpectedAccess::Write)
-        );
-    }
-
-    #[test]
-    fn test_windows_split_pipe_returns_fallback_error() {
-        let error = open_windows_split_pipe_with(
-            WindowsNamedPipeExpectedAccess::Write,
-            || -> io::Result<&'static str> {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "duplex failed",
-                ))
-            },
-            |expected_access| {
-                assert_eq!(expected_access, WindowsNamedPipeExpectedAccess::Write);
-                Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "outbound endpoint missing",
-                ))
-            },
-        )
-        .expect_err("failing both open attempts should return an error");
-
-        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
     /// Unit tests for the V2 status-bar response derivation. The test
