@@ -307,6 +307,52 @@ def f(value: float | tuple[float, float]) -> float | tuple[float, float]:
 );
 
 testcase!(
+    test_match_exhaustive_call_subject_assert_never,
+    r#"
+from dataclasses import dataclass
+from typing import assert_never
+
+@dataclass
+class A: ...
+
+@dataclass
+class B: ...
+
+def f(x: A | B) -> A | B:
+    return x
+
+def test(x: A | B):
+    match f(x):
+        case A():
+            pass
+        case B():
+            pass
+        case y:
+            assert_never(y)
+"#,
+);
+
+testcase!(
+    test_match_call_subject_class_args_not_exhaustive,
+    r#"
+from typing import assert_never
+
+class C:
+    val: int
+
+def f(x: C) -> C:
+    return x
+
+def test(x: C):
+    match f(x):
+        case C(val=1):
+            pass
+        case y:
+            assert_never(y)  # E: Argument `C` is not assignable to parameter `arg` with type `Never`
+"#,
+);
+
+testcase!(
     test_match_exhaustive_enum_assign,
     r#"
 from enum import IntEnum
