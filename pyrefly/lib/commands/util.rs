@@ -11,7 +11,6 @@ use clap::ColorChoice;
 use clap::Parser;
 use pyrefly_util::args::clap_env;
 use pyrefly_util::thread_pool::ThreadCount;
-use pyrefly_util::thread_pool::init_thread_pool;
 use pyrefly_util::trace::init_tracing;
 
 /// Arguments shared between all commands.
@@ -52,8 +51,12 @@ impl CommonGlobalArgs {
         if !skip_tracing {
             init_tracing(self.verbose, false);
         }
-        init_thread_pool(self.threads);
         init_color(self.color);
+    }
+
+    /// Returns the thread count setting from command line args.
+    pub fn thread_count(&self) -> ThreadCount {
+        self.threads
     }
 }
 

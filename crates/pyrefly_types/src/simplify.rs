@@ -80,6 +80,7 @@ fn unions_internal(
             promote_anonymous_typed_dicts(&mut res, stdlib, heap);
         }
         collapse_tuple_unions_with_empty(&mut res, heap);
+        collapse_builtins_type(&mut res, heap);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
         try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
     })
@@ -231,9 +232,7 @@ fn collapse_literals(
                     Lit::Bool(_) if has_true && has_false => return false,
                     Lit::Str(_) if has_literal_string => return false,
                     Lit::Enum(lit_enum) if enums_to_delete.contains(&lit_enum.class) => {
-                        if enums_to_delete.contains(&lit_enum.class) {
-                            return false;
-                        }
+                        return false;
                     }
                     _ => {}
                 }
@@ -259,9 +258,8 @@ fn collapse_literals(
 fn promote_anonymous_typed_dicts(types: &mut [Type], stdlib: &Stdlib, heap: &TypeHeap) {
     for ty in types.iter_mut() {
         if let Type::TypedDict(TypedDict::Anonymous(inner)) = ty {
-            *ty = heap.mk_class_type(
-                stdlib.dict(stdlib.str().clone().to_type(), inner.value_type.clone()),
-            );
+            let value_type = inner.compute_value_type(heap);
+            *ty = heap.mk_class_type(stdlib.dict(stdlib.str().clone().to_type(), value_type));
         }
     }
 }
@@ -318,6 +316,38 @@ fn flatten_unpacked_concrete_tuples(elts: Vec<Type>) -> Vec<Type> {
         }
     }
     result
+}
+
+/// `type[int] | type[str]` => `type[int | str]`
+fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
+    let mut idx = 0;
+    let mut first_elt = None;
+    let mut additional_elts = Vec::new();
+    types.retain(|t| {
+        let retain = match t {
+            Type::Type(box t) if first_elt.is_none() => {
+                first_elt = Some((idx, t.clone()));
+                true
+            }
+            Type::Type(box t) => {
+                additional_elts.push(t.clone());
+                false
+            }
+            _ => true,
+        };
+        idx += 1;
+        retain
+    });
+    if let Some((idx, first_elt)) = first_elt
+        && !additional_elts.is_empty()
+    {
+        let mut elts = vec![first_elt.clone()];
+        elts.extend(additional_elts);
+        *(types
+            .get_mut(idx)
+            .expect("idx out of bounds when collapsing type members in union")) =
+            heap.mk_type_of(heap.mk_union(elts));
+    }
 }
 
 // After a TypeVarTuple gets substituted with a tuple type, try to simplify the type

@@ -58,10 +58,19 @@ impl<'a> TransactionManager<'a> {
     /// If we were unable to restore a transaction from saved state, we create a fresh transaction.
     /// Callers may need to re-validate open files in this case.
     pub fn non_committable_transaction(&mut self, state: &'a State) -> Transaction<'a> {
-        self.saved_state
-            .take()
-            .and_then(|saved_state| saved_state.restore())
-            .unwrap_or_else(|| state.transaction())
+        let previous_blocking = match self.saved_state.take() {
+            Some(saved_state) => match saved_state.restore() {
+                Ok(tx) => return tx,
+                Err(blocked) => Some(blocked),
+            },
+            None => None,
+        };
+        let mut tx = state.transaction();
+        tx.set_fresh();
+        if let Some(d) = previous_blocking {
+            tx.add_locked_blocking_duration(d);
+        }
+        tx
     }
 
     /// This function should be called once we finished using transaction for an LSP request.

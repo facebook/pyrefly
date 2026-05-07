@@ -13,9 +13,9 @@ use lsp_types::Url;
 use lsp_types::request::CodeActionRequest;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 fn init_with_workspace_edit_support(root_path: &std::path::Path) -> (LspInteraction, Url) {
     let scope_uri = Url::from_file_path(root_path).unwrap();

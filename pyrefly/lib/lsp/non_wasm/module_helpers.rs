@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe as _;
+use lsp_types::Location;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
@@ -28,6 +29,8 @@ use crate::state::state::State;
 /// to URIs.
 pub type PathRemapper = Arc<dyn Fn(&Path) -> Cow<'_, Path> + Send + Sync>;
 
+pub type ThriftRemapper = Arc<dyn Fn(&Location) -> Option<Location> + Send + Sync>;
+
 /// Convert ModuleInfo to URI with optional path remapping.
 /// When a path remapper is provided, the path is transformed before
 /// being converted to a URI.
@@ -44,7 +47,7 @@ pub fn module_info_to_uri(
     Some(Url::from_file_path(abs_path).unwrap())
 }
 
-pub(in crate::lsp) fn handle_from_module_path(state: &State, path: ModulePath) -> Handle {
+pub(crate) fn handle_from_module_path(state: &State, path: ModulePath) -> Handle {
     let unknown = ModuleName::unknown();
     let config = state
         .config_finder()
@@ -52,7 +55,7 @@ pub(in crate::lsp) fn handle_from_module_path(state: &State, path: ModulePath) -
     match path.details() {
         ModulePathDetails::BundledTypeshed(_) => {
             let module_name = to_real_path(&path)
-                .and_then(|path| ModuleName::from_path(&path, config.search_path()))
+                .and_then(|path| ModuleName::from_path(&path, config.search_path(), &[]))
                 .unwrap_or(unknown);
             Handle::new(module_name, path, config.get_sys_info())
         }

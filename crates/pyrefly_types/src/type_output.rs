@@ -63,7 +63,8 @@ impl<'a, 'b, 'f> TypeOutput for DisplayOutput<'a, 'b, 'f> {
     }
 
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result {
-        self.context.fmt_targs(targs, self.formatter)
+        let ctx = self.context;
+        ctx.fmt_targs(targs, self)
     }
 
     fn write_type(&mut self, ty: &Type) -> fmt::Result {
@@ -138,20 +139,10 @@ impl TypeOutput for OutputWithLocations<'_> {
     }
 
     fn write_targs(&mut self, targs: &TArgs) -> fmt::Result {
-        // Write each type argument separately with its own location
-        // This ensures that each type in a union (e.g., int | str) gets its own
-        // clickable part with a link to its definition
-        if !targs.is_empty() {
-            self.write_str("[")?;
-            for (i, ty) in targs.as_slice().iter().enumerate() {
-                if i > 0 {
-                    self.write_str(", ")?;
-                }
-                self.write_type(ty)?;
-            }
-            self.write_str("]")?;
-        }
-        Ok(())
+        // Delegate to fmt_targs so TypeVarTuple-aware formatting (e.g. *Shape) is
+        // applied here too, not only on the plain Display path.
+        let ctx = self.context;
+        ctx.fmt_targs(targs, self)
     }
 
     fn write_type(&mut self, ty: &Type) -> fmt::Result {
@@ -194,8 +185,11 @@ mod tests {
     use crate::class::ClassType;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
+    use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
     use crate::tuple::Tuple;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
@@ -215,7 +209,6 @@ mod tests {
             NestingContext::toplevel(),
             mi,
             None,
-            starlark_map::small_map::SmallMap::new(),
         )
     }
 
@@ -322,7 +315,11 @@ mod tests {
 
         // Create TArgs with multiple type arguments
         let tparam1 = Quantified::new(
-            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("T"),
             QuantifiedKind::TypeVar,
             None,
@@ -330,7 +327,11 @@ mod tests {
             PreInferenceVariance::Invariant,
         );
         let tparam2 = Quantified::new(
-            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::new(TextRange::default(), 1),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("U"),
             QuantifiedKind::TypeVar,
             None,
@@ -338,7 +339,11 @@ mod tests {
             PreInferenceVariance::Invariant,
         );
         let tparam3 = Quantified::new(
-            pyrefly_util::uniques::UniqueFactory::new().fresh(),
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::new(TextRange::default(), 2),
+                QuantifiedOrigin::Pep695,
+            ),
             Name::new("V"),
             QuantifiedKind::TypeVar,
             None,

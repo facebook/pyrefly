@@ -1,0 +1,12 @@
+  10:14-18: None
+  11:4-5: __static__.int64
+  11:7-12: typing.Type[__static__.int64]
+  11:15-23: __static__.int64
+    contextual: __static__.int64
+  11:15-20: typing.Type[__static__.int64]
+  11:21-22: Literal[0] -> builtins.int
+  12:4-5: __static__.int64
+  12:8-16: __static__.int64
+    contextual: __static__.int64
+  12:8-13: typing.Type[__static__.int64]
+  12:14-15: Literal[0] -> builtins.int

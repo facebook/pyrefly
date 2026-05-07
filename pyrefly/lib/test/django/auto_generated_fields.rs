@@ -19,7 +19,7 @@ class Reporter(models.Model):
 
 reporter = Reporter()
 assert_type(reporter.id, int)
-assert_type(reporter.pk, int) 
+assert_type(reporter.pk, int)
 "#,
 );
 
@@ -53,12 +53,59 @@ class B(Article):
 
 article = Article()
 article.id # E: Object of class `Article` has no attribute `id`
-assert_type(article.uuid, UUID) 
-assert_type(article.pk, UUID) 
+assert_type(article.uuid, UUID)
+assert_type(article.pk, UUID)
 
 article2 = B()
-article2.id # E: Object of class `B` has no attribute `id` 
+article2.id # E: Object of class `B` has no attribute `id`
 assert_type(article2.uuid, UUID)
-assert_type(article2.pk, UUID) 
+assert_type(article2.pk, UUID)
+"#,
+);
+
+django_testcase!(
+    test_abstract_model_charfield_pk,
+    r#"
+from typing import assert_type
+from django.db import models
+
+class StrIdMixin(models.Model):
+    id = models.CharField(max_length=36, primary_key=True)
+    class Meta:
+        abstract = True
+
+class StrIdChildModel(StrIdMixin):
+    name = models.CharField(max_length=100)
+
+child = StrIdChildModel()
+assert_type(child.id, str)
+assert_type(child.pk, str)
+"#,
+);
+
+// Multiple abstract mixins: the one with primary_key=True must win,
+// even if a later base has no custom PK (regression test for #2218).
+django_testcase!(
+    test_abstract_model_charfield_pk_multiple_mixins,
+    r#"
+from typing import assert_type
+from django.db import models
+
+class StrIdMixin(models.Model):
+    id = models.CharField(max_length=36, primary_key=True)
+    class Meta:
+        abstract = True
+
+class AuditMixin(models.Model):
+    created_by = models.CharField(max_length=100)
+    class Meta:
+        abstract = True
+
+class ConcreteModel(StrIdMixin, AuditMixin):
+    name = models.CharField(max_length=100)
+
+obj = ConcreteModel()
+assert_type(obj.id, str)
+assert_type(obj.pk, str)
 "#,
 );

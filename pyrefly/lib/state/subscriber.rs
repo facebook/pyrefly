@@ -8,6 +8,7 @@
 use std::mem;
 use std::sync::Arc;
 
+use clap::ValueEnum;
 use dupe::Dupe;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
@@ -19,6 +20,30 @@ use starlark_map::small_map::SmallMap;
 
 use crate::state::load::Load;
 use crate::state::state::Transaction;
+use crate::state::steps::Step;
+
+/// Controls which progress bar style to use during type checking.
+#[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
+pub enum ProgressBarStyle {
+    /// Show an interactive progress bar (default).
+    #[default]
+    Interactive,
+    /// Show simple log-style progress messages, suitable for non-interactive use.
+    Simple,
+    /// Disable progress reporting entirely.
+    No,
+}
+
+impl ProgressBarStyle {
+    /// Create a subscriber matching this style, or `None` if progress reporting is disabled.
+    pub fn make_subscriber(&self) -> Option<Box<dyn Subscriber>> {
+        match self {
+            ProgressBarStyle::Interactive => Some(Box::new(ProgressBarSubscriber::new())),
+            ProgressBarStyle::Simple => Some(Box::new(SimpleProgressBarSubscriber::new())),
+            ProgressBarStyle::No => None,
+        }
+    }
+}
 
 /// Trait to capture which handles are executed by `State`.
 /// Calls to `start_work` and `finish_work` will be paired.
@@ -42,22 +67,39 @@ pub trait Subscriber: Sync {
         result: &Arc<Load>,
         exports_changed: bool,
     );
+
+    /// Called after each step is computed for a module. Default no-op.
+    fn step_computed(&self, _handle: &Handle, _step: Step) {}
+}
+
+/// Per-module tracking info for TestSubscriber.
+#[derive(Debug, Clone)]
+pub struct TestModuleInfo {
+    pub start_count: usize,
+    pub load: Option<Arc<Load>>,
+    /// The highest step computed for this module.
+    pub last_step: Option<Step>,
 }
 
 /// A subscriber that validates all start/finish are paired and returns the final load states.
 #[derive(Debug, Default, Clone, Dupe)]
-pub struct TestSubscriber(Arc<Mutex<SmallMap<Handle, (usize, Option<Arc<Load>>)>>>);
+pub struct TestSubscriber(Arc<Mutex<SmallMap<Handle, TestModuleInfo>>>);
 
 impl Subscriber for TestSubscriber {
     fn start_work(&self, handle: &Handle) {
         let mut value = self.0.lock();
         match value.entry(handle.dupe()) {
             Entry::Vacant(e) => {
-                e.insert((1, None));
+                e.insert(TestModuleInfo {
+                    start_count: 1,
+                    load: None,
+                    last_step: None,
+                });
             }
             Entry::Occupied(mut e) => {
-                e.get_mut().0 += 1;
-                e.get_mut().1 = None;
+                e.get_mut().start_count += 1;
+                e.get_mut().load = None;
+                e.get_mut().last_step = None;
             }
         }
     }
@@ -67,23 +109,50 @@ impl Subscriber for TestSubscriber {
         match value.entry(handle.dupe()) {
             Entry::Vacant(_) => panic!("Handle finished but never started: {handle:?}"),
             Entry::Occupied(mut e) => {
-                assert!(e.get().1.is_none());
-                e.get_mut().1 = Some(result.dupe());
+                assert!(e.get().load.is_none());
+                e.get_mut().load = Some(result.dupe());
             }
+        }
+    }
+
+    fn step_computed(&self, handle: &Handle, step: Step) {
+        let mut value = self.0.lock();
+        if let Some(info) = value.get_mut(handle) {
+            info.last_step = Some(match info.last_step {
+                Some(prev) if prev > step => prev,
+                _ => step,
+            });
+        }
+        // If the module wasn't started yet (e.g., prefetched), add it.
+        else {
+            value.insert(
+                handle.dupe(),
+                TestModuleInfo {
+                    start_count: 0,
+                    load: None,
+                    last_step: Some(step),
+                },
+            );
         }
     }
 }
 
 impl TestSubscriber {
-    #[allow(dead_code)] // Only in test code
     pub fn new() -> Self {
         Self::default()
     }
 
     /// For each handle, return a pair of (the number of times each handle started, the final load state).
     /// Panics if any handle was started but not finished.
-    #[allow(dead_code)] // Only in test code
     pub fn finish(self) -> SmallMap<Handle, (usize, Option<Arc<Load>>)> {
+        mem::take(&mut *self.0.lock())
+            .into_iter()
+            .map(|(h, info)| (h, (info.start_count, info.load)))
+            .collect()
+    }
+
+    /// Return per-module info including step tracking.
+    pub fn finish_detailed(self) -> SmallMap<Handle, TestModuleInfo> {
         mem::take(&mut *self.0.lock())
     }
 }
@@ -178,6 +247,45 @@ impl ProgressBarSubscriber {
     }
 }
 
+/// A simple progress bar subscriber that prints log-style progress messages.
+/// Suitable for non-interactive environments (e.g., when output is piped to a file
+/// or when pyrefly is invoked by another tool like pysa).
+pub struct SimpleProgressBarSubscriber {
+    state: Mutex<ProgressBarState>,
+}
+
+impl SimpleProgressBarSubscriber {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(ProgressBarState {
+                last_progress: 0,
+                started: 0,
+                finished: 0,
+            }),
+        }
+    }
+}
+
+impl Subscriber for SimpleProgressBarSubscriber {
+    fn start_work(&self, _: &Handle) {
+        self.state.lock().started += 1;
+    }
+
+    fn finish_work(&self, _: &Transaction<'_>, _: &Handle, _: &Arc<Load>, _: bool) {
+        let (finished, started) = {
+            let mut state = self.state.lock();
+            state.finished += 1;
+            (state.finished, state.started)
+        };
+        // Log at regular intervals to avoid flooding the output.
+        // Print on the first completion, then at every 1% of progress, and at the end.
+        let interval = (started / 100).max(1);
+        if finished == 1 || finished == started || finished % interval == 0 {
+            eprintln!("Processed {} of {} modules", finished, started);
+        }
+    }
+}
+
 pub struct PublishDiagnosticsSubscriber<F>
 where
     F: Fn(&Transaction<'_>, &Handle, bool) + Send + Sync,
@@ -199,5 +307,42 @@ where
         exports_changed: bool,
     ) {
         (self.publish_callback)(transaction, handle, exports_changed);
+    }
+}
+
+/// A subscriber that forwards all events to each of its inner subscribers.
+pub(crate) struct CompositeSubscriber<'a> {
+    subscribers: Vec<Box<dyn Subscriber + 'a>>,
+}
+
+impl<'a> CompositeSubscriber<'a> {
+    pub(crate) fn new(subscribers: Vec<Box<dyn Subscriber + 'a>>) -> Self {
+        Self { subscribers }
+    }
+}
+
+impl<'a> Subscriber for CompositeSubscriber<'a> {
+    fn start_work(&self, handle: &Handle) {
+        for subscriber in &self.subscribers {
+            subscriber.start_work(handle);
+        }
+    }
+
+    fn finish_work(
+        &self,
+        transaction: &Transaction<'_>,
+        handle: &Handle,
+        result: &Arc<Load>,
+        exports_changed: bool,
+    ) {
+        for subscriber in &self.subscribers {
+            subscriber.finish_work(transaction, handle, result, exports_changed);
+        }
+    }
+
+    fn step_computed(&self, handle: &Handle, step: Step) {
+        for subscriber in &self.subscribers {
+            subscriber.step_computed(handle, step);
+        }
     }
 }

@@ -39,6 +39,14 @@ use crate::types::stdlib::Stdlib;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
+/// Slot names declared directly on a class via `__slots__`.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct SlotsInfo {
+    pub names: SmallSet<Name>,
+    /// Whether `__dict__` appears among the slot names, which disables enforcement.
+    pub has_dict: bool,
+}
+
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassMetadata {
     metaclass: Metaclass,
@@ -61,8 +69,13 @@ pub struct ClassMetadata {
     /// that were passed to the `dataclass_transform` call.
     dataclass_transform_metadata: Option<DataclassTransformMetadata>,
     pydantic_model_kind: Option<PydanticModelKind>,
+    is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
     is_marshmallow_schema: bool,
+    is_factory_boy_factory: bool,
+    /// Whether this class is a metaclass (i.e., a subclass of `type`).
+    is_metaclass: bool,
+    slots_info: Option<SlotsInfo>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -98,8 +111,12 @@ impl ClassMetadata {
         total_ordering_metadata: Option<TotalOrderingMetadata>,
         dataclass_transform_metadata: Option<DataclassTransformMetadata>,
         pydantic_model_kind: Option<PydanticModelKind>,
+        is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
         is_marshmallow_schema: bool,
+        is_factory_boy_factory: bool,
+        is_metaclass: bool,
+        slots_info: Option<SlotsInfo>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -120,8 +137,12 @@ impl ClassMetadata {
             total_ordering_metadata,
             dataclass_transform_metadata,
             pydantic_model_kind,
+            is_attrs_class,
             django_model_metadata,
             is_marshmallow_schema,
+            is_factory_boy_factory,
+            is_metaclass,
+            slots_info,
         }
     }
 
@@ -145,8 +166,12 @@ impl ClassMetadata {
             total_ordering_metadata: None,
             dataclass_transform_metadata: None,
             pydantic_model_kind: None,
+            is_attrs_class: false,
             django_model_metadata: None,
             is_marshmallow_schema: false,
+            is_factory_boy_factory: false,
+            is_metaclass: false,
+            slots_info: None,
         }
     }
 
@@ -185,6 +210,19 @@ impl ClassMetadata {
 
     pub fn is_marshmallow_schema(&self) -> bool {
         self.is_marshmallow_schema
+    }
+
+    pub fn is_factory_boy_factory(&self) -> bool {
+        self.is_factory_boy_factory
+    }
+
+    /// Whether this class is a metaclass (i.e., a subclass of `type`).
+    pub fn is_metaclass(&self) -> bool {
+        self.is_metaclass
+    }
+
+    pub fn is_attrs_class(&self) -> bool {
+        self.is_attrs_class
     }
 
     pub fn pydantic_model_kind(&self) -> Option<PydanticModelKind> {
@@ -282,6 +320,10 @@ impl ClassMetadata {
         self.dataclass_metadata.as_ref()
     }
 
+    pub fn slots_info(&self) -> Option<&SlotsInfo> {
+        self.slots_info.as_ref()
+    }
+
     pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformMetadata> {
         self.dataclass_transform_metadata.as_ref()
     }
@@ -318,6 +360,12 @@ impl ClassSynthesizedField {
     pub fn new(ty: Type) -> Self {
         Self {
             inner: Arc::new(ClassField::new_synthesized(ty)),
+        }
+    }
+
+    pub fn new_classvar(ty: Type) -> Self {
+        Self {
+            inner: Arc::new(ClassField::new_synthesized_classvar(ty)),
         }
     }
 }
@@ -392,6 +440,14 @@ impl Metaclass {
             Self::None => None,
         }
     }
+
+    pub fn get_mut(&mut self) -> Option<&mut ClassType> {
+        match self {
+            Self::Direct(metaclass) => Some(metaclass),
+            Self::Inherited(metaclass) => Some(metaclass),
+            Self::None => None,
+        }
+    }
 }
 
 /// A struct representing the keywords in a class header, e.g. for
@@ -433,6 +489,9 @@ pub struct EnumMetadata {
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct NamedTupleMetadata {
     pub elements: SmallSet<Name>,
+    /// If true, the namedtuple fields were dynamically generated (e.g., using a
+    /// generator or variable) and couldn't be statically resolved.
+    pub has_dynamic_fields: bool,
 }
 
 /// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
@@ -462,6 +521,8 @@ pub struct DataclassMetadata {
     pub init_defaults: InitDefaults,
     /// Whether a default can be passed positionally to field specifier calls
     pub default_can_be_positional: bool,
+    /// Fields targeted by `@field_validator(mode='before'|'plain')`, including inherited.
+    pub pydantic_before_validator_fields: SmallSet<Name>,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
@@ -469,8 +530,8 @@ pub struct DjangoModelMetadata {
     /// The name of the field that has primary_key=True, if any.
     /// If None, the model uses the default auto-generated `id` field.
     pub custom_primary_key_field: Option<Name>,
-    /// Names of ForeignKey fields
-    pub foreign_key_fields: Vec<Name>,
+    /// Names of ForeignKey and OneToOneField fields.
+    pub foreign_key_like_fields: Vec<Name>,
     /// Names of fields with choices=...
     pub fields_with_choices: Vec<Name>,
 }

@@ -1,0 +1,46 @@
+name: Auto Assign PR Owner
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  assign-owner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto-assign known contributors
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const OWNERS = [
+              'yangdanny',
+              'grievejia',
+              'jvansch1',
+              'samwgoldman',
+              'lolpack',
+              'stroxler',
+              'javabster',
+              'ndmitchell',
+              'rchen152',
+              'kinto0',
+              'connernilsen',
+              'maggiemoss',
+              'migeed-z',
+            ];
+
+            const author = context.payload.pull_request.user.login;
+
+            if (OWNERS.includes(author.toLowerCase())) {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                assignees: [author],
+              });
+              console.log(`Assigned ${author} as owner`);
+            } else {
+              console.log(`${author} not in owner list, skipping`);
+            }

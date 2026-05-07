@@ -10,10 +10,11 @@ use pyrefly_build::handle::Handle;
 
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report_no_cursor;
+use crate::test::util::get_batched_lsp_operations_report_no_cursor_allow_error;
 
 fn get_test_report(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
-    if let Some(symbols) = transaction.symbols(handle) {
+    if let Some(symbols) = transaction.symbols(handle, None) {
         serde_json::to_string_pretty(&symbols).unwrap()
     } else {
         "No document symbols found".to_owned()
@@ -271,237 +272,6 @@ class MyClass:
 }
 
 #[test]
-fn mixed_content_test() {
-    let code = r#"
-import os
-from typing import List
-
-x = 1
-
-def helper_function():
-    return 42
-
-class MyClass:
-    class_var = "hello"
-
-    def method(self):
-        local_var = helper_function()
-        return local_var
-
-y = MyClass()
-result = y.method()
- "#;
-    let report = get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
-
-[
-  {
-    "name": "x",
-    "kind": 13,
-    "range": {
-      "start": {
-        "line": 4,
-        "character": 0
-      },
-      "end": {
-        "line": 4,
-        "character": 5
-      }
-    },
-    "selectionRange": {
-      "start": {
-        "line": 4,
-        "character": 0
-      },
-      "end": {
-        "line": 4,
-        "character": 1
-      }
-    }
-  },
-  {
-    "name": "helper_function",
-    "kind": 12,
-    "range": {
-      "start": {
-        "line": 6,
-        "character": 0
-      },
-      "end": {
-        "line": 7,
-        "character": 13
-      }
-    },
-    "selectionRange": {
-      "start": {
-        "line": 6,
-        "character": 4
-      },
-      "end": {
-        "line": 6,
-        "character": 19
-      }
-    },
-    "children": []
-  },
-  {
-    "name": "MyClass",
-    "kind": 5,
-    "range": {
-      "start": {
-        "line": 9,
-        "character": 0
-      },
-      "end": {
-        "line": 14,
-        "character": 24
-      }
-    },
-    "selectionRange": {
-      "start": {
-        "line": 9,
-        "character": 6
-      },
-      "end": {
-        "line": 9,
-        "character": 13
-      }
-    },
-    "children": [
-      {
-        "name": "class_var",
-        "kind": 13,
-        "range": {
-          "start": {
-            "line": 10,
-            "character": 4
-          },
-          "end": {
-            "line": 10,
-            "character": 23
-          }
-        },
-        "selectionRange": {
-          "start": {
-            "line": 10,
-            "character": 4
-          },
-          "end": {
-            "line": 10,
-            "character": 13
-          }
-        }
-      },
-      {
-        "name": "method",
-        "kind": 6,
-        "range": {
-          "start": {
-            "line": 12,
-            "character": 4
-          },
-          "end": {
-            "line": 14,
-            "character": 24
-          }
-        },
-        "selectionRange": {
-          "start": {
-            "line": 12,
-            "character": 8
-          },
-          "end": {
-            "line": 12,
-            "character": 14
-          }
-        },
-        "children": [
-          {
-            "name": "local_var",
-            "kind": 13,
-            "range": {
-              "start": {
-                "line": 13,
-                "character": 8
-              },
-              "end": {
-                "line": 13,
-                "character": 37
-              }
-            },
-            "selectionRange": {
-              "start": {
-                "line": 13,
-                "character": 8
-              },
-              "end": {
-                "line": 13,
-                "character": 17
-              }
-            }
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "name": "y",
-    "kind": 13,
-    "range": {
-      "start": {
-        "line": 16,
-        "character": 0
-      },
-      "end": {
-        "line": 16,
-        "character": 13
-      }
-    },
-    "selectionRange": {
-      "start": {
-        "line": 16,
-        "character": 0
-      },
-      "end": {
-        "line": 16,
-        "character": 1
-      }
-    }
-  },
-  {
-    "name": "result",
-    "kind": 13,
-    "range": {
-      "start": {
-        "line": 17,
-        "character": 0
-      },
-      "end": {
-        "line": 17,
-        "character": 19
-      }
-    },
-    "selectionRange": {
-      "start": {
-        "line": 17,
-        "character": 0
-      },
-      "end": {
-        "line": 17,
-        "character": 6
-      }
-    }
-  }
-]
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
 fn nested_class_test() {
     let code = r#"
 while True:
@@ -543,6 +313,31 @@ while True:
         .trim(),
         report.trim(),
     );
+}
+
+/// Syntax errors like `x = = None` cause the parser to produce assignment
+/// targets with empty names. We must skip these to avoid returning
+/// `DocumentSymbol { name: "" }`, which violates the LSP spec and causes
+/// "name must not be falsy" errors in VS Code.
+#[test]
+fn test_syntax_error_empty_name_assign() {
+    let code = r#"
+def foo():
+    x = = None
+"#;
+    let report =
+        get_batched_lsp_operations_report_no_cursor_allow_error(&[("main", code)], get_test_report);
+    let symbols: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(&report.split('\n').skip(2).collect::<Vec<_>>().join("\n")).unwrap();
+
+    assert_eq!(symbols.len(), 1);
+    assert_eq!(symbols[0].name, "foo");
+
+    let children = symbols[0].children.as_ref().unwrap();
+    // Only the valid "x" assignment should appear; the empty-name target
+    // from the parser's error recovery must be filtered out.
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].name, "x");
 }
 
 // TODO(kylei): list comprehension document symbol

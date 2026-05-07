@@ -67,6 +67,13 @@ impl<K, V> SmallMap1<K, V> {
         }
     }
 
+    pub fn first_mut(&mut self) -> (&K, &mut V) {
+        match &mut self.0 {
+            SmallMap1Inner::One(key, value) => (key, value),
+            SmallMap1Inner::Map(map) => map.iter_mut().next().unwrap(),
+        }
+    }
+
     /// Get a reference to the value associated with the given key.
     pub fn get(&self, key: &K) -> Option<&V>
     where

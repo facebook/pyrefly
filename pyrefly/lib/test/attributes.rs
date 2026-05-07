@@ -320,7 +320,6 @@ def foo(x: Callable[[int], str], c: C, c2: C2, c3: C3):
 );
 
 testcase!(
-    bug = "classmethod bound object w/o targs is default-instantiated, solves T to Any",
     test_bound_classmethod_explicit_targs,
     r#"
 from typing import assert_type
@@ -333,7 +332,7 @@ class A[T]:
         return cls(x)
 
 assert_type(A[int].m(0), A[int])
-assert_type(A.m(0), A[int]) # TODO # E: assert_type(A[Any], A[int]) failed
+assert_type(A.m(0), A[int])
 
 def test_typevar_bounds[T: A[int]](x: type[T]):
     assert_type(x.m(0), A[int])
@@ -519,6 +518,16 @@ class C:
         pass
 C().f(C())  # OK
 C().f(0)    # E: Argument `Literal[0]` is not assignable to parameter `x` with type `C`
+    "#,
+);
+
+testcase!(
+    test_bad_bound_on_self,
+    r#"
+class C:
+    def f[T: int](self: T) -> T:
+        return self
+C().f()  # E: `C` is not assignable to upper bound `int`
     "#,
 );
 
@@ -774,6 +783,26 @@ class Meta(type):
 class C(metaclass=Meta):
     pass
 assert_type(C.x, int)
+    "#,
+);
+
+testcase!(
+    test_metaclass_property_precedence,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    @property
+    def f(cls) -> str:
+        return "1"
+
+class C(metaclass=Meta):
+    @property
+    def f(self) -> str:
+        return type(self).f
+
+# C.f should resolve to the metaclass property, returning str
+assert_type(C.f, str)
     "#,
 );
 
@@ -1107,6 +1136,74 @@ class C2[R]:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2204
+testcase!(
+    test_generic_function_assigned_to_attribute,
+    r#"
+from typing import reveal_type, assert_type
+def f[T](x: T) -> T:
+    return x
+
+class C:
+    def m[U](self, x: U) -> U:
+        return x
+
+class D:
+    def __init__(self, c: C):
+        self.f = f
+        self.g = c.m
+        self.h = C.m
+
+def test(o: D):
+    reveal_type(o.f) # E: [T](x: T) -> T
+    assert_type(o.f(1), int)
+
+    reveal_type(o.g) # E: [U](self: C, x: U) -> U
+    assert_type(o.g(1), int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2812
+testcase!(
+    test_bound_overload_assigned_to_attribute,
+    r#"
+from typing import assert_type
+
+class ThemeStack:
+    def __init__(self) -> None:
+        self._entries: list[dict[str, str]] = [{}]
+        self.get = self._entries[-1].get
+
+def test(stack: ThemeStack) -> None:
+    assert_type(stack.get("theme"), str | None)
+    assert_type(stack.get("theme", "fallback"), str)
+"#,
+);
+
+testcase!(
+    test_generic_function_as_closure_default_arg,
+    r#"
+import bisect
+
+class Worker:
+    def __init__(self) -> None:
+        self.heartbeats: list[float] = []
+        self.event = self._create_event_handler()
+
+    def _create_event_handler(self):
+        heartbeats = self.heartbeats
+
+        def event(
+            timestamp: float | None = None,
+            insort = bisect.insort,
+        ) -> None:
+            if timestamp is not None:
+                insort(heartbeats, timestamp)
+
+        return event
+"#,
+);
+
 testcase!(
     test_attr_unknown,
     r#"
@@ -1118,7 +1215,6 @@ class Namespace:
             return "test"
         return Op()
 x = Namespace().some_op.default # E:  Object of class `str` has no attribute `default
-
 "#,
 );
 
@@ -1136,7 +1232,7 @@ class C:
         if orig_func is None:
             return super().__new__(cls)
 def f():
-    with C():  # E: `NoneType` has no attribute `__enter__`  # E: `NoneType` has no attribute `__exit__`
+    with C():
         pass
     "#,
 );
@@ -1437,6 +1533,95 @@ class B:
     "#,
 );
 
+testcase!(
+    test_private_attribute_with_getattr,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __getattr__(self, attr: str) -> str:
+        return attr
+
+def main(f: Foo) -> None:
+    assert_type(f._foo, str)
+    assert_type(f.__foo, str)
+    "#,
+);
+
+testcase!(
+    test_private_attribute_with_getattr_and_explicit_field,
+    r#"
+class A:
+    __secret: int = 0
+    def __getattr__(self, name: str) -> str: ...
+
+class B:
+    def leak(self, a: A):
+        return a.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+    "#,
+);
+
+testcase!(
+    test_private_attribute_with_getattribute,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __getattribute__(self, name: str) -> str:
+        return name
+
+def main(f: Foo) -> None:
+    assert_type(f.__bar, str)
+    "#,
+);
+
+testcase!(
+    test_private_attribute_with_inherited_getattr,
+    r#"
+from typing import assert_type
+
+class Base:
+    def __getattr__(self, name: str) -> str:
+        return name
+
+class Child(Base):
+    pass
+
+def main(c: Child) -> None:
+    assert_type(c.__foo, str)
+    "#,
+);
+
+testcase!(
+    test_private_attribute_inherited_field_with_child_getattr,
+    r#"
+class Parent:
+    __secret: int = 0
+
+class Child(Parent):
+    def __getattr__(self, name: str) -> str: ...
+
+class External:
+    def leak(self, c: Child):
+        return c.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+    "#,
+);
+
+testcase!(
+    test_private_attribute_mixed_union_with_getattr,
+    r#"
+class A:
+    __secret: int = 0
+
+class Dyn:
+    def __getattr__(self, name: str) -> str: ...
+
+class External:
+    def leak(self, x: A | Dyn):
+        return x.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+    "#,
+);
+
 // We allow __attr access on modules, since name mangling only occurs on attributes of classes.
 testcase!(
     test_module_attr_is_not_private,
@@ -1567,6 +1752,21 @@ ty(TD).mro() # E: Expr::attr_infer_for_type attribute base undefined
 );
 
 testcase!(
+    test_attribute_access_on_type_bare_typeddict_special_form,
+    r#"
+from typing import TypedDict
+# `type[TypedDict]` is invalid as an annotation. After the error is reported,
+# the inner `TypedDict` should be recovered to `Any` so attribute access on
+# `cls` does not trigger an internal error. Value-position access on bare
+# `TypedDict` is unaffected and should still error.
+def f(cls: type[TypedDict]) -> None:  # E: `TypedDict` is not allowed in this context
+    cls.__annotations__
+    cls.__name__
+    cls.__bases__
+"#,
+);
+
+testcase!(
     test_type_magic_dunder_compare,
     r#"
 def test(x: type[int], y: type[int]) -> None:
@@ -1641,6 +1841,23 @@ class A[T]:
 reveal_type(A.f) # E: revealed type: Overload[\n  (x: None = ...) -> None\n  [T](x: T) -> T\n]
 assert_type(A.f(), None)
 assert_type(A.f(0), int)
+    "#,
+);
+
+testcase!(
+    test_parametrized_class_init_call,
+    r#"
+from typing import reveal_type
+
+class Foo[T]:
+    def __init__(self, /) -> None:
+        pass
+
+class Bar[S](Foo[S]):
+    def __init__(self, /) -> None:
+        Foo[S].__init__(self)
+
+Foo[int].__init__(Foo[int]())
     "#,
 );
 
@@ -1756,8 +1973,20 @@ testcase!(
     r#"
 from typing import ClassVar, Final
 class C:
-    x: ClassVar[Final[int]] = 42
+    x: ClassVar[Final[int]] = 42  # E: `Final` may not be nested inside `ClassVar`
 C.x = 43  # E: This field is marked as Final
+    "#,
+);
+
+testcase!(
+    test_classvar_final_nesting,
+    r#"
+from typing import ClassVar, Final
+class C:
+    x: Final[ClassVar[int]] = 1  # E: `ClassVar` may not be nested inside `Final`
+    y: ClassVar[Final[int]] = 2  # E: `Final` may not be nested inside `ClassVar`
+    z: Final[int] = 3
+    w: ClassVar[int] = 4
     "#,
 );
 
@@ -2273,6 +2502,54 @@ def f(a: A):
 );
 
 testcase!(
+    test_promote_literalstring_method_attribute,
+    r#"
+from typing import Literal, assert_type
+
+class SessionMiddleware:
+    def __init__(
+        self, same_site: Literal["lax", "strict", "none"] = "lax", domain: str | None = None
+    ) -> None:
+        self.security_flags = "httponly; samesite=" + same_site
+        if domain is not None:
+            self.security_flags += f"; domain={domain}"
+
+def f(middleware: SessionMiddleware):
+    assert_type(middleware.security_flags, str)
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_addition_of_explicit_literal_strings,
+    r#"
+from typing import LiteralString, assert_type
+
+class C:
+    def __init__(self, x: LiteralString, y: LiteralString) -> None:
+        self.z = x + y
+
+def f(c: C):
+    assert_type(c.z, LiteralString)
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_augmented_addition_of_explicit_literal_strings,
+    r#"
+from typing import LiteralString, assert_type
+
+class C:
+    def __init__(self, x: LiteralString, y: LiteralString) -> None:
+        z = x
+        z += y
+        self.attr = z
+
+def f(c: C):
+    assert_type(c.attr, LiteralString)
+    "#,
+);
+
+testcase!(
     test_top_level_anonymous_typeddict,
     r#"
 from typing import NotRequired, TypedDict
@@ -2314,4 +2591,32 @@ class B(A[None]):
         if not foo:
             pass
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/417
+testcase!(
+    test_classmethod_inherited_no_missing_attribute,
+    r#"
+class Base:
+    @classmethod
+    def from_pretrained(cls, name: str) -> "Base":
+        return cls()
+
+class Derived(Base):
+    pass
+
+Derived.from_pretrained("model")
+"#,
+);
+
+testcase!(
+    test_classmethod_vararg_does_not_bind_self,
+    r#"
+class C:
+    @classmethod
+    def create(*args, **kwargs): ...
+
+C.create(42)
+C.create(a=42)
+"#,
 );

@@ -59,8 +59,14 @@ fn read_manifest_file_data(data: &[u8]) -> anyhow::Result<Vec<ManifestItem>> {
                 // We deliberately stick with relative paths, as sometimes we are run on RE,
                 // so the absolute path on RE will not match the users absolute path.
                 let path = PathBuf::from(raw_item[1].clone());
-                if path.iter().any(|x| x == "pyre_buck_typeshed") {
-                    // We sometimes get Pyre typeshed files in the manifest, which don't match the versions we expect.
+                if path
+                    .iter()
+                    .any(|x| x == "pyre_buck_typeshed" || x == "__flattened__")
+                {
+                    // Filter out Pyre typeshed files from the manifest. These don't
+                    // match the versions Pyrefly expects and cause spurious errors.
+                    // This catches both the default target (pyre_buck_typeshed:flattened)
+                    // and user overrides (e.g. tools/pyre/stubs/typeshed/typeshed:flattened).
                     // Once Pyre is retired, we can remove this filtering.
                     continue;
                 }
@@ -133,18 +139,27 @@ pub struct BuckCheckSourceDatabase {
     /// See <https://github.com/facebook/buck2/blob/03ed62f85e7cc487fd505ad097ef9f260fae2522/prelude/python/tools/wheel.py#L196C1-L198C1>.
     implicit_init: SmallMap<ModuleName, ModulePath>,
     sys_info: SysInfo,
+    check_dependencies: bool,
 }
 
 impl SourceDatabase for BuckCheckSourceDatabase {
     fn modules_to_check(&self) -> Vec<Handle> {
-        self.sources
-            .iter()
-            .flat_map(|(name, paths)| {
-                paths
-                    .iter()
-                    .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
-            })
-            .collect()
+        let sources = self.sources.iter().flat_map(|(name, paths)| {
+            paths
+                .iter()
+                .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
+        });
+        if self.check_dependencies {
+            sources
+                .chain(self.dependencies.iter().flat_map(|(name, paths)| {
+                    paths
+                        .iter()
+                        .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
+                }))
+                .collect()
+        } else {
+            sources.collect()
+        }
     }
 
     fn lookup(
@@ -201,6 +216,7 @@ impl BuckCheckSourceDatabase {
         dependency_manifests: &[PathBuf],
         typeshed_manifests: &[PathBuf],
         sys_info: SysInfo,
+        check_dependencies: bool,
     ) -> anyhow::Result<Self> {
         let sources = read_manifest_files(source_manifests)?;
         let dependencies = read_manifest_files(dependency_manifests)?;
@@ -210,6 +226,7 @@ impl BuckCheckSourceDatabase {
             dependencies,
             typeshed,
             sys_info,
+            check_dependencies,
         ))
     }
 
@@ -218,6 +235,7 @@ impl BuckCheckSourceDatabase {
         dependency_items: Vec<ManifestItem>,
         typeshed_items: Vec<ManifestItem>,
         sys_info: SysInfo,
+        check_dependencies: bool,
     ) -> Self {
         let mut implicit_init = SmallMap::new();
         for x in source_items
@@ -241,6 +259,7 @@ impl BuckCheckSourceDatabase {
             ),
             implicit_init,
             sys_info,
+            check_dependencies,
         }
     }
 }
@@ -327,6 +346,7 @@ mod tests {
                 module_path: baz_path.dupe(),
             }],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -377,6 +397,7 @@ mod tests {
             ],
             vec![],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -418,6 +439,7 @@ mod tests {
             ],
             vec![],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -480,6 +502,7 @@ mod tests {
                 },
             ],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("a")),
@@ -519,6 +542,7 @@ mod tests {
             vec![],
             vec![],
             SysInfo::default(),
+            false,
         );
         let res = source_db.lookup(ModuleName::from_str("foo"), None, None);
         assert_eq!(res.unwrap().as_path().to_str().unwrap(), "/root/foo");

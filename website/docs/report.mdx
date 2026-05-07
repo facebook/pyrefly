@@ -28,11 +28,28 @@ pyrefly report path/to/file.py
 pyrefly report path/to/directory/
 ```
 
-The command outputs a JSON object keyed by file path. For each file, the report includes:
+The command outputs a JSON object with two top-level keys: `files` (per-file reports) and `summary` (aggregate statistics). For each file, the report includes:
 
 - **Line count** — the total number of lines in the file.
 - **Functions** — every function and method, including its fully-qualified name, parameter annotations, and return annotation.
 - **Classes** — every class, along with a list of incompletely-annotated attributes (including those inherited from base classes).
 - **Suppressions** — every `# pyrefly: ignore[...]` comment, with the suppressed error codes.
+- **Annotation completeness** — the percentage of functions that are fully annotated (0.0–100.0).
+- **Type completeness** — the percentage of fully-annotated functions whose resolved types contain no `Any` (0.0–100.0).
+
+Each function entry also includes `is_type_known` (whether the function's resolved types all contain no `Any`) and `is_return_type_known`. Each parameter includes `is_type_known`.
+
+The `summary` object provides aggregate statistics across all files:
+
+- **total_files** — number of files analyzed.
+- **total_functions** — total functions across all files.
+- **fully_annotated_functions** — number of functions with complete annotations.
+- **type_complete_functions** — number of fully-annotated functions whose resolved types contain no `Any`.
+- **aggregate_annotation_completeness** — overall annotation completeness percentage, weighted by function count (not averaged per file).
+- **aggregate_type_completeness** — percentage of fully-annotated functions that are type-complete (denominator is `fully_annotated_functions`, not `total_functions`).
+
+A function is considered **fully annotated** if it has a return type annotation and all parameters have type annotations. The first parameter is exempt if it is named `self` or `cls`.
+
+A function is considered **type-complete** only if it is fully annotated AND all of its resolved types (return type and parameter types) contain no `Any`. Type-complete functions are always a subset of fully-annotated functions. Tracking both metrics helps you first achieve full annotation coverage, then progressively replace `Any` with more precise types.
 
 You can pipe the output to other tools (e.g. `jq`) or ingest it into dashboards to track annotation coverage over time.

@@ -20,6 +20,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
@@ -92,7 +93,7 @@ impl Incremental {
         Self {
             data: data.dupe(),
             require: None,
-            state: State::new(ConfigFinder::new_constant(config)),
+            state: State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT),
             to_set: Vec::new(),
         }
     }
@@ -112,8 +113,12 @@ impl Incremental {
 
     fn unchecked(&mut self, want: &[&str]) -> IncrementalResult {
         let subscriber = TestSubscriber::new();
+        // Transitive deps default to `Require::Exports` so they stay
+        // lazy (matching demand-driven solving in real-world usage).
+        // Tests that need a higher level for transitive deps can set
+        // `i.require` to override.
         let mut transaction = self.state.new_committable_transaction(
-            self.require.unwrap_or(Require::Errors),
+            self.require.unwrap_or(Require::Exports),
             Some(Box::new(subscriber.dupe())),
         );
         for (file, contents) in mem::take(&mut self.to_set) {
@@ -134,11 +139,12 @@ impl Incremental {
             &handles,
             self.require.unwrap_or(Require::Everything),
             None,
+            None,
         );
         let loaded = Self::USER_FILES.map(|x| self.handle(x));
         let errors = self.state.transaction().get_errors(&loaded);
         let project_root = PathBuf::new();
-        print_errors(project_root.as_path(), &errors.collect_errors().shown);
+        print_errors(project_root.as_path(), &errors.collect_display_errors());
 
         let mut changed = Vec::new();
         for (x, (count, _)) in subscriber.finish() {
@@ -226,7 +232,10 @@ fn test_incremental_cyclic() {
     let mut i = Incremental::new();
     i.set("foo", "import bar; x = 1; y = bar.x");
     i.set("bar", "import foo; x = True; y = foo.x");
-    i.check(&["foo"], &["foo", "bar"]);
+    // Initial check fully checks both modules so deps get recorded
+    // both ways; subsequent checks rely on those recorded deps to
+    // drive invalidation.
+    i.check(&["foo", "bar"], &["foo", "bar"]);
     i.set("foo", "import bar; x = 1; y = bar.x # still");
     i.check(&["foo"], &["foo"]);
     i.set("foo", "import bar; x = 'test'; y = bar.x");
@@ -344,7 +353,7 @@ fn test_error_clearing_on_dependency() {
         .collect_errors();
 
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected errors before fixing the dependency"
     );
 
@@ -357,7 +366,7 @@ fn test_error_clearing_on_dependency() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after_fix.shown.is_empty(),
+        errors_after_fix.ordinary.is_empty(),
         "Expected errors after fixing the dependency"
     );
 }
@@ -382,7 +391,7 @@ fn test_error_clearing_on_dependency_star_import() {
         .collect_errors();
 
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected errors before fixing the dependency"
     );
 
@@ -395,7 +404,7 @@ fn test_error_clearing_on_dependency_star_import() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after_fix.shown.is_empty(),
+        errors_after_fix.ordinary.is_empty(),
         "Expected no errors after fixing the dependency"
     );
 }
@@ -415,17 +424,18 @@ fn test_failed_import_invalidation_via_rdeps() {
     i.set("bar", "from foo import y"); // bar tries to import y - FAILS
     i.set("main", "import bar"); // main imports bar
 
-    // Initial check - all modules computed
-    i.unchecked(&["main"]);
+    // Initial check fully checks bar so its failed import gets
+    // registered for `invalidate_failed_imports_from` to find later.
+    i.unchecked(&["main", "bar"]);
 
     // Now foo exports `y` - bar's failed import should now succeed
     i.set("foo", "y = 2");
 
     // Only request main, NOT bar directly.
-    // Before the fix: bar wouldn't be invalidated because:
+    // bar wouldn't be invalidated through normal rdeps because:
     //   - bar is not in foo's rdeps (the import failed)
     //   - bar is not in the `want` list
-    // After the fix: invalidate_failed_imports_from scans for failed imports and invalidates bar
+    // But invalidate_failed_imports_from scans for failed imports and invalidates bar.
     let res = i.unchecked(&["main"]);
 
     // bar should be recomputed because its failed import now succeeds
@@ -442,13 +452,16 @@ fn test_stale_class() {
     i.set("foo", "class C: x: int = 1");
     i.set("bar", "from foo import C; c = C");
     i.set("main", "from bar import c; v = c.x");
-    i.check(&["main"], &["main", "foo", "bar"]);
+    // Initial check fully checks bar so its `c = C` binding gets
+    // solved and a TypeEq dep on `foo::C` is recorded; that dep is
+    // what drives bar's invalidation when `C` is removed.
+    i.check(&["main", "bar"], &["main", "foo", "bar"]);
 
     i.set("foo", "");
     i.set("main", "from bar import c; v = c.x # hello");
     let res = i.unchecked(&["main", "foo"]);
     res.check_recompute_dedup(&["main", "foo", "bar"]);
-    assert_eq!(res.errors.collect_errors().shown.len(), 1);
+    assert_eq!(res.errors.collect_errors().ordinary.len(), 1);
 }
 
 #[test]
@@ -505,7 +518,7 @@ fn test_dueling_typevar() {
     i.set("bar", "from foo import T");
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
     );
     i.check(&["main"], &["main", "foo", "bar"]);
 
@@ -515,7 +528,7 @@ fn test_dueling_typevar() {
     // Observe that foo.T and bar.T are no longer equal.
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x # E: `TypeVar[T]` is not assignable to `TypeVar[T]`",
+        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: `TypeVar[T]` is not assignable to `TypeVar[T]`  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
     );
     i.check(&["main"], &["main"]);
 }
@@ -597,6 +610,28 @@ fn test_fine_grained_unrelated_export_no_recompute() {
     i.check(&["main"], &["foo"]);
 }
 
+/// Changing an export's type (not its existence) shouldn't invalidate
+/// consumers whose only edge on it is an `export_exists` check.
+///
+/// `bar`'s `from foo import Foo` calls `export_exists(foo, "Foo")`
+/// during binding. `main` only imports `value` from `bar`, so `bar`'s
+/// `Binding::Import(foo, Foo)` is never solved and no TypeEq dep on
+/// `foo::Foo` is recorded — leaving the `export_exists` call as the
+/// only edge. Foo's type changing should not invalidate bar.
+#[test]
+fn test_export_exists_is_existence_level() {
+    let mut i = Incremental::new();
+    i.set("foo", "Foo: int = 1");
+    i.set("bar", "from foo import Foo\nvalue: int = 42");
+    i.set("main", "from bar import value\nresult = value");
+    // `foo` is also requested so its TypeEq changes get diffed at
+    // Solutions level — otherwise the change-detection machinery
+    // never fires.
+    i.check(&["main", "foo"], &["main", "foo", "bar"]);
+
+    i.set("foo", "Foo: str = 'changed'");
+    i.check(&["foo"], &["foo"]);
+}
 /// Test fine-grained dependency tracking: changing the imported export SHOULD
 /// trigger recomputation.
 #[test]
@@ -688,7 +723,7 @@ fn test_transitive_export_addition_clears_error() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected errors before foo exports x"
     );
 
@@ -703,9 +738,9 @@ fn test_transitive_export_addition_clears_error() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after_fix.shown.is_empty(),
+        errors_after_fix.ordinary.is_empty(),
         "Expected no errors after foo exports x, but got: {:?}",
-        errors_after_fix.shown
+        errors_after_fix.ordinary
     );
 }
 
@@ -818,7 +853,8 @@ fn test_overlapping_exports_cycle_detected() {
     // values that depend on each other.
     i.set("foo", "import bar\nx: int = 1\ny = bar.x");
     i.set("bar", "import foo\nx: int = 2\ny = foo.x");
-    i.check(&["foo"], &["foo", "bar"]);
+    // Fully check both modules so the cycle deps get recorded.
+    i.check(&["foo", "bar"], &["foo", "bar"]);
 
     // Changing `x` in foo should propagate to bar (which uses foo.x),
     // and potentially back to foo (if bar.x changes). The same export `x`
@@ -1022,7 +1058,11 @@ fn test_class_field_removal_propagates() {
         "main",
         "from bar import B\ndef f(b: B) -> int:\n    return b.a.y # E: Object of class `A` has no attribute `y`",
     );
-    i.check(&["main"], &["main", "foo", "bar"]);
+    // Only foo and main recompute: foo because it changed, main
+    // because it has a `Class` dep on `foo::A` (it queries `A.y`).
+    // bar doesn't need to be recomputed — its `class B: a: A`
+    // binding doesn't depend on A's field set, only on `KeyExport(A)`.
+    i.check(&["main"], &["foo", "main"]);
 }
 
 /// Test that method signature changes propagate through the dependency chain.
@@ -1155,12 +1195,15 @@ fn test_four_level_class_field_chain() {
     i.check_ignoring_expectations(&["main"], &["main", "foo", "bar"]);
 }
 
-/// Test that star import properly invalidates on any export change.
+/// Test that star import invalidates when the export *set* changes.
 ///
-/// Modules using `from X import *` should be invalidated when ANY export
-/// in X changes, including class-related exports.
+/// `from X import *` records a wildcard dependency on X's export set:
+/// adding or removing an exported name changes the set and invalidates
+/// the importer. Changes to the *content* of an export that's already
+/// in the set don't invalidate via the wildcard — only via that
+/// specific name's dep, if it's used.
 #[test]
-fn test_star_import_invalidates_on_class_change() {
+fn test_star_import_invalidates_on_export_set_change() {
     let mut i = Incremental::new();
 
     // bar uses star import from foo
@@ -1172,15 +1215,24 @@ fn test_star_import_invalidates_on_class_change() {
     );
     i.check(&["main"], &["main", "foo", "bar"]);
 
-    // Change B (not A) - bar should still be recomputed because of star import
+    // Change B's *content* (not its existence). bar doesn't actually
+    // use B, so the wildcard dep doesn't fire and bar is not
+    // recomputed; main is also unaffected.
     i.set(
         "foo",
         "class A:\n    x: int = 1\nclass B:\n    y: str = 'changed'",
     );
-    // bar should be recomputed even though it only uses A, because star import
-    // means it depends on all exports
-    // Main should not be recomputed because it doesn't use B
-    i.check_ignoring_expectations(&["main"], &["foo", "bar"]);
+    i.check_ignoring_expectations(&["main"], &["foo"]);
+
+    // Add a new export to foo. The wildcard *set* changes, which
+    // invalidates bar (via its wildcard dep). bar's exports
+    // consequently gain `D`, which is an existence change in bar's
+    // exports — so main is also invalidated.
+    i.set(
+        "foo",
+        "class A:\n    x: int = 1\nclass B:\n    y: str = 'changed'\nclass D:\n    z: int = 3",
+    );
+    i.check_ignoring_expectations(&["main"], &["foo", "bar", "main"]);
 }
 
 /// Test that enum member changes propagate correctly.
@@ -1253,7 +1305,7 @@ fn test_mixed_import_failed_export_invalidated() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error before foo exports y"
     );
 
@@ -1265,7 +1317,7 @@ fn test_mixed_import_failed_export_invalidated() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected error after foo exports y"
     );
 }
@@ -1499,15 +1551,15 @@ fn test_dunder_all_missing_name_error_clears() {
         .get_errors([&foo_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when __all__ lists undefined name"
     );
     assert!(
-        errors.shown.iter().any(|e| e
+        errors.ordinary.iter().any(|e| e
             .msg()
             .contains("Name `test` is listed in `__all__` but is not defined in the module")),
         "Expected error message about missing __all__ name, but got: {:?}",
-        errors.shown.iter().map(|e| e.msg()).collect::<Vec<_>>()
+        errors.ordinary.iter().map(|e| e.msg()).collect::<Vec<_>>()
     );
 
     // Add the missing name - error should disappear
@@ -1520,9 +1572,9 @@ fn test_dunder_all_missing_name_error_clears() {
         .get_errors([&foo_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after defining the missing name, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1556,16 +1608,16 @@ fn test_dunder_all_star_import_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when using name not in __all__"
     );
     assert!(
         errors
-            .shown
+            .ordinary
             .iter()
             .any(|e| e.msg().contains("Could not find name `y`")),
         "Expected error about missing name y, but got: {:?}",
-        errors.shown.iter().map(|e| e.msg()).collect::<Vec<_>>()
+        errors.ordinary.iter().map(|e| e.msg()).collect::<Vec<_>>()
     );
 
     // Update __all__ to include y - error should disappear
@@ -1578,9 +1630,9 @@ fn test_dunder_all_star_import_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y to __all__, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1609,7 +1661,7 @@ fn test_name_existence_change_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when importing non-existent name"
     );
 
@@ -1624,9 +1676,9 @@ fn test_name_existence_change_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y to foo, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1656,7 +1708,7 @@ fn test_name_not_in_dunder_all_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when importing non-existent name"
     );
 
@@ -1671,9 +1723,9 @@ fn test_name_not_in_dunder_all_invalidates_importer() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y to foo (even though y is not in __all__), but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1752,12 +1804,12 @@ fn test_star_import_unused_variable_type_change() {
     i.check_ignoring_expectations(&["bar"], &["foo", "bar"]);
 }
 
-/// Test that star import errors clear when a missing name is added to the module.
+/// Test that star imports don't surface missing-name errors when __all__ is invalid.
 ///
-/// When `__all__` lists a name that doesn't exist, star importers get an error.
-/// Adding the missing definition should clear the error.
+/// When `__all__` lists a name that doesn't exist, the error should be reported
+/// on the `__all__` definition, not on star-importers.
 #[test]
-fn test_dunder_all_star_import_missing_definition_error_clears() {
+fn test_dunder_all_star_import_missing_definition_no_import_error() {
     let mut i = Incremental::new();
 
     // foo has __all__ = ["x", "y"] but only defines x - y is missing
@@ -1765,27 +1817,25 @@ fn test_dunder_all_star_import_missing_definition_error_clears() {
         "foo",
         "x = 1\n__all__ = [\"x\", \"y\"] # E: Name `y` is listed in `__all__` but is not defined",
     );
-    // main does star import and tries to use y - should error
-    i.set(
-        "main",
-        "from foo import * # E: Could not import `y` from `foo`\nz = y",
-    );
+    // main does star import and tries to use y - should not error here
+    i.set("main", "from foo import *\nz = y");
     i.check(&["main", "foo"], &["main", "foo"]);
 
     let main_handle = i.handle("main");
 
-    // Verify there's an error
+    // Verify there's no error in the importing module
     let errors = i
         .state
         .transaction()
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
-        "Expected error when using name listed in __all__ but not defined"
+        errors.ordinary.is_empty(),
+        "Expected no errors in star importer, but got: {:?}",
+        errors.ordinary
     );
 
-    // Add the missing definition - error should disappear
+    // Add the missing definition - still no errors
     i.set("foo", "x = 1\ny = 2\n__all__ = [\"x\", \"y\"]");
     i.check_ignoring_expectations(&["main"], &["foo", "main"]);
 
@@ -1795,9 +1845,9 @@ fn test_dunder_all_star_import_missing_definition_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding y definition, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 
@@ -1827,7 +1877,7 @@ fn test_transitive_star_import_missing_name_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        !errors.shown.is_empty(),
+        !errors.ordinary.is_empty(),
         "Expected error when using undefined name via transitive star import"
     );
 
@@ -1841,9 +1891,9 @@ fn test_transitive_star_import_missing_name_error_clears() {
         .get_errors([&main_handle])
         .collect_errors();
     assert!(
-        errors_after.shown.is_empty(),
+        errors_after.ordinary.is_empty(),
         "Expected no errors after adding x to foo, but got: {:?}",
-        errors_after.shown
+        errors_after.ordinary
     );
 }
 

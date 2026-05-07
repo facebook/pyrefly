@@ -33,8 +33,11 @@ pub fn print_panic(info: &PanicHookInfo<'_>) {
     static PANIC_LOCK: Once = Once::new();
 
     PANIC_LOCK.call_once(|| {
+        // Use {:#} (alternate format) to print full backtraces including
+        // instruction pointer addresses. The default short format omits
+        // addresses, which makes backtraces from stripped binaries blank.
         error!(
-            "Thread panicked, shutting down: {info}\nBacktrace:\n{}",
+            "Thread panicked, shutting down: {info}\nBacktrace:\n{:#}",
             Backtrace::force_capture()
         );
 

@@ -25,6 +25,7 @@ use ruff_text_size::TextSize;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::selection_anchor;
 use crate::binding::binding::Key;
+use crate::binding::bindings::Bindings;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp::LocalRefactorCodeAction;
@@ -113,12 +114,12 @@ fn import_from_module_text(import_from: &StmtImportFrom) -> String {
 
 fn collect_star_imported_names(
     ast: &ModModule,
-    bindings: &crate::binding::bindings::Bindings,
+    bindings: &Bindings,
     module_name: ModuleName,
     star_range: TextRange,
 ) -> Vec<String> {
     struct NameCollector<'a> {
-        bindings: &'a crate::binding::bindings::Bindings,
+        bindings: &'a Bindings,
         module_name: ModuleName,
         star_range: TextRange,
         names: BTreeSet<String>,

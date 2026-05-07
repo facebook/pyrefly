@@ -50,7 +50,7 @@ $ echo "x: str = 0" > $TMPDIR/oops.py && echo "errors = { bad-assignment = false
 
 ```scrut {output_stream: stderr}
 $ mkdir $TMPDIR/bad_config && touch $TMPDIR/bad_config/empty.py && echo "oops oops" > $TMPDIR/bad_config/pyrefly.toml && cd $TMPDIR/bad_config && $PYREFLY check
- INFO Checking project configured at `*/pyrefly.toml` (glob)
+ WARN Config at `*/pyrefly.toml` failed to parse, checking with default configuration (glob)
 ERROR */pyrefly.toml: TOML parse error* (glob)
   |
 1 | oops oops
@@ -83,7 +83,7 @@ Fatal configuration error
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check -c $TMPDIR/bad_config/pyrefly.toml
- INFO Checking project configured at `*/pyrefly.toml` (glob)
+ WARN Config at `*/pyrefly.toml` failed to parse, checking with default configuration (glob)
 ERROR */pyrefly.toml: TOML parse error* (glob)
   |
 1 | oops oops
@@ -201,6 +201,17 @@ ERROR *main.py* ?bad-assignment? (glob)
 ```scrut {output_stream: stdout}
 $ echo "disable-project-excludes-heuristics = true" > $TMPDIR/disable_excludes_heuristics/pyrefly.toml && \
 > PYREFLY_CONFIG="$TMPDIR/disable_excludes_heuristics/pyrefly.toml" $PYREFLY check $TMPDIR/disable_excludes_heuristics/.src/main.py --output-format=min-text
+ERROR *main.py* ?bad-assignment? (glob)
+[1]
+```
+
+## Project inside hidden directory ancestor still reports errors
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/.hidden_workspace/project && \
+> echo "x: str = 1" > $TMPDIR/.hidden_workspace/project/main.py && \
+> touch $TMPDIR/.hidden_workspace/project/pyrefly.toml && \
+> $PYREFLY check --output-format=min-text $TMPDIR/.hidden_workspace/project
 ERROR *main.py* ?bad-assignment? (glob)
 [1]
 ```

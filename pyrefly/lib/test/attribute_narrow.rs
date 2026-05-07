@@ -91,6 +91,28 @@ def f(foo: Foo):
 "#,
 );
 
+testcase!(
+    test_dunder_class_attribute_narrow,
+    r#"
+from typing import assert_type
+def f(x: int | str):
+    if x.__class__ is int:
+        assert_type(x, int)
+    else:
+        assert_type(x, int | str)
+    if x.__class__ == int:
+        assert_type(x, int)
+def g(x: int | str):
+    assert x.__class__ is int
+    assert_type(x, int)
+def h(x: bool | str):
+    if x.__class__ is bool:
+        assert_type(x, bool)
+    else:
+        assert_type(x, str)
+"#,
+);
+
 // The expected behavior when narrowing an invalid attribute chain is to produce
 // type errors at the narrow site, but apply the narrowing downstream
 // (motivation: being noisy downstream could be quite frustrating for gradually
@@ -604,5 +626,22 @@ def test(c: C):
         assert_type(c.x, Any)  # E: Object of class `C` has no attribute `x`
     if getattr(c, "x", 1) != 1:
         assert_type(c.x, Any)  # E: Object of class `C` has no attribute `x`
+    "#,
+);
+
+testcase!(
+    test_hasattr_narrowing_preserves_attr_type,
+    r#"
+from typing import assert_type, Any
+
+class A:
+    x: int
+class B:
+    pass
+
+def f(v: A | B):
+    if hasattr(v, "x"):
+        # The facet should preserve `int` from A.x, not widen to bare Any.
+        assert_type(v.x, int | Any)
     "#,
 );

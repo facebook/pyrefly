@@ -192,6 +192,10 @@ impl ModulePath {
         self.style() == ModuleStyle::Interface
     }
 
+    pub fn is_memory(&self) -> bool {
+        matches!(self.0, ModulePathDetails::Memory(_))
+    }
+
     pub fn is_notebook(&self) -> bool {
         self.as_path().extension() == Some("ipynb".as_ref())
     }
@@ -279,6 +283,19 @@ impl ModulePath {
                 ModulePath::new(ModulePathDetails::BundledThirdParty(*path))
             }
         }
+    }
+
+    /// Returns true if this module comes from stubs bundled with Pyrefly
+    /// (typeshed stdlib, typeshed third-party, or custom third-party stubs).
+    /// Bundled modules resolve identically regardless of the importing file's
+    /// origin, so their results can be cached origin-agnostically.
+    pub fn is_bundled(&self) -> bool {
+        matches!(
+            self.0,
+            ModulePathDetails::BundledTypeshed(_)
+                | ModulePathDetails::BundledTypeshedThirdParty(_)
+                | ModulePathDetails::BundledThirdParty(_)
+        )
     }
 
     pub fn details(&self) -> &ModulePathDetails {

@@ -301,6 +301,11 @@ impl TypeInfo {
         }
     }
 
+    /// Returns true if this TypeInfo has any facet narrows.
+    pub fn has_facets(&self) -> bool {
+        self.facets.is_some()
+    }
+
     pub fn ty(&self) -> &Type {
         &self.ty
     }

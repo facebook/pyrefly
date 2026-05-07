@@ -20,8 +20,12 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::callable::CallArg;
+use crate::alt::callable::CallKeyword;
 use crate::alt::class::variance_inference::VarianceMap;
+use crate::alt::overload::ArgsExpander;
 use crate::binding::binding::KeyVariance;
+use crate::error::collector::ErrorCollector;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
 use crate::types::callable::Required;
@@ -177,5 +181,17 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn untype_alias(self, ta: &TypeAliasData) -> Type {
         self.0.untype_alias(ta)
+    }
+
+    pub fn args_expander(
+        self,
+        posargs: Vec<CallArg<'a>>,
+        keywords: Vec<CallKeyword<'a>>,
+    ) -> ArgsExpander<'a, Ans> {
+        ArgsExpander::new(posargs, keywords, self.0)
+    }
+
+    pub fn error_swallower(self) -> ErrorCollector {
+        self.0.error_swallower()
     }
 }

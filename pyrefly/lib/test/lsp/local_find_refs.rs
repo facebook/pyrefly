@@ -14,9 +14,14 @@ use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
 
-fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
+fn get_test_report(
+    state: &State,
+    handle: &Handle,
+    position: TextSize,
+    include_declaration: bool,
+) -> String {
     let transaction = state.transaction();
-    let ranges = transaction.find_local_references(handle, position);
+    let ranges = transaction.find_local_references(handle, position, include_declaration);
     let module_info = transaction.get_module_info(handle).unwrap();
     format!(
         "References:\n{}",
@@ -34,7 +39,9 @@ fn no_references_test() {
 # ^
 
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -58,7 +65,9 @@ foo + 4 + foo
 def ff():
   foo = 4
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -138,7 +147,9 @@ class ExtendsBase(MyClass):
 
 ExtendsBase().x
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -193,7 +204,9 @@ class MyClass:
 obj = MyClass()
 print(obj.attribute)
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -222,7 +235,9 @@ try:
 except Exception:
   foo
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -249,7 +264,9 @@ class Foo:
     
 Foo()
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -272,7 +289,9 @@ xyz = "test"
 if isinstance(xyz, int):
     print(xyz)
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -303,7 +322,9 @@ class C:
         return self.f()
         #           ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -340,7 +361,9 @@ class Concrete(C):
     def f(self) -> str:
         return "test"
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -367,7 +390,9 @@ class Concrete(C):
     #   ^
         return "test"
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -399,7 +424,9 @@ class Concrete2(C):
         return "test"
 
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -422,7 +449,9 @@ xy = 5
 #^
 xy = xy + 1
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
     assert_eq!(
         r#"
 # main.py
@@ -436,5 +465,53 @@ References:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn include_declaration() {
+    let code = r#"
+xy = 1
+#^
+xy + xy
+"#;
+    let with_declaration =
+        get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+            get_test_report(state, handle, position, true)
+        });
+    assert_eq!(
+        r#"
+# main.py
+2 | xy = 1
+     ^
+References:
+2 | xy = 1
+    ^^
+4 | xy + xy
+    ^^
+4 | xy + xy
+         ^^
+"#
+        .trim(),
+        with_declaration.trim(),
+    );
+
+    let without_declaration =
+        get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+            get_test_report(state, handle, position, false)
+        });
+    assert_eq!(
+        r#"
+# main.py
+2 | xy = 1
+     ^
+References:
+4 | xy + xy
+    ^^
+4 | xy + xy
+         ^^
+"#
+        .trim(),
+        without_declaration.trim(),
     );
 }

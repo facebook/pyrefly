@@ -460,7 +460,17 @@ testcase!(
     test_export_all_wrongly,
     env_export_all_wrongly(),
     r#"
-from foo import bad_definition  # E: Could not import `bad_definition` from `foo`
+from foo import bad_definition
+x = bad_definition
+"#,
+);
+
+testcase!(
+    test_export_all_wrongly_missing_other_name,
+    env_export_all_wrongly(),
+    r#"
+from foo import missing_definition  # E: Could not import `missing_definition` from `foo`
+x = missing_definition
 "#,
 );
 
@@ -468,7 +478,7 @@ testcase!(
     test_export_all_wrongly_star,
     env_export_all_wrongly(),
     r#"
-from foo import *  # E: Could not import `bad_definition` from `foo`
+from foo import *
 "#,
 );
 
@@ -557,7 +567,7 @@ fn test_import_fail_to_load() {
         .transaction()
         .get_errors([&handle("foo")])
         .collect_errors()
-        .shown;
+        .ordinary;
     assert_eq!(errs.len(), 1);
     let err = &errs[0];
     assert!(err.msg().contains("Failed to load"));
@@ -640,7 +650,6 @@ def test():
     # it works out to None, sometimes Unknown.
     # Plenty of errors here.
     reveal_type(i.x) # E:
-
 "#,
 );
 
@@ -808,7 +817,7 @@ fn test_interface_disagree() {
         .transaction()
         .get_errors([&h_py])
         .collect_errors()
-        .shown;
+        .ordinary;
     assert_eq!(errs.len(), 0);
 }
 
@@ -1133,4 +1142,515 @@ assert_type(X.anything, Any)
 reveal_type(Y)  # E: Ellipsis
 Y.anything  # E: `EllipsisType` has no attribute `anything`
     "#,
+);
+
+fn env_final_value() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+from typing import Final
+X: Final = 42
+Y: Final[int] = 42
+"#,
+    )
+}
+
+testcase!(
+    test_modify_imported_final_value,
+    env_final_value(),
+    r#"
+from foo import X, Y
+X = 10  # E: Cannot assign to `X` because it is imported as final
+Y = 10  # E: Cannot assign to `Y` because it is imported as final
+"#,
+);
+
+testcase!(
+    test_modify_imported_as_final_value,
+    env_final_value(),
+    r#"
+from foo import X as x, Y as y
+x = 10  # E: Cannot assign to `x` because it is imported as final
+y = 10  # E: Cannot assign to `y` because it is imported as final
+"#,
+);
+
+testcase!(
+    test_duplicate_import_of_final_value,
+    env_final_value(),
+    r#"
+from foo import X
+from foo import X
+"#,
+);
+
+testcase!(
+    test_duplicate_import_of_final_value_as,
+    env_final_value(),
+    r#"
+from foo import X as Y
+from foo import X as Y
+"#,
+);
+
+fn env_all_binop_add() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = ["a"] + base.__all__
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_binop_add,
+    env_all_binop_add(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_starred() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "base",
+        r#"
+__all__ = ["x", "y"]
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t.add(
+        "combined",
+        r#"
+import base
+from base import *
+a: float = 3.14
+__all__ = [*base.__all__, "a"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_star_all_starred,
+    env_all_starred(),
+    r#"
+from typing import assert_type
+from combined import *
+assert_type(a, float)
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_unresolvable() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+def generate_all():
+    return ["x"]
+
+x: int = 1
+y: str = "hello"
+_private: float = 3.14
+__all__ = generate_all()  # E: `__all__` could not be statically analyzed
+"#,
+    )
+}
+
+testcase!(
+    test_import_star_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import *
+# Since __all__ is unresolvable, falls back to all public names
+assert_type(x, int)
+assert_type(y, str)
+_private  # E: Could not find name `_private`
+"#,
+);
+
+testcase!(
+    test_import_named_all_unresolvable,
+    env_all_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import x, y
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_augassign_unresolvable() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg",
+        "pkg/__init__.py",
+        r#"
+from .sub import *
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub",
+        "pkg/sub/__init__.py",
+        r#"
+from ._impl import *
+
+_extra_names = ["x"]
+__all__ = ["Base"]
+__all__ += _extra_names  # E: `__all__` could not be statically analyzed
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub._impl",
+        "pkg/sub/_impl.py",
+        r#"
+class Base: ...
+x: int = 1
+y: str = "hello"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_augassign_unresolvable,
+    env_all_augassign_unresolvable(),
+    r#"
+from typing import assert_type
+import pkg
+# Since __all__ += variable is unresolvable, falls back to all public names,
+# which includes names from `from ._impl import *`.
+assert_type(pkg.x, int)
+assert_type(pkg.y, str)
+"#,
+);
+
+fn env_all_append_unresolvable() -> TestEnv {
+    TestEnv::one(
+        "foo",
+        r#"
+x: int = 1
+y: str = "hello"
+_name = "x"
+__all__ = ["y"]
+__all__.append(_name)  # E: `__all__` could not be statically analyzed
+"#,
+    )
+}
+
+testcase!(
+    test_all_append_unresolvable,
+    env_all_append_unresolvable(),
+    r#"
+from typing import assert_type
+from foo import *
+# Since __all__.append(variable) is unresolvable, falls back to all public names.
+assert_type(x, int)
+assert_type(y, str)
+"#,
+);
+
+fn env_all_relative_module_ref() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg",
+        "pkg/__init__.py",
+        r#"
+from .sub import *
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub",
+        "pkg/sub/__init__.py",
+        r#"
+from . import _api
+from ._api import *
+__all__ = _api.__all__
+"#,
+    );
+    t.add_with_path(
+        "pkg.sub._api",
+        "pkg/sub/_api.py",
+        r#"
+__all__ = ["convolve", "medfilt"]
+def convolve(x: list[float]) -> list[float]: return x
+def medfilt(x: list[float]) -> list[float]: return x
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_all_relative_module_ref,
+    env_all_relative_module_ref(),
+    r#"
+from typing import assert_type
+import pkg
+# __all__ = _api.__all__ should resolve _api to pkg.sub._api
+assert_type(pkg.convolve([1.0]), list[float])
+assert_type(pkg.medfilt([1.0]), list[float])
+"#,
+);
+
+fn env_relative_import_in_subdirectory() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("test.foo", "test/foo.py", "from .foo2 import bar");
+    t.add_with_path("test.foo2", "test/foo2.py", "bar: int = 100");
+    t
+}
+
+testcase!(
+    test_relative_import_in_subdirectory,
+    env_relative_import_in_subdirectory(),
+    r#"
+from typing import assert_type
+from test.foo import bar
+assert_type(bar, int)
+"#,
+);
+
+/// Create a test environment with extra-extension `.cinc` modules.
+fn env_extra_ext_cinc_import() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["cinc".to_owned(), "cconf".to_owned()]);
+    t.add_with_path(
+        "service.config.cinc",
+        "service/config.cinc",
+        r#"
+x: int = 42
+class Config:
+    name: str
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_extra_ext_cinc_import,
+    env_extra_ext_cinc_import(),
+    r#"
+from typing import assert_type
+import service.config.cinc as config
+assert_type(config.x, int)
+"#,
+);
+
+// Test importing a `.cconf` file (another extra extension).
+fn env_extra_ext_cconf_import() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["cinc".to_owned(), "cconf".to_owned()]);
+    t.add_with_path(
+        "service.settings.cconf",
+        "service/settings.cconf",
+        r#"
+value: str = "hello"
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_extra_ext_cconf_import,
+    env_extra_ext_cconf_import(),
+    r#"
+from typing import assert_type
+import service.settings.cconf as settings
+assert_type(settings.value, str)
+"#,
+);
+
+// Test importing an extra-extension file with dots in the filename.
+fn env_extra_ext_dotted_filename_import() -> TestEnv {
+    let mut t =
+        TestEnv::new().with_extra_file_extensions(vec!["cinc".to_owned(), "cconf".to_owned()]);
+    t.add_with_path(
+        "foo.file1.name2.cinc",
+        "foo/file1.name2.cinc",
+        r#"
+y: float = 3.14
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_extra_ext_dotted_filename_import,
+    env_extra_ext_dotted_filename_import(),
+    r#"
+from typing import assert_type
+import foo.file1.name2.cinc as mod
+assert_type(mod.y, float)
+"#,
+);
+
+// Test using `from ... import` syntax with extra-extension modules.
+testcase!(
+    test_extra_ext_from_import,
+    env_extra_ext_cinc_import(),
+    r#"
+from typing import assert_type
+from service.config.cinc import x, Config
+assert_type(x, int)
+c = Config()
+assert_type(c.name, str)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2983
+testcase!(
+    test_malformed_def_from_star,
+    r#"
+def # E: Expected an identifier
+from *a # E: Expected `)` # E: Cannot find module # E: only allowed at module level # E: Expected a module name # E: Star import must be the only import # E: Expected `,`
+"#,
+);
+
+const PKGUTIL_INIT: &str =
+    "from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n";
+
+#[test]
+fn test_pkgutil_namespace_package_multi_root() {
+    // Two search roots both contain `ns/__init__.py` with `pkgutil.extend_path`.
+    // Both register as LegacyNamespacePackage and accumulate, so submodules from
+    // both roots are importable through the merged namespace.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("root0/ns/baz")).unwrap();
+    std::fs::create_dir_all(root.join("root1/ns/bar")).unwrap();
+    std::fs::write(root.join("root0/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(
+        root.join("root0/ns/baz/__init__.py"),
+        "def helper() -> int: return 0\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("root1/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(root.join("root1/ns/bar/__init__.py"), "class Foo: ...\n").unwrap();
+
+    let mut env =
+        TestEnv::new().with_site_package_paths(vec![root.join("root0"), root.join("root1")]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        "from ns.bar import Foo\nfrom ns.baz import helper\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_pkgutil_namespace_absorbs_implicit_namespace() {
+    // An earlier search root contributes only an implicit (PEP 420) `ns/`
+    // directory; a later root has `ns/__init__.py` with `pkgutil.extend_path`.
+    // The LNP must absorb the prior implicit namespace dir so submodules from
+    // both roots are importable. This mirrors the layout produced by editable
+    // installs of `extend_path`-style namespace packages (e.g. azure-sdk-for-python).
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("root0/ns/baz")).unwrap();
+    std::fs::create_dir_all(root.join("root1/ns/bar")).unwrap();
+    // root0 has no ns/__init__.py — implicit namespace.
+    std::fs::write(
+        root.join("root0/ns/baz/__init__.py"),
+        "def helper() -> int: return 0\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("root1/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(root.join("root1/ns/bar/__init__.py"), "class Foo: ...\n").unwrap();
+
+    let mut env =
+        TestEnv::new().with_site_package_paths(vec![root.join("root0"), root.join("root1")]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        "from ns.bar import Foo\nfrom ns.baz import helper\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+// ----------------------------------------------------------------------------
+// Cross-module class rebind tests: importers should observe whichever class
+// the visible result chose. See `assign.rs` for the same-module regressions.
+// ----------------------------------------------------------------------------
+
+fn env_class_rebind_incompatible() -> TestEnv {
+    TestEnv::one(
+        "mod",
+        r#"
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+"#,
+    )
+}
+
+fn env_class_rebind_compatible() -> TestEnv {
+    TestEnv::one(
+        "mod",
+        r#"
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class SubReal(Real):
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+Real = SubReal
+"#,
+    )
+}
+
+testcase!(
+    test_class_rebind_import_after_incompatible_write,
+    env_class_rebind_incompatible(),
+    r#"
+from typing import reveal_type
+from mod import Real
+reveal_type(Real)  # E: revealed type: type[Real]
+Real("example.com", port=443)
+"#,
+);
+
+testcase!(
+    test_class_rebind_import_after_compatible_write,
+    env_class_rebind_compatible(),
+    r#"
+from typing import reveal_type
+from mod import Real
+reveal_type(Real)  # E: revealed type: type[SubReal]
+Real("example.com", port=443)
+"#,
 );

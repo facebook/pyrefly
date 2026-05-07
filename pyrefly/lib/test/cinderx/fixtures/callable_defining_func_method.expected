@@ -1,0 +1,5 @@
+  8:23-26: typing.Type[builtins.str]
+  9:15-22: Literal['hello'] -> builtins.str
+  12:0-1: callable_defining_func_method.MyClass.greet(callable_defining_func_method.MyClass) -> builtins.str
+  12:4-17: callable_defining_func_method.MyClass.greet(callable_defining_func_method.MyClass) -> builtins.str
+  12:4-11: typing.Type[callable_defining_func_method.MyClass]

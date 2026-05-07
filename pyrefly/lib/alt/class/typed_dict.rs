@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
@@ -47,7 +46,10 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
+use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
+use crate::types::quantified::QuantifiedIdentity;
+use crate::types::quantified::QuantifiedOrigin;
 use crate::types::read_only::ReadOnlyReason;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Restriction;
@@ -181,6 +183,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                         tcc,
                         subset_error,
+                        None,
+                        Vec::new(),
                     );
                 }
             }
@@ -228,10 +232,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         is_total: bool,
     ) -> Option<TypedDictField> {
-        let member = self.get_class_member(typed_dict.class_object(), name)?;
-        let field = Arc::unwrap_or_clone(member);
-        let instantiated_ty = self.get_instantiated_typed_dict_field_type(typed_dict, name)?;
-        let mut typed_dict_field = field.as_typed_dict_field_info(is_total)?;
+        let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
+        let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
+        let mut typed_dict_field =
+            Arc::unwrap_or_clone(member).as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)
     }
@@ -343,18 +347,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             signatures: vec1![
                 OverloadType::Function(Function {
                     signature: Callable::list(ParamList::new(kw_params), self.heap.mk_none()),
-                    metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+                    metadata: FuncMetadata::method(cls, dunder::INIT),
                 }),
                 OverloadType::Function(Function {
                     signature: Callable::list(ParamList::new(map_params), self.heap.mk_none()),
-                    metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+                    metadata: FuncMetadata::method(cls, dunder::INIT),
                 })
             ],
-            metadata: Box::new(FuncMetadata::def(
-                self.module().dupe(),
-                cls.dupe(),
-                dunder::INIT,
-            )),
+            metadata: Box::new(FuncMetadata::method(cls, dunder::INIT)),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -364,7 +364,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), UPDATE_METHOD);
+        let metadata = FuncMetadata::method(cls, UPDATE_METHOD);
         let self_param = self.class_self_param(cls, true);
         let extra = if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls) {
             Some(extra.ty)
@@ -455,14 +455,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Get a (key, default: T) -> ValueType | T overload.
     fn get_overload_with_default(
         &self,
+        cls: &Class,
         metadata: &FuncMetadata,
         self_param: &Param,
         name: Option<&Name>,
         ty: Type,
     ) -> OverloadType {
+        // Synthetic `_T` quantified used internally for the default parameter type.
+        // Anchored to the TypedDict class definition range with SyntheticCallableResidual origin.
+        let identity = QuantifiedIdentity::new(
+            self.module().name(),
+            AnchorIndex::first(cls.range()),
+            QuantifiedOrigin::SyntheticCallableResidual,
+        );
         let q = Quantified::type_var(
             Name::new("_T"),
-            self.uniques,
+            identity,
             None,
             Restriction::Unrestricted,
             PreInferenceVariance::Invariant,
@@ -493,7 +501,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), GET_METHOD);
+        let metadata = FuncMetadata::method(cls, GET_METHOD);
         // Synthesizes signatures for each field and a fallback `(self, key: str, default: object = ...) -> object` signature.
         let self_param = self.class_self_param(cls, true);
         let object_ty = self.heap.mk_class_type(self.stdlib.object().clone());
@@ -532,6 +540,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }));
                 // (self, key: Literal["key"], default: T) -> ValueType | T
                 literal_signatures.push(self.get_overload_with_default(
+                    cls,
                     &metadata,
                     &self_param,
                     Some(name),
@@ -557,7 +566,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 metadata: metadata.clone(),
             }),
         );
-        signatures.push(self.get_overload_with_default(&metadata, &self_param, None, value_ty));
+        signatures.push(self.get_overload_with_default(
+            cls,
+            &metadata,
+            &self_param,
+            None,
+            value_ty,
+        ));
         ClassSynthesizedField::new(self.heap.mk_overload(Overload {
             signatures,
             metadata: Box::new(metadata),
@@ -582,6 +597,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn gen_pop_overloads_for_field(
         &self,
+        cls: &Class,
         metadata: &FuncMetadata,
         self_param: &Param,
         name: Option<&Name>,
@@ -605,7 +621,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }));
 
         // 2) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
-        overloads.push(self.get_overload_with_default(metadata, self_param, name, ty));
+        overloads.push(self.get_overload_with_default(cls, metadata, self_param, name, ty));
     }
 
     /// Synthesize a method for every non-required field. Thus, this method returns None if all fields are required since no methods are synthesized
@@ -614,11 +630,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), POP_METHOD);
+        let metadata = FuncMetadata::method(cls, POP_METHOD);
         let self_param = self.class_self_param(cls, true);
         let mut literal_signatures: Vec<OverloadType> = Vec::new();
         for (name, field) in self.names_to_fields(cls, fields) {
             self.gen_pop_overloads_for_field(
+                cls,
                 &metadata,
                 &self_param,
                 Some(name),
@@ -630,6 +647,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls) {
             self.gen_pop_overloads_for_field(
+                cls,
                 &metadata,
                 &self_param,
                 None,
@@ -656,7 +674,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Synthesizes a `(self, k: Literal["key"], default: ValueType) -> ValueType` signature for each field.
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), SETDEFAULT_METHOD);
+        let metadata = FuncMetadata::method(cls, SETDEFAULT_METHOD);
         let make_overload = |name: Option<&Name>, read_only: bool, field_ty: Type| {
             if read_only {
                 None
@@ -708,7 +726,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap.mk_class_type(self.stdlib.object().clone())
                 }
             }
-            TypedDict::Anonymous(inner) => inner.value_type.clone(),
+            TypedDict::Anonymous(inner) => inner.compute_value_type(self.heap),
         }
     }
 
@@ -720,7 +738,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict)
             && !extra.read_only
             && self.typed_dict_fields(typed_dict).values().all(|field| {
-                !field.is_read_only() && !field.required && self.is_equal(&field.ty, &extra.ty)
+                !field.is_read_only() && !field.required && self.is_consistent(&field.ty, &extra.ty)
             })
         {
             Some(extra.ty)
@@ -771,7 +789,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), ITEMS_METHOD);
+        let metadata = FuncMetadata::method(cls, ITEMS_METHOD);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -791,7 +809,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), VALUES_METHOD);
+        let metadata = FuncMetadata::method(cls, VALUES_METHOD);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -825,7 +843,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::new(vec![self.class_self_param(cls, true)]),
                     self.heap.mk_none(),
                 ),
-                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), CLEAR_METHOD),
+                metadata: FuncMetadata::method(cls, CLEAR_METHOD),
             },
         )))
     }
@@ -847,7 +865,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.get_typed_dict_value_type_from_fields(cls, fields),
                     ]),
                 ),
-                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD),
+                metadata: FuncMetadata::method(cls, POPITEM_METHOD),
             },
         )))
     }
@@ -903,7 +921,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> ClassField {
         let (annotation, is_legal_field_declaration) = match field_definition {
-            ClassFieldDefinition::DeclaredByAnnotation { annotation } => (Some(annotation), true),
+            ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => {
+                (Some(annotation), true)
+            }
             ClassFieldDefinition::AssignedInBody {
                 value: _,
                 annotation,
@@ -982,7 +1002,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
                                 format!("Cannot add required field `{}` to TypedDict `{}` with non-read-only `extra_items`", name, base.name()),
                             );
-                        } else if !self.is_equal(field_ty, &ty) {
+                        } else if !self.is_consistent(field_ty, &ty) {
                             self.error(
                                 errors,
                                 range,

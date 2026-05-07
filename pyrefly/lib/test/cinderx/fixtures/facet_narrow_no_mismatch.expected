@@ -1,0 +1,7 @@
+  8:4-5: builtins.int
+  8:7-10: typing.Type[builtins.int]
+  11:11-14: typing.Type[facet_narrow_no_mismatch.Foo]
+  11:19-23: None
+  12:4-5: builtins.int
+  12:8-13: builtins.int
+  12:8-11: facet_narrow_no_mismatch.Foo

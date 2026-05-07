@@ -11,9 +11,9 @@ use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 /// Test that the LSP server doesn't crash when receiving workspace folder change
 /// notifications with non-file URIs (like vscode-remote://, ssh://, untitled:).

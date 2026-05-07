@@ -168,12 +168,17 @@ print(b"world")
 "#;
 
     let type_lit_str = r#"from typing import Union
+import typing
+
 class B:
     class A:
         pass
 
     def other(self, x: "B") -> "Union[list[B], A, bool]":
         return False
+
+    def dotted(self, x: "B.A") -> "typing.List[int]":
+        return [0]
 "#;
 
     let exports_all = r#"from typing import Union as U
@@ -197,6 +202,17 @@ def helloworld():
         "@",
     );
 
+    let attr_annotation = r#"from typing import Optional
+
+class Node:
+    pass
+
+class Container:
+    def setup(self) -> None:
+        self.x: Node = Node()
+        self.y: Optional[Node] = None
+"#;
+
     let files = [
         ("simple", simple_code),
         ("classes", classes_code),
@@ -207,6 +223,7 @@ def helloworld():
         ("type_lit_str", type_lit_str),
         ("exports_all", exports_all),
         ("generated_file", &generated_file),
+        ("attr_annotation", attr_annotation),
     ];
     let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Everything);
     let transaction = state.transaction();

@@ -48,6 +48,7 @@ fn trace_module(transaction: &Transaction, handle: &Handle) -> Option<ModuleOutp
         // TODO: Support multiple definitions
         if let Some(def) = transaction
             .goto_definition(handle, loc.start())
+            .unwrap_or_default()
             .into_iter()
             .next()
         {

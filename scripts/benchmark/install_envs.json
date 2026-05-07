@@ -1,0 +1,1153 @@
+{
+  "description": "Python packages for type checker analysis",
+  "packages": [
+    {
+      "github_url": "https://github.com/aio-libs/aiohttp",
+      "check_paths": [
+        "aiohttp"
+      ],
+      "install": true,
+      "install_env": {
+        "AIOHTTP_NO_EXTENSIONS": "1"
+      },
+      "deps": [
+        "pytest"
+      ]
+    },
+    {
+      "github_url": "https://github.com/apache/airflow",
+      "check_paths": [
+        "airflow-core/src/airflow"
+      ],
+      "install": true
+    },
+    {
+      "github_url": "https://github.com/ansible/ansible",
+      "check_paths": [
+        "lib/ansible"
+      ],
+      "install": true,
+      "search_path": [
+        "lib"
+      ]
+    },
+    {
+      "github_url": "https://github.com/python-attrs/attrs",
+      "check_paths": [
+        "src"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/Significant-Gravitas/Auto-GPT",
+      "check_paths": [
+        "autogpt_platform/backend/backend",
+        "autogpt_platform/autogpt_libs/autogpt_libs",
+        "classic/original_autogpt/autogpt",
+        "classic/forge/forge"
+      ],
+      "install": false,
+      "search_path": [
+        "autogpt_platform/backend",
+        "autogpt_platform/autogpt_libs",
+        "classic/original_autogpt",
+        "classic/forge"
+      ],
+      "deps": [
+        "pydantic",
+        "pydantic-settings",
+        "prisma",
+        "fastapi",
+        "starlette",
+        "pytest",
+        "openai",
+        "httpx",
+        "aiohttp",
+        "click",
+        "sentry-sdk",
+        "orjson",
+        "colorama",
+        "redis"
+      ]
+    },
+    {
+      "github_url": "https://github.com/psf/black",
+      "check_paths": [
+        "src"
+      ],
+      "install": true,
+      "deps": [
+        "aiohttp",
+        "click",
+        "pathspec",
+        "tomli",
+        "platformdirs",
+        "packaging",
+        "colorama",
+        "tokenize-rt"
+      ]
+    },
+    {
+      "github_url": "https://github.com/boto/boto3",
+      "check_paths": [
+        "boto3"
+      ],
+      "install": true,
+      "deps": [
+        "botocore",
+        "s3transfer"
+      ]
+    },
+    {
+      "github_url": "https://github.com/boto/botocore",
+      "check_paths": [
+        "botocore"
+      ],
+      "install": false,
+      "deps": [
+        "jmespath",
+        "python-dateutil",
+        "urllib3"
+      ]
+    },
+    {
+      "github_url": "https://github.com/celery/celery",
+      "check_paths": [
+        "celery"
+      ],
+      "install": false,
+      "deps": [
+        "kombu",
+        "billiard",
+        "vine",
+        "click",
+        "click-didyoumean",
+        "click-repl",
+        "click-plugins",
+        "python-dateutil"
+      ]
+    },
+    {
+      "github_url": "https://github.com/certifi/python-certifi",
+      "name": "certifi",
+      "check_paths": [
+        "certifi"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/python-cffi/cffi",
+      "check_paths": [
+        "src/cffi"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/Ousret/charset_normalizer",
+      "name": "charset-normalizer",
+      "check_paths": [
+        "src/charset_normalizer"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/pallets/click",
+      "check_paths": [
+        "src/click"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/comfyanonymous/ComfyUI",
+      "install": false,
+      "deps": [
+        "torch",
+        "torchvision",
+        "torchaudio",
+        "numpy",
+        "einops",
+        "pydantic",
+        "pydantic-settings",
+        "aiohttp",
+        "sqlalchemy",
+        "alembic",
+        "Pillow",
+        "safetensors",
+        "scipy",
+        "kornia",
+        "spandrel",
+        "tqdm",
+        "psutil",
+        "pyyaml",
+        "requests",
+        "websocket-client",
+        "pytest"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pyca/cryptography",
+      "check_paths": [
+        "src/cryptography"
+      ],
+      "install": true,
+      "deps": [
+        "cffi",
+        "typing-extensions",
+        "pytest"
+      ],
+      "search_path": [
+        "src"
+      ]
+    },
+    {
+      "github_url": "https://github.com/dask/dask",
+      "check_paths": [
+        "dask"
+      ],
+      "install": true,
+      "deps": [
+        "numpy",
+        "pandas",
+        "pyarrow",
+        "pytest",
+        "scipy",
+        "bokeh",
+        "sqlalchemy",
+        "toolz"
+      ]
+    },
+    {
+      "github_url": "https://github.com/deepseek-ai/DeepSeek-V3",
+      "check_paths": [
+        "inference"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/django/django",
+      "check_paths": [
+        "django"
+      ],
+      "install": false,
+      "deps": [
+        "asgiref",
+        "sqlparse"
+      ]
+    },
+    {
+      "github_url": "https://github.com/fastapi/fastapi",
+      "check_paths": [
+        "fastapi"
+      ],
+      "install": true,
+      "deps": [
+        "python-multipart",
+        "email-validator"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pallets/flask",
+      "check_paths": [
+        "src/flask"
+      ],
+      "install": true,
+      "deps": [
+        "asgiref",
+        "python-dotenv"
+      ]
+    },
+    {
+      "github_url": "https://github.com/gradio-app/gradio",
+      "check_paths": [
+        "gradio"
+      ],
+      "install": true
+    },
+    {
+      "github_url": "https://github.com/home-assistant/core",
+      "name": "homeassistant",
+      "check_paths": [
+        "homeassistant"
+      ],
+      "install": true,
+      "deps": [
+        "aiohttp",
+        "attrs",
+        "pydantic",
+        "SQLAlchemy",
+        "types-setuptools",
+        "types-atomicwrites",
+        "types-certifi",
+        "types-croniter",
+        "types-PyYAML",
+        "types-requests",
+        "types-python-slugify",
+        "types-backports",
+        "voluptuous"
+      ],
+      "python_version": "3.14.2"
+    },
+    {
+      "github_url": "https://github.com/encode/httpcore",
+      "check_paths": [
+        "httpcore"
+      ],
+      "install": false,
+      "deps": [
+        "certifi",
+        "h11",
+        "h2",
+        "anyio",
+        "trio",
+        "sniffio",
+        "socksio"
+      ]
+    },
+    {
+      "github_url": "https://github.com/encode/httpx",
+      "check_paths": [
+        "httpx"
+      ],
+      "install": false,
+      "deps": [
+        "certifi",
+        "httpcore",
+        "anyio",
+        "idna",
+        "h2",
+        "trio",
+        "sniffio",
+        "socksio",
+        "click",
+        "pygments",
+        "rich"
+      ]
+    },
+    {
+      "github_url": "https://github.com/kjd/idna",
+      "check_paths": [
+        "idna"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/pallets/jinja",
+      "name": "jinja2",
+      "install": false,
+      "deps": [
+        "markupsafe",
+        "pytest"
+      ]
+    },
+    {
+      "github_url": "https://github.com/langchain-ai/langchain",
+      "check_paths": [
+        "libs/core/langchain_core",
+        "libs/langchain/langchain_classic",
+        "libs/text-splitters/langchain_text_splitters"
+      ],
+      "install": false,
+      "deps": [
+        "langchain-community"
+      ]
+    },
+    {
+      "github_url": "https://github.com/langflow-ai/langflow",
+      "check_paths": [
+        "src/backend/base/langflow"
+      ],
+      "install": false,
+      "deps": [
+        "fastapi",
+        "httpx",
+        "pydantic",
+        "pydantic-settings",
+        "sqlmodel",
+        "sqlalchemy",
+        "langchain-core",
+        "loguru",
+        "typer",
+        "rich",
+        "alembic",
+        "celery",
+        "cryptography",
+        "opentelemetry-api",
+        "mcp",
+        "fastapi-pagination"
+      ],
+      "search_path": [
+        "src/backend/base"
+      ]
+    },
+    {
+      "github_url": "https://github.com/spotify/luigi",
+      "check_paths": [
+        "luigi"
+      ],
+      "install": false,
+      "deps": [
+        "types-python-dateutil",
+        "types-requests",
+        "types-toml",
+        "redis",
+        "boto3",
+        "elasticsearch"
+      ]
+    },
+    {
+      "github_url": "https://github.com/ManimCommunity/manim",
+      "check_paths": [
+        "manim"
+      ],
+      "install": false,
+      "deps": [
+        "types-decorator",
+        "types-pillow",
+        "types-pygments",
+        "click",
+        "cloup",
+        "decorator",
+        "networkx",
+        "numpy",
+        "pygments",
+        "rich",
+        "scipy",
+        "tqdm",
+        "typing-extensions",
+        "beautifulsoup4",
+        "moderngl"
+      ]
+    },
+    {
+      "github_url": "https://github.com/microsoft/markitdown",
+      "check_paths": [
+        "packages/markitdown/src/markitdown"
+      ],
+      "install": false,
+      "deps": [
+        "beautifulsoup4",
+        "requests",
+        "markdownify",
+        "charset-normalizer",
+        "defusedxml",
+        "pdfminer.six",
+        "mammoth",
+        "python-pptx"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pallets/markupsafe",
+      "check_paths": [
+        "src/markupsafe"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/matplotlib/matplotlib",
+      "check_paths": [
+        "lib/matplotlib"
+      ],
+      "install": true,
+      "deps": [
+        "pytest"
+      ],
+      "search_path": [
+        "lib"
+      ]
+    },
+    {
+      "github_url": "https://github.com/networkx/networkx",
+      "check_paths": [
+        "networkx"
+      ],
+      "install": false,
+      "deps": [
+        "numpy",
+        "scipy",
+        "pytest"
+      ]
+    },
+    {
+      "github_url": "https://github.com/numpy/numpy",
+      "check_paths": [
+        "numpy"
+      ],
+      "install": false,
+      "deps": [
+        "pytest",
+        "hypothesis"
+      ]
+    },
+    {
+      "github_url": "https://github.com/open-webui/open-webui",
+      "check_paths": [
+        "backend/open_webui"
+      ],
+      "install": false,
+      "deps": [
+        "fastapi",
+        "pydantic",
+        "sqlalchemy",
+        "requests",
+        "aiohttp",
+        "httpx",
+        "loguru",
+        "openai",
+        "alembic",
+        "peewee",
+        "peewee-migrate",
+        "langchain-core",
+        "redis",
+        "cryptography",
+        "aiocache",
+        "mcp",
+        "asgiref",
+        "fpdf2",
+        "websocket-client"
+      ],
+      "search_path": [
+        "backend"
+      ]
+    },
+    {
+      "github_url": "https://github.com/openai/openai-python",
+      "name": "openai",
+      "check_paths": [
+        "src/openai"
+      ],
+      "install": true,
+      "deps": [
+        "numpy",
+        "pandas",
+        "websockets"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pypa/packaging",
+      "check_paths": [
+        "src"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/pandas-dev/pandas",
+      "check_paths": [
+        "pandas"
+      ],
+      "install": true,
+      "deps": [
+        "numpy",
+        "types-python-dateutil",
+        "types-pytz",
+        "types-PyMySQL",
+        "types-setuptools",
+        "pytest"
+      ]
+    },
+    {
+      "github_url": "https://github.com/python-pillow/Pillow",
+      "name": "pillow",
+      "check_paths": [
+        "src/PIL"
+      ],
+      "install": false,
+      "deps": [
+        "olefile",
+        "defusedxml"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pypa/pip",
+      "check_paths": [
+        "src/pip/_internal"
+      ],
+      "install": false,
+      "search_path": [
+        "src"
+      ]
+    },
+    {
+      "github_url": "https://github.com/PrefectHQ/prefect",
+      "check_paths": [
+        "src/prefect"
+      ],
+      "install": true,
+      "deps": [
+        "types-python-dateutil",
+        "types-requests",
+        "types-simplejson",
+        "types-toml",
+        "types-croniter",
+        "types-PyYAML",
+        "types-python-slugify",
+        "types-pytz",
+        "cryptography",
+        "SQLAlchemy",
+        "pydantic",
+        "pytest"
+      ],
+      "search_path": [
+        "src"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pydantic/pydantic",
+      "check_paths": [
+        "pydantic"
+      ],
+      "install": true,
+      "deps": [
+        "annotated-types",
+        "pydantic-core",
+        "typing-extensions",
+        "typing-inspection"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pytest-dev/pytest",
+      "check_paths": [
+        "src"
+      ],
+      "install": false,
+      "deps": [
+        "attrs",
+        "pluggy",
+        "py",
+        "types-setuptools",
+        "packaging"
+      ],
+      "search_path": [
+        "src"
+      ]
+    },
+    {
+      "github_url": "https://github.com/dateutil/dateutil",
+      "name": "python-dateutil",
+      "check_paths": [
+        "src/dateutil"
+      ],
+      "install": false,
+      "deps": [
+        "six"
+      ]
+    },
+    {
+      "github_url": "https://github.com/yaml/pyyaml",
+      "check_paths": [
+        "lib/yaml"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/ray-project/ray",
+      "check_paths": [
+        "python/ray"
+      ],
+      "install": false,
+      "deps": [
+        "click",
+        "filelock",
+        "jsonschema",
+        "msgpack",
+        "packaging",
+        "protobuf",
+        "pyyaml",
+        "requests",
+        "grpcio",
+        "pydantic",
+        "gymnasium",
+        "dm-tree",
+        "numpy",
+        "pandas",
+        "pyarrow",
+        "aiohttp",
+        "fastapi",
+        "starlette",
+        "httpx",
+        "opencensus",
+        "opentelemetry-sdk",
+        "prometheus-client",
+        "fsspec",
+        "smart-open",
+        "redis",
+        "boto3",
+        "scipy",
+        "torch",
+        "pytest"
+      ]
+    },
+    {
+      "github_url": "https://github.com/redis/redis-py",
+      "name": "redis",
+      "check_paths": [
+        "redis"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/psf/requests",
+      "check_paths": [
+        "src/requests"
+      ],
+      "install": false,
+      "deps": [
+        "charset-normalizer",
+        "idna",
+        "urllib3",
+        "certifi"
+      ]
+    },
+    {
+      "github_url": "https://github.com/Textualize/rich",
+      "check_paths": [
+        "rich"
+      ],
+      "install": false,
+      "deps": [
+        "attrs",
+        "pygments",
+        "markdown-it-py"
+      ]
+    },
+    {
+      "github_url": "https://github.com/saltstack/salt",
+      "check_paths": [
+        "salt"
+      ],
+      "install": false,
+      "deps": [
+        "tornado",
+        "pyyaml",
+        "jinja2",
+        "markupsafe",
+        "cryptography",
+        "psutil",
+        "requests",
+        "pyzmq",
+        "msgpack",
+        "certifi",
+        "urllib3",
+        "idna",
+        "distro",
+        "packaging",
+        "looseversion",
+        "python-dateutil",
+        "python-gnupg",
+        "pycryptodomex",
+        "cherrypy",
+        "pyopenssl",
+        "setproctitle",
+        "croniter",
+        "timelib",
+        "jmespath",
+        "gitpython",
+        "aiohttp",
+        "lxml",
+        "networkx"
+      ]
+    },
+    {
+      "github_url": "https://github.com/scikit-learn/scikit-learn",
+      "check_paths": [
+        "sklearn"
+      ],
+      "install": false,
+      "deps": [
+        "joblib",
+        "numpy",
+        "scipy-stubs",
+        "threadpoolctl",
+        "pytest",
+        "matplotlib"
+      ]
+    },
+    {
+      "github_url": "https://github.com/scipy/scipy",
+      "check_paths": [
+        "scipy"
+      ],
+      "install": false,
+      "deps": [
+        "numpy",
+        "pytest",
+        "hypothesis",
+        "setuptools>=71.1",
+        "types-psutil"
+      ]
+    },
+    {
+      "github_url": "https://github.com/scrapy/scrapy",
+      "check_paths": [
+        "scrapy"
+      ],
+      "install": false,
+      "deps": [
+        "attrs",
+        "types-pyOpenSSL",
+        "types-setuptools",
+        "Twisted",
+        "w3lib",
+        "itemadapter",
+        "itemloaders",
+        "parsel",
+        "queuelib",
+        "zope.interface",
+        "PyDispatcher",
+        "packaging",
+        "lxml",
+        "service-identity",
+        "protego",
+        "tldextract",
+        "cryptography",
+        "h2",
+        "pytest",
+        "testfixtures"
+      ]
+    },
+    {
+      "github_url": "https://github.com/getsentry/sentry-python",
+      "name": "sentry-sdk",
+      "check_paths": [
+        "sentry_sdk"
+      ],
+      "install": false,
+      "deps": [
+        "urllib3",
+        "certifi",
+        "django",
+        "flask",
+        "fastapi",
+        "starlette",
+        "opentelemetry-api",
+        "grpcio"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pypa/setuptools",
+      "check_paths": [
+        "setuptools"
+      ],
+      "install": false,
+      "deps": [
+        "pytest",
+        "filelock",
+        "ini2toml",
+        "packaging",
+        "tomli",
+        "tomli-w",
+        "more-itertools"
+      ]
+    },
+    {
+      "github_url": "https://github.com/benjaminp/six",
+      "check_paths": [
+        "six.py"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/explosion/spaCy",
+      "name": "spacy",
+      "check_paths": [
+        "spacy"
+      ],
+      "install": false,
+      "deps": [
+        "thinc",
+        "numpy",
+        "srsly",
+        "wasabi",
+        "typer",
+        "weasel",
+        "pydantic",
+        "catalogue",
+        "packaging",
+        "cymem",
+        "preshed",
+        "requests",
+        "pytest",
+        "hypothesis"
+      ]
+    },
+    {
+      "github_url": "https://github.com/sqlalchemy/sqlalchemy",
+      "check_paths": [
+        "lib/sqlalchemy"
+      ],
+      "install": false,
+      "deps": [
+        "typing-extensions"
+      ]
+    },
+    {
+      "github_url": "https://github.com/AUTOMATIC1111/stable-diffusion-webui",
+      "check_paths": [
+        "modules",
+        "scripts",
+        "webui.py",
+        "launch.py"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/encode/starlette",
+      "check_paths": [
+        "starlette"
+      ],
+      "install": false,
+      "deps": [
+        "anyio",
+        "types-requests",
+        "types-PyYAML"
+      ]
+    },
+    {
+      "github_url": "https://github.com/streamlit/streamlit",
+      "check_paths": [
+        "lib",
+        "scripts"
+      ],
+      "install": false,
+      "deps": [
+        "attrs",
+        "tornado",
+        "packaging",
+        "types-toml",
+        "types-python-dateutil",
+        "types-setuptools",
+        "types-protobuf",
+        "types-pytz",
+        "types-requests",
+        "types-cffi",
+        "click",
+        "pytest",
+        "parameterized",
+        "pandas",
+        "starlette",
+        "numpy",
+        "pyarrow",
+        "altair",
+        "Pillow",
+        "typing-extensions",
+        "plotly",
+        "watchdog",
+        "tenacity",
+        "uvicorn",
+        "anyio",
+        "blinker",
+        "requests"
+      ],
+      "search_path": [
+        "lib"
+      ]
+    },
+    {
+      "github_url": "https://github.com/sympy/sympy",
+      "check_paths": [
+        "sympy"
+      ],
+      "install": false,
+      "deps": [
+        "mpmath"
+      ]
+    },
+    {
+      "github_url": "https://github.com/tensorflow/tensorflow",
+      "check_paths": [
+        "tensorflow/python"
+      ],
+      "install": false,
+      "deps": [
+        "numpy",
+        "absl-py",
+        "protobuf",
+        "scipy",
+        "gast",
+        "six",
+        "wrapt",
+        "packaging",
+        "grpcio",
+        "h5py",
+        "psutil",
+        "requests",
+        "astunparse",
+        "opt-einsum",
+        "termcolor",
+        "ml-dtypes",
+        "dill",
+        "portpicker"
+      ]
+    },
+    {
+      "github_url": "https://github.com/TheAlgorithms/Python",
+      "name": "TheAlgorithms-Python",
+      "install": false,
+      "deps": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "pytest",
+        "httpx"
+      ]
+    },
+    {
+      "github_url": "https://github.com/nvbn/thefuck",
+      "check_paths": [
+        "thefuck"
+      ],
+      "install": false,
+      "deps": [
+        "psutil",
+        "pyte",
+        "colorama"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pytorch/pytorch",
+      "name": "torch",
+      "check_paths": [
+        "torch"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/tqdm/tqdm",
+      "check_paths": [
+        "tqdm"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/huggingface/transformers",
+      "check_paths": [
+        "src/transformers"
+      ],
+      "install": false,
+      "deps": [
+        "huggingface-hub",
+        "packaging",
+        "pyyaml",
+        "tqdm",
+        "safetensors",
+        "numpy",
+        "torch",
+        "Pillow",
+        "tokenizers",
+        "torchvision",
+        "scipy",
+        "regex"
+      ],
+      "search_path": [
+        "src"
+      ]
+    },
+    {
+      "github_url": "https://github.com/python-trio/trio",
+      "check_paths": [
+        "src/trio"
+      ],
+      "install": false,
+      "deps": [
+        "types-pyOpenSSL",
+        "types-cffi",
+        "attrs",
+        "outcome",
+        "exceptiongroup",
+        "pytest",
+        "sniffio"
+      ]
+    },
+    {
+      "github_url": "https://github.com/tiangolo/typer",
+      "check_paths": [
+        "typer"
+      ],
+      "install": true
+    },
+    {
+      "github_url": "https://github.com/python/typing_extensions",
+      "name": "typing-extensions",
+      "check_paths": [
+        "src/typing_extensions.py"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/urllib3/urllib3",
+      "install": false,
+      "deps": [
+        "idna>=2.0.0",
+        "cryptography>=1.3.4",
+        "tornado>=6.1",
+        "pytest",
+        "trustme==0.9.0",
+        "types-backports",
+        "types-requests",
+        "h2",
+        "brotli"
+      ]
+    },
+    {
+      "github_url": "https://github.com/encode/uvicorn",
+      "check_paths": [
+        "uvicorn"
+      ],
+      "install": false,
+      "deps": [
+        "types-click",
+        "types-pyyaml",
+        "h11",
+        "httptools",
+        "websockets",
+        "wsproto",
+        "watchfiles"
+      ]
+    },
+    {
+      "github_url": "https://github.com/pypa/wheel",
+      "check_paths": [
+        "src/wheel"
+      ],
+      "install": false,
+      "deps": [
+        "packaging",
+        "setuptools"
+      ]
+    },
+    {
+      "github_url": "https://github.com/openai/whisper",
+      "check_paths": [
+        "whisper"
+      ],
+      "install": false,
+      "deps": [
+        "torch",
+        "numpy",
+        "tqdm",
+        "tiktoken"
+      ]
+    },
+    {
+      "github_url": "https://github.com/ytdl-org/youtube-dl",
+      "check_paths": [
+        "youtube_dl"
+      ],
+      "install": false
+    },
+    {
+      "github_url": "https://github.com/yt-dlp/yt-dlp",
+      "check_paths": [
+        "yt_dlp"
+      ],
+      "install": false,
+      "deps": [
+        "requests",
+        "urllib3",
+        "websockets",
+        "mutagen",
+        "pycryptodomex",
+        "certifi"
+      ]
+    }
+  ]
+}
