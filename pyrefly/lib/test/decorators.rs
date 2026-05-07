@@ -507,12 +507,13 @@ from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
 from flask import current_app
+from flask.typing import ResponseReturnValue
 
 P = ParamSpec("P")
 R = TypeVar("R")
 
-def login_required(func: Callable[P, R]):
-    def decorated_view(*args: P.args, **kwargs: P.kwargs):
+def login_required(func: Callable[P, R]) -> Callable[P, ResponseReturnValue | R]:
+    def decorated_view(*args: P.args, **kwargs: P.kwargs) -> ResponseReturnValue | R:
         if args:
             return current_app.login_manager.unauthorized()
         return current_app.ensure_sync(func)(*args, **kwargs)
