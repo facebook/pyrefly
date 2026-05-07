@@ -8,6 +8,7 @@
 //! Tests of the `State` object.
 
 use std::fs;
+use std::panic;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::sleep;
@@ -634,4 +635,29 @@ fn test_stdlib_cached_on_recheck() {
         "Cached stdlib should skip pre-warming entirely"
     );
     state.commit_transaction(t2, None);
+}
+
+#[test]
+fn test_stdlib_single_entry_shortcut_requires_matching_sys_info() {
+    let env = TestEnv::one("foo", "x: int = 1");
+    let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
+    let linux = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
+    let windows = SysInfo::new(PythonVersion::default(), PythonPlatform::windows());
+    let handle = Handle::new(
+        ModuleName::from_str("foo"),
+        ModulePath::memory(PathBuf::from("foo.py")),
+        linux,
+    );
+
+    let mut transaction = state.new_transaction(Require::Exports, None);
+    transaction.set_memory(env.get_memory());
+    transaction.run(&[handle], Require::Everything, None);
+
+    assert!(
+        panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            transaction.get_stdlib_for_sys_info(&windows);
+        }))
+        .is_err(),
+        "a single cached stdlib must not be returned for a different SysInfo"
+    );
 }
