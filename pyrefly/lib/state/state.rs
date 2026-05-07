@@ -92,6 +92,7 @@ use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyExportNameAssignTypeForm;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::Keyed;
@@ -140,6 +141,7 @@ use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFields;
 use crate::types::stdlib::Stdlib;
+use crate::types::type_info::NameAssignTypeFormInfo;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -2937,6 +2939,38 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
             }
         }
         res
+    }
+
+    fn get_name_assign_type_form(
+        &self,
+        module: ModuleName,
+        path: Option<&ModulePath>,
+        k: &KeyExportNameAssignTypeForm,
+        thread_state: &ThreadState,
+    ) -> Option<Arc<NameAssignTypeFormInfo>> {
+        let path = match path {
+            Some(path) => path.dupe(),
+            None => self
+                .module_data
+                .imports
+                .read()
+                .get(&module)?
+                .clone()
+                .finding()?,
+        };
+        if matches!(path.details(), ModulePathDetails::BundledTypeshed(_)) {
+            return None;
+        }
+        let handle = Handle::new(module, path, self.module_data.handle.sys_info().dupe());
+        let module_data = self.transaction.get_module(&handle);
+        let answers_guard = module_data.state.load_answers();
+        let Some(answers) = answers_guard.as_ref() else {
+            let solutions = module_data.state.get_solutions()?;
+            solutions.get_hashed_opt(Hashed::new(k))?;
+            return self.get(module, Some(handle.path()), k, thread_state);
+        };
+        answers.0.key_to_idx_hashed_opt(Hashed::new(k))?;
+        self.get(module, Some(handle.path()), k, thread_state)
     }
 
     fn commit_to_module(

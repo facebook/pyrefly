@@ -2935,9 +2935,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         path: Option<&ModulePath>,
         k: &KeyExportNameAssignTypeForm,
     ) -> Arc<NameAssignTypeFormInfo> {
-        self.get_from_module(module, path, k).unwrap_or_else(|| {
-            panic!("We should have checked Exports before calling this, {module} {k:?}")
-        })
+        self.answers
+            .get_name_assign_type_form(module, path, k, self.thread_state)
+            .unwrap_or_else(|| Arc::new(NameAssignTypeFormInfo::default()))
     }
 
     /// Might return None if the class is no longer present on the underlying module.

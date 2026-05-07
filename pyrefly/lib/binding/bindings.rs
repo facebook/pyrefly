@@ -692,9 +692,14 @@ impl Bindings {
             if exported.contains_key_hashed(name.as_ref()) {
                 let key = name.into_key().clone();
                 exported_names.insert(key.clone());
-                builder
-                    .table
-                    .insert(KeyExportNameAssignTypeForm(key.clone()), binding.clone());
+                if BindingsBuilder::export_may_have_implicit_alias_syntax_problem(
+                    &builder.table,
+                    binding.key_idx(),
+                ) {
+                    builder
+                        .table
+                        .insert(KeyExportNameAssignTypeForm(key.clone()), binding.clone());
+                }
                 builder.table.insert(KeyExport(key), binding);
             }
         }
@@ -706,10 +711,6 @@ impl Bindings {
                 exported_names.insert(name.clone());
                 builder.table.insert(
                     KeyExport(name.clone()),
-                    BindingExport::forward_maybe_promote(key, &name),
-                );
-                builder.table.insert(
-                    KeyExportNameAssignTypeForm(name.clone()),
                     BindingExport::forward_maybe_promote(key, &name),
                 );
             }
@@ -941,6 +942,57 @@ impl<'a> BindingsBuilder<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.get_mut::<K>().1.get_mut(idx)
+    }
+
+    fn export_may_have_implicit_alias_syntax_problem(
+        table: &BindingTable,
+        mut idx: Idx<Key>,
+    ) -> bool {
+        let mut visited = SmallSet::new();
+        loop {
+            if !visited.insert(idx) {
+                return false;
+            }
+            match table.get::<Key>().1.get(idx) {
+                Some(
+                    Binding::Forward(next)
+                    | Binding::PromoteForward(next)
+                    | Binding::ForwardToFirstUse(next)
+                    | Binding::Phi(JoinStyle::NarrowOf(next), _),
+                ) => idx = *next,
+                Some(Binding::NameAssign(name_assign)) => {
+                    return name_assign.annotation.is_none()
+                        && !name_assign.is_in_function_scope
+                        && Self::expr_may_have_implicit_alias_syntax_problem(&name_assign.expr);
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    fn expr_may_have_implicit_alias_syntax_problem(expr: &Expr) -> bool {
+        match expr {
+            Expr::Name(..)
+            | Expr::Attribute(..)
+            | Expr::StringLiteral(..)
+            | Expr::BytesLiteral(..)
+            | Expr::NoneLiteral(..)
+            | Expr::EllipsisLiteral(..)
+            | Expr::Starred(..) => false,
+            Expr::Subscript(subscript) => !matches!(
+                subscript.value.as_ref(),
+                Expr::Name(..)
+                    | Expr::BinOp(ruff_python_ast::ExprBinOp {
+                        op: ruff_python_ast::Operator::BitOr,
+                        ..
+                    })
+                    | Expr::Named(..)
+                    | Expr::StringLiteral(..)
+                    | Expr::NoneLiteral(..)
+                    | Expr::Attribute(..)
+            ),
+            _ => true,
+        }
     }
 
     /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,

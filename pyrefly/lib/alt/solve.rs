@@ -710,9 +710,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Binding::Import(import) => {
-                    if !self.exports.export_exists(import.module, &import.name) {
-                        return NameAssignTypeFormInfo::default();
-                    }
                     return self
                         .get_from_export_name_assign_type_form(
                             import.module,
@@ -745,6 +742,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.name_assign_type_form_for_idx(idx, &self.error_swallower())
             .as_ref()
             .cloned()
+    }
+
+    fn annotation_name_resolves_to_import(&self, name: &ruff_python_ast::ExprName) -> bool {
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let Some(mut idx) = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key)) else {
+            return false;
+        };
+        let mut visited = SmallSet::new();
+        loop {
+            if !visited.insert(idx) {
+                unreachable!("cycle in binding chain while checking annotation import origin");
+            }
+            match self.bindings().get(idx) {
+                Binding::Forward(next)
+                | Binding::PromoteForward(next)
+                | Binding::ForwardToFirstUse(next)
+                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
+                Binding::Import(_) => return true,
+                Binding::PossibleLegacyTParam(key, _) => {
+                    match (self.bindings().get(*key), &*self.get_idx(*key)) {
+                        (
+                            BindingLegacyTypeParam::ParamKeyed(next),
+                            LegacyTypeParameterLookup::NotParameter(_),
+                        ) => idx = *next,
+                        _ => return false,
+                    }
+                }
+                _ => return false,
+            }
+        }
     }
 
     pub fn name_assign_type_form_for_export(
@@ -6164,6 +6191,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if type_form_context.reports_implicit_alias_syntax_at_use_site()
             && let Expr::Name(name) = x
+            && !self.annotation_name_resolves_to_import(name)
             && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) =
                 self.annotation_name_assign_type_form(name)
         {
@@ -6220,6 +6248,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             _ => {
                 let inferred_ty = self.expr_infer(x, errors);
+                if type_form_context.reports_implicit_alias_syntax_at_use_site()
+                    && let Expr::Name(name) = x
+                    && self.annotation_name_resolves_to_import(name)
+                    && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) =
+                        self.annotation_name_assign_type_form(name)
+                {
+                    return self.error(
+                        errors,
+                        x.range(),
+                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        format!("{problem} cannot be used in annotations"),
+                    );
+                }
                 // Check if this is a scoped type alias in base class context
                 // We do this check here instead of `validate_type_form` because it
                 // substitutes type aliases with the aliased type

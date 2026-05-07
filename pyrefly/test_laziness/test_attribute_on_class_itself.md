@@ -49,7 +49,7 @@ a: Solutions
 b: Answers
 c: Answers
 
-(181 builtin demands hidden)
+(183 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
@@ -73,4 +73,5 @@ a -> b::KeyClassMro(ClassDefIndex(0))
 a -> c::KeyClassSynthesizedFields(ClassDefIndex(0))
 a -> b::KeyClassMro(ClassDefIndex(0))
 a -> b::KeyClassField(ClassDefIndex(0), Name("child_attr"))
+a -> b::KeyAbstractClassCheck(ClassDefIndex(0))
 ```

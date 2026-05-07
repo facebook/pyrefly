@@ -34,7 +34,7 @@ class Foo:
 a: Solutions
 b: Answers
 
-(159 builtin demands hidden)
+(161 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)

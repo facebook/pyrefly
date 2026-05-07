@@ -37,6 +37,7 @@ use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyExportNameAssignTypeForm;
 use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
@@ -68,6 +69,7 @@ use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
 use crate::types::heap::TypeHeap;
 use crate::types::stdlib::Stdlib;
+use crate::types::type_info::NameAssignTypeFormInfo;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
 use crate::types::types::TParams;
@@ -573,6 +575,14 @@ pub trait LookupAnswer: Sized {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>;
+
+    fn get_name_assign_type_form(
+        &self,
+        module: ModuleName,
+        path: Option<&ModulePath>,
+        k: &KeyExportNameAssignTypeForm,
+        stack: &ThreadState,
+    ) -> Option<Arc<NameAssignTypeFormInfo>>;
 
     /// Commit a preliminary answer to a specific module's Calculation cell.
     /// Used for cross-module batch commit when an SCC spans module boundaries.
