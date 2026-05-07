@@ -21,6 +21,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::MutexGuard;
+use std::sync::OnceLock;
 use std::sync::RwLockReadGuard;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -495,6 +496,71 @@ fn module_sys_info_override(
     module_platform_guard(&ast.body).map(|platform| sys_info.with_platform(platform))
 }
 
+thread_local! {
+    static COMPUTING_STDLIB: RefCell<Vec<SysInfo>> = const { RefCell::new(Vec::new()) };
+}
+
+struct ComputingStdlibGuard(SysInfo);
+
+impl ComputingStdlibGuard {
+    fn new(sys_info: SysInfo) -> Self {
+        COMPUTING_STDLIB.with(|stack| stack.borrow_mut().push(sys_info));
+        Self(sys_info)
+    }
+}
+
+impl Drop for ComputingStdlibGuard {
+    fn drop(&mut self) {
+        COMPUTING_STDLIB.with(|stack| {
+            let last = stack
+                .borrow_mut()
+                .pop()
+                .expect("computing stdlib stack should not be empty");
+            assert_eq!(
+                last, self.0,
+                "computing stdlib stack should be popped in LIFO order"
+            );
+        });
+    }
+}
+
+fn is_computing_stdlib(sys_info: SysInfo) -> bool {
+    COMPUTING_STDLIB.with(|stack| stack.borrow().contains(&sys_info))
+}
+
+struct StdlibEntry {
+    bootstrap: Arc<Stdlib>,
+    ready: OnceLock<Arc<Stdlib>>,
+}
+
+impl StdlibEntry {
+    fn computing() -> Self {
+        Self {
+            bootstrap: Arc::new(Stdlib::for_bootstrapping()),
+            ready: OnceLock::new(),
+        }
+    }
+
+    fn ready(stdlib: Arc<Stdlib>) -> Self {
+        let entry = Self::computing();
+        assert!(
+            entry.ready.set(stdlib).is_ok(),
+            "new stdlib entry should be empty"
+        );
+        entry
+    }
+
+    fn get(&self, sys_info: SysInfo) -> Arc<Stdlib> {
+        if let Some(stdlib) = self.ready.get() {
+            return stdlib.dupe();
+        }
+        if is_computing_stdlib(sys_info) {
+            return self.bootstrap.dupe();
+        }
+        self.ready.wait().dupe()
+    }
+}
+
 impl ModuleData {
     /// Make a copy of the data that can be mutated.
     fn clone_for_mutation(&self) -> ModuleDataMut {
@@ -663,7 +729,7 @@ pub struct TransactionTimingCounters {
 /// It is used to store uncommitted transaction state in between transaction runs.
 pub(crate) struct TransactionData<'a> {
     state: &'a State,
-    stdlib: SmallMap<SysInfo, Arc<Stdlib>>,
+    stdlib: LockedMap<SysInfo, StdlibEntry>,
     updated_modules: LockedMap<Handle, ArcId<ModuleDataMut>>,
     updated_loaders: LockedMap<ArcId<ConfigFile>, Arc<LoaderFindCache>>,
     memory_overlay: MemoryFilesOverlay,
@@ -1437,8 +1503,14 @@ impl<'a> Transaction<'a> {
 
             computed = true;
             let require = guard.require();
-            let stdlib = self.get_stdlib(&module_data.handle);
+            let sys_info = if todo >= Step::Exports {
+                module_data.effective_sys_info()
+            } else {
+                module_data.handle.sys_info().dupe()
+            };
             let config = module_data.config.read();
+            self.compute_stdlib([(sys_info.dupe(), config.dupe())]);
+            let stdlib = self.get_stdlib_for_sys_info(&sys_info);
 
             // Compute and record the `tensor_shapes` bit. Storing it here makes it a
             // find-only dependency: the `dirty.find()` clean-check re-derives this value
@@ -1457,7 +1529,6 @@ impl<'a> Transaction<'a> {
                     module_ids: &reporter.module_ids,
                     stdlib: stdlib.dupe(),
                 });
-            let sys_info = module_data.effective_sys_info();
             let ctx = Context {
                 require,
                 module: module_data.handle.module(),
@@ -1882,7 +1953,9 @@ impl<'a> Transaction<'a> {
 
         // Slow path: need full solve_exported_key for computation.
         let load = module_data.state.get_load().unwrap();
-        let stdlib = self.get_stdlib(&module_data.handle);
+        let sys_info = module_data.effective_sys_info();
+        self.compute_stdlib([(sys_info.dupe(), module_data.config.read().dupe())]);
+        let stdlib = self.get_stdlib_for_sys_info(&sys_info);
         let lookup = self.lookup(module_data);
         answers.1.solve_exported_key(
             &lookup,
@@ -1927,100 +2000,90 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_stdlib_for_sys_info(&self, sys_info: &SysInfo) -> Arc<Stdlib> {
-        if self.data.stdlib.len() == 1 {
-            // The single-entry shortcut is only valid for the requested SysInfo.
-            let (cached_sys_info, stdlib) = self.data.stdlib.first().unwrap();
-            if cached_sys_info == sys_info {
-                return stdlib.dupe();
-            }
-        }
-
         self.data
             .stdlib
             .get(sys_info)
             .unwrap_or_else(|| panic!("stdlib was not computed for {sys_info:?}"))
-            .dupe()
+            .get(*sys_info)
     }
 
     pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
-        if let Some(stdlib) = self.data.stdlib.get(handle.sys_info()) {
-            return stdlib.dupe();
+        if let Some(entry) = self.data.stdlib.get(handle.sys_info()) {
+            return entry.get(*handle.sys_info());
         }
-        if let Some((_, stdlib)) = self
+        if let Some((sys_info, entry)) = self
             .data
             .stdlib
-            .iter()
+            .iter_unordered()
             .find(|(sys_info, _)| sys_info.version() == handle.sys_info().version())
         {
-            return stdlib.dupe();
+            return entry.get(*sys_info);
         }
         self.get_stdlib_for_sys_info(handle.sys_info())
     }
 
     /// Compute the `Stdlib` for each requested `SysInfo`.
     ///
-    /// Stdlib is derived from bundled (immutable) typeshed stubs, so the result
-    /// is deterministic for a given `SysInfo`. We skip recomputation for any
-    /// `SysInfo` already present in the stdlib map — this avoids 80-150 ms of
-    /// redundant single-threaded work on rechecks and multi-epoch runs.
+    /// Stdlib is derived from the typeshed selected by the module config. Every
+    /// config sharing a `SysInfo` must therefore select the same typeshed. We skip
+    /// recomputation for any `SysInfo` already present in the stdlib map — this
+    /// avoids 80-150 ms of redundant work on rechecks and multi-epoch runs.
     ///
     /// Returns `true` if all entries were already cached (no work done).
-    fn compute_stdlib(&mut self, handles: &[Handle]) -> bool {
-        // Filter out SysInfos that already have a computed stdlib.
-        let sys_infos: SmallSet<SysInfo> = handles.iter().map(|h| h.sys_info().dupe()).collect();
-        let missing: SmallSet<SysInfo> = sys_infos
-            .into_iter()
-            .filter(|k| !self.data.stdlib.contains_key(k))
-            .collect();
-        if missing.is_empty() {
-            return true;
+    fn compute_stdlib(
+        &self,
+        modules: impl IntoIterator<Item = (SysInfo, ArcId<ConfigFile>)>,
+    ) -> bool {
+        let mut configs: SmallMap<SysInfo, ArcId<ConfigFile>> = SmallMap::new();
+        for (sys_info, config) in modules {
+            if let Some(existing) = configs.get(&sys_info) {
+                assert_eq!(
+                    existing.typeshed_path, config.typeshed_path,
+                    "modules sharing a SysInfo must agree on typeshed_path"
+                );
+            } else {
+                configs.insert(sys_info, config);
+            }
         }
         // Use defaults (disabled) for stdlib - depth limiting is for user code
         let thread_state = ThreadState::new(None);
-        for k in missing.into_iter_hashed() {
-            // The stdlib is cached per `SysInfo`, so every handle sharing this `SysInfo`
-            // must resolve to the same `typeshed_path`; otherwise the cached stdlib would
-            // depend on which handle happened to be seen first. Enforce that invariant
-            // rather than silently loading the stdlib from an arbitrary handle's typeshed.
-            let typeshed_path = handles
-                .iter()
-                .filter(|h| h.sys_info() == &*k)
-                .map(|h| self.data.state.get_config(h).typeshed_path.clone())
-                .reduce(|a, b| {
-                    assert_eq!(
-                        a, b,
-                        "handles sharing a SysInfo must agree on typeshed_path"
-                    );
-                    a
-                })
-                .flatten();
-            // Load the stdlib from the user-provided typeshed if one is set; otherwise
-            // use the bundled typeshed.
-            let stdlib_config = typeshed_path
+        let mut cached = true;
+        for (sys_info, config) in configs {
+            let (entry, _) = self.data.stdlib.ensure(&sys_info, StdlibEntry::computing);
+            if entry.ready.get().is_some() || is_computing_stdlib(sys_info) {
+                continue;
+            }
+            cached = false;
+            let stdlib_config = config
+                .typeshed_path
+                .clone()
                 .map_or_else(BundledTypeshedStdlib::config, custom_typeshed_stdlib_config);
             let loader = self.get_cached_loader(&stdlib_config);
-            self.data
-                .stdlib
-                .insert_hashed(k.to_owned(), Arc::new(Stdlib::for_bootstrapping()));
-            let v = Arc::new(Stdlib::new(
-                k.version(),
-                &|module, name| {
-                    let path = loader
-                        .find_import(module, None, Some(&self.timing))
-                        .finding()?;
-                    self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &thread_state)
-                },
-                &|module, name| {
-                    let path = loader
-                        .find_import(module, None, Some(&self.timing))
-                        .finding()?;
-                    let handle = Handle::new(module, path, (*k).dupe());
-                    self.lookup_export_location(&handle, name)
-                },
-            ));
-            self.data.stdlib.insert_hashed(k, v);
+            let _guard = ComputingStdlibGuard::new(sys_info);
+            entry.ready.get_or_init(|| {
+                Arc::new(Stdlib::new(
+                    sys_info.version(),
+                    &|module, name| {
+                        let path = loader
+                            .find_import(module, None, Some(&self.timing))
+                            .finding()?;
+                        self.lookup_stdlib(
+                            &Handle::new(module, path, sys_info.dupe()),
+                            name,
+                            &thread_state,
+                        )
+                    },
+                    &|module, name| {
+                        let path = loader
+                            .find_import(module, None, Some(&self.timing))
+                            .finding()?;
+                        let handle = Handle::new(module, path, sys_info.dupe());
+                        self.lookup_export_location(&handle, name)
+                    },
+                ))
+            });
         }
-        false
+        cached
     }
 
     fn work(&self) -> Result<(), Cancelled> {
@@ -2139,7 +2202,11 @@ impl<'a> Transaction<'a> {
         // Compute stdlib once before the epoch loop. Stdlib is deterministic for a
         // given SysInfo and does not depend on user code, so it only needs to run once.
         let stdlib_start = Instant::now();
-        let stdlib_cached = self.compute_stdlib(handles);
+        let stdlib_cached = self.compute_stdlib(
+            handles
+                .iter()
+                .map(|handle| (handle.sys_info().dupe(), self.data.state.get_config(handle))),
+        );
         let compute_stdlib_time = stdlib_start.elapsed();
         {
             let mut stats = self.stats.lock();
@@ -2247,7 +2314,9 @@ impl<'a> Transaction<'a> {
         let load = module_data.state.get_load()?;
         let answers = module_data.state.get_answers()?;
         let errors = &load.errors;
-        let stdlib = self.get_stdlib(handle);
+        let sys_info = module_data.effective_sys_info();
+        self.compute_stdlib([(sys_info.dupe(), module_data.config.read().dupe())]);
+        let stdlib = self.get_stdlib_for_sys_info(&sys_info);
         let recurser = VarRecurser::new();
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
@@ -2487,13 +2556,15 @@ impl<'a> Transaction<'a> {
             let m = self.get_module(&m.handle);
             let alt = StepsMut::new_loaded(m.state.get_load().unwrap());
             let require = m.state.require();
-            let stdlib = self.get_stdlib(&m.handle);
+            let sys_info = m.effective_sys_info();
+            self.compute_stdlib([(sys_info.dupe(), m.config.read().dupe())]);
+            let stdlib = self.get_stdlib_for_sys_info(&sys_info);
             let config = m.config.read();
             let ctx = Context {
                 require,
                 module: m.handle.module(),
                 path: m.handle.path(),
-                sys_info: m.handle.sys_info(),
+                sys_info: &sys_info,
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
@@ -3119,7 +3190,10 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                     "target module has Answers but no Load; this should be unreachable \
                      because Load is computed before Answers",
                 );
-                let stdlib = self.transaction.get_stdlib(&module_data.handle);
+                let sys_info = module_data.effective_sys_info();
+                self.transaction
+                    .compute_stdlib([(sys_info.dupe(), module_data.config.read().dupe())]);
+                let stdlib = self.transaction.get_stdlib_for_sys_info(&sys_info);
                 let lookup = self.transaction.lookup(module_data);
                 target_answers.solve_idx_erased(
                     any_idx,
@@ -3335,7 +3409,15 @@ impl State {
         let readable = self.state.read();
         let state_lock_blocked = start.elapsed();
         let now = readable.now;
-        let stdlib = readable.stdlib.clone();
+        let stdlib = LockedMap::new();
+        for (sys_info, cached_stdlib) in readable.stdlib.iter() {
+            assert!(
+                stdlib
+                    .insert(sys_info.dupe(), StdlibEntry::ready(cached_stdlib.dupe()))
+                    .is_none(),
+                "readable stdlib should not contain duplicate SysInfo keys"
+            );
+        }
         Transaction {
             readable,
             stats: Mutex::new(TelemetryTransactionStats {
@@ -3469,7 +3551,16 @@ impl State {
             "Attempted to commit a stale transaction from epoch {:?} into state at epoch {:?}",
             base, state.now
         );
-        state.stdlib = stdlib;
+        state.stdlib = stdlib
+            .into_iter()
+            .map(|(sys_info, entry)| {
+                let stdlib = entry
+                    .ready
+                    .into_inner()
+                    .expect("committed stdlib entry should be fully computed");
+                (sys_info, stdlib)
+            })
+            .collect();
         state.now = now;
         for (handle, new_module_data) in updated_modules {
             state.modules.insert(
