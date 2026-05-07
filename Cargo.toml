@@ -9,7 +9,7 @@ quickcheck = { git = "https://github.com/jakoschiko/quickcheck", rev = "6ecdf5bb
 debug = 1
 lto = true
 codegen-units = 1
-strip = false
+strip = "debuginfo"
 
 [workspace]
 members = [
