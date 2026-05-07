@@ -1020,7 +1020,19 @@ impl SysInfo {
 }
 
 pub fn module_platform_guard(body: &[Stmt]) -> Option<PythonPlatform> {
-    body.iter().find_map(platform_guard_from_stmt)
+    let body = match body.split_first() {
+        Some((Stmt::Expr(x), rest)) if x.value.is_string_literal_expr() => rest,
+        _ => body,
+    };
+    for stmt in body {
+        if let Some(platform) = platform_guard_from_stmt(stmt) {
+            return Some(platform);
+        }
+        if !matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) {
+            return None;
+        }
+    }
+    None
 }
 
 fn platform_guard_from_stmt(stmt: &Stmt) -> Option<PythonPlatform> {
@@ -1098,7 +1110,21 @@ fn string_literal(expr: &Expr) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use ruff_python_ast::PySourceType;
+
     use super::*;
+    use crate::ast::Ast;
+
+    fn parsed_module_platform_guard(code: &str) -> Option<PythonPlatform> {
+        let (module, parse_errors, unsupported_syntax_errors) =
+            Ast::parse(code, PySourceType::Python);
+        assert!(parse_errors.is_empty(), "{parse_errors:?}");
+        assert!(
+            unsupported_syntax_errors.is_empty(),
+            "{unsupported_syntax_errors:?}"
+        );
+        module_platform_guard(&module.body)
+    }
 
     #[test]
     fn test_parse_py_version() {
@@ -1136,6 +1162,48 @@ mod tests {
         );
         assert!(PythonVersion::from_str("").is_err());
         assert!(PythonVersion::from_str("abc").is_err());
+    }
+
+    #[test]
+    fn test_module_platform_guard_allows_leading_docstring_and_imports() {
+        assert_eq!(
+            parsed_module_platform_guard(
+                r#"
+"Windows-only module."
+from __future__ import annotations
+import sys
+assert sys.platform == "win32"
+x = 1
+"#,
+            ),
+            Some(PythonPlatform::windows()),
+        );
+    }
+
+    #[test]
+    fn test_module_platform_guard_stops_after_executable_statement() {
+        assert_eq!(
+            parsed_module_platform_guard(
+                r#"
+import sys
+x = 1
+assert sys.platform == "win32"
+"#,
+            ),
+            None,
+        );
+        assert_eq!(
+            parsed_module_platform_guard(
+                r#"
+import sys
+if __name__ == "__main__":
+    pass
+if sys.platform != "win32":
+    raise RuntimeError()
+"#,
+            ),
+            None,
+        );
     }
 
     #[test]
