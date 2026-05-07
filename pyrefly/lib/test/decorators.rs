@@ -552,12 +552,13 @@ from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
 from flask import current_app
+from flask.typing import ResponseReturnValue
 
 P = ParamSpec("P")
 R = TypeVar("R")
 
-def login_required(func: Callable[P, R]):
-    def decorated_view(*args: P.args, **kwargs: P.kwargs):
+def login_required(func: Callable[P, R]) -> Callable[P, ResponseReturnValue | R]:
+    def decorated_view(*args: P.args, **kwargs: P.kwargs) -> ResponseReturnValue | R:
         if args:
             return current_app.login_manager.unauthorized()
         return current_app.ensure_sync(func)(*args, **kwargs)
@@ -565,7 +566,7 @@ def login_required(func: Callable[P, R]):
 
 def setup_required(view: Callable[..., int]) -> Callable[..., int]: ...
 
-@setup_required
+@setup_required  # E: Argument `(*args: Unknown, **kwargs: Unknown) -> ResponseReturnValue | R` is not assignable to parameter `view` with type `(...) -> int` in function `setup_required`
 @login_required
 def handler(*args, **kwargs) -> int:
     return 0

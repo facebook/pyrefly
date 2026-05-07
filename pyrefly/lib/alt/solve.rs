@@ -1553,29 +1553,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.scoped_type_params(scoped_tparams.as_ref(), errors)
             }
         };
-        let validated_tparams =
-            self.validated_tparams(range, tparams, TParamsSource::TypeAlias, errors);
-        if validated_tparams.is_empty() {
-            let alias_display_name = (self.module().name(), name.clone());
-            match ta.as_type_mut() {
-                Type::Union(union) => {
-                    let display_name = &mut union.display_name;
-                    if display_name.is_none() {
-                        *display_name = Some(alias_display_name.clone());
-                    }
-                }
-                Type::Type(inner) => {
-                    if let Type::Union(union) = inner.as_mut() {
-                        let display_name = &mut union.display_name;
-                        if display_name.is_none() {
-                            *display_name = Some(alias_display_name.clone());
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(validated_tparams)
+        Forallable::TypeAlias(TypeAliasData::Value(ta)).forall(self.validated_tparams(
+            range,
+            tparams,
+            TParamsSource::TypeAlias,
+            errors,
+        ))
     }
 
     /// Create TParams for a recursive reference to a type alias. This is essentially a

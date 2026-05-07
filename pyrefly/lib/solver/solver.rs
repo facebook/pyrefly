@@ -981,10 +981,10 @@ impl Solver {
                 let original_name = u.display_name.take();
                 let mut merged = unions(mem::take(&mut u.members), &self.heap);
                 // Preserve a pre-existing display name, but keep any newly inferred one.
-                if let Type::Union(merged_u) = &mut merged {
-                    if original_name.is_some() {
-                        merged_u.display_name = original_name;
-                    }
+                if let Type::Union(merged_u) = &mut merged
+                    && original_name.is_some()
+                {
+                    merged_u.display_name = original_name;
                 }
                 *x = merged;
             }
