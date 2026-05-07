@@ -7,10 +7,10 @@
 
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::check_inlay_hint_label_values;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::check_inlay_hint_label_values;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_inlay_hint_default_config() {
@@ -19,7 +19,9 @@ fn test_inlay_hint_default_config() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -181,6 +183,7 @@ fn test_inlay_hint_disable_variables() {
     interaction
         .initialize(InitializeSettings {
             configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"},
                 "analysis": {
                     "inlayHints": {
                         "variableTypes": false
@@ -258,6 +261,7 @@ fn test_inlay_hint_disable_returns() {
     interaction
         .initialize(InitializeSettings {
             configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"},
                 "analysis": {
                     "inlayHints": {
                         "functionReturnTypes": false
@@ -317,7 +321,9 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -371,7 +377,9 @@ fn test_inlay_hint_tuple_type_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -444,7 +452,9 @@ fn test_inlay_hint_typevar_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -481,7 +491,9 @@ fn test_inlay_hint_typevartuple_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -520,7 +532,9 @@ fn test_inlay_hint_paramspec_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -557,7 +571,9 @@ fn test_inlay_hint_class_based_typed_dict_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -594,7 +610,9 @@ fn test_inlay_hint_anonymous_typed_dict_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -646,7 +664,9 @@ fn test_inlay_hint_never_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -683,7 +703,9 @@ fn test_inlay_hint_literal_string_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -709,6 +731,166 @@ fn test_inlay_hint_literal_string_has_location() {
                 return false;
             }
             check_inlay_hint_label_values(hint, &[(" -> ", false), ("LiteralString", true)])
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_type_guard_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("type_guard_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("type_guard_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 12 || hint.position.character != 7 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("(", false),
+                    ("val", false),
+                    (": ", false),
+                    ("object", true),
+                    (") -> ", false),
+                    ("TypeGuard", true),
+                    ("[", false),
+                    ("str", true),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_type_is_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("type_is_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("type_is_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 12 || hint.position.character != 7 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("(", false),
+                    ("val", false),
+                    (": ", false),
+                    ("object", true),
+                    (") -> ", false),
+                    ("TypeIs", true),
+                    ("[", false),
+                    ("str", true),
+                    ("]", false),
+                ],
+            )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_unpack_has_location() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("unpack_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("unpack_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 1 {
+                return false;
+            }
+
+            let hint = &hints[0];
+            if hint.position.line != 19 || hint.position.character != 7 {
+                return false;
+            }
+            check_inlay_hint_label_values(
+                hint,
+                &[
+                    (": ", false),
+                    ("(", false),
+                    ("**", false),
+                    ("kwargs", false),
+                    (": ", false),
+                    ("Unpack", true),
+                    ("[", false),
+                    ("Options", true),
+                    ("]", false),
+                    (") -> ", false),
+                    ("None", false),
+                ],
+            )
         })
         .unwrap();
 

@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use dupe::Dupe;
 use pyrefly_util::interned_path::InternedPath;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use serde::Serialize;
 use serde::Serializer;
 
@@ -43,6 +45,16 @@ impl ModuleStyle {
 /// Store information about where a module is sourced from.
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash)]
 pub struct ModulePath(ModulePathDetails);
+
+impl<To: 'static> Visit<To> for ModulePath {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+
+impl<To: 'static> VisitMut<To> for ModulePath {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
 
 #[derive(Debug, Clone, Dupe, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize)]
 pub enum ModulePathDetails {
@@ -180,6 +192,10 @@ impl ModulePath {
         self.style() == ModuleStyle::Interface
     }
 
+    pub fn is_memory(&self) -> bool {
+        matches!(self.0, ModulePathDetails::Memory(_))
+    }
+
     pub fn is_notebook(&self) -> bool {
         self.as_path().extension() == Some("ipynb".as_ref())
     }
@@ -267,6 +283,19 @@ impl ModulePath {
                 ModulePath::new(ModulePathDetails::BundledThirdParty(*path))
             }
         }
+    }
+
+    /// Returns true if this module comes from stubs bundled with Pyrefly
+    /// (typeshed stdlib, typeshed third-party, or custom third-party stubs).
+    /// Bundled modules resolve identically regardless of the importing file's
+    /// origin, so their results can be cached origin-agnostically.
+    pub fn is_bundled(&self) -> bool {
+        matches!(
+            self.0,
+            ModulePathDetails::BundledTypeshed(_)
+                | ModulePathDetails::BundledTypeshedThirdParty(_)
+                | ModulePathDetails::BundledThirdParty(_)
+        )
     }
 
     pub fn details(&self) -> &ModulePathDetails {

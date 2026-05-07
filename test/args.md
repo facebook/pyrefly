@@ -67,7 +67,8 @@ ERROR * [missing-source] (glob)
 -->
 
 ```scrut {output_stream.stdout}
-$ mkdir $TMPDIR/site_package_missing_stubs && \
+$ touch $TMPDIR/pyrefly.toml && \
+> mkdir $TMPDIR/site_package_missing_stubs && \
 > mkdir $TMPDIR/site_package_missing_stubs/django && \
 > touch $TMPDIR/site_package_missing_stubs/django/__init__.py && \
 > mkdir $TMPDIR/site_package_missing_stubs/django/forms && \

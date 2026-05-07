@@ -50,7 +50,7 @@ testcase!(
     test_implicit_any_no_inference,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::SkipAndInferReturnAny)
         .enable_unannotated_return_error()
-        .enable_unannotated_parameter_error(),
+        .enable_implicit_any_parameter_error(),
     r#"
 def foo(x, y):  # E: `foo` is missing an annotation for parameter `x` # E: `foo` is missing an annotation for parameter `y` # E: `foo` is missing a return annotation
     return 1
@@ -61,7 +61,7 @@ testcase!(
     test_implicit_any_with_inference,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::CheckAndInferReturnType)
         .enable_unannotated_return_error()
-        .enable_unannotated_parameter_error(),
+        .enable_implicit_any_parameter_error(),
     r#"
 def foo(x, y):  # E: `foo` is missing an annotation for parameter `x` # E: `foo` is missing an annotation for parameter `y` # E: `foo` is missing a return annotation
     return 1
@@ -79,6 +79,50 @@ class C:
     @classmethod
     def clsmethod(cls) -> int:
         return 1
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2327
+testcase!(
+    test_unannotated_parameter_first_param_by_position,
+    TestEnv::new().enable_implicit_any_parameter_error(),
+    r#"
+class A:
+    def __new__(cls, a: int) -> "A": ...
+
+class B:
+    def __new__(_cls, a: int) -> "B": ...
+
+class C:
+    def method(_self, x: int) -> int:
+        return x
+
+    @classmethod
+    def clsmethod(_cls) -> int:
+        return 1
+
+    @classmethod
+    def clsmethod2(klass) -> int:
+        return 1
+
+    @staticmethod
+    def static_method(x) -> int:  # E: `static_method` is missing an annotation for parameter `x`
+        return x
+
+    def __init_subclass__(klass, **kwargs: int) -> None: ...
+
+    # vararg as first param is NOT an implicit self param
+    def vararg_method(*args, **kwargs) -> None: ...  # E: `vararg_method` is missing an annotation for parameter `args` # E: `vararg_method` is missing an annotation for parameter `kwargs`
+
+    # keyword-only params after variadic first param should also error
+    def vararg_method2(*args, name) -> None: ...  # E: `vararg_method2` is missing an annotation for parameter `args` # E: `vararg_method2` is missing an annotation for parameter `name`
+
+# self/cls in standalone functions should still error
+def f(a: str, self, cls, b: int) -> None: ...  # E: `f` is missing an annotation for parameter `self` # E: `f` is missing an annotation for parameter `cls`
+
+# self/cls as first param of standalone function should error
+def g(self) -> None: ...  # E: `g` is missing an annotation for parameter `self`
+def h(cls) -> None: ...  # E: `h` is missing an annotation for parameter `cls`
 "#,
 );
 
@@ -129,11 +173,29 @@ x2 = {}
 
 testcase!(
     test_warn_on_implicit_any_in_attribute,
-    TestEnv::new().enable_unannotated_attribute_error(),
+    TestEnv::new().enable_implicit_any_attribute_error(),
     r#"
 from typing import Any
 class A:
     def __init__(self):
         self.x = None  # E: implicitly inferred to be `Any | None`
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1774
+testcase!(
+    test_nested_list_set_item,
+    r#"
+from typing import Any
+rows: list[str] = []
+x = []
+for i, row in enumerate(rows):
+    x.append([])
+    for j, item in enumerate(row):
+        x[-1].append(item)
+
+entries: list[Any] = []
+for i, j in entries:
+    x[i][j] = "x"
+"#,
 );

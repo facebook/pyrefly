@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::dunder;
+
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::types::class::ClassType;
@@ -28,8 +30,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(Type::Tuple)
             .map(|ty| cls.targs().substitute_into(ty))
         {
-            return Some(simplify_tuples(tuple));
+            return Some(simplify_tuples(tuple, self.heap));
         }
         None
+    }
+
+    /// Check if a class that inherits from tuple defines its own `__getitem__`,
+    /// which should take priority over tuple's special subscript handling.
+    pub fn class_overrides_tuple_getitem(&self, cls: &ClassType) -> bool {
+        if cls.class_object().is_builtin("tuple") {
+            return false;
+        }
+        self.get_non_synthesized_class_member_and_defining_class(
+            cls.class_object(),
+            &dunder::GETITEM,
+        )
+        .is_some_and(|member| !member.defining_class.is_builtin("tuple"))
     }
 }

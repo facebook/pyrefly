@@ -1,5 +1,6 @@
 """Python wrapper for Expat parser."""
 
+import sys
 from _typeshed import ReadableBuffer, SupportsRead
 from collections.abc import Callable
 from pyexpat import errors as errors, model as model
@@ -74,6 +75,11 @@ class XMLParserType:
     def SetReparseDeferralEnabled(self, enabled: bool, /) -> None:
         """Enable/Disable reparse deferral; enabled by default with Expat >=2.6.0."""
         ...
+    if sys.version_info >= (3, 10):
+        # Added in Python 3.10.20, 3.11.15, 3.12.3, 3.13.10, 3.14.1
+        def SetAllocTrackerActivationThreshold(self, threshold: int, /) -> None: ...
+        def SetAllocTrackerMaximumAmplification(self, max_factor: float, /) -> None: ...
+
     @property
     def intern(self) -> dict[str, str]: ...
     buffer_size: int

@@ -1,0 +1,11 @@
+  9:11-16: typing.Type[__static__.int64]
+  9:21-24: typing.Type[builtins.str]
+  9:29-35: typing.Type[__static__.double]
+  9:40-44: None
+  13:0-22: None
+  13:0-3: static_call_multiple_args.baz(__static__.int64, builtins.str, __static__.double) -> None
+  13:4-6: Literal[42] -> builtins.int
+    contextual: __static__.int64
+  13:8-15: Literal['hello'] -> builtins.str
+  13:17-21: builtins.float
+    contextual: __static__.double

@@ -26,7 +26,7 @@ def create_model(
 
 
 def create_model(*args: Any, **kwargs: Any) -> Any:
-    ...
+    raise NotImplementedError
 
 
 @create_model(kw_only=False, order=False)
@@ -74,7 +74,7 @@ v2 = c2_1 < c2_2
 
 @dataclass_transform(kw_only_default=True, order_default=True, frozen_default=True)
 def create_model_frozen(cls: T) -> T:
-    ...
+    raise NotImplementedError
 
 
 @create_model_frozen

@@ -177,6 +177,40 @@ def f(c: C) -> None:
     "#,
 );
 
+testcase!(
+    test_property_decorated_with_lru_cache,
+    r#"
+import functools
+
+class Foo:
+    @property
+    @functools.lru_cache
+    def foo(self) -> dict[str, str]:
+        return {"a": "b"}
+
+def main() -> None:
+    Foo.foo.get("a")
+    Foo().foo.get("a")
+    "#,
+);
+
+testcase!(
+    bug = "cached_property's __name__ should not exist and attrname should be a str",
+    test_cached_property_attrname,
+    r#"
+from functools import cached_property
+from typing import reveal_type
+
+class C:
+    @cached_property
+    def foo(self) -> int:
+        return 42
+
+reveal_type(C.foo.__name__)  # E: revealed type: str
+reveal_type(C.foo.attrname)  # E: revealed type: Any
+    "#,
+);
+
 // Make sure we don't crash.
 testcase!(
     test_staticmethod_class,
@@ -199,6 +233,41 @@ assert_type(C.d, int)
 assert_type(C().d, int)
 C.d = 42  # E: `Literal[42]` is not assignable to attribute `d` with type `D`
 C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `__set__` and cannot be set
+    "#,
+);
+
+testcase!(
+    test_descriptor_dunder_call,
+    r#"
+from typing import assert_type
+class SomeCallable:
+    def __call__(self, x: int) -> str:
+        return "a"
+class Descriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> SomeCallable:
+        return SomeCallable()
+class B:
+    __call__: Descriptor = Descriptor()
+b_instance = B()
+assert_type(b_instance(1), str)
+    "#,
+);
+
+// Test that a descriptor-based __call__ returning the same class doesn't cause
+// infinite recursion when called through a type variable bound. The circular
+// __call__ resolution is a type error because it would cause infinite recursion at runtime.
+testcase!(
+    test_descriptor_dunder_call_self_referencing_via_typevar,
+    r#"
+from typing import TypeVar
+class SelfDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> "SelfCallable":
+        return SelfCallable()
+class SelfCallable:
+    __call__: SelfDescriptor = SelfDescriptor()
+T = TypeVar("T", bound=SelfCallable)
+def f(x: T) -> None:
+    x()  # E: `__call__` on `T` resolves back to the same type, creating infinite recursion at runtime
     "#,
 );
 
@@ -312,7 +381,6 @@ from __future__ import annotations
 
 from typing import Callable
 
-
 class CachedMethod:
     def __init__(self, fn: Callable[[Constraint], int]) -> None:
         self._fn = fn
@@ -325,10 +393,8 @@ class CachedMethod:
 
     def clear_cache(self, obj: Constraint) -> None: ...
 
-
 def cache_on_self(fn: Callable[[Constraint], int]) -> CachedMethod:
     return CachedMethod(fn)
-
 
 class Constraint:
     @cache_on_self
@@ -581,6 +647,33 @@ from .decl_api import DeclarativeBase as DeclarativeBase
     env
 }
 
+fn stub_descriptor_env() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "pkg.styleable",
+        "pkg/styleable.pyi",
+        r#"
+class Descriptor:
+    def __get__(self, obj: object, owner: object) -> str: ...
+    def __set__(self, obj: object, value: str) -> None: ...
+
+class StyleableObject:
+    style: Descriptor
+    "#,
+    );
+    env.add_with_path(
+        "pkg.cell",
+        "pkg/cell.pyi",
+        r#"
+from .styleable import StyleableObject
+
+class Cell(StyleableObject): ...
+    "#,
+    );
+    env.add_with_path("pkg", "pkg/__init__.pyi", "");
+    env
+}
+
 testcase!(
     test_sqlalchemy_mapped_is_always_descriptor,
     sqlalchemy_mapped_env(),
@@ -592,5 +685,190 @@ class User(Base):
     name: Mapped[str]
     def __init__(self, name: str):
         self.name = name
+    "#,
+);
+
+testcase!(
+    test_stub_annotation_only_descriptor_has_descriptor_semantics,
+    stub_descriptor_env(),
+    r#"
+from typing import assert_type
+
+from pkg.cell import Cell
+from pkg.styleable import StyleableObject
+
+c = Cell()
+s = StyleableObject()
+
+assert_type(c.style, str)
+assert_type(s.style, str)
+    "#,
+);
+
+testcase!(
+    test_overloaded_descriptor_get_with_bounded_typevar,
+    r#"
+from typing import Callable, overload
+
+class MyDescriptor[_ModelT, _RT]:
+    def __init__(self, fget: Callable[[type[_ModelT]], _RT], /) -> None:
+        self.fget = fget
+
+    @overload
+    def __get__(self, instance: None, objtype: type[_ModelT]) -> _RT: ...
+    @overload
+    def __get__(self, instance: _ModelT, objtype: type[_ModelT]) -> _RT: ...
+    def __get__(self, instance: _ModelT | None, objtype: type[_ModelT]) -> _RT:
+        return self.fget.__get__(instance, objtype)()
+
+class A:
+    @MyDescriptor
+    @classmethod
+    def x(cls) -> dict[str, int]:
+        return {"x": 0}
+
+class B[T: A]:
+    def __init__(self, a: type[T]):
+        self.a = a
+
+    def f(self):
+        for k in self.a.x:
+            print(k)
+    "#,
+);
+
+testcase!(
+    test_property_constructor_non_callable_arg,
+    r#"
+from typing import Any, assert_type
+class C:
+    p = property(42)  # E: `Literal[42]` is not assignable to parameter `fget`
+def f(c: C):
+    assert_type(c.p, Any)
+    "#,
+);
+
+testcase!(
+    test_property_constructor_with_none_setter,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    foo = property(_get_foo, None)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = 42  # E: Attribute `foo` of class `C` is a read-only property and cannot be set
+    "#,
+);
+
+testcase!(
+    test_property_constructor_read_only,
+    r#"
+from typing import assert_type, reveal_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    foo = property(_get_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = 42  # E: Attribute `foo` of class `C` is a read-only property and cannot be set
+    reveal_type(C.foo)  # E: revealed type: (self: C) -> int
+    "#,
+);
+
+testcase!(
+    test_property_constructor_with_setter,
+    r#"
+from typing import assert_type, reveal_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: str) -> None:
+        pass
+    foo = property(_get_foo, _set_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = "42"
+    c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    "#,
+);
+
+testcase!(
+    test_property_constructor_with_deleter,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: int) -> None:
+        pass
+    def _del_foo(self) -> None:
+        pass
+    foo = property(_get_foo, _set_foo, _del_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = 1
+    del c.foo
+    "#,
+);
+
+testcase!(
+    test_property_constructor_keyword_args,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: str) -> None:
+        pass
+    foo = property(fget=_get_foo, fset=_set_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = "42"
+    c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
+    "#,
+);
+
+testcase!(
+    test_property_constructor_mixed_args,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: str) -> None:
+        pass
+    foo = property(_get_foo, fset=_set_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = "42"
+    c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
+    "#,
+);
+
+testcase!(
+    test_property_constructor_lambda,
+    r#"
+from typing import assert_type, Literal
+class C:
+    foo = property(lambda self: 42)
+def f(c: C):
+    assert_type(c.foo, Literal[42])
+    c.foo = 42  # E: Attribute `foo` of class `C` is a read-only property and cannot be set
+    "#,
+);
+
+testcase!(
+    test_property_constructor_nullable_getter,
+    r#"
+from typing import assert_type
+class C:
+    def _get_x(self) -> str | None:
+        return None
+    x = property(_get_x)
+def f(c: C):
+    assert_type(c.x, str | None)
     "#,
 );

@@ -153,7 +153,7 @@ assert_type(m5.x, RootModel[int])
 m6 = Model3(x=RootModel(0))
 assert_type(m6.x, RootModel[int])
 Model3(x='oops')  # E: `Literal['oops']` is not assignable to parameter `x`
-Model3(x=RootModel('oops')) # E: Argument `Literal['oops']` is not assignable to parameter `root` with type `int` in function `pydantic.root_model.RootModel.__init__`
+Model3(x=RootModel('oops')) # E: Argument `RootModel[str]` is not assignable to parameter `x` with type `RootModel[int] | int` in function `Model3.__init__`
     "#,
 );
 
@@ -251,7 +251,25 @@ class Model(BaseModel, strict=True):
     x: OuterModel
 
 m1 = Model(x=OuterModel(InnerModel(5)))
-m2 = Model(x=InnerModel(5))  
+m2 = Model(x=InnerModel(5))
 m3 = Model(x=5)
+    "#,
+);
+
+pydantic_testcase!(
+    test_root_model_dict_field,
+    r#"
+from pydantic import BaseModel, RootModel
+
+class InnerModel(BaseModel):
+    a: int
+
+InnerModelDict = RootModel[dict[str, InnerModel]]
+
+class OuterModel(BaseModel):
+    data: InnerModelDict
+
+def serialize(d: InnerModelDict) -> OuterModel:
+    return OuterModel(data=d)
     "#,
 );

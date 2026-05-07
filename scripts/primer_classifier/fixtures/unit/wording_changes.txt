@@ -1,0 +1,5 @@
+wordproject (https://github.com/example/wordproject)
++ ERROR src/foo.py:10:5-20: Expected `int` but got `str` [bad-argument]
+- ERROR src/foo.py:10:5-20: Unexpected type `str` for argument, expected `int` [bad-argument]
++ ERROR src/bar.py:5:1-10: Cannot return `None`, expected `int` [bad-return]
+- ERROR src/bar.py:5:1-10: Return type `None` is not assignable to `int` [bad-return]

@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
@@ -72,9 +71,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 all_fields.extend(dataclass.fields.clone());
             }
         }
-        for name in cls.fields() {
-            if cls.is_field_annotated(name) {
-                all_fields.insert(name.clone());
+        if let Some(class_fields) = self.get_class_fields(cls) {
+            for name in class_fields.names() {
+                if class_fields.is_field_annotated(name) {
+                    all_fields.insert(name.clone());
+                }
             }
         }
         all_fields
@@ -154,7 +155,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             dunder::DATACLASS_FIELDS,
-            ClassSynthesizedField::new(self.heap.mk_class_type(dataclass_fields_type)),
+            ClassSynthesizedField::new_classvar(self.heap.mk_class_type(dataclass_fields_type)),
         );
 
         if dataclass.kws.order {
@@ -169,7 +170,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if dataclass.kws.slots {
             // It's a runtime error to set slots=True on a class that already defines __slots__.
             // Note that inheriting __slots__ from a base class is fine.
-            if cls.contains(&dunder::SLOTS) {
+            if self
+                .get_class_fields(cls)
+                .is_some_and(|f| f.contains(&dunder::SLOTS))
+            {
                 self.error(
                     errors,
                     cls.range(),
@@ -225,7 +229,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // We don't use assignability here because overloads could cause issues.
                 let get_return_ty = self
                     .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type());
+                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
 
                 if let Some(Type::SelfType(_)) = get_return_ty {
                     continue;
@@ -264,7 +268,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Get the __get__ method's return type from the descriptor class.
                 let get_return_ty = self
                     .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type());
+                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
 
                 // Get the __set__ method and extract the value parameter type (3rd param).
                 let set_value_ty = self
@@ -423,16 +427,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::REPLACE),
+            metadata: FuncMetadata::method(cls, dunder::REPLACE),
         });
         ClassSynthesizedField::new(ty)
     }
 
+    /// Validate that frozen and non-frozen dataclasses are not mixed in an inheritance chain.
+    /// For standard `@dataclass`, we reject both directions (frozen-from-non-frozen and
+    /// non-frozen-from-frozen). For `@dataclass_transform` classes, only non-frozen inheriting
+    /// from frozen is an error, since the transform allows each class to independently opt
+    /// into frozen.
     pub fn validate_frozen_dataclass_inheritance(
         &self,
         cls: &Class,
         dataclass_metadata: &DataclassMetadata,
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        is_from_dataclass_transform: bool,
         errors: &ErrorCollector,
     ) {
         for (base, base_metadata) in bases_with_metadata {
@@ -441,6 +451,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let is_current_frozen = dataclass_metadata.kws.frozen;
 
                 if is_current_frozen != is_base_frozen {
+                    // For dataclass_transform classes, a frozen subclass of a non-frozen base is
+                    // allowed. The restriction only applies when a non-frozen subclass inherits
+                    // from a frozen base, which would violate the parent's immutability guarantee.
+                    if is_from_dataclass_transform && is_current_frozen && !is_base_frozen {
+                        continue;
+                    }
+
                     let current_status = if is_current_frozen {
                         "frozen"
                     } else {
@@ -599,6 +616,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         alias: &mut Option<Name>,
         converter_param: &mut Option<Type>,
     ) {
+        // Class-based field specifiers (e.g. `field_specifiers=(CustomField,)`) need to be
+        // resolved to their constructor callable so that we can read keyword defaults from
+        // `__init__`. This mirrors how Pyright handles `field_specifiers` per PEP 681.
+        let constructor_callable = self.constructor_to_callable_distributed(func);
+        let func = constructor_callable.as_ref().unwrap_or(func);
         let sigs = func.callable_signatures();
         let sig = if sigs.len() == 1 {
             sigs[0].clone()
@@ -619,7 +641,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }))
                 .unwrap(),
-                (*overload.metadata).clone(),
+                &overload.metadata,
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
@@ -641,7 +663,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | Param::KwOnly(name, ty, Required::Required) => (name, ty, None),
                     Param::Pos(name, ty, Required::Optional(default))
                     | Param::KwOnly(name, ty, Required::Optional(default)) => {
-                        (name, ty, default.as_ref())
+                        (name, ty, default.as_ref().map(|d| &d.ty))
                     }
                     _ => continue,
                 };
@@ -705,7 +727,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let constructor_callable = self.constructor_to_callable_distributed(converter);
         let converter = constructor_callable.as_ref().unwrap_or(converter);
         self.distribute_over_union(converter, |ty| {
-            ty.callable_first_param()
+            ty.callable_first_param(self.heap)
                 .unwrap_or_else(|| self.heap.mk_any_implicit())
         })
     }
@@ -723,7 +745,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             constructor_callable
                 .as_ref()
                 .unwrap_or(factory)
-                .callable_return_type()
+                .callable_return_type(self.heap)
                 .unwrap_or_else(|| self.heap.mk_any_implicit()),
         )
     }
@@ -734,8 +756,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let compute_for_class = |target_cls: &Class| -> SmallSet<Name> {
             let mut kw_only_fields = SmallSet::new();
             let mut seen_kw_only_marker = false;
-            for name in target_cls.fields() {
-                if !target_cls.is_field_annotated(name) {
+            let Some(class_fields) = self.get_class_fields(target_cls) else {
+                return kw_only_fields;
+            };
+            for name in class_fields.names() {
+                if !class_fields.is_field_annotated(name) {
                     continue;
                 }
                 let Some(field) =
@@ -837,7 +862,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if !is_kw_only {
                     if !has_default
                         && has_seen_default
-                        && let Some(range) = cls.field_decl_range(&name)
+                        && let Some(range) = self
+                            .get_class_fields(cls)
+                            .and_then(|f| f.field_decl_range(&name))
                     {
                         self.error(
                             errors,
@@ -853,14 +880,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
 
-                // Get converter param: explicit field converter takes priority, then Pydantic lax table
-                let converter_param = field_flags.converter_param.clone().or_else(|| {
-                    if !strict {
-                        converter_table.get(&field.ty()).cloned()
-                    } else {
-                        None
-                    }
-                });
+                // If this field has a `@field_validator(..., mode='before'|'plain')`, the init
+                // parameter accepts `Any` because the validator transforms arbitrary input.
+                let converter_param = if dataclass.pydantic_before_validator_fields.contains(&name)
+                {
+                    Some(self.heap.mk_any_explicit())
+                } else {
+                    field_flags.converter_param.clone().or_else(|| {
+                        if !strict {
+                            converter_table.get(&field.ty()).cloned()
+                        } else {
+                            None
+                        }
+                    })
+                };
 
                 if field_flags.init_by_name {
                     params.push(self.as_param(
@@ -894,7 +927,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT),
+            metadata: FuncMetadata::method(cls, dunder::INIT),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -966,7 +999,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             callable.clone()
                         },
-                        metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), name.clone()),
+                        metadata: FuncMetadata::method(cls, name.clone()),
                     })),
                 )
             })
@@ -978,7 +1011,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ret = self.heap.mk_class_type(self.stdlib.int().clone());
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::HASH),
+            metadata: FuncMetadata::method(cls, dunder::HASH),
         }))
     }
 }

@@ -35,7 +35,12 @@ async def func2(val: int | Awaitable[int]):
         x: int = await val
         return x
     else:
-        assert_type(val, int)
+        # We can't say much here. The strictly correct answer is
+        # (int | Awaitable[int]) & ~Awaitable[Any], but conformant implementations
+        # may simplify this.
+        # But it should definitely remain assignable to `int | Awaitable[int]`.
+        y: int | Awaitable[int] = val
+        return y
 
 
 T_A = TypeVar("T_A", bound="A")

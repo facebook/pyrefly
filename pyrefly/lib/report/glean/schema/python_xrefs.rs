@@ -19,32 +19,6 @@ use crate::report::glean::schema::*;
 use crate::report::glean::facts::GleanPredicate;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct XRefsByTarget {
-    pub id: u64,
-    pub key: Box<XRefsByTarget_key>,
-}
-
-impl XRefsByTarget {
-    pub fn new(target: python::DeclarationLocation, file: src::File, spans: Vec<src::ByteSpan>) -> Self {
-        XRefsByTarget {
-            id: 0,
-            key: Box::new(XRefsByTarget_key {
-                target,
-                file,
-                spans
-            }),
-        }
-    }
-}
-
-impl GleanPredicate for XRefsByTarget {
-    fn GLEAN_name() -> String {
-        String::from("python.xrefs.XRefsByTarget.1")
-    }
-
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct XRefsByFile {
     pub id: u64,
     pub key: Box<XRefsByFile_key>,
@@ -67,13 +41,6 @@ impl GleanPredicate for XRefsByFile {
         String::from("python.xrefs.XRefsByFile.1")
     }
 
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct XRefsByTarget_key {
-    pub target: python::DeclarationLocation,
-    pub file: src::File,
-    pub spans: Vec<src::ByteSpan>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]

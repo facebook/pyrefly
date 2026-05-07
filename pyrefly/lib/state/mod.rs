@@ -14,6 +14,7 @@ pub mod loader;
 pub mod lsp;
 pub mod lsp_attributes;
 pub mod memory;
+pub mod module;
 pub mod notebook;
 pub mod require;
 pub mod semantic_tokens;

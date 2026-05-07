@@ -24,15 +24,15 @@ class Array(Generic[*Ts]):
 
 
 def add_batch_axis(x: Array[*Shape]) -> Array[Batch, *Shape]:
-    ...
+    raise NotImplementedError
 
 
 def del_batch_axis(x: Array[Batch, *Shape]) -> Array[*Shape]:
-    ...
+    raise NotImplementedError
 
 
 def add_batch_channels(x: Array[*Shape]) -> Array[Batch, *Shape, Channels]:
-    ...
+    raise NotImplementedError
 
 
 def func1(a: Array[Height, Width]):
@@ -45,11 +45,12 @@ def func1(a: Array[Height, Width]):
 
 
 def prefix_tuple(x: T, y: tuple[*Ts]) -> tuple[T, *Ts]:
-    ...
+    raise NotImplementedError
 
 
-z = prefix_tuple(x=0, y=(True, "a"))
-assert_type(z, tuple[int, bool, str])
+def call_prefix_tuple(x: int, y: bool, z: str):
+    result = prefix_tuple(x=x, y=(y, z))
+    assert_type(result, tuple[int, bool, str])
 
 
 def move_first_element_to_last(tup: tuple[T, *Ts]) -> tuple[*Ts, T]:

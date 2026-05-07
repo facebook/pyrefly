@@ -6,12 +6,12 @@
  */
 
 use lsp_types::Url;
-use lsp_types::request::WorkspaceSymbolRequest;
+use lsp_types::WorkspaceSymbolResponse;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_workspace_symbol() {
@@ -32,11 +32,7 @@ fn test_workspace_symbol() {
 
     interaction
         .client
-        .send_request::<WorkspaceSymbolRequest>(
-            json!({
-                "query": "this_is_a_very_long_function_name_so_we_can"
-            }),
-        )
+        .send_workspace_symbol("this_is_a_very_long_function_name_so_we_can")
         .expect_response(json!([
             {
                 "kind": 12,
@@ -50,6 +46,106 @@ fn test_workspace_symbol() {
                 "name": "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
             }
         ]))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_workspace_symbol_prefers_non_init_result() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("workspace_symbol_prefer_non_init/implementation.py");
+    interaction
+        .client
+        .did_open("workspace_symbol_prefer_non_init/__init__.py");
+
+    let implementation_uri =
+        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/implementation.py"))
+            .unwrap();
+    let init_uri =
+        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/__init__.py"))
+            .unwrap();
+    let symbol_name = "workspace_symbol_prefers_non_init_over_init_reexport";
+
+    interaction
+        .client
+        .send_workspace_symbol(symbol_name)
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            assert!(symbols.iter().all(|symbol| symbol.name == symbol_name));
+            assert!(symbols.iter().all(|symbol| {
+                symbol.location.uri == implementation_uri || symbol.location.uri == init_uri
+            }));
+
+            let first_init_index = symbols
+                .iter()
+                .position(|symbol| symbol.location.uri == init_uri)
+                .expect("expected at least one __init__.py result");
+            let last_non_init_index = symbols
+                .iter()
+                .rposition(|symbol| symbol.location.uri == implementation_uri)
+                .expect("expected at least one non-__init__.py result");
+
+            assert!(last_non_init_index < first_init_index);
+            true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3041
+#[test]
+fn test_workspace_symbol_multibyte_no_panic() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("workspace_symbol_multibyte/__init__.py");
+    interaction
+        .client
+        .did_open("workspace_symbol_multibyte/impl_mod.py");
+
+    interaction
+        .client
+        .send_workspace_symbol("workspace_symbol_multibyte_repro")
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            assert!(
+                !symbols.is_empty(),
+                "Expected at least one result for workspace_symbol_multibyte_repro"
+            );
+            true
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();

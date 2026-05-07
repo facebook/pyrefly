@@ -28,6 +28,7 @@ use ruff_python_ast::visitor::Visitor;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
 use super::extract_shared::MethodInfo;
 use super::extract_shared::code_at_range;
@@ -39,6 +40,7 @@ use super::extract_shared::split_selection;
 use super::extract_shared::unique_name;
 use super::extract_shared::validate_non_empty_selection;
 use super::types::LocalRefactorCodeAction;
+use crate::module::module_info::ModuleInfo;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
@@ -327,7 +329,10 @@ fn expression_uses_local_names(
         if param_names.contains(name) {
             continue;
         }
-        let defs = transaction.find_definition(handle, range.start(), FindPreference::default());
+        let defs = transaction
+            .find_definition(handle, range.start(), FindPreference::default())
+            .map(Vec1::into_vec)
+            .unwrap_or_default();
         if defs.iter().any(|def| {
             def.module.path() == module_path
                 && function_def.range().contains_range(def.definition_range)
@@ -472,7 +477,7 @@ fn collect_matching_expression_ranges(
 fn build_callsite_edits(
     transaction: &Transaction<'_>,
     handle: &Handle,
-    module_info: &crate::module::module_info::ModuleInfo,
+    module_info: &ModuleInfo,
     param_info: &ParamInfo,
     template: &ExpressionTemplate,
     new_param_name: &str,
@@ -485,6 +490,8 @@ fn build_callsite_edits(
             function_ctx.function_def.name.range.start(),
             FindPreference::default(),
         )
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
         .into_iter()
         .find(|def| {
             def.module.path() == module_info.path()
@@ -503,6 +510,7 @@ fn build_callsite_edits(
             definition.metadata.clone(),
             definition.definition_range,
             &definition.module,
+            true,
         ) else {
             continue;
         };

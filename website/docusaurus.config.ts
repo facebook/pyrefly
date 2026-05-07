@@ -302,6 +302,14 @@ const config: Config = {
                   component: '@site/src/pages/landingPage.tsx',
                   exact: true,
                 });
+                // Short vanity URL surfaced from the VS Code extension's
+                // status-bar tooltip and the CLI upsell. Points users at
+                // the install/onboarding docs.
+                addRoute({
+                  path: '/getting-started',
+                  component: '@site/src/pages/redirect-getting-started.tsx',
+                  exact: true,
+                });
               },
             };
         },
@@ -417,6 +425,7 @@ const config: Config = {
         'https://buttons.github.io/buttons.js',
         'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js',
         '/js/code-block-buttons.js',
+        '/js/gtag-fragment-tracking.js',
     ],
     stylesheets: ['/css/code-block-buttons.css']
 };

@@ -1,0 +1,41 @@
+urllib3 (https://github.com/urllib3/urllib3)
++ ERROR src/urllib3/util/ssl_.py:125:9-36: Cannot assign to `HAS_NEVER_CHECK_COMMON_NAME` because it is imported as final [bad-assignment]
++ ::error file=src/urllib3/util/ssl_.py,line=125,col=9,endLine=125,endColumn=36,title=Pyrefly bad-assignment::Cannot assign to `HAS_NEVER_CHECK_COMMON_NAME` because it is imported as final
+
+trio (https://github.com/python-trio/trio)
++ ERROR src/trio/_tests/test_highlevel_socket.py:11:33-34: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ::error file=src/trio/_tests/test_highlevel_socket.py,line=11,col=33,endLine=11,endColumn=34,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
+
+zulip (https://github.com/zulip/zulip)
++ ERROR zproject/settings.py:41:34-35: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ::error file=zproject/settings.py,line=41,col=34,endLine=41,endColumn=35,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
+
+ibis (https://github.com/ibis-project/ibis)
++ ERROR ibis/expr/datatypes/__init__.py:4:38-39: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:6:36-37: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:8:34-35: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:9:37-38: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:10:40-41: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:12:34-35: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:13:37-38: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:14:34-35: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:15:37-38: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:16:39-40: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:17:35-36: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:18:37-38: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:19:37-38: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ERROR ibis/expr/types/__init__.py:20:38-39: Cannot assign to `TYPE_CHECKING` because it is imported as final [bad-assignment]
++ ::error file=ibis/expr/datatypes/__init__.py,line=4,col=38,endLine=4,endColumn=39,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=6,col=36,endLine=6,endColumn=37,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=8,col=34,endLine=8,endColumn=35,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=9,col=37,endLine=9,endColumn=38,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=10,col=40,endLine=10,endColumn=41,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=12,col=34,endLine=12,endColumn=35,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=13,col=37,endLine=13,endColumn=38,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=14,col=34,endLine=14,endColumn=35,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=15,col=37,endLine=15,endColumn=38,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=16,col=39,endLine=16,endColumn=40,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=17,col=35,endLine=17,endColumn=36,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=18,col=37,endLine=18,endColumn=38,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=19,col=37,endLine=19,endColumn=38,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final
++ ::error file=ibis/expr/types/__init__.py,line=20,col=38,endLine=20,endColumn=39,title=Pyrefly bad-assignment::Cannot assign to `TYPE_CHECKING` because it is imported as final

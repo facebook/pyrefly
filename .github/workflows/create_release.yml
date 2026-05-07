@@ -1,0 +1,126 @@
+name: Create GitHub Release
+
+# This workflow creates a GitHub Release with release notes after a new
+# version is published to PyPI and a tag is pushed.
+#
+# It is called by publish_to_pypi.yml after the tag push succeeds.
+# Creating the release will in turn trigger release_binaries.yml
+# (which fires on release published events) to build and upload
+# platform binaries.
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'The version tag (e.g. 0.57.0)'
+        required: true
+        type: string
+    secrets:
+      DISCORD_RELEASES_WEBHOOK_URL:
+        description: 'Discord webhook URL for the releases channel'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo at tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      - name: Find release notes file
+        id: find-notes
+        run: |
+          VERSION="${{ inputs.tag_name }}"
+          NOTES_FILE="release_notes/release-notes-v${VERSION}.md"
+
+          if [ -f "$NOTES_FILE" ]; then
+            echo "notes_file=$NOTES_FILE" >> $GITHUB_OUTPUT
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "Found release notes: $NOTES_FILE"
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "No release notes file found at $NOTES_FILE"
+            echo "Will create release with auto-generated notes"
+          fi
+
+      - name: Create release with notes file
+        if: steps.find-notes.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag_name }}" \
+            --title "Pyrefly v${{ inputs.tag_name }}" \
+            --notes-file "${{ steps.find-notes.outputs.notes_file }}"
+
+      - name: Create release with auto-generated notes
+        if: steps.find-notes.outputs.found != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag_name }}" \
+            --title "Pyrefly v${{ inputs.tag_name }}" \
+            --generate-notes
+
+  notify-discord:
+    name: Notify Discord
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - name: Check webhook configured
+        id: check-webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+        run: |
+          if [ -n "$WEBHOOK_URL" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "DISCORD_RELEASES_WEBHOOK_URL secret not set, skipping notification"
+          fi
+
+      - name: Send Discord notification
+        if: steps.check-webhook.outputs.configured == 'true'
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+        run: |
+          VERSION="${{ inputs.tag_name }}"
+          RELEASE_URL="https://github.com/facebook/pyrefly/releases/tag/${VERSION}"
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "\ud83d\ude80 Pyrefly v${VERSION} Released!",
+              "url": "${RELEASE_URL}",
+              "description": "Pyrefly v${VERSION} is now available! Check out the release notes for details on what's new, bug fixes, and more.",
+              "color": 16744448,
+              "fields": [
+                {
+                  "name": "Install / Upgrade",
+                  "value": "\`\`\`bash\npip install --upgrade pyrefly==${VERSION}\n\`\`\`",
+                  "inline": false
+                },
+                {
+                  "name": "Links",
+                  "value": "[Release Notes](${RELEASE_URL}) | [PyPI](https://pypi.org/project/pyrefly/${VERSION}/)",
+                  "inline": false
+                }
+              ],
+              "footer": {
+                "text": "Pyrefly - Python Type Checker"
+              }
+            }]
+          }
+          EOF
+          )
+
+          curl -sf -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK_URL"
+
+          echo "Discord notification sent for v${VERSION}"

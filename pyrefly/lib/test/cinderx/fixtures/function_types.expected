@@ -1,0 +1,9 @@
+  7:11-14: typing.Type[builtins.int]
+  7:19-22: typing.Type[builtins.str]
+  8:11-17: builtins.str
+  8:11-14: typing.Type[builtins.str]
+  8:15-16: builtins.int
+  11:0-1: builtins.str
+  11:4-11: builtins.str
+  11:4-7: function_types.foo(builtins.int) -> builtins.str
+  11:8-10: Literal[42] -> builtins.int

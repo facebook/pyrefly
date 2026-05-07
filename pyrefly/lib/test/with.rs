@@ -208,7 +208,6 @@ class CM:
   def __exit__(self, *args) -> bool:
     return False
 
-
 def f() -> int:  # E: missing an explicit `return`
   with CM():
     return 1
@@ -226,7 +225,6 @@ class CM:
 
   def __exit__(self, *args) -> Literal[True]:
     return True
-
 
 def f() -> int:  # E: missing an explicit `return`
   with CM():
@@ -247,7 +245,6 @@ class CM:
 
   def __exit__(self, *args) -> Literal[False]:
     return False
-
 
 def f() -> int:
   with CM():
@@ -272,11 +269,11 @@ testcase!(
     test_with_contextmanager,
     r#"
 import contextlib
-from typing import Iterator
+from typing import Generator
 
 @contextlib.contextmanager
-def f() -> Iterator[str]:
-    return iter([""])
+def f() -> Generator[str, None, None]:
+    yield ""
 
 def g() -> bool:
     with f():

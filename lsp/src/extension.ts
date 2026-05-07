@@ -21,11 +21,16 @@ import {
   ResponseError,
   ServerOptions,
 } from 'vscode-languageclient/node';
-import {PythonExtension} from '@vscode/python-extension';
-import {updateStatusBar, getStatusBarItem} from './status-bar';
-import {runDocstringFoldingCommand} from './docstring';
 import {
-  triggerMsPythonRefreshLanguageServers,
+  TYPE_ERROR_DISPLAY_STATUS_VERSION,
+  getStatusBarItem,
+  updateStatusBar,
+} from './status-bar';
+import {runDocstringFoldingCommand} from './docstring';
+import {registerCodeLensCommands} from './codeLens';
+import {PythonEnvironment} from './python-environment';
+import {
+  triggerMsPythonRefreshLanguageServersIfInstalled,
   disableWindsurfPyrightIfInstalled,
   disableBasedPyrightIfInstalled,
   disableCursorPyrightIfInstalled,
@@ -55,37 +60,28 @@ function requireSetting<T>(path: string): T {
  * - VSCode returns a configuration of {setting: 'value'} from settings.json
  * - This function will add pythonPath: '/usr/bin/python3' from the Python extension to the configuration
  * - {setting: 'value', pythonPath: '/usr/bin/python3'} is returned
- *
- * @param pythonExtension the python extension API
- * @param configurationItems the sections within the workspace
- * @param configuration the configuration returned by vscode in response to a workspace/configuration request (usually what's in settings.json)
- * corresponding to the sections described in configurationItems
  */
 async function overridePythonPath(
-  pythonExtension: PythonExtension,
+  pythonEnv: PythonEnvironment,
   configurationItems: ConfigurationItem[],
   configuration: (object | null)[],
 ): Promise<(object | null)[]> {
-  const getPythonPathForConfigurationItem = async (index: number) => {
-    if (
-      configurationItems.length <= index ||
-      configurationItems[index].section !== 'python'
-    ) {
-      return undefined;
-    }
-    let scopeUri = configurationItems[index].scopeUri;
-    return await pythonExtension.environments.getActiveEnvironmentPath(
-      scopeUri === undefined ? undefined : vscode.Uri.parse(scopeUri),
-    ).path;
-  };
   const newResult = await Promise.all(
     configuration.map(async (item, index) => {
-      const pythonPath = await getPythonPathForConfigurationItem(index);
+      if (
+        configurationItems.length <= index ||
+        configurationItems[index].section !== 'python'
+      ) {
+        return item;
+      }
+      const scopeUri = configurationItems[index].scopeUri;
+      const pythonPath = await pythonEnv.getInterpreterPath(
+        scopeUri === undefined ? undefined : vscode.Uri.parse(scopeUri),
+      );
       if (pythonPath === undefined) {
         return item;
-      } else {
-        return {...item, pythonPath};
       }
+      return {...item, pythonPath};
     }),
   );
   return newResult;
@@ -116,18 +112,41 @@ export async function activate(context: ExtensionContext) {
     process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
   );
 
-  let pythonExtension = await PythonExtension.api();
+  const pythonEnv = new PythonEnvironment(context);
 
   // Otherwise to spawn the server
   let serverOptions: ServerOptions = {
     command: path === '' ? bundledPyreflyPath.fsPath : path,
     args: args,
   };
-  let rawInitialisationOptions = vscode.workspace.getConfiguration('pyrefly');
+  // `getConfiguration` returns a `WorkspaceConfiguration` proxy, not a
+  // plain object: spread (`{...cfg}`) and `Object.assign({}, cfg)` rely
+  // on own enumerable properties and may silently drop the configured
+  // values. JSON-roundtrip via the proxy's `toJSON` (the same path
+  // `vscode-languageclient` itself takes when serializing
+  // `initializationOptions`) gives us a faithful plain object to merge
+  // with.
+  const rawInitialisationOptions = JSON.parse(
+    JSON.stringify(vscode.workspace.getConfiguration('pyrefly') ?? {}),
+  );
+
+  // Opt into the V2 wire shape for the typeErrorDisplayStatus request.
+  // An older binary that doesn't know V2 still returns its V1 bare
+  // string when the field is absent / unrecognized, so declaring V2 is
+  // safe even against pre-V2 binaries — V1's bare-string response is
+  // distinguishable by shape (`typeof resp === 'string'`) and the V1
+  // renderer below handles it.
+  const initializationOptions = {
+    ...rawInitialisationOptions,
+    pyrefly: {
+      ...((rawInitialisationOptions as any).pyrefly ?? {}),
+      typeErrorDisplayStatusVersion: TYPE_ERROR_DISPLAY_STATUS_VERSION,
+    },
+  };
 
   // Options to control the language client
   let clientOptions: LanguageClientOptions = {
-    initializationOptions: rawInitialisationOptions,
+    initializationOptions,
     // Register the server for Python documents
     documentSelector: [
       {scheme: 'file', language: 'python'},
@@ -161,12 +180,11 @@ export async function activate(context: ExtensionContext) {
           if (result instanceof ResponseError) {
             return result;
           }
-          const newResult = await overridePythonPath(
-            pythonExtension,
+          return await overridePythonPath(
+            pythonEnv,
             params.items,
             result as (object | null)[],
           );
-          return newResult;
         },
       },
     },
@@ -186,13 +204,17 @@ export async function activate(context: ExtensionContext) {
     }),
   );
 
-  context.subscriptions.push(
-    pythonExtension.environments.onDidChangeActiveEnvironmentPath(() => {
+  pythonEnv
+    .onDidChangeInterpreter(() => {
       client.sendNotification(DidChangeConfigurationNotification.type, {
         settings: {},
       });
-    }),
-  );
+    })
+    .then(disposable => {
+      if (disposable) {
+        context.subscriptions.push(disposable);
+      }
+    });
 
   context.subscriptions.push(
     workspace.onDidChangeConfiguration(async event => {
@@ -232,15 +254,16 @@ export async function activate(context: ExtensionContext) {
       await runDocstringFoldingCommand(client, outputChannel, 'editor.unfold');
     }),
   );
+  registerCodeLensCommands(context, pythonEnv);
 
   // When our extension is activated, make sure ms-python knows
   // TODO(kylei): remove this hack once ms-python has this behavior
-  await triggerMsPythonRefreshLanguageServers();
+  await triggerMsPythonRefreshLanguageServersIfInstalled();
 
   vscode.workspace.onDidChangeConfiguration(async e => {
     if (e.affectsConfiguration(`python.pyrefly.disableLanguageServices`)) {
       // TODO(kylei): remove this hack once ms-python has this behavior
-      await triggerMsPythonRefreshLanguageServers();
+      await triggerMsPythonRefreshLanguageServersIfInstalled();
     }
   });
 

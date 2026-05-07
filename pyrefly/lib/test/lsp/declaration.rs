@@ -16,7 +16,10 @@ use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_declaration_report(state: &State, handle: &Handle, position: TextSize) -> String {
-    let defs = state.transaction().goto_declaration(handle, position);
+    let defs = state
+        .transaction()
+        .goto_declaration(handle, position)
+        .unwrap_or_default();
     if !defs.is_empty() {
         defs.into_iter()
             .map(

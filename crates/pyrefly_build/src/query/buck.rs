@@ -6,6 +6,7 @@
  */
 
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -74,6 +75,16 @@ impl BxlArgs {
         })?;
 
         Ok(PathBuf::from(stdout.trim()))
+    }
+}
+
+impl Display for BxlArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "isolation_dir: {:?}, extras: {:?}",
+            self.isolation_dir, self.extras
+        )
     }
 }
 

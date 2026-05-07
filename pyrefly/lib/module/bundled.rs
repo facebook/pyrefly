@@ -38,13 +38,10 @@ pub fn set_readonly(path: &Path, value: bool) -> anyhow::Result<()> {
 ///
 /// This helper function encapsulates the common configuration logic shared across
 /// different bundled stub types (typeshed stdlib, typeshed third-party, and third-party stubs).
-///
-/// # Parameters
-/// * `search_paths` - Optional search paths to add to the config
-/// * `error_overrides` - Optional error kind overrides (e.g., to ignore certain errors)
 pub fn create_bundled_stub_config(
     search_paths: Option<Vec<PathBuf>>,
     error_overrides: Option<HashMap<ErrorKind, Severity>>,
+    permissive_ignores: Option<bool>,
 ) -> ConfigFile {
     let mut config_file = ConfigFile::default();
     config_file.python_environment.site_package_path = Some(Vec::new());
@@ -58,6 +55,7 @@ pub fn create_bundled_stub_config(
     }
 
     config_file.root.disable_type_errors_in_ide = Some(true);
+    config_file.root.permissive_ignores = permissive_ignores;
     config_file.configure();
     config_file
 }

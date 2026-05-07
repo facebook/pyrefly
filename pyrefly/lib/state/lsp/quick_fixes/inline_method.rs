@@ -24,11 +24,13 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use super::types::LocalRefactorCodeAction;
-use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
+use crate::state::lsp::quick_fixes::extract_shared::expr_needs_parens;
+use crate::state::lsp::quick_fixes::extract_shared::find_local_definition;
 use crate::state::lsp::quick_fixes::extract_shared::first_parameter_name;
 use crate::state::lsp::quick_fixes::extract_shared::is_disallowed_scope_expr;
 use crate::state::lsp::quick_fixes::extract_shared::is_static_or_class_method;
+use crate::state::lsp::quick_fixes::extract_shared::wrap_if_needed;
 
 pub(crate) fn inline_method_code_actions(
     transaction: &Transaction<'_>,
@@ -47,14 +49,13 @@ pub(crate) fn inline_method_code_actions(
         ),
         _ => return None,
     };
-    let defs = transaction.find_definition(handle, callee_range.start(), FindPreference::default());
-    let def = defs.into_iter().find(|def| {
-        def.module.path() == module_info.path()
-            && matches!(
-                def.metadata.symbol_kind(),
-                Some(SymbolKind::Function | SymbolKind::Method)
-            )
-    });
+    let def = find_local_definition(
+        transaction,
+        handle,
+        callee_range.start(),
+        &module_info,
+        |k| matches!(k, Some(SymbolKind::Function | SymbolKind::Method)),
+    );
     let mut function_def_ctx =
         def.and_then(|def| find_function_def_with_context(ast.as_ref(), def.definition_range));
     if function_def_ctx.is_none() {
@@ -241,40 +242,6 @@ fn find_method_def_for_self_call(
         }
     }
     None
-}
-
-/// Returns true if the expression needs parentheses when inlined.
-/// Simple expressions (literals, names, subscripts, attributes, calls) don't need
-/// parentheses because they have high precedence. Complex expressions (binary ops,
-/// unary ops, comparisons, etc.) need parentheses to preserve semantics.
-fn expr_needs_parens(expr: &Expr) -> bool {
-    !matches!(
-        expr,
-        Expr::Name(_)
-            | Expr::NumberLiteral(_)
-            | Expr::StringLiteral(_)
-            | Expr::BytesLiteral(_)
-            | Expr::BooleanLiteral(_)
-            | Expr::NoneLiteral(_)
-            | Expr::EllipsisLiteral(_)
-            | Expr::Subscript(_)
-            | Expr::Attribute(_)
-            | Expr::Call(_)
-            | Expr::List(_)
-            | Expr::Dict(_)
-            | Expr::Set(_)
-            | Expr::Tuple(_)
-            | Expr::FString(_)
-    )
-}
-
-/// Wraps text in parentheses only if the expression needs them.
-fn wrap_if_needed(expr: &Expr, text: &str) -> String {
-    if expr_needs_parens(expr) {
-        format!("({text})")
-    } else {
-        text.to_owned()
-    }
 }
 
 fn build_param_map(

@@ -9,6 +9,12 @@ on:
         description: 'Tag name to upload assets to (e.g., 0.51.0)'
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name to upload assets to (e.g., 0.51.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -108,6 +114,10 @@ jobs:
       - name: Set jemalloc page size for ARM64 Linux
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> ${{ matrix.github_env }}
+
+      - name: Set jemalloc page size for ARM64 macOS
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> ${{ matrix.github_env }}
 
       - name: Build binary (native)
         if: ${{ !matrix.cross }}

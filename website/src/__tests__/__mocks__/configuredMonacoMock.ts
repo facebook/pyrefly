@@ -17,6 +17,8 @@ interface MockEditorModel {
     getValue: () => string;
     setValue: (value: string) => void;
     updateOptions: (options: any) => void;
+    dispose: () => void;
+    onDidChangeContent: (listener: any) => { dispose: () => void };
 }
 
 /**
@@ -36,6 +38,8 @@ const monaco = {
                 getValue: () => content,
                 setValue: jest.fn((value: string) => { content = value; }),
                 updateOptions: jest.fn(),
+                dispose: jest.fn(),
+                onDidChangeContent: jest.fn(() => ({ dispose: jest.fn() })),
             };
             mockModels.set(path, model);
             return model;

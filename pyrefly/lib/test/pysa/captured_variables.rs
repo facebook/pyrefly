@@ -7,15 +7,19 @@
 
 use std::collections::HashMap;
 
+use dupe::Dupe;
 use pretty_assertions::assert_eq;
 use ruff_python_ast::name::Name;
 use serde::Serialize;
 
 use crate::report::pysa::call_graph::FunctionTrait;
+use crate::report::pysa::captured_variable::CaptureKind;
 use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::captured_variable::collect_captured_variables_for_module;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::context::PysaResolver;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::module::ModuleIds;
 use crate::test::pysa::call_graph::split_module_class_and_identifier;
@@ -53,13 +57,25 @@ impl FunctionRefForTest {
 
 fn captured_variables_from_actual(
     captures: ModuleCapturedVariables<FunctionRef>,
+    module_name: &str,
 ) -> HashMap<Name, HashMap<Name, FunctionRefForTest>> {
     captures
         .into_iter()
         .map(|(function, captures)| {
             let captures = captures
                 .into_iter()
-                .map(|(k, v)| (k, FunctionRefForTest::from_definition_ref(v)))
+                .map(|(k, v)| {
+                    (
+                        k,
+                        match v {
+                            CaptureKind::Local(v) => FunctionRefForTest::from_definition_ref(v),
+                            CaptureKind::Global => FunctionRefForTest {
+                                module_name: module_name.to_owned(),
+                                identifier: "__top_level__".to_owned(),
+                            },
+                        },
+                    )
+                })
                 .collect::<HashMap<Name, FunctionRefForTest>>();
             (function.function_name, captures)
         })
@@ -96,12 +112,26 @@ fn test_exported_captured_variables(
     let module_ids = ModuleIds::new(&handles);
 
     let test_module_handle = get_handle_for_module_name(module_name, &transaction);
-
-    let context = ModuleContext::create(test_module_handle, &transaction, &module_ids).unwrap();
+    let resolver = PysaResolver::new_for_test(
+        &transaction,
+        &module_ids,
+        test_module_handle.dupe(),
+        &handles,
+    );
+    let context = ModuleContext {
+        answers_context: ModuleAnswersContext::create(
+            test_module_handle.dupe(),
+            &transaction,
+            &module_ids,
+        ),
+        resolver: &resolver,
+    };
 
     let expected_captures = captured_variables_from_expected(expected_captures);
-    let actual_captures =
-        captured_variables_from_actual(collect_captured_variables_for_module(&context));
+    let actual_captures = captured_variables_from_actual(
+        collect_captured_variables_for_module(&context),
+        module_name,
+    );
 
     assert_eq!(expected_captures, actual_captures);
 }
@@ -326,5 +356,19 @@ def foo(cond):
     HashMap::from([(
         "inner".into(),
         vec![(create_captured_variable("x"), "test.foo")]
+    ),]),
+);
+
+exported_captured_variables_testcase!(
+    test_export_capture_global,
+    r#"
+g = 1
+def foo():
+    global g
+    g = 2
+"#,
+    HashMap::from([(
+        "foo".into(),
+        vec![(create_captured_variable("g"), "test.__top_level__")]
     ),]),
 );

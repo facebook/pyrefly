@@ -27,7 +27,7 @@ impl Transaction<'_> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let legends = SemanticTokensLegends::new();
-        let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), handle.sys_info());
+        let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), *handle.sys_info());
         let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
 
         builder.process_ast(

@@ -73,6 +73,10 @@ impl Condvar {
         self.0.notify_all();
     }
 
+    pub fn wait<'a, T>(&self, guard: sync::MutexGuard<'a, T>) -> sync::MutexGuard<'a, T> {
+        self.0.wait(guard).unwrap()
+    }
+
     pub fn wait_while<'a, T, F>(
         &self,
         guard: sync::MutexGuard<'a, T>,

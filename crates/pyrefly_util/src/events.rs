@@ -57,6 +57,14 @@ impl CategorizedEvents {
         res
     }
 
+    /// Merge another set of categorized events into this one.
+    pub fn extend(&mut self, other: CategorizedEvents) {
+        self.created.extend(other.created);
+        self.modified.extend(other.modified);
+        self.removed.extend(other.removed);
+        self.unknown.extend(other.unknown);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.created.is_empty()
             && self.modified.is_empty()

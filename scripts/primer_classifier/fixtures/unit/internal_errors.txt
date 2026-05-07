@@ -1,0 +1,3 @@
+crashproject (https://github.com/example/crashproject)
++ ERROR src/main.py:1:1-100: thread 'worker' panicked at 'internal error' [internal-error]
++ ERROR src/lib.py:50:1-80: internal error during type checking [internal-error]

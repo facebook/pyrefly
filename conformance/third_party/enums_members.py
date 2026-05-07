@@ -12,7 +12,7 @@ from typing import Literal, assert_type, reveal_type
 # > attribute
 
 
-class Pet(Enum):  # E?: Uninitialized attributes (pyre)
+class Pet(Enum):
     genus: str  # Non-member attribute
     species: str  # Non-member attribute
 
@@ -24,16 +24,20 @@ class Pet(Enum):  # E?: Uninitialized attributes (pyre)
         self.species = species
 
 
-assert_type(Pet.genus, str)
-assert_type(Pet.species, str)
+def func1(pet: Pet) -> None:
+    assert_type(pet.genus, str)
+    assert_type(pet.species, str)
+
 assert_type(Pet.CAT, Literal[Pet.CAT])
 assert_type(Pet.DOG, Literal[Pet.DOG])
 
 
 from _enums_members import Pet2
 
-assert_type(Pet2.genus, str)
-assert_type(Pet2.species, str)
+def func2(pet: Pet2) -> None:
+    assert_type(pet.genus, str)
+    assert_type(pet.species, str)
+
 assert_type(Pet2.CAT, Literal[Pet2.CAT])
 assert_type(Pet2.DOG, Literal[Pet2.DOG])
 
@@ -72,17 +76,17 @@ class Pet4(Enum):
         return "mammal"
 
     def speak(self) -> None:  # Non-member method
-        print("meow" if self is Pet.CAT else "woof")
+        print("meow" if self is Pet4.CAT else "woof")
 
     class Nested: ...  # Non-member nested class
 
 
 assert_type(Pet4.CAT, Literal[Pet4.CAT])
 assert_type(Pet4.DOG, Literal[Pet4.DOG])
-assert_type(Pet4.converter, Literal[Pet4.converter])  # E
-assert_type(Pet4.transform, Literal[Pet4.transform])  # E
-assert_type(Pet4.species, Literal[Pet4.species])  # E
-assert_type(Pet4.speak, Literal[Pet4.speak])  # E
+converter: Literal[Pet4.converter]  # E
+transform: Literal[Pet4.transform]  # E
+species: Literal[Pet4.species]  # E
+speak: Literal[Pet4.speak]  # E
 
 
 # > An attribute that is assigned the value of another member of the same

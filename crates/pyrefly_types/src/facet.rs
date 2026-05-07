@@ -27,7 +27,7 @@ use vec1::Vec1;
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, Hash)]
 pub enum FacetKind {
     Attribute(Name),
-    Index(usize),
+    Index(i64),
     Key(String),
 }
 
@@ -80,7 +80,7 @@ impl Display for FacetChain {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnresolvedFacetKind {
     Attribute(Name),
-    Index(usize),
+    Index(i64),
     Key(String),
     VariableSubscript(ExprName),
 }

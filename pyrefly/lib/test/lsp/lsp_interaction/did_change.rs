@@ -9,9 +9,9 @@ use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use serde_json::json;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_text_document_did_change() {
@@ -59,6 +59,64 @@ fn test_text_document_did_change() {
             }],
         }));
 
+    interaction
+        .client
+        .diagnostic("text_document.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_text_document_did_change_backwards_version() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    interaction.client.did_open("text_document.py");
+
+    let filepath = root.path().join("text_document.py");
+
+    // Send version 3 first (skipping version 2).
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "version": 3
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 6, "character": 0},
+                    "end": {"line": 6, "character": 0}
+                },
+                "text": "x: int = 'not_an_int'\n"
+            }],
+        }));
+
+    // Send version 2 (backwards!). The server should accept it.
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 6, "character": 0},
+                    "end": {"line": 7, "character": 0}
+                },
+                "text": "x: int = 42\n"
+            }],
+        }));
+
+    // If the backwards version was rejected, we'd still see the type error
+    // from version 3. Since it was accepted, the content should be valid.
     interaction
         .client
         .diagnostic("text_document.py")
