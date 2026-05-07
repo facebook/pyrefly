@@ -23,7 +23,6 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_python::sys_info::module_platform_guard;
-use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::class::ClassFields;
 use pyrefly_types::function::FuncDefIndex;
