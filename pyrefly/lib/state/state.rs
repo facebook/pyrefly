@@ -470,7 +470,7 @@ struct ModuleDataMut {
 }
 
 fn module_sys_info_override(
-    sys_info: &SysInfo,
+    sys_info: SysInfo,
     ast: Option<&ruff_python_ast::ModModule>,
 ) -> Option<SysInfo> {
     let ast = ast?;
@@ -532,7 +532,7 @@ impl ModuleDataMut {
         if let Some(ast) = self.state.get_ast().as_deref() {
             let base = self.handle.sys_info();
             let effective =
-                module_sys_info_override(base, Some(ast)).unwrap_or_else(|| base.dupe());
+                module_sys_info_override(*base, Some(ast)).unwrap_or_else(|| base.dupe());
             *self.effective_sys_info.write() = effective.dupe();
             effective
         } else {
