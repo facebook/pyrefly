@@ -2150,7 +2150,7 @@ impl<'a> BindingsBuilder<'a> {
                 Some(_) => None,
             },
             LegacyTParamId::Attr(_, attr) => match binding {
-                Some(Binding::Module(..)) | None => Some((
+                Some(Binding::Module(..) | Binding::Import(..)) | None => Some((
                     KeyLegacyTypeParam(ShortIdentifier::new(attr)),
                     BindingLegacyTypeParam::ModuleKeyed(original_idx, Box::new(attr.id.clone())),
                 )),

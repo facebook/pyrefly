@@ -890,3 +890,26 @@ my_list: MyList[int] = MyList()
 my_list.my_append(foo.C(), 5)  # E: Argument `Literal[5]` is not assignable to parameter `t` with type `TypeVar[T]` in function `MyList.my_append`
     "#,
 );
+
+fn env_with_package() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path("pkg", "pkg/__init__.py", "");
+    env.add_with_path(
+        "pkg.lib",
+        "pkg/lib.py",
+        "from typing import TypeVar\nT = TypeVar('T')",
+    );
+    env
+}
+
+testcase!(
+    test_class_generic_typevar_from_imported_module,
+    env_with_package(),
+    r#"
+from pkg import lib
+from typing import Generic
+
+class MyGeneric(Generic[lib.T]):
+  pass
+"#,
+);
