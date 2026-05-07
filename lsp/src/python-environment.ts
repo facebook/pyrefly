@@ -9,78 +9,154 @@
 
 import * as vscode from 'vscode';
 import {PythonExtension} from '@vscode/python-extension';
+import {PythonEnvironments} from '@vscode/python-environments';
 
 const DISMISSED_KEY = 'pyrefly.dismissedPythonExtensionWarning';
 
+interface InterpreterProvider {
+  getPath(uri?: vscode.Uri): Promise<string | undefined>;
+  onDidChange(callback: () => void): vscode.Disposable;
+}
+
 export class PythonEnvironment {
-  private api: Promise<PythonExtension | undefined>;
-  private pendingListeners: (() => void)[] = [];
+  private provider: Promise<InterpreterProvider | undefined>;
+  private listeners: (() => void)[] = [];
+  private listenerDisposables: vscode.Disposable[] = [];
   private context: vscode.ExtensionContext;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
-    this.api = PythonExtension.api().catch(() => {
-      if (!context.globalState.get(DISMISSED_KEY)) {
-        const install = 'Install';
-        const dismiss = "Don't Show Again";
-        vscode.window
-          .showInformationMessage(
-            'Install the Python extension (ms-python.python) for improved experience with Pyrefly, including automatic Python environment detection.',
-            install,
-            dismiss,
-          )
-          .then(selection => {
-            if (selection === install) {
-              vscode.commands.executeCommand(
-                'workbench.extensions.installExtension',
-                'ms-python.python',
-              );
-            } else if (selection === dismiss) {
-              context.globalState.update(DISMISSED_KEY, true);
-            }
-          });
+    this.provider = this.tryResolveProvider().then(provider => {
+      if (!provider) {
+        this.showInstallWarning();
       }
-      this.retryPythonAPIOnExtensionInstall();
-      return undefined;
+      return provider;
     });
+    this.watchExtensionChanges();
   }
 
-  /**
-   * Retry accessing python API on every extension install until successful. Once successful, we call all callbacks and no longer try.
-   */
-  private retryPythonAPIOnExtensionInstall() {
-    const disposable = vscode.extensions.onDidChange(() => {
-      PythonExtension.api()
-        .then(ext => {
-          this.api = Promise.resolve(ext);
-          disposable.dispose();
-          for (const listener of this.pendingListeners) {
-            listener();
-            ext.environments.onDidChangeActiveEnvironmentPath(listener);
-          }
-        })
-        .catch(() => {});
-    });
-    this.context.subscriptions.push(disposable);
+  private async tryResolveProvider(): Promise<InterpreterProvider | undefined> {
+    // Prefer vscode-python-environments if available
+    try {
+      const api = await PythonEnvironments.api();
+      return {
+        async getPath(uri?: vscode.Uri) {
+          const env = await api.getEnvironment(uri);
+          return env?.execInfo?.run?.executable;
+        },
+        onDidChange(callback: () => void) {
+          return api.onDidChangeEnvironment(() => callback());
+        },
+      };
+    } catch {}
+
+    // Fall back to ms-python.python
+    try {
+      const ext = await PythonExtension.api();
+      return {
+        async getPath(uri?: vscode.Uri) {
+          const envPath =
+            await ext.environments.getActiveEnvironmentPath(uri);
+          return envPath.path.length > 0 ? envPath.path : undefined;
+        },
+        onDidChange(callback: () => void) {
+          return ext.environments.onDidChangeActiveEnvironmentPath(callback);
+        },
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private showInstallWarning() {
+    if (this.context.globalState.get(DISMISSED_KEY)) {
+      return;
+    }
+    const install = 'Install';
+    const dismiss = "Don't Show Again";
+    vscode.window
+      .showInformationMessage(
+        'Install the Python extension (ms-python.python) for improved experience with Pyrefly, including automatic Python environment detection.',
+        install,
+        dismiss,
+      )
+      .then(selection => {
+        if (selection === install) {
+          vscode.commands.executeCommand(
+            'workbench.extensions.installExtension',
+            'ms-python.python',
+          );
+        } else if (selection === dismiss) {
+          this.context.globalState.update(DISMISSED_KEY, true);
+        }
+      });
+  }
+
+  private watchExtensionChanges() {
+    let hadPyEnvs = !!vscode.extensions.getExtension(
+      'ms-python.vscode-python-envs',
+    );
+    let hadMsPython = !!vscode.extensions.getExtension('ms-python.python');
+
+    this.context.subscriptions.push(
+      vscode.extensions.onDidChange(() => {
+        const hasPyEnvs = !!vscode.extensions.getExtension(
+          'ms-python.vscode-python-envs',
+        );
+        const hasMsPython = !!vscode.extensions.getExtension(
+          'ms-python.python',
+        );
+
+        if (hasPyEnvs === hadPyEnvs && hasMsPython === hadMsPython) {
+          return;
+        }
+        hadPyEnvs = hasPyEnvs;
+        hadMsPython = hasMsPython;
+
+        this.tryResolveProvider()
+          .then(provider => {
+            for (const d of this.listenerDisposables) {
+              d.dispose();
+            }
+            this.listenerDisposables = [];
+
+            this.provider = Promise.resolve(provider);
+
+            if (provider) {
+              for (const listener of this.listeners) {
+                listener();
+                this.listenerDisposables.push(
+                  provider.onDidChange(listener),
+                );
+              }
+            }
+          })
+          .catch(() => {});
+      }),
+    );
   }
 
   async getInterpreterPath(uri?: vscode.Uri): Promise<string | undefined> {
-    const ext = await this.api;
-    if (!ext) {
+    const provider = await this.provider;
+    if (!provider) {
       return undefined;
     }
-    const envPath = await ext.environments.getActiveEnvironmentPath(uri);
-    return envPath.path.length > 0 ? envPath.path : undefined;
+    return provider.getPath(uri);
   }
 
   async onDidChangeInterpreter(
     callback: () => void,
-  ): Promise<vscode.Disposable | undefined> {
-    const ext = await this.api;
-    if (ext) {
-      return ext.environments.onDidChangeActiveEnvironmentPath(callback);
+  ): Promise<vscode.Disposable> {
+    this.listeners.push(callback);
+    const provider = await this.provider;
+    if (provider) {
+      this.listenerDisposables.push(provider.onDidChange(callback));
     }
-    this.pendingListeners.push(callback);
-    return undefined;
+    return new vscode.Disposable(() => {
+      const idx = this.listeners.indexOf(callback);
+      if (idx >= 0) {
+        this.listeners.splice(idx, 1);
+      }
+    });
   }
 }
