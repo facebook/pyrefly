@@ -710,6 +710,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 Binding::Import(import) => {
+                    if !self.exports.export_exists(import.module, &import.name) {
+                        return NameAssignTypeFormInfo::default();
+                    }
                     return self
                         .get_from_export_name_assign_type_form(
                             import.module,
