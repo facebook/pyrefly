@@ -45,6 +45,7 @@ use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::lined_buffer::PythonASTRange;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -162,9 +163,6 @@ pub struct Attribute {
     pub annotation: String,
     pub is_final: bool,
 }
-
-/// Re-export from `pyrefly_util::lined_buffer` for backwards compatibility.
-pub use pyrefly_util::lined_buffer::PythonASTRange;
 
 /// Thin wrapper around `LinedBuffer::python_ast_range_for_expr` that accepts
 /// a `ModuleInfo` for convenience. Callers with direct access to a

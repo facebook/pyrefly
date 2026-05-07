@@ -427,10 +427,10 @@ mod test {
     use pyrefly_util::globs::FilteredGlobs;
     use pyrefly_util::globs::Globs;
     use pyrefly_util::globs::HiddenDirFilter;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use tempfile;
 
     use super::*;
-    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn assert_annotations(input: &str, output: &str, flags: Option<InferFlags>) {

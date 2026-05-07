@@ -994,6 +994,8 @@ pub enum KeyExpect {
     Bool(TextRange),
     /// Match statement exhaustiveness check.
     MatchExhaustiveness(TextRange),
+    /// Match case reachability check.
+    MatchCaseReachability(TextRange),
     /// Private attribute access validation.
     PrivateAttributeAccess(TextRange),
     /// Deferred uninitialized variable check.
@@ -1012,6 +1014,7 @@ impl Ranged for KeyExpect {
             | KeyExpect::Redefinition(range)
             | KeyExpect::Bool(range)
             | KeyExpect::MatchExhaustiveness(range)
+            | KeyExpect::MatchCaseReachability(range)
             | KeyExpect::PrivateAttributeAccess(range)
             | KeyExpect::UninitializedCheck(range)
             | KeyExpect::ForwardRefUnion(range) => *range,
@@ -1029,6 +1032,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::Redefinition(r) => ("Redefinition", r),
             KeyExpect::Bool(r) => ("Bool", r),
             KeyExpect::MatchExhaustiveness(r) => ("MatchExhaustiveness", r),
+            KeyExpect::MatchCaseReachability(r) => ("MatchCaseReachability", r),
             KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
@@ -1097,6 +1101,13 @@ pub enum BindingExpect {
         narrowing_subject: NarrowingSubject,
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
+    },
+    /// A match case whose pattern may not overlap with the current subject type.
+    MatchCaseReachability {
+        subject_idx: Idx<Key>,
+        narrowing_subject: NarrowingSubject,
+        narrow_ops_for_case: (Box<NarrowOp>, TextRange),
+        case_range: TextRange,
     },
     /// Track private attribute accesses that need semantic validation.
     PrivateAttributeAccess(PrivateAttributeAccessCheck),
@@ -1199,6 +1210,18 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "MatchExhaustiveness({}, {})",
                     ctx.display(*subject_idx),
                     ctx.module().display(range)
+                )
+            }
+            Self::MatchCaseReachability {
+                subject_idx,
+                case_range,
+                ..
+            } => {
+                write!(
+                    f,
+                    "MatchCaseReachability({}, {})",
+                    ctx.display(*subject_idx),
+                    ctx.module().display(case_range)
                 )
             }
             Self::UninitializedCheck {

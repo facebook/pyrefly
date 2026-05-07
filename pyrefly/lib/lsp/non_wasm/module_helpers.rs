@@ -47,7 +47,7 @@ pub fn module_info_to_uri(
     Some(Url::from_file_path(abs_path).unwrap())
 }
 
-pub(in crate::lsp) fn handle_from_module_path(state: &State, path: ModulePath) -> Handle {
+pub(crate) fn handle_from_module_path(state: &State, path: ModulePath) -> Handle {
     let unknown = ModuleName::unknown();
     let config = state
         .config_finder()

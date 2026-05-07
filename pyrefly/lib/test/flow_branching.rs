@@ -464,7 +464,6 @@ match y:
 );
 
 testcase!(
-    bug = "does not detect unreachable branches based on nested patterns",
     test_match_narrow_len,
     r#"
 from typing import assert_type, Never
@@ -481,9 +480,9 @@ def foo(x: tuple[int, int] | tuple[str]):
             assert_type(x1, int)
     match x:
         # these two cases should be impossible to match
-        case [str(), str()]:
+        case [str(), str()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[int, int])
-        case [int()]:
+        case [int()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[str])
 "#,
 );

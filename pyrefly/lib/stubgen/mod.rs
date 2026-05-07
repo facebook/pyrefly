@@ -19,13 +19,13 @@ mod tests {
     use pyrefly_util::globs::Globs;
     use pyrefly_util::globs::HiddenDirFilter;
     use pyrefly_util::includes::Includes;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 
     use super::emit::emit_stub;
     use super::extract::ExtractConfig;
     use super::extract::extract_module_stub;
     use crate::state::require::Require;
     use crate::state::state::State;
-    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn run_stubgen(input: &str) -> String {

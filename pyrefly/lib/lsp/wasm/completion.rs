@@ -55,7 +55,7 @@ use crate::types::types::Type;
 
 /// Classification of a completion item's source, used for ranking.
 #[derive(Clone, Copy, Default)]
-pub(crate) enum CompletionSource {
+enum CompletionSource {
     /// Keywords, variables, literals, builtins, dict keys, etc.
     #[default]
     Local,
@@ -69,9 +69,9 @@ pub(crate) enum CompletionSource {
 
 /// A completion item paired with ranking metadata.
 pub(crate) struct RankedCompletion {
-    pub(crate) item: CompletionItem,
-    pub(crate) source: CompletionSource,
-    pub(crate) is_incompatible: bool,
+    item: CompletionItem,
+    source: CompletionSource,
+    is_incompatible: bool,
 }
 
 impl RankedCompletion {
@@ -215,7 +215,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completion items for literal types (e.g., `Literal["foo", "bar"]`).
-    pub(crate) fn add_literal_completions_from_type(
+    fn add_literal_completions_from_type(
         param_type: &Type,
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
@@ -292,7 +292,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completions for magic methods (dunder methods like `__init__`, `__str__`, etc.).
-    pub(crate) fn add_magic_method_completions(
+    fn add_magic_method_completions(
         identifier: &Identifier,
         completions: &mut Vec<RankedCompletion>,
     ) {
@@ -312,10 +312,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completions for Python keywords (e.g., `if`, `for`, `class`, etc.).
-    pub(crate) fn add_keyword_completions(
-        handle: &Handle,
-        completions: &mut Vec<RankedCompletion>,
-    ) {
+    fn add_keyword_completions(handle: &Handle, completions: &mut Vec<RankedCompletion>) {
         get_keywords(handle.sys_info().version())
             .iter()
             .for_each(|name| {
@@ -328,10 +325,7 @@ impl Transaction<'_> {
     }
 
     /// Adds function/method completion inserts with parentheses, using snippets when supported.
-    pub(crate) fn add_function_call_parens(
-        completions: &mut [RankedCompletion],
-        supports_snippets: bool,
-    ) {
+    fn add_function_call_parens(completions: &mut [RankedCompletion], supports_snippets: bool) {
         for ranked in completions {
             let item = &mut ranked.item;
             if item.insert_text.is_some() || item.text_edit.is_some() {
@@ -354,7 +348,7 @@ impl Transaction<'_> {
     }
 
     /// Retrieves documentation for an export to display in completion items.
-    pub(crate) fn get_documentation_from_export(
+    fn get_documentation_from_export(
         &self,
         export_info: Option<(Handle, Export)>,
     ) -> Option<lsp_types::Documentation> {
@@ -370,7 +364,7 @@ impl Transaction<'_> {
     }
 
     /// Adds keyword argument completions (e.g., `arg=`) for function/method calls.
-    pub(crate) fn add_kwargs_completions(
+    fn add_kwargs_completions(
         &self,
         handle: &Handle,
         position: TextSize,
@@ -418,7 +412,7 @@ impl Transaction<'_> {
     }
 
     /// Gets docstring documentation for an attribute to display in completion items.
-    pub(crate) fn get_docstring_for_attribute(
+    fn get_docstring_for_attribute(
         &self,
         handle: &Handle,
         attr_info: &AttrInfo,
@@ -445,7 +439,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completions from the builtins module, optionally filtered by fuzzy match.
-    pub(crate) fn add_builtins_autoimport_completions(
+    fn add_builtins_autoimport_completions(
         &self,
         handle: &Handle,
         identifier: Option<&Identifier>,
@@ -519,7 +513,7 @@ impl Transaction<'_> {
 
     /// Adds completions for local variables and returns true if any were added.
     /// If an identifier is present, filters matches using fuzzy matching.
-    pub(crate) fn add_local_variable_completions(
+    fn add_local_variable_completions(
         &self,
         handle: &Handle,
         identifier: Option<&Identifier>,
@@ -601,7 +595,7 @@ impl Transaction<'_> {
     }
 
     /// Adds literal completions for function call arguments based on parameter types.
-    pub(crate) fn add_literal_completions(
+    fn add_literal_completions(
         &self,
         handle: &Handle,
         position: TextSize,
@@ -636,7 +630,7 @@ impl Transaction<'_> {
     }
 
     /// Adds auto-import completions from exports of other modules using fuzzy matching.
-    pub(crate) fn add_autoimport_completions(
+    fn add_autoimport_completions(
         &self,
         handle: &Handle,
         identifier: &Identifier,
@@ -803,7 +797,7 @@ impl Transaction<'_> {
     /// infer literals from. Instead, we look for a match value/singleton
     /// pattern at the cursor and pull the `match` subject's type to surface
     /// its Literal members.
-    pub(crate) fn add_match_literal_completions(
+    fn add_match_literal_completions(
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],

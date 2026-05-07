@@ -1820,7 +1820,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Determines if a type should be checked for match exhaustiveness.
     /// We check exhaustiveness when the type has a finite, known set of possible values.
-    pub(crate) fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
+    fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
                 // Final classes can't have subclasses, so they are exhaustible, with the exception
@@ -1930,6 +1930,133 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ErrorInfo::Kind(ErrorKind::NonExhaustiveMatch),
             msg,
         );
+    }
+
+    pub fn check_match_case_reachability(
+        &self,
+        subject_idx: &Idx<Key>,
+        narrowing_subject: &NarrowingSubject,
+        narrow_ops_for_case: &(Box<NarrowOp>, TextRange),
+        case_range: &TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let (op, narrow_range) = narrow_ops_for_case;
+        if !Self::is_match_case_reachability_op(op) {
+            return;
+        }
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+        let subject_ty = subject_info.ty().clone();
+        if subject_ty.is_any()
+            || subject_ty.is_never()
+            || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))
+        {
+            return;
+        }
+        let ignore_errors = self.error_swallower();
+        let (mut narrowed_ty, has_never_trigger_facet) = match narrowing_subject {
+            NarrowingSubject::Name(_) => {
+                let narrowed =
+                    self.narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors);
+                let has_never_trigger_facet =
+                    self.has_never_match_trigger_facet(&narrowed, op, *case_range);
+                (narrowed.ty().clone(), has_never_trigger_facet)
+            }
+            NarrowingSubject::Facets(_, facets) => {
+                let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
+                    return;
+                };
+                let type_info = TypeInfo::of_ty(self.heap.mk_any_implicit());
+                let narrowing_subject_info =
+                    type_info.with_narrow(resolved_chain.facets(), subject_ty.clone());
+                let narrowed = self.narrow(
+                    &narrowing_subject_info,
+                    op.as_ref(),
+                    *narrow_range,
+                    &ignore_errors,
+                );
+                (
+                    self.get_facet_chain_type(&narrowed, &resolved_chain, *case_range),
+                    false,
+                )
+            }
+        };
+        self.expand_vars_mut(&mut narrowed_ty);
+        if !narrowed_ty.is_never() && !has_never_trigger_facet {
+            return;
+        }
+        let subject_display = self.for_display(subject_ty);
+        self.error(
+            errors,
+            *case_range,
+            ErrorInfo::Kind(ErrorKind::Unreachable),
+            format!("Case pattern can never match subject of type `{subject_display}`"),
+        );
+    }
+
+    fn is_match_case_reachability_op(op: &NarrowOp) -> bool {
+        let (can_check, has_trigger) = Self::classify_match_case_reachability_op(op);
+        can_check && has_trigger
+    }
+
+    fn classify_match_case_reachability_op(op: &NarrowOp) -> (bool, bool) {
+        match op {
+            NarrowOp::Atomic(_, AtomicNarrowOp::Eq(_) | AtomicNarrowOp::Is(_)) => (true, true),
+            NarrowOp::Atomic(Some(_), AtomicNarrowOp::IsInstance(_, NarrowSource::Pattern)) => {
+                (true, true)
+            }
+            NarrowOp::Atomic(
+                _,
+                AtomicNarrowOp::IsSequence
+                | AtomicNarrowOp::IsMapping
+                | AtomicNarrowOp::LenEq(_)
+                | AtomicNarrowOp::LenGte(_),
+            ) => (true, false),
+            NarrowOp::And(ops) | NarrowOp::Or(ops) => {
+                let mut has_trigger = false;
+                for op in ops {
+                    let (can_check, op_has_trigger) = Self::classify_match_case_reachability_op(op);
+                    if !can_check {
+                        return (false, false);
+                    }
+                    has_trigger |= op_has_trigger;
+                }
+                (true, has_trigger)
+            }
+            _ => (false, false),
+        }
+    }
+
+    fn has_never_match_trigger_facet(
+        &self,
+        type_info: &TypeInfo,
+        op: &NarrowOp,
+        range: TextRange,
+    ) -> bool {
+        match op {
+            NarrowOp::Atomic(
+                Some(facet),
+                AtomicNarrowOp::Eq(_)
+                | AtomicNarrowOp::Is(_)
+                | AtomicNarrowOp::IsInstance(_, NarrowSource::Pattern),
+            ) => {
+                let Some(resolved_chain) = self.resolve_facet_chain(facet.chain.clone()) else {
+                    return false;
+                };
+                let mut facet_ty = self.get_facet_chain_type(type_info, &resolved_chain, range);
+                self.expand_vars_mut(&mut facet_ty);
+                facet_ty.is_never()
+            }
+            NarrowOp::And(ops) => ops
+                .iter()
+                .any(|op| self.has_never_match_trigger_facet(type_info, op, range)),
+            NarrowOp::Or(ops) => {
+                !ops.is_empty()
+                    && ops
+                        .iter()
+                        .all(|op| self.has_never_match_trigger_facet(type_info, op, range))
+            }
+            _ => false,
+        }
     }
 
     pub fn resolve_facet_chain(&self, unresolved: UnresolvedFacetChain) -> Option<FacetChain> {

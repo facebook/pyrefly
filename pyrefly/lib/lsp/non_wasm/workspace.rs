@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use lsp_types::Url;
 use lsp_types::WorkspaceFoldersChangeEvent;
-use pyrefly_build::SourceDatabase;
+use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_config::resolve_unconfigured::UnconfiguredOverride;
 use pyrefly_util::arc_id::ArcId;

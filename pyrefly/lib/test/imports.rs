@@ -1525,6 +1525,77 @@ from *a # E: Expected `)` # E: Cannot find module # E: only allowed at module le
 "#,
 );
 
+const PKGUTIL_INIT: &str =
+    "from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n";
+
+#[test]
+fn test_pkgutil_namespace_package_multi_root() {
+    // Two search roots both contain `ns/__init__.py` with `pkgutil.extend_path`.
+    // Both register as LegacyNamespacePackage and accumulate, so submodules from
+    // both roots are importable through the merged namespace.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("root0/ns/baz")).unwrap();
+    std::fs::create_dir_all(root.join("root1/ns/bar")).unwrap();
+    std::fs::write(root.join("root0/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(
+        root.join("root0/ns/baz/__init__.py"),
+        "def helper() -> int: return 0\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("root1/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(root.join("root1/ns/bar/__init__.py"), "class Foo: ...\n").unwrap();
+
+    let mut env =
+        TestEnv::new().with_site_package_paths(vec![root.join("root0"), root.join("root1")]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        "from ns.bar import Foo\nfrom ns.baz import helper\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_pkgutil_namespace_absorbs_implicit_namespace() {
+    // An earlier search root contributes only an implicit (PEP 420) `ns/`
+    // directory; a later root has `ns/__init__.py` with `pkgutil.extend_path`.
+    // The LNP must absorb the prior implicit namespace dir so submodules from
+    // both roots are importable. This mirrors the layout produced by editable
+    // installs of `extend_path`-style namespace packages (e.g. azure-sdk-for-python).
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("root0/ns/baz")).unwrap();
+    std::fs::create_dir_all(root.join("root1/ns/bar")).unwrap();
+    // root0 has no ns/__init__.py — implicit namespace.
+    std::fs::write(
+        root.join("root0/ns/baz/__init__.py"),
+        "def helper() -> int: return 0\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("root1/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(root.join("root1/ns/bar/__init__.py"), "class Foo: ...\n").unwrap();
+
+    let mut env =
+        TestEnv::new().with_site_package_paths(vec![root.join("root0"), root.join("root1")]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        "from ns.bar import Foo\nfrom ns.baz import helper\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
 // ----------------------------------------------------------------------------
 // Cross-module class rebind tests: importers should observe whichever class
 // the visible result chose. See `assign.rs` for the same-module regressions.

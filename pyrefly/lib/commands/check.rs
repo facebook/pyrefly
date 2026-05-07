@@ -1142,6 +1142,17 @@ impl CheckArgs {
                 .collect()
         };
 
+        // Filter by minimum severity. Directives are not subject to this
+        // filter — they are merged separately in the output step below.
+        // This must run before `--suppress-errors` so suppression respects
+        // the user's severity threshold: a finding the user asked to hide
+        // via `--min-severity` should not get a suppression comment written
+        // into source.
+        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
+        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
+            .into_iter()
+            .partition(|e| e.severity() >= min_severity);
+
         // Suppress operates on ordinary diagnostics only — directives are
         // structurally excluded since they live in `directives`, not `ordinary_errors`.
         if self.behavior.suppress_errors {
@@ -1159,13 +1170,6 @@ impl CheckArgs {
             let unused_errors = loads.collect_unused_ignore_errors(&collected);
             suppress::remove_unused_ignores(unused_errors);
         }
-
-        // Filter by minimum severity. Directives are not subject to this
-        // filter — they are merged separately in the output step below.
-        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
-        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
-            .into_iter()
-            .partition(|e| e.severity() >= min_severity);
 
         // We update the baseline file if requested, after reporting any new
         // errors using the old baseline. Directives are structurally excluded

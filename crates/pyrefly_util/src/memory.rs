@@ -82,7 +82,7 @@ pub struct JemallocStats {
     pub allocated: Option<Bytes>,
 }
 
-#[cfg(not(fbcode_build))]
+#[cfg(not(all(fbcode_build, not(target_os = "windows"))))]
 fn get_jemalloc_stats() -> JemallocStats {
     JemallocStats {
         active: None,
@@ -90,7 +90,7 @@ fn get_jemalloc_stats() -> JemallocStats {
     }
 }
 
-#[cfg(fbcode_build)]
+#[cfg(all(fbcode_build, not(target_os = "windows")))]
 fn get_jemalloc_stats() -> JemallocStats {
     fn get_all() -> Option<serde_json::Value> {
         // This options configuration flag string is passed to `malloc_stats_print()`.

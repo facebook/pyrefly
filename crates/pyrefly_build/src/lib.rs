@@ -40,7 +40,7 @@ use serde::Serialize;
 
 pub mod handle;
 pub mod source_db;
-pub use source_db::SourceDatabase;
+use source_db::SourceDatabase;
 use starlark_map::small_map::SmallMap;
 mod query;
 use tracing::info;

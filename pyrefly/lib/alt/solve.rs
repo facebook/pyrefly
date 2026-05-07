@@ -2346,6 +2346,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
                 errors,
             ),
+            BindingExpect::MatchCaseReachability {
+                subject_idx,
+                narrowing_subject,
+                narrow_ops_for_case,
+                case_range,
+            } => self.check_match_case_reachability(
+                subject_idx,
+                narrowing_subject,
+                narrow_ops_for_case,
+                case_range,
+                errors,
+            ),
             BindingExpect::PrivateAttributeAccess(expectation) => {
                 self.check_private_attribute_access(expectation, errors);
             }

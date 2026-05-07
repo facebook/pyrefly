@@ -622,6 +622,7 @@ mod tests {
     use pyrefly_python::sys_info::SysInfo;
     use pyrefly_util::arc_id::ArcId;
     use pyrefly_util::fs_anyhow;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use tempfile;
     use tempfile::TempDir;
 
@@ -633,7 +634,6 @@ mod tests {
     use crate::state::load::FileContents;
     use crate::state::require::Require;
     use crate::state::state::State;
-    use crate::test::util::TEST_THREAD_COUNT;
 
     fn get_path(tdir: &TempDir) -> PathBuf {
         tdir.path().join("test.py")

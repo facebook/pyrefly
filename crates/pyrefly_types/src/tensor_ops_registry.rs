@@ -539,7 +539,7 @@ impl TensorOpsRegistry {
     /// `class_name` is the qualified class name (e.g., `"torch.nn.MaxPool2d"`).
     /// This registers the forward function under `"{class_name}.forward"` and
     /// the init captures under `"{class_name}"`.
-    pub(crate) fn register_init_forward(
+    fn register_init_forward(
         &mut self,
         fn_lookup: &Arc<HashMap<String, Arc<DslFnDef>>>,
         class_name: &str,

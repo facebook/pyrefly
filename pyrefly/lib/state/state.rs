@@ -605,7 +605,7 @@ pub struct TransactionTimingCounters {
     pub total_stat_count: AtomicU64,
     pub slow_stat_count: AtomicU64,
     pub slow_stat_ns: AtomicU64,
-    // Filesystem read latency (read_to_string in load)
+    // Filesystem read latency (read_to_string in load, pkgutil detection in finder)
     pub total_read_count: AtomicU64,
     pub slow_read_count: AtomicU64,
     pub slow_read_ns: AtomicU64,
@@ -704,7 +704,7 @@ impl<'a> Transaction<'a> {
         data
     }
 
-    pub(crate) fn timing(&self) -> &TransactionTimingCounters {
+    fn timing(&self) -> &TransactionTimingCounters {
         &self.timing
     }
 
@@ -822,6 +822,12 @@ impl<'a> Transaction<'a> {
     /// Returns a handle that can be used to cancel ongoing work in this transaction.
     pub fn get_cancellation_handle(&self) -> CancellationHandle {
         self.data.todo.get_cancellation_handle()
+    }
+
+    /// Replace the internal cancellation handle so that a previously cancelled
+    /// transaction can run work again.
+    pub fn reset_cancellation(&mut self) {
+        self.data.todo.reset_cancellation();
     }
 
     /// Sets an instance of a [`SubTaskTelemetry`], which will enable the creation and logging of

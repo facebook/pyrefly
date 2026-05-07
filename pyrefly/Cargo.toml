@@ -86,7 +86,7 @@ backtrace-on-stack-overflow = { version = "0.3", optional = true }
 tikv-jemallocator = "0.6.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-mimalloc = "0.1.46"
+mimalloc = { version = "0.1.46", default-features = false }
 
 [features]
 debug-stack-overflow = ["dep:backtrace-on-stack-overflow"]

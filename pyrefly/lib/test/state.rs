@@ -24,6 +24,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use tempfile::TempDir;
 
 use crate::commands::config_finder::default_config_finder;
@@ -35,7 +36,6 @@ use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
-use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::TestEnv;
 
 #[test]

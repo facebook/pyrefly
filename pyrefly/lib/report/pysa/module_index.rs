@@ -47,7 +47,7 @@ impl GraphQLDecoratorRef {
         }
     }
 
-    pub(crate) fn matches_decorator_id(&self, module: ModuleName, name: &Name) -> bool {
+    fn matches_decorator_id(&self, module: ModuleName, name: &Name) -> bool {
         module.as_str() == self.module && name.as_str() == self.name
     }
 }

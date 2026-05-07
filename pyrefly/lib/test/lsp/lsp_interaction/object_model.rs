@@ -86,11 +86,11 @@ use pyrefly_util::lock::FinishHandle;
 use pyrefly_util::telemetry::NoTelemetry;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::thread_pool::ThreadCount;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::init::TEST_THREAD_COUNT;
 use crate::init::init_test;
 
 #[derive(Debug)]

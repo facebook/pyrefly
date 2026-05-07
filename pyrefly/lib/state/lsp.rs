@@ -105,7 +105,7 @@ pub(crate) enum CalleeKind {
     Unknown,
 }
 
-pub(crate) fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
+fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
     match call.func.as_ref() {
         Expr::Name(name) => CalleeKind::Function(Ast::expr_name_identifier(name.clone())),
         Expr::Attribute(attr) => CalleeKind::Method(attr.value.range(), attr.attr.clone()),
@@ -254,6 +254,13 @@ pub struct FindPreference {
     /// when callers need the raw definition (e.g., call-graph queries that
     /// unwrap decorators like `@lru_cache`).
     pub resolve_call_dunders: bool,
+    /// When true, disable the LSP style fallback behavior. Normally, if a
+    /// symbol is not found in the preferred file style (e.g., `.pyi`), the LSP
+    /// will fall back to the other style (e.g., `.py`) and look for the same
+    /// symbol there. This is useful for go-to-definition in the IDE, but can
+    /// cause unwanted side effects in other consumers (e.g., pysa) by pulling
+    /// in additional file handles.
+    pub disable_style_fallback: bool,
 }
 
 impl Default for FindPreference {
@@ -262,6 +269,7 @@ impl Default for FindPreference {
             import_behavior: ImportBehavior::JumpThroughEverything,
             prefer_pyi: true,
             resolve_call_dunders: true,
+            disable_style_fallback: false,
         }
     }
 }
@@ -1367,6 +1375,9 @@ impl<'a> Transaction<'a> {
         let primary = self.import_handle_with_preference(origin, m, preference)?;
         if let Some(loc) = self.get_exports(&primary).get(name) {
             return Some((primary, loc.clone()));
+        }
+        if preference.disable_style_fallback {
+            return None;
         }
         let fallback_pref = FindPreference {
             prefer_pyi: !preference.prefer_pyi,
@@ -3337,7 +3348,7 @@ impl<'a> Transaction<'a> {
     /// For a module containing calls like `foo(bar=1)` and `baz(bar=2)`, searching for
     /// the name `bar` would return both keyword argument identifiers along with their
     /// respective callee information (`foo` and `baz`).
-    pub(self) fn collect_local_keyword_arguments_by_name(
+    fn collect_local_keyword_arguments_by_name(
         &self,
         handle: &Handle,
         expected_name: &Name,
@@ -3386,7 +3397,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns `Some(Vec<TextRange>)` containing the text ranges of all keyword argument usages
     /// that reference this parameter definition, or `None` if the AST cannot be retrieved.
-    pub(crate) fn local_keyword_argument_references_from_parameter_definition(
+    fn local_keyword_argument_references_from_parameter_definition(
         &self,
         handle: &Handle,
         definition_range: TextRange,

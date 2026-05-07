@@ -3529,7 +3529,7 @@ impl ResidualWitnessContext {
         self.identity.witness_hash
     }
 
-    pub(crate) fn capture_candidate_vars(&self) -> SmallSet<Var> {
+    fn capture_candidate_vars(&self) -> SmallSet<Var> {
         self.origin_vars
             .iter()
             .chain(self.deferred_vars.iter())
@@ -3602,7 +3602,7 @@ impl CallContext {
         self.argument_side
     }
 
-    pub(crate) fn residual_hooks_enabled(&self) -> bool {
+    fn residual_hooks_enabled(&self) -> bool {
         match &self.witness {
             Some(witness) => {
                 self.argument_side == witness.argument_side
@@ -3626,7 +3626,7 @@ impl CallContext {
         }
     }
 
-    pub(crate) fn take_deferred_quantified_vars(&self) -> QuantifiedHandle {
+    fn take_deferred_quantified_vars(&self) -> QuantifiedHandle {
         let mut deferred_quantified_vars = self.deferred_quantified_vars.lock();
         QuantifiedHandle(
             mem::take(&mut *deferred_quantified_vars)
@@ -3635,7 +3635,7 @@ impl CallContext {
         )
     }
 
-    pub(crate) fn take_overload_witness_payloads(&self) -> OverloadWitnessPayloadByHash {
+    fn take_overload_witness_payloads(&self) -> OverloadWitnessPayloadByHash {
         let mut overload_witness_payloads = self.overload_witness_payloads.lock();
         mem::take(&mut *overload_witness_payloads)
     }
@@ -3799,7 +3799,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         self.with_active_call_context(call_context, |me| me.is_subset_eq(got, want))
     }
 
-    pub(crate) fn with_active_call_context<T>(
+    fn with_active_call_context<T>(
         &mut self,
         call_context: &CallContext,
         f: impl FnOnce(&mut Self) -> T,

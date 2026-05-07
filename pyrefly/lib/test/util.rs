@@ -29,7 +29,7 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::prelude::SliceExt;
-pub use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::trace::init_tracing;
 use ruff_python_ast::name::Name;
 use ruff_source_file::LineIndex;
@@ -156,6 +156,11 @@ impl TestEnv {
         let mut res = Self::new();
         res.site_package_path = paths.iter().map(PathBuf::from).collect();
         res
+    }
+
+    pub fn with_site_package_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.site_package_path = paths;
+        self
     }
 
     pub fn new_with_version(version: PythonVersion) -> Self {

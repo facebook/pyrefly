@@ -318,13 +318,11 @@
         "typescript": "^4.4.3"
     },
     "dependencies": {
+        "@vscode/python-environments": "^1.0.0",
         "@vscode/python-extension": "^1.0.5",
         "serialize-javascript": "^7.0.5",
         "underscore": "^1.13.8",
         "vsce": "^2.15.0",
         "vscode-languageclient": "9.0.1"
-    },
-    "extensionDependencies": [
-        "ms-python.python"
-    ]
+    }
 }

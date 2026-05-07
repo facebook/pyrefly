@@ -92,8 +92,8 @@ pub struct Index {
 
 #[derive(Debug, Clone)]
 pub struct OverloadTrace {
-    pub(crate) callable: Callable,
-    pub(crate) tparams: Option<Arc<TParams>>,
+    callable: Callable,
+    tparams: Option<Arc<TParams>>,
 }
 
 impl OverloadTrace {
@@ -135,7 +135,7 @@ pub struct Traces {
 
 impl Traces {
     /// Merge accumulated side effects into the persisted trace store.
-    pub(crate) fn merge(&mut self, side_effects: TraceSideEffects) {
+    fn merge(&mut self, side_effects: TraceSideEffects) {
         for (k, v) in side_effects.types {
             self.types.insert(k, v);
         }

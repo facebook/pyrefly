@@ -20,6 +20,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
@@ -30,7 +31,6 @@ use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::subscriber::TestSubscriber;
-use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default, Clone, Dupe, Debug)]

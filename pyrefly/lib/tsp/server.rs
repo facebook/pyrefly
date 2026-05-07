@@ -116,7 +116,7 @@ impl IpcTransportNames {
 }
 
 pub struct TspServer<T: TspInterface> {
-    pub(crate) inner: Arc<T>,
+    inner: Arc<T>,
     /// Current snapshot version, updated on RecheckFinished events.
     pub(crate) current_snapshot: Arc<Mutex<i32>>,
     extra_connections: Mutex<HashMap<IpcTransportNames, ExtraConnectionHandle>>,
@@ -184,7 +184,7 @@ impl<T: TspInterface> TspConnection<T> {
         convert_type_with_resolvers(ty, Some(&resolver), Some(&module_path_resolver))
     }
 
-    pub(crate) fn send_response(&self, response: Response) {
+    fn send_response(&self, response: Response) {
         if let Err(error) = self.response_sender.send(Message::Response(response)) {
             warn!("Failed to send TSP response: {error}");
         }

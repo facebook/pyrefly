@@ -29,7 +29,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 
-pub(super) fn split_selection<'a>(
+pub(crate) fn split_selection<'a>(
     selection_text: &'a str,
     selection_range: TextRange,
 ) -> Option<(&'a str, &'a str, &'a str, TextRange)> {
@@ -57,13 +57,13 @@ pub(super) fn split_selection<'a>(
     ))
 }
 
-pub(super) fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
+pub(crate) fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
     Ast::locate_node(ast, selection.start())
         .into_iter()
         .any(|node| node.as_expr_ref().is_some() && node.range() == selection)
 }
 
-pub(super) fn line_indent_and_start(
+pub(crate) fn line_indent_and_start(
     source: &str,
     position: TextSize,
 ) -> Option<(String, TextSize)> {
@@ -83,7 +83,7 @@ pub(super) fn line_indent_and_start(
     Some((indent, insert_position))
 }
 
-pub(super) fn find_enclosing_statement_range(
+pub(crate) fn find_enclosing_statement_range(
     ast: &ModModule,
     selection: TextRange,
 ) -> Option<TextRange> {
@@ -98,7 +98,7 @@ pub(super) fn find_enclosing_statement_range(
     None
 }
 
-pub(super) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
+pub(crate) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
     if let Some(param) = parameters.posonlyargs.first() {
         return Some(param.name().id.to_string());
     }
@@ -108,14 +108,14 @@ pub(super) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
         .map(|param| param.name().id.to_string())
 }
 
-pub(super) fn function_has_decorator(function_def: &StmtFunctionDef, decorator: &str) -> bool {
+pub(crate) fn function_has_decorator(function_def: &StmtFunctionDef, decorator: &str) -> bool {
     function_def
         .decorator_list
         .iter()
         .any(|d| decorator_matches_name(&d.expression, decorator))
 }
 
-pub(super) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
+pub(crate) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
     match decorator {
         Expr::Name(identifier) => identifier.id.as_str() == expected,
         Expr::Attribute(attribute) => attribute.attr.as_str() == expected,
@@ -126,7 +126,7 @@ pub(super) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
 
 /// Given a selection range, returns the first non-whitespace position within it.
 /// If the selection is empty, returns the start position.
-pub(super) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
+pub(crate) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     if selection.is_empty() {
         return selection.start();
     }
@@ -146,7 +146,7 @@ pub(super) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     }
 }
 
-pub(super) fn expr_needs_parens(expr: &Expr) -> bool {
+pub(crate) fn expr_needs_parens(expr: &Expr) -> bool {
     !matches!(
         expr,
         Expr::Name(_)
@@ -167,7 +167,7 @@ pub(super) fn expr_needs_parens(expr: &Expr) -> bool {
     )
 }
 
-pub(super) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
+pub(crate) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
     if expr_needs_parens(expr) {
         format!("({text})")
     } else {
@@ -177,7 +177,7 @@ pub(super) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
 
 /// Extracts the name from a statement that defines a named symbol.
 /// Returns `None` for statements that don't define a single named symbol.
-pub(super) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
+pub(crate) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
     match stmt {
         Stmt::FunctionDef(func_def) => Some(func_def.name.id.to_string()),
         Stmt::ClassDef(class_def) => Some(class_def.name.id.to_string()),
@@ -204,7 +204,7 @@ pub(super) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
 
 /// Checks if an expression creates a new scope where variable semantics differ.
 /// These include lambdas and comprehensions, where inlining could change behavior.
-pub(super) fn is_disallowed_scope_expr(expr: &Expr) -> bool {
+pub(crate) fn is_disallowed_scope_expr(expr: &Expr) -> bool {
     matches!(
         expr,
         Expr::Lambda(_)
@@ -216,7 +216,7 @@ pub(super) fn is_disallowed_scope_expr(expr: &Expr) -> bool {
 }
 
 /// Checks if a reference position is inside a disallowed scope expression.
-pub(super) fn reference_in_disallowed_scope(ast: &ModModule, reference: TextRange) -> bool {
+pub(crate) fn reference_in_disallowed_scope(ast: &ModModule, reference: TextRange) -> bool {
     Ast::locate_node(ast, reference.start())
         .into_iter()
         .any(|node| {
@@ -242,7 +242,7 @@ pub(super) fn reference_in_disallowed_scope(ast: &ModModule, reference: TextRang
 /// The collector becomes "invalid" if:
 /// - A Store-context reference to the name is found
 /// - A Load-context reference appears inside a lambda or comprehension
-pub(super) struct NameRefCollector {
+pub(crate) struct NameRefCollector {
     pub name: String,
     pub load_refs: Vec<TextRange>,
     pub invalid: bool,
@@ -312,7 +312,7 @@ impl Visitor<'_> for NameRefCollector {
 
 /// Generates a unique name by appending `_N` suffixes until the name is not in use.
 /// The `exists` predicate should return true if a name is already taken.
-pub(super) fn unique_name(base: &str, exists: impl Fn(&str) -> bool) -> String {
+pub(crate) fn unique_name(base: &str, exists: impl Fn(&str) -> bool) -> String {
     if !exists(base) {
         return base.to_owned();
     }
@@ -327,7 +327,7 @@ pub(super) fn unique_name(base: &str, exists: impl Fn(&str) -> bool) -> String {
 }
 
 /// Finds the innermost function definition that contains the given range.
-pub(super) fn find_enclosing_function(
+pub(crate) fn find_enclosing_function(
     ast: &ModModule,
     range: TextRange,
 ) -> Option<&StmtFunctionDef> {
@@ -344,14 +344,14 @@ pub(super) fn find_enclosing_function(
 
 /// Returns true if a visitor should recurse into this statement for intra-function analysis.
 /// Returns false for nested function and class definitions, which create new scopes.
-pub(super) fn is_local_scope_stmt(stmt: &Stmt) -> bool {
+pub(crate) fn is_local_scope_stmt(stmt: &Stmt) -> bool {
     !matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_))
 }
 
 /// Core information about a method within a class.
 /// Contains the common fields needed by various refactoring operations.
 #[derive(Clone, Debug)]
-pub(super) struct MethodInfo {
+pub(crate) struct MethodInfo {
     /// Name of the class containing the method.
     pub class_name: String,
     /// Name of the receiver parameter (typically `self` or `cls`).
@@ -360,7 +360,7 @@ pub(super) struct MethodInfo {
 
 /// Extracts the text at the given range from a source string.
 /// Returns `None` if the range extends beyond the source bounds.
-pub(super) fn code_at_range<'a>(source: &'a str, range: TextRange) -> Option<&'a str> {
+pub(crate) fn code_at_range<'a>(source: &'a str, range: TextRange) -> Option<&'a str> {
     let start = range.start().to_usize();
     let end = range.end().to_usize();
     if end <= source.len() {
@@ -371,13 +371,13 @@ pub(super) fn code_at_range<'a>(source: &'a str, range: TextRange) -> Option<&'a
 }
 
 /// Returns true if the function has a @staticmethod or @classmethod decorator.
-pub(super) fn is_static_or_class_method(function_def: &StmtFunctionDef) -> bool {
+pub(crate) fn is_static_or_class_method(function_def: &StmtFunctionDef) -> bool {
     function_has_decorator(function_def, "staticmethod")
         || function_has_decorator(function_def, "classmethod")
 }
 
 /// Reindent every non-blank line in `text` from `from_indent` to `to_indent`.
-pub(super) fn reindent_block(text: &str, from_indent: &str, to_indent: &str) -> String {
+pub(crate) fn reindent_block(text: &str, from_indent: &str, to_indent: &str) -> String {
     let mut result = String::new();
     for line in text.split_inclusive('\n') {
         let (line_body, line_end) = match line.strip_suffix('\n') {
@@ -406,7 +406,7 @@ pub(super) fn reindent_block(text: &str, from_indent: &str, to_indent: &str) -> 
 }
 
 /// Prepares text for insertion at a given position, adding a newline prefix if needed.
-pub(super) fn prepare_insertion_text(
+pub(crate) fn prepare_insertion_text(
     source: &str,
     position: TextSize,
     member_text: &str,
@@ -421,7 +421,7 @@ pub(super) fn prepare_insertion_text(
 }
 
 /// Returns the byte position of the end of the line containing the given position.
-pub(super) fn line_end_position(source: &str, position: TextSize) -> TextSize {
+pub(crate) fn line_end_position(source: &str, position: TextSize) -> TextSize {
     let idx = position.to_usize().min(source.len());
     if let Some(offset) = source[idx..].find('\n') {
         TextSize::try_from(idx + offset + 1).unwrap_or(position)
@@ -432,7 +432,7 @@ pub(super) fn line_end_position(source: &str, position: TextSize) -> TextSize {
 
 /// Validates that a selection is non-empty and contains non-whitespace content.
 /// Returns the selection text if valid, `None` otherwise.
-pub(super) fn validate_non_empty_selection<'a>(
+pub(crate) fn validate_non_empty_selection<'a>(
     selection: TextRange,
     selection_text: &'a str,
 ) -> Option<&'a str> {
@@ -444,7 +444,7 @@ pub(super) fn validate_non_empty_selection<'a>(
 }
 
 /// Returns true if the statement is a member definition (function, class, or assignment).
-pub(super) fn is_member_stmt(stmt: &Stmt) -> bool {
+pub(crate) fn is_member_stmt(stmt: &Stmt) -> bool {
     matches!(
         stmt,
         Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
@@ -452,12 +452,12 @@ pub(super) fn is_member_stmt(stmt: &Stmt) -> bool {
 }
 
 /// Computes the full-line removal range for a statement (leading indent through trailing newline).
-pub(super) fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
+pub(crate) fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
     statement_removal_range_from_range(source, stmt.range())
 }
 
 /// Computes the full-line removal range for a text range (leading indent through trailing newline).
-pub(super) fn statement_removal_range_from_range(
+pub(crate) fn statement_removal_range_from_range(
     source: &str,
     range: TextRange,
 ) -> Option<TextRange> {
@@ -468,7 +468,7 @@ pub(super) fn statement_removal_range_from_range(
 
 /// Returns true if removing the statement at `removed_range` would leave the body
 /// with only docstrings, requiring a `pass` placeholder.
-pub(super) fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) -> bool {
+pub(crate) fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) -> bool {
     let mut non_docstring = body.iter().filter(|stmt| !is_docstring_stmt(stmt));
     let only_stmt = non_docstring.next();
     non_docstring.next().is_none() && only_stmt.is_some_and(|stmt| stmt.range() == removed_range)
@@ -476,7 +476,7 @@ pub(super) fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) 
 
 /// Extracts the text at `range` from `source` and reindents from `from_indent` to `to_indent`.
 /// Ensures the result ends with a newline.
-pub(super) fn reindent_statement(
+pub(crate) fn reindent_statement(
     source: &str,
     range: TextRange,
     from_indent: &str,
@@ -495,7 +495,7 @@ pub(super) fn reindent_statement(
 /// Resolves the definition at `position` to the single matching local definition
 /// (same module as `module_info`) whose symbol kind passes `kind_filter`.
 /// Returns `None` if no matching definition exists.
-pub(super) fn find_local_definition(
+pub(crate) fn find_local_definition(
     transaction: &Transaction<'_>,
     handle: &Handle,
     position: TextSize,

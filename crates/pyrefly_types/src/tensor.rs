@@ -17,10 +17,9 @@ use pyrefly_derive::VisitMut;
 use pyrefly_util::display::commas_iter;
 
 use crate::class::ClassType;
-pub use crate::dimension::ShapeError;
-pub use crate::dimension::SizeExpr;
+use crate::dimension::ShapeError;
+use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
-pub use crate::dimension::contains_var_in_type;
 use crate::tuple::Tuple;
 use crate::types::Type;
 

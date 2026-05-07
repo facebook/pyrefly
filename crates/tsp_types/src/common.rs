@@ -195,7 +195,7 @@ pub fn snapshot_outdated_error() -> ResponseError {
 
 /// Creates a common error response for internal errors
 #[allow(dead_code)]
-pub(crate) fn create_internal_error(message: &str) -> ResponseError {
+fn create_internal_error(message: &str) -> ResponseError {
     ResponseError {
         code: ErrorCode::InternalError as i32,
         message: message.to_owned(),
@@ -205,7 +205,7 @@ pub(crate) fn create_internal_error(message: &str) -> ResponseError {
 
 /// Creates a common error response for language services being disabled
 #[allow(dead_code)]
-pub(crate) fn language_services_disabled_error() -> ResponseError {
+fn language_services_disabled_error() -> ResponseError {
     ResponseError {
         code: ErrorCode::RequestFailed as i32,
         message: "Language services disabled".to_owned(),

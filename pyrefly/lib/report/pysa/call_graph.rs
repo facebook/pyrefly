@@ -97,6 +97,13 @@ use crate::report::pysa::types::string_for_type;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 
+fn pysa_find_preference() -> FindPreference {
+    FindPreference {
+        disable_style_fallback: true,
+        ..FindPreference::default()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Hash, PartialOrd, Ord)]
 pub enum OriginKind {
     GetAttrConstantLiteral,
@@ -2314,7 +2321,7 @@ impl<'a> CallGraphVisitor<'a> {
         let go_to_definition = self
             .module_context
             .resolver
-            .find_definition_for_name_use(&identifier, FindPreference::default());
+            .find_definition_for_name_use(&identifier, pysa_find_preference());
 
         if let Some(go_to_definition) = go_to_definition.as_ref() {
             debug_println!(
@@ -2578,7 +2585,7 @@ impl<'a> CallGraphVisitor<'a> {
         let go_to_definitions = self.module_context.resolver.find_definition_for_attribute(
             base.range(),
             attribute,
-            FindPreference::default(),
+            pysa_find_preference(),
         );
 
         let callee_expr_suffix = Some(attribute.as_str());
@@ -4121,7 +4128,7 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
                         .resolver
                         .find_definition(
                             decorator.expression.end(),
-                            FindPreference::default(),
+                            pysa_find_preference(),
                         ),
                     _ => vec![],
                 })

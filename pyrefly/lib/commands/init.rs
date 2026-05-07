@@ -379,11 +379,11 @@ impl InitArgs {
 
 #[cfg(test)]
 mod test {
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use tempfile;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::test::util::TEST_THREAD_COUNT;
 
     // helper function for ConfigFile::from_file
     fn from_file(path: &Path) -> anyhow::Result<()> {

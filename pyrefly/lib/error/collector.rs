@@ -136,17 +136,6 @@ impl ErrorCollector {
         self.add_with_annotations_and_quick_fixes(range, info, msg, Vec::new(), Vec::new());
     }
 
-    /// Add an error with secondary annotations for richer diagnostics.
-    pub fn add_with_annotations(
-        &self,
-        range: TextRange,
-        info: ErrorInfo,
-        msg: Vec1<String>,
-        annotations: Vec<(TextRange, String)>,
-    ) {
-        self.add_with_annotations_and_quick_fixes(range, info, msg, annotations, Vec::new());
-    }
-
     pub fn add_with_annotations_and_quick_fixes(
         &self,
         range: TextRange,

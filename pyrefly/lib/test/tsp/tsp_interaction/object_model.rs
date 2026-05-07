@@ -24,6 +24,7 @@ use lsp_types::request::Request as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::telemetry::NoTelemetry;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use serde_json::Value;
 
 use crate::commands::lsp::IndexingMode;
@@ -35,7 +36,6 @@ use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Connection;
-use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default)]

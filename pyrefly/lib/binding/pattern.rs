@@ -579,6 +579,19 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
+            if let Some(narrowing_subject) = match_subject.as_single()
+                && let Some((op, range)) = new_narrow_ops.0.get(narrowing_subject.name())
+            {
+                self.insert_binding(
+                    KeyExpect::MatchCaseReachability(case_range),
+                    BindingExpect::MatchCaseReachability {
+                        subject_idx: case_subject_idx,
+                        narrowing_subject: narrowing_subject.clone(),
+                        narrow_ops_for_case: (Box::new(op.clone()), *range),
+                        case_range,
+                    },
+                );
+            }
             if let Some(mut guard) = guard {
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));

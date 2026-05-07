@@ -82,6 +82,7 @@ use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
@@ -1596,7 +1597,7 @@ impl ThreadState {
 
     /// Install a fresh trace sink for the current calculation, saving any
     /// existing sink for later restoration.
-    pub(crate) fn install_trace_sink(&self) {
+    fn install_trace_sink(&self) {
         let previous = self.trace_sink.borrow_mut().take();
         self.trace_sink_stack.borrow_mut().push(previous);
         *self.trace_sink.borrow_mut() = Some(TraceSideEffects::default());
@@ -1604,7 +1605,7 @@ impl ThreadState {
 
     /// Take the accumulated trace side effects, restoring any saved sink
     /// from an outer calculation.
-    pub(crate) fn take_trace_sink(&self) -> Option<TraceSideEffects> {
+    fn take_trace_sink(&self) -> Option<TraceSideEffects> {
         let result = self.trace_sink.borrow_mut().take();
         let restored = self.trace_sink_stack.borrow_mut().pop().flatten();
         *self.trace_sink.borrow_mut() = restored;
@@ -1846,7 +1847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .insert((self.module().name(), id), var);
     }
 
-    pub(crate) fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+    fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
@@ -1854,7 +1855,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .copied()
     }
 
-    pub(crate) fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
+    fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
         if let Some(var) = self.get_lambda_param_var(id) {
             var
         } else {
@@ -3092,16 +3093,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match subset_result {
             Ok(()) => true,
             Err(error) => {
-                let enum_member_suggestion = self.suggest_enum_member_for_value(got, want);
-                let note = enum_member_suggestion
-                    .as_ref()
-                    .map(|s| format!("Did you mean `{s}`?"));
-                let quick_fixes = enum_member_suggestion
-                    .map(|replacement| ErrorQuickFix::ReplaceWithEnumMember { replacement })
-                    .into_iter()
-                    .collect();
-                self.solver()
-                    .error(got, want, errors, loc, tcc, error, note, quick_fixes);
+                self.report_type_error(got, want, errors, loc, tcc, error);
                 false
             }
         }
@@ -3124,19 +3116,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ) {
             Ok(()) => true,
             Err(error) => {
-                let enum_member_suggestion = self.suggest_enum_member_for_value(got, want);
-                let note = enum_member_suggestion
-                    .as_ref()
-                    .map(|s| format!("Did you mean `{s}`?"));
-                let quick_fixes = enum_member_suggestion
-                    .map(|replacement| ErrorQuickFix::ReplaceWithEnumMember { replacement })
-                    .into_iter()
-                    .collect();
-                self.solver()
-                    .error(got, want, errors, loc, tcc, error, note, quick_fixes);
+                self.report_type_error(got, want, errors, loc, tcc, error);
                 false
             }
         }
+    }
+
+    fn report_type_error(
+        &self,
+        got: &Type,
+        want: &Type,
+        errors: &ErrorCollector,
+        loc: TextRange,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        error: SubsetError,
+    ) {
+        let enum_member_suggestion = self.suggest_enum_member_for_value(got, want);
+        let note = enum_member_suggestion
+            .as_ref()
+            .map(|s| format!("Did you mean `{s}`?"));
+        let quick_fixes = enum_member_suggestion
+            .map(|replacement| ErrorQuickFix::ReplaceWithEnumMember { replacement })
+            .into_iter()
+            .collect();
+        self.solver()
+            .error(got, want, errors, loc, tcc, error, note, quick_fixes);
     }
 
     pub fn distribute_over_union(&self, ty: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {

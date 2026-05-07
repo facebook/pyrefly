@@ -173,7 +173,7 @@ const styles = stylex.create({
         justifyContent: 'center',
         marginVertical: '20px',
         width: '100%',
-        maxWidth: '430px',
+        maxWidth: '500px',
         marginLeft: 'auto',
         marginRight: 'auto',
         opacity: 0,
