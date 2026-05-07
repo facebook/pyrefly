@@ -1900,14 +1900,32 @@ impl<'a> Transaction<'a> {
 
     pub fn get_stdlib_for_sys_info(&self, sys_info: &SysInfo) -> Arc<Stdlib> {
         if self.data.stdlib.len() == 1 {
-            // Since we know our one must exist, we can shortcut
-            return self.data.stdlib.first().unwrap().1.dupe();
+            // The single-entry shortcut is only valid for the requested SysInfo.
+            let (cached_sys_info, stdlib) = self.data.stdlib.first().unwrap();
+            if cached_sys_info == sys_info {
+                return stdlib.dupe();
+            }
         }
 
-        self.data.stdlib.get(sys_info).unwrap().dupe()
+        self.data
+            .stdlib
+            .get(sys_info)
+            .unwrap_or_else(|| panic!("stdlib was not computed for {sys_info:?}"))
+            .dupe()
     }
 
     pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
+        if let Some(stdlib) = self.data.stdlib.get(handle.sys_info()) {
+            return stdlib.dupe();
+        }
+        if let Some((_, stdlib)) = self
+            .data
+            .stdlib
+            .iter()
+            .find(|(sys_info, _)| sys_info.version() == handle.sys_info().version())
+        {
+            return stdlib.dupe();
+        }
         self.get_stdlib_for_sys_info(handle.sys_info())
     }
 
