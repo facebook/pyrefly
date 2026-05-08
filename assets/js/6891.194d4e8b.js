@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunknew_website=globalThis.webpackChunknew_website||[]).push([[6891],{86891(e){e.exports=JSON.parse('{"url":"https://github.com/migeed-z/pyrefly-type-challenge"}')}}]);

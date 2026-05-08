@@ -6528,6 +6528,11 @@ description: Complete reference for Dim, Tensor, and tensor shape type system AP
 This page documents the types, functions, and type-level constructs that make
 up pyrefly's tensor shape type system.
 
+```sandbox
+dir: tensor-shapes-reference
+description: Experiment with Dim operators, type-level arithmetic in shapes, and concatenation.
+```
+
 ## `Dim[X]`
 
 `Dim[X]` is a type constructor that bridges runtime integer values to
@@ -6865,6 +6870,11 @@ class Linear(nn.Module):
 PEP 695 new-style generics (`class Foo[T]`) automatically use
 `typing.TypeVar` internally, which doesn't support arithmetic — so this
 option requires old-style generics.
+
+```sandbox
+dir: tensor-shapes-setup
+description: Experiment with Dim arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
+```
 
 ## Hello world
 
@@ -7339,6 +7349,11 @@ In this tutorial, you'll add tensor shape annotations to a simple multi-layer pe
 By the end, you'll understand `Dim`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
+```sandbox
+dir: tensor-shapes-tutorial-basics
+description: Try porting a simple MLP with class-level and method-level type parameters.
+```
+
 ## The model
 
 Here's a simple actor network from a reinforcement learning setup — three
@@ -7759,6 +7774,11 @@ With tensor shapes enabled, Pyrefly infers and displays the shape of every
 intermediate tensor — `Tensor[B, T, NEmbedding]` for embeddings,
 `Tensor[T]` for position indices — without any manual annotations on local
 variables.
+
+```sandbox
+dir: tensor-shapes-overview
+description: See tensor shape tracking, variadic batch dimensions, and shape mismatch errors in action.
+```
 
 ## How it works
 
