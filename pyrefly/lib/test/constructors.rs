@@ -1078,7 +1078,9 @@ def g() -> list[ParentItem] | None:
 
 // Overloaded __new__ where one overload has an explicit return annotation
 // and one doesn't. The unannotated overload should assume Self; the
-// annotated overload should keep its declared return type.
+// annotated overload should keep its declared return type. The explicit-return
+// overload is an inconsistent overload error because `C` is not a subtype of
+// the implementation's `Self@C`.
 testcase!(
     test_overloaded_new_mixed_annotation,
     r#"
@@ -1086,7 +1088,7 @@ from typing import assert_type, overload
 
 class C:
     @overload
-    def __new__(cls, x: int) -> "C": ...
+    def __new__(cls, x: int) -> "C": ...  # E: Overload return type `C` is not assignable to implementation return type `Self@C`
     @overload
     def __new__(cls, x: str): ...
     def __new__(cls, x: int | str):
