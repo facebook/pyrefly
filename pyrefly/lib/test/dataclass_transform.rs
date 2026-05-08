@@ -569,3 +569,59 @@ class SmallModule(Module):
 SmallModule(x=1)
     "#,
 );
+
+testcase!(
+    test_init_subclass_scope_issue,
+    r#"
+from typing import Any, reveal_type
+import typing
+import typing as tpe
+
+def module_field(*, kw_only: bool = False, default: Any | None = ...) -> Any:
+  ...
+
+@tpe.dataclass_transform(field_specifiers=(module_field,))
+class ModuleBase:
+  if typing.TYPE_CHECKING:
+    scope: Any | None
+
+class Module(ModuleBase):
+  @classmethod
+  def __init_subclass__(cls, kw_only: bool = False, **kwargs: Any) -> None:
+    cls.scope: Any = None
+
+class MyModel(Module):
+    features: int
+
+reveal_type(MyModel.__init__)  # E: revealed type: (self: MyModel, features: int) -> None
+MyModel(features=5)
+    "#,
+);
+
+testcase!(
+    test_class_method_foo_scope_issue,
+    r#"
+from typing import Any, reveal_type
+import typing
+import typing as tpe
+
+def module_field(*, kw_only: bool = False, default: Any | None = ...) -> Any:
+  ...
+
+@tpe.dataclass_transform(field_specifiers=(module_field,))
+class ModuleBase:
+  if typing.TYPE_CHECKING:
+    scope: Any | None
+
+class Module(ModuleBase):
+  @classmethod
+  def foo(cls) -> None:
+    cls.scope: Any = None
+
+class MyModel(Module):
+    features: int
+
+reveal_type(MyModel.__init__)  # E: revealed type: (self: MyModel, features: int) -> None
+MyModel(features=5)
+    "#,
+);
