@@ -573,11 +573,10 @@ SmallModule(x=1)
 testcase!(
     test_class_method_field_ignored_by_dataclass_repro,
     r#"
-from typing import Any, dataclass_transform, reveal_type, TYPE_CHECKING
+from typing import Any, dataclass_transform, reveal_type
 
 @dataclass_transform()
 class ModuleBase:
-  if TYPE_CHECKING:
     field: Any | None
 
 class Module(ModuleBase):
@@ -586,17 +585,17 @@ class Module(ModuleBase):
     cls.field: Any = None
 
 reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
+Module()
     "#,
 );
 
 testcase!(
     test_instance_method_field_ignored_by_dataclass_repro,
     r#"
-from typing import Any, dataclass_transform, reveal_type, TYPE_CHECKING
+from typing import Any, dataclass_transform, reveal_type
 
 @dataclass_transform()
 class ModuleBase:
-  if TYPE_CHECKING:
     field: Any | None
 
 class Module(ModuleBase):
@@ -604,5 +603,6 @@ class Module(ModuleBase):
     self.field: Any = None
 
 reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
+Module()
     "#,
 );
