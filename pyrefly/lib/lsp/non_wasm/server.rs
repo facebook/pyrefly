@@ -4689,6 +4689,10 @@ impl Server {
                 transaction.invert_boolean_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "if_to_match",
+                transaction.if_to_match_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "extract_function",
                 transaction.extract_function_code_actions(&handle, range)
             );
