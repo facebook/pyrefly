@@ -15,6 +15,7 @@ mod extract_shared;
 pub(crate) mod extract_superclass;
 pub(crate) mod extract_variable;
 pub(crate) mod generate_code;
+pub(crate) mod if_to_match;
 pub(crate) mod inline_method;
 pub(crate) mod inline_parameter;
 pub(crate) mod inline_variable;
