@@ -1525,6 +1525,30 @@ def test[T: int | str](value: T) -> T:
 );
 
 testcase!(
+    test_self_returning_method_on_typevar_intersection,
+    r#"
+from typing import Self, reveal_type
+
+class BaseModel:
+    def model_copy(self) -> Self: ...
+
+class ParentModel(BaseModel):
+    field: int | str
+
+class ChildModel(BaseModel):
+    field: int
+
+def test[T: ParentModel](value: T) -> T:
+    if isinstance(value, ChildModel):
+        reveal_type(value)  # E: ChildModel & T
+        value_copy = value.model_copy()
+        reveal_type(value_copy)  # E: ChildModel & T
+        return value_copy
+    return value
+    "#,
+);
+
+testcase!(
     test_issubclass_typevar_nondisjoint_classes,
     r#"
 from typing import reveal_type

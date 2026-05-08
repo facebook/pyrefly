@@ -479,7 +479,7 @@ enum AttributeBase1 {
     TypedDict(TypedDictInner),
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
-    Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
+    Intersect(Option<Type>, Vec<AttributeBase1>, Vec<AttributeBase1>),
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
     BoundMethod(BoundMethodType),
@@ -682,7 +682,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::ProtocolSubset(inner) => {
                 self.collect_attribute_candidates_from_base(inner, candidates);
             }
-            AttributeBase1::Intersect(options, fallback) => {
+            AttributeBase1::Intersect(_, options, fallback) => {
                 for b in options {
                     self.collect_attribute_candidates_from_base(b, candidates);
                 }
@@ -1862,7 +1862,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             },
-            AttributeBase1::Intersect(bases, fallback) => {
+            AttributeBase1::Intersect(self_type, bases, fallback) => {
                 // Try each base and collect successful lookups, filtering out
                 // GenericAlias lookups when the found attribute is inherited from
                 // `object`. Parametrized classes like `Foo[int]` are an intersection of
@@ -1887,7 +1887,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         continue;
                     }
                     let mut acc_candidate = LookupResult::empty();
-                    self.lookup_attr_static1(b.clone(), attr_name, &mut acc_candidate);
+                    if let Some(self_type) = &self_type {
+                        self.lookup_attr_from_attribute_base1_with_self_type(
+                            b.clone(),
+                            self_type,
+                            attr_name,
+                            &mut acc_candidate,
+                        );
+                    } else {
+                        self.lookup_attr_static1(b.clone(), attr_name, &mut acc_candidate);
+                    }
                     if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
                     {
                         candidates.push(acc_candidate.found);
@@ -1898,10 +1907,78 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     // TODO: Intersect the candidates instead of using the fallback.
                     for b in fallback {
-                        self.lookup_attr_static1(b.clone(), attr_name, acc);
+                        if let Some(self_type) = &self_type {
+                            self.lookup_attr_from_attribute_base1_with_self_type(
+                                b.clone(),
+                                self_type,
+                                attr_name,
+                                acc,
+                            );
+                        } else {
+                            self.lookup_attr_static1(b.clone(), attr_name, acc);
+                        }
                     }
                 }
             }
+        }
+    }
+
+    fn lookup_attr_from_attribute_base1_with_self_type(
+        &self,
+        base: AttributeBase1,
+        self_type: &Type,
+        attr_name: &Name,
+        acc: &mut LookupResult,
+    ) {
+        match &base {
+            AttributeBase1::ClassInstance(class) => {
+                if let Some(attr) = self.try_nn_module_dict_attr(class, attr_name) {
+                    acc.found_class_attribute(attr, base);
+                    return;
+                }
+                let metadata = self.get_metadata_for_class(class.class_object());
+                match self.get_enum_or_instance_attribute_with_self_type(
+                    class,
+                    &metadata,
+                    attr_name,
+                    self_type.clone(),
+                ) {
+                    Some(attr) => acc.found_class_attribute(attr, base),
+                    None if metadata.has_base_any() => {
+                        acc.found_type(self.heap.mk_any_implicit(), base)
+                    }
+                    None if metadata
+                        .named_tuple_metadata()
+                        .is_some_and(|m| m.has_dynamic_fields) =>
+                    {
+                        acc.found_type(self.heap.mk_any_implicit(), base)
+                    }
+                    None => {
+                        acc.not_found(NotFoundOn::ClassInstance(class.class_object().dupe(), base))
+                    }
+                }
+            }
+            AttributeBase1::Quantified(_, bound) | AttributeBase1::SelfType(bound) => {
+                match self.get_instance_attribute_with_self_type(
+                    bound,
+                    self_type.clone(),
+                    attr_name,
+                ) {
+                    Some(attr) => acc.found_class_attribute(attr, base),
+                    None => {
+                        let metadata = self.get_metadata_for_class(bound.class_object());
+                        if metadata.has_base_any() {
+                            acc.found_type(self.heap.mk_any_implicit(), base)
+                        } else {
+                            acc.not_found(NotFoundOn::ClassInstance(
+                                bound.class_object().dupe(),
+                                base,
+                            ))
+                        }
+                    }
+                }
+            }
+            _ => self.lookup_attr_static1(base, attr_name, acc),
         }
     }
 
@@ -2240,6 +2317,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
                     // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
                     acc.push(AttributeBase1::Intersect(
+                        None,
                         vec![generic_alias_base.clone(), class_base],
                         vec![generic_alias_base],
                     ));
@@ -2550,13 +2628,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )),
             },
             Type::Intersect(x) => {
+                let self_type = Type::Intersect(x.clone());
                 let mut acc_intersect = Vec::new();
                 for t in x.0 {
                     self.as_attribute_base1(t, &mut acc_intersect);
                 }
                 let mut acc_fallback = Vec::new();
                 self.as_attribute_base1(x.1, &mut acc_fallback);
-                acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
+                acc.push(AttributeBase1::Intersect(
+                    Some(self_type),
+                    acc_intersect,
+                    acc_fallback,
+                ));
             }
             Type::ElementOfTypeVarTuple(_) => {
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
@@ -2944,7 +3027,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // TODO(samzhou19815): Support autocomplete for properties
                 {}
             }
-            AttributeBase1::Intersect(bases, _) => {
+            AttributeBase1::Intersect(_, bases, _) => {
                 for b in bases {
                     self.completions_inner1(b, expected_attribute_name, res);
                 }

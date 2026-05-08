@@ -157,6 +157,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .or_else(|| self.get_instance_attribute(class, attr_name))
     }
 
+    pub fn get_enum_or_instance_attribute_with_self_type(
+        &self,
+        class: &ClassType,
+        metadata: &ClassMetadata,
+        attr_name: &Name,
+        self_type: Type,
+    ) -> Option<ClassAttribute> {
+        self.special_case_enum_attr_lookup(class, None, metadata, attr_name)
+            .or_else(|| self.get_instance_attribute_with_self_type(class, self_type, attr_name))
+    }
+
     /// Checks for a special-cased enum attribute on an enum literal, falling back to a regular instance attribute lookup.
     pub fn get_enum_literal_or_instance_attribute(
         &self,

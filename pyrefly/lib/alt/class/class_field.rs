@@ -3814,6 +3814,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(|field| self.as_instance_attribute(name, &field, &Instance::of_class(cls)))
     }
 
+    pub fn get_instance_attribute_with_self_type(
+        &self,
+        cls: &ClassType,
+        self_type: Type,
+        name: &Name,
+    ) -> Option<ClassAttribute> {
+        self.get_class_member(cls.class_object(), name)
+            .map(|field| {
+                self.as_instance_attribute(name, &field, &Instance::of_protocol(cls, self_type))
+            })
+    }
+
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
             .map(|field| self.as_instance_attribute(name, &field, &Instance::of_self_type(cls)))
