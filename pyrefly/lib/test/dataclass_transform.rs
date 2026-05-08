@@ -571,7 +571,7 @@ SmallModule(x=1)
 );
 
 testcase!(
-    test_class_method_field_ignored_by_dataclass_repro,
+    test_classmethod_shadowing_base_annotation_ignored,
     r#"
 from typing import Any, dataclass_transform, reveal_type
 
@@ -590,7 +590,7 @@ Module()
 );
 
 testcase!(
-    test_instance_method_field_ignored_by_dataclass_repro,
+    test_method_shadowing_base_annotation_ignored,
     r#"
 from typing import Any, dataclass_transform, reveal_type
 
