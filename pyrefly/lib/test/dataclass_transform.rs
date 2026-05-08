@@ -571,57 +571,38 @@ SmallModule(x=1)
 );
 
 testcase!(
-    test_init_subclass_scope_issue,
+    test_class_method_field_ignored_by_dataclass_repro,
     r#"
-from typing import Any, reveal_type
-import typing
-import typing as tpe
+from typing import Any, dataclass_transform, reveal_type, TYPE_CHECKING
 
-def module_field(*, kw_only: bool = False, default: Any | None = ...) -> Any:
-  ...
-
-@tpe.dataclass_transform(field_specifiers=(module_field,))
+@dataclass_transform()
 class ModuleBase:
-  if typing.TYPE_CHECKING:
-    scope: Any | None
-
-class Module(ModuleBase):
-  @classmethod
-  def __init_subclass__(cls, kw_only: bool = False, **kwargs: Any) -> None:
-    cls.scope: Any = None
-
-class MyModel(Module):
-    features: int
-
-reveal_type(MyModel.__init__)  # E: revealed type: (self: MyModel, features: int) -> None
-MyModel(features=5)
-    "#,
-);
-
-testcase!(
-    test_class_method_foo_scope_issue,
-    r#"
-from typing import Any, reveal_type
-import typing
-import typing as tpe
-
-def module_field(*, kw_only: bool = False, default: Any | None = ...) -> Any:
-  ...
-
-@tpe.dataclass_transform(field_specifiers=(module_field,))
-class ModuleBase:
-  if typing.TYPE_CHECKING:
-    scope: Any | None
+  if TYPE_CHECKING:
+    field: Any | None
 
 class Module(ModuleBase):
   @classmethod
   def foo(cls) -> None:
-    cls.scope: Any = None
+    cls.field: Any = None
 
-class MyModel(Module):
-    features: int
+reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
+    "#,
+);
 
-reveal_type(MyModel.__init__)  # E: revealed type: (self: MyModel, features: int) -> None
-MyModel(features=5)
+testcase!(
+    test_instance_method_field_ignored_by_dataclass_repro,
+    r#"
+from typing import Any, dataclass_transform, reveal_type, TYPE_CHECKING
+
+@dataclass_transform()
+class ModuleBase:
+  if TYPE_CHECKING:
+    field: Any | None
+
+class Module(ModuleBase):
+  def foo(self) -> None:
+    self.field: Any = None
+
+reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
     "#,
 );
