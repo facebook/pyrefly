@@ -1393,6 +1393,22 @@ def test_isinstance_then_issubclass(x: object) -> None:
 );
 
 testcase!(
+    test_isinstance_type_and_issubclass_else,
+    r#"
+from typing import Iterable, assert_type
+import enum
+
+def main(categories: Iterable[str] | type[enum.Enum]) -> None:
+    cached_categories: tuple[str, ...]
+    if isinstance(categories, type) and issubclass(categories, enum.Enum):
+        cached_categories = tuple(member.value for member in categories)
+    else:
+        assert_type(categories, Iterable[str])
+        cached_categories = tuple(categories)
+    "#,
+);
+
+testcase!(
     test_issubclass_with_metaclass_instance,
     r#"
 class ModelBase(type):
