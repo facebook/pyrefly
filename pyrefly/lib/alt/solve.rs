@@ -918,6 +918,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn is_string_like(&self, ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => cls == self.stdlib.str(),
+            Type::Literal(lit) => matches!(&lit.value, Lit::Str(_)),
+            Type::LiteralString(_) => true,
+            _ => false,
+        }
+    }
+
     pub fn get_produced_type(&self, iterables: Vec<Iterable>) -> Type {
         let mut produced_types = Vec::new();
         for iterable in iterables {
@@ -2257,6 +2266,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Iterable is `Never`: producing expression cannot complete, so this
                 // unpacking is unreachable. Skip to avoid a spurious `NotIterable`.
                 if iterable_ty.ty().is_never() {
+                    return Arc::new(EmptyAnswer);
+                }
+                if self.is_string_like(iterable_ty.ty()) {
+                    self.error(
+                        errors,
+                        *range,
+                        ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                        format!("Cannot unpack {} into {}", iterable_ty, expect.message()),
+                    );
                     return Arc::new(EmptyAnswer);
                 }
                 let iterables = self.iterate(iterable_ty.ty(), *range, errors, None);
