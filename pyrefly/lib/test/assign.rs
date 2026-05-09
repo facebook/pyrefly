@@ -958,6 +958,23 @@ a, b = "abc"  # E: Cannot unpack
 "#,
 );
 
+testcase!(
+    test_unpack_string_exact_length,
+    r#"
+a, b = "12"
+"#,
+);
+
+testcase!(
+    test_unpack_string_splat,
+    r#"
+x, *y = "123"
+x, *y = "12"
+x, *y = "1"
+x, *y = ""  # E: Cannot unpack
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/2927
 testcase!(
     test_unpack_string_too_few,
