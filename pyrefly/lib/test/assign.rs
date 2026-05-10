@@ -1073,6 +1073,17 @@ for a, b in xs:  # E: Cannot unpack
 );
 
 testcase!(
+    test_for_loop_unpack_parenthesized_tuple_annotation,
+    r#"
+from __future__ import annotations
+
+x: list[(str, str)] = []
+for a, b in x:
+    pass
+"#,
+);
+
+testcase!(
     bug = "Any assignment should not erase nullable annotation",
     test_nullable_annotation_any_assign,
     r#"

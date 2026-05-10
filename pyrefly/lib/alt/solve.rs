@@ -2309,12 +2309,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )),
                         })
                 {
-                    self.error(
-                        errors,
-                        *range,
-                        ErrorInfo::Kind(ErrorKind::BadUnpacking),
-                        error,
-                    );
+                    self.error(errors, *range, ErrorKind::BadUnpacking, error);
                     return Arc::new(EmptyAnswer);
                 }
                 let iterables = self.iterate(iterable_ty.ty(), *range, errors, None);
