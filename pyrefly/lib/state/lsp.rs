@@ -53,9 +53,12 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::PySourceType;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
+use ruff_python_parser::TokenKind;
+use ruff_python_parser::parse_unchecked_source;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -677,54 +680,91 @@ impl<'a> Transaction<'a> {
     }
 
     fn empty_imported_name_from_covering_nodes(
+        mod_module: &ModModule,
         covering_nodes: &[AnyNodeRef],
         source: &str,
         position: TextSize,
     ) -> Option<IdentifierWithContext> {
-        let import_from = covering_nodes.iter().find_map(|node| match node {
-            AnyNodeRef::StmtImportFrom(import_from) => Some(import_from),
-            _ => None,
-        })?;
-
-        if !import_from.names.is_empty() {
-            return None;
+        fn find_import_from<'a>(nodes: &'a [AnyNodeRef<'a>]) -> Option<&'a StmtImportFrom> {
+            nodes.iter().find_map(|node| match node {
+                AnyNodeRef::StmtImportFrom(import_from) => Some(*import_from),
+                _ => None,
+            })
         }
-
-        let stmt_start = import_from.range().start().to_usize();
-        let stmt_end = import_from.range().end().to_usize();
-        let stmt_text = source.get(stmt_start..stmt_end)?;
-
-        let import_keyword_end = stmt_text.find(" import")? + " import".len();
-
-        // slot_start is the boundary present right after `import` , for eg. `from foo import|`
-        let slot_start = stmt_start + import_keyword_end;
-
-        let line_end = source[slot_start..]
-            .find('\n')
-            .map(|i| slot_start + i)
-            .unwrap_or(source.len());
 
         let pos = position.to_usize();
+        let line_start = source[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
 
-        if pos <= slot_start || pos > line_end {
+        fn build_empty_imported_name<'a>(
+            nodes: &'a [AnyNodeRef<'a>],
+            source: &str,
+            position: TextSize,
+            pos: usize,
+        ) -> Option<IdentifierWithContext> {
+            let import_from = find_import_from(nodes)?;
+
+            if !import_from.names.is_empty() {
+                return None;
+            }
+
+            let slot_start = parse_unchecked_source(source, PySourceType::Python)
+                .tokens()
+                .in_range(import_from.range())
+                .iter()
+                .find(|token| token.kind() == TokenKind::Import)?
+                .range()
+                .end()
+                .to_usize();
+
+            let line_end = source
+                .get(slot_start..)?
+                .find('\n')
+                .map(|i| slot_start + i)
+                .unwrap_or(source.len());
+
+            if pos <= slot_start || pos > line_end {
+                return None;
+            }
+
+            let (module_name, dots) = IdentifierWithContext::module_name_and_dots(import_from);
+
+            Some(IdentifierWithContext {
+                identifier: Identifier {
+                    id: Name::empty(),
+                    range: TextRange::at(position, TextSize::new(0)),
+                    node_index: AtomicNodeIndex::default(),
+                },
+                context: IdentifierContext::ImportedName {
+                    module_name,
+                    dots,
+                    name_after_import: None,
+                    identifier: None,
+                },
+            })
+        }
+
+        if let Some(identifier) = build_empty_imported_name(covering_nodes, source, position, pos) {
+            return Some(identifier);
+        }
+
+        let mut probe = pos;
+        while probe > line_start {
+            let previous = probe - 1;
+            let Some(byte) = source.as_bytes().get(previous).copied() else {
+                break;
+            };
+            if !matches!(byte, b' ' | b'\t' | b'\r') {
+                break;
+            }
+            probe = previous;
+        }
+
+        if probe == pos {
             return None;
         }
 
-        let (module_name, dots) = IdentifierWithContext::module_name_and_dots(import_from);
-
-        Some(IdentifierWithContext {
-            identifier: Identifier {
-                id: Name::empty(),
-                range: TextRange::at(position, TextSize::new(0)),
-                node_index: AtomicNodeIndex::default(),
-            },
-            context: IdentifierContext::ImportedName {
-                module_name,
-                dots,
-                name_after_import: None,
-                identifier: None,
-            },
-        })
+        let probe_nodes = Ast::locate_node(mod_module, TextSize::new(probe as u32));
+        build_empty_imported_name(&probe_nodes, source, position, pos)
     }
 
     pub(crate) fn identifier_at(
@@ -742,35 +782,13 @@ impl<'a> Transaction<'a> {
         let module = self.get_module_info(handle)?;
         let source = module.lined_buffer().contents();
 
-        if let Some(identifier) =
-            Self::empty_imported_name_from_covering_nodes(&covering_nodes, source, position)
-        {
+        if let Some(identifier) = Self::empty_imported_name_from_covering_nodes(
+            &mod_module,
+            &covering_nodes,
+            source,
+            position,
+        ) {
             return Some(identifier);
-        }
-
-        // If the cursor is in trailing whitespace after `import` for eg. `from math import    |`, probe left on
-        // the same line until we hit a non-whitespace character and reuse that
-        // AST context while validating the original cursor position.
-        let mut probe = position.to_usize();
-        while probe > 0 {
-            let previous = probe - 1;
-            let Some(byte) = source.as_bytes().get(previous).copied() else {
-                break;
-            };
-            match byte {
-                b' ' | b'\t' | b'\r' => {
-                    probe = previous;
-                }
-                b'\n' => break,
-                _ => {
-                    let probe_nodes = Ast::locate_node(&mod_module, TextSize::new(previous as u32));
-                    return Self::empty_imported_name_from_covering_nodes(
-                        &probe_nodes,
-                        source,
-                        position,
-                    );
-                }
-            }
         }
 
         None
