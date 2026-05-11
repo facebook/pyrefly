@@ -654,6 +654,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn solve_django_reverse_relations(
         &self,
         binding: &BindingDjangoRelations,
+        _range: TextRange,
         _errors: &ErrorCollector,
     ) -> Arc<DjangoReverseRelationIndex> {
         let mut per_class = SmallMap::new();
@@ -668,10 +669,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             let expr = match &binding.definition {
-                ClassFieldDefinition::AssignedInBody {
-                    value,
-                    ..
-                } => match value.as_ref() {
+                ClassFieldDefinition::AssignedInBody { value, .. } => match value.as_ref() {
                     ExprOrBinding::Expr(expr) => expr,
                     ExprOrBinding::Binding(_) => continue,
                 },
