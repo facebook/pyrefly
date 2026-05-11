@@ -431,12 +431,18 @@ def test_dlrm():
     model = DLRM(13, 64, 100, 200, 300)
     dense: Tensor[32, 13] = torch.randn(32, 13)
     # Sparse inputs: indices and offsets for each table
-    idx1: Tensor = torch.randint(0, 100, (64,))
-    off1: Tensor = torch.arange(0, 65, 2)
-    idx2: Tensor = torch.randint(0, 200, (96,))
-    off2: Tensor = torch.arange(0, 97, 3)
-    idx3: Tensor = torch.randint(0, 300, (64,))
-    off3: Tensor = torch.arange(0, 65, 2)
+    idx1 = torch.randint(0, 100, (64,))
+    assert_type(idx1, Tensor[64])
+    off1 = torch.arange(0, 65, 2)
+    assert_type(off1, Tensor[32])
+    idx2 = torch.randint(0, 200, (96,))
+    assert_type(idx2, Tensor[96])
+    off2 = torch.arange(0, 97, 3)
+    assert_type(off2, Tensor[32])
+    idx3 = torch.randint(0, 300, (64,))
+    assert_type(idx3, Tensor[64])
+    off3 = torch.arange(0, 65, 2)
+    assert_type(off3, Tensor[32])
     out = model(dense, idx1, off1, idx2, off2, idx3, off3)
     assert_type(out, Tensor[32, 1])
 
@@ -445,12 +451,15 @@ def test_dlrm_different_dims():
     """Test DLRM with different dense/embed dimensions."""
     model = DLRM(26, 32, 500, 1000, 2000)
     dense: Tensor[8, 26] = torch.randn(8, 26)
-    idx1: Tensor = torch.randint(0, 500, (16,))
-    off1: Tensor = torch.arange(0, 17, 2)
-    idx2: Tensor = torch.randint(0, 1000, (24,))
-    off2: Tensor = torch.arange(0, 25, 3)
-    idx3: Tensor = torch.randint(0, 2000, (16,))
-    off3: Tensor = torch.arange(0, 17, 2)
+    idx1 = torch.randint(0, 500, (16,))
+    off1 = torch.arange(0, 17, 2)
+    assert_type(off1, Tensor[8])
+    idx2 = torch.randint(0, 1000, (24,))
+    off2 = torch.arange(0, 25, 3)
+    assert_type(off2, Tensor[8])
+    idx3 = torch.randint(0, 2000, (16,))
+    off3 = torch.arange(0, 17, 2)
+    assert_type(off3, Tensor[8])
     out = model(dense, idx1, off1, idx2, off2, idx3, off3)
     assert_type(out, Tensor[8, 1])
 
@@ -458,26 +467,26 @@ def test_dlrm_different_dims():
 def test_qr_embedding_bag():
     """Test QR embedding: compressed lookup via quotient-remainder."""
     qr_emb = QREmbeddingBag(10000, 64, q_factor=50)
-    indices: Tensor = torch.randint(0, 10000, (32,))
-    offsets: Tensor = torch.arange(0, 33, 4)
+    indices = torch.randint(0, 10000, (32,))
+    offsets = torch.arange(0, 33, 4)
+    assert_type(offsets, Tensor[8])
     _out = qr_emb(indices, offsets)
-    # _out: (B, 64) — unrefined due to EmbeddingBag
 
 
 def test_pr_embedding_bag():
     """Test PR embedding: compressed lookup via hashing."""
     pr_emb = PREmbeddingBag(1000, 64)
-    indices: Tensor = torch.randint(0, 50000, (32,))
-    offsets: Tensor = torch.arange(0, 33, 4)
+    indices = torch.randint(0, 50000, (32,))
+    offsets = torch.arange(0, 33, 4)
+    assert_type(offsets, Tensor[8])
     _out = pr_emb(indices, offsets)
-    # _out: (B, 64) — unrefined due to EmbeddingBag
 
 
 def test_quantized_embedding_bag():
     """Test quantized embedding: int8 quantized lookup."""
     q_emb = QuantizedEmbeddingBag(10000, 64)
     q_emb.quantize()
-    indices: Tensor = torch.randint(0, 10000, (32,))
-    offsets: Tensor = torch.arange(0, 33, 4)
+    indices = torch.randint(0, 10000, (32,))
+    offsets = torch.arange(0, 33, 4)
+    assert_type(offsets, Tensor[8])
     _out = q_emb(indices, offsets)
-    # _out: (B, 64) — unrefined due to EmbeddingBag

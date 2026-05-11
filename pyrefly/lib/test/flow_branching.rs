@@ -464,7 +464,6 @@ match y:
 );
 
 testcase!(
-    bug = "does not detect unreachable branches based on nested patterns",
     test_match_narrow_len,
     r#"
 from typing import assert_type, Never
@@ -481,9 +480,9 @@ def foo(x: tuple[int, int] | tuple[str]):
             assert_type(x1, int)
     match x:
         # these two cases should be impossible to match
-        case [str(), str()]:
+        case [str(), str()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[int, int])
-        case [int()]:
+        case [int()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[str])
 "#,
 );
@@ -1488,6 +1487,96 @@ def f(a: int) -> int:
 );
 
 testcase!(
+    test_walrus_in_while_post_loop,
+    r#"
+from typing import Callable, Any
+
+class Cat:
+    def equals(self, other: Any) -> bool:
+        return False
+
+def main(f: Callable[[], Cat]) -> None:
+    while (a := f()).equals(1):
+        break
+    print(a)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_simple,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    while (x := f()) > 0:
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_with_else,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    while (x := f()) > 0:
+        pass
+    else:
+        pass
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_pre_declared_uninitialized,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    x: int
+    while (x := f()) > 0:
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
+    bug = "walrus in while overwrites pre-bound type instead of narrowing; yields str | int",
+    test_walrus_in_while_pre_bound_type_precision,
+    r#"
+from typing import assert_type
+
+def f_int() -> int:
+    return 1
+
+def main() -> None:
+    x = ""
+    while (x := f_int()) > 0:
+        break
+    assert_type(x, int)  # E: assert_type(Literal[''] | int, int) failed
+    "#,
+);
+
+testcase!(
+    bug =
+        "BoolOp laxness causes false negative for walrus in while short-circuit context, see #1251",
+    test_walrus_in_while_bool_op,
+    r#"
+def cond() -> bool: ...
+def get() -> int: ...
+
+def main() -> None:
+    while cond() and (x := get()):
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
     test_trycatch_implicit_return,
     r#"
 def f() -> int:
@@ -2195,7 +2284,6 @@ import types
 from dataclasses import dataclass
 from typing import Any, TypeIs, assert_never
 
-
 def is_instance_union_aware[T](
     value: Any, target_type: type[T] | tuple[type[T], ...]
 ) -> TypeIs[T]: ...
@@ -2400,5 +2488,129 @@ for x in range(10):
         assert_type(z, int)
         continue
     assert_type(z, int)
+    "#,
+);
+
+// When a variable is defined inside `if a:` and used inside a subsequent
+// `if a:`, the variable is guaranteed to be initialized because the same
+// condition guards both the definition and the use.
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_basic,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    c = 5
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_negated_condition,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    if not a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_unrelated_condition,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+    if c:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b and c are always initialized when a is truthy",
+    test_guarded_initialization_multiple_variables,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+        c = 4
+    if a:
+        return b + c  # E: `b` may be uninitialized  # E: `c` may be uninitialized
+    return 0
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_with_intermediate_statements,
+    r#"
+def f(a: bool) -> int:
+    if a:
+        b = 3
+    x = 5
+    y = x + 1
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_annotation_then_guarded_assign,
+    r#"
+def f(a: bool) -> int:
+    b: int
+    if a:
+        b = 3
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a is truthy",
+    test_guarded_initialization_repeated_use,
+    r#"
+def f(a: bool) -> None:
+    if a:
+        b = 3
+    if a:
+        print(b)  # E: `b` may be uninitialized
+    if a:
+        print(b)
+    "#,
+);
+
+testcase!(
+    test_guarded_initialization_guard_reassigned,
+    r#"
+def f(a: bool, c: bool) -> int:
+    if a:
+        b = 3
+    a = c
+    if a:
+        return b  # E: `b` may be uninitialized
+    return 9
+    "#,
+);
+
+testcase!(
+    bug = "false positive: b is always initialized when a > 0 at both sites",
+    test_guarded_initialization_complex_condition,
+    r#"
+def f(a: int) -> int:
+    if a > 0:
+        b = 3
+    if a > 0:
+        return b  # E: `b` may be uninitialized
+    return 9
     "#,
 );

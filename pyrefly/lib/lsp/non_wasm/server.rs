@@ -11,8 +11,6 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::hash::Hasher;
-use std::io::BufReader;
-use std::io::Stdin;
 use std::io::Write;
 use std::iter::once;
 use std::num::NonZeroUsize;
@@ -23,11 +21,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
@@ -67,6 +63,7 @@ use lsp_types::DidChangeWorkspaceFoldersParams;
 use lsp_types::DocumentDiagnosticParams;
 use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
+use lsp_types::DocumentHighlightKind;
 use lsp_types::DocumentHighlightParams;
 use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
@@ -203,8 +200,8 @@ use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkDoneProgressCreate;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
-use pyrefly_build::SourceDatabase;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_config::config::ConfigSource;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::PYTHON_EXTENSIONS;
@@ -223,6 +220,7 @@ use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::stdlib::is_python_stdlib_file;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::telemetry::ActivityKey;
@@ -293,17 +291,20 @@ use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
-use crate::lsp::non_wasm::protocol::read_lsp_message;
-use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
-use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
-use crate::lsp::non_wasm::stdlib::no_config_severity_override;
-use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatus;
+pub use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusRequest;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusResponse;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusV2;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusVersion;
+use crate::lsp::non_wasm::type_error_display_status::default_v2_response;
+use crate::lsp::non_wasm::type_error_display_status::derive_v2_response;
+use crate::lsp::non_wasm::type_error_display_status::negotiate_type_error_display_status_version;
 use crate::lsp::non_wasm::type_hierarchy::collect_class_defs;
 use crate::lsp::non_wasm::type_hierarchy::find_class_at_position_in_ast;
 use crate::lsp::non_wasm::type_hierarchy::prepare_type_hierarchy_item;
@@ -328,7 +329,6 @@ use crate::lsp::wasm::provide_type::provide_type;
 use crate::module::bundled::BundledStub;
 use crate::state::load::Load;
 use crate::state::load::LspFile;
-use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
@@ -370,30 +370,8 @@ pub enum DidCloseKind {
     TextDocument,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TypeErrorDisplayStatus {
-    DisabledInIdeConfig,
-    EnabledInIdeConfig,
-    DisabledInConfigFile,
-    EnabledInConfigFile,
-    NoConfigFile,
-}
-
-impl TypeErrorDisplayStatus {
-    fn is_enabled(self) -> bool {
-        match self {
-            TypeErrorDisplayStatus::DisabledInIdeConfig
-            | TypeErrorDisplayStatus::DisabledInConfigFile => false,
-            TypeErrorDisplayStatus::EnabledInIdeConfig
-            | TypeErrorDisplayStatus::EnabledInConfigFile
-            | TypeErrorDisplayStatus::NoConfigFile => true,
-        }
-    }
-}
-
 /// Interface exposed for TSP to interact with the LSP server
-pub trait TspInterface: Send + Sync {
+pub trait TspInterface: Send + Sync + 'static {
     /// Send a response back to the LSP client
     fn send_response(&self, response: Response);
 
@@ -474,105 +452,33 @@ pub trait TspInterface: Send + Sync {
         &self,
         func_id: &pyrefly_types::callable::FuncId,
     ) -> Option<TextRange>;
+
+    /// Resolve an importable module to its backing filesystem path using the
+    /// import-resolution context of `source_uri`.
+    ///
+    /// Returns `None` when the source URI is invalid, cannot be mapped to a
+    /// path, or the target module cannot be resolved.
+    fn resolve_module_uri(
+        &self,
+        source_uri: &str,
+        module: &pyrefly_types::module::ModuleType,
+    ) -> Option<PathBuf>;
+
+    /// Resolve a URI to a filesystem path.
+    ///
+    /// Handles both `file://` URIs (via [`Url::to_file_path`]) and notebook
+    /// cell URIs (via the `open_notebook_cells` map). Returns `None` when
+    /// the URI cannot be mapped to a path.
+    fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf>;
+
+    /// Return the cell index if `uri` is an open notebook cell, or `None`
+    /// for regular file URIs.
+    fn maybe_get_code_cell_index(&self, uri: &Url) -> Option<usize>;
 }
 
-pub struct Connection {
-    pub sender: Sender<Message>,
-    /// Channel receiver, only present for test connections created via
-    /// `Connection::memory()`. The test client reads from this to observe
-    /// messages sent by the server.
-    channel_receiver: Option<Receiver<Message>>,
-}
-
-/// Owns the message source for the LSP/TSP server. Either a crossbeam channel
-/// (used in tests via `Connection::memory()`) or a direct stdin reader (used in
-/// production via `Connection::stdio()`).
-///
-/// This is kept separate from `Connection` so the read side can take `&mut self`
-/// without requiring interior mutability — stdin is only ever read from one
-/// thread.
-pub enum MessageReader {
-    Channel(Receiver<Message>),
-    Stdio(BufReader<Stdin>),
-}
-
-impl MessageReader {
-    /// Receive the next message, blocking until one is available.
-    /// Returns `None` if the connection is closed (channel disconnected or
-    /// stdin EOF).
-    pub fn recv(&mut self) -> Option<Message> {
-        match self {
-            MessageReader::Channel(r) => r.recv().ok(),
-            MessageReader::Stdio(r) => read_lsp_message(r).ok().flatten(),
-        }
-    }
-}
-
-pub struct IoThread {
-    writer: JoinHandle<std::io::Result<()>>,
-}
-
-impl IoThread {
-    pub fn join(self) -> std::io::Result<()> {
-        match self.writer.join() {
-            Ok(result) => result,
-            Err(e) => std::panic::panic_any(e),
-        }
-    }
-}
-
-impl Connection {
-    /// Create a connection that reads directly from stdin and writes to stdout.
-    /// Only the writer uses a background thread; reads happen inline in the
-    /// calling thread, eliminating a context switch per LSP message.
-    pub fn stdio() -> (Self, MessageReader, IoThread) {
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
-        let writer = std::thread::spawn(move || {
-            let mut stdout = std::io::stdout().lock();
-            while let Ok(msg) = writer_receiver.recv() {
-                write_lsp_message(&mut stdout, msg)?
-            }
-            Ok(())
-        });
-        (
-            Self {
-                sender: writer_sender,
-                channel_receiver: None,
-            },
-            MessageReader::Stdio(BufReader::new(std::io::stdin())),
-            IoThread { writer },
-        )
-    }
-
-    pub fn memory() -> ((Self, MessageReader), (Self, MessageReader)) {
-        let (s1, r1) = crossbeam_channel::unbounded();
-        let (s2, r2) = crossbeam_channel::unbounded();
-        (
-            (
-                Self {
-                    sender: s1,
-                    channel_receiver: Some(r2.clone()),
-                },
-                MessageReader::Channel(r2),
-            ),
-            (
-                Self {
-                    sender: s2,
-                    channel_receiver: Some(r1.clone()),
-                },
-                MessageReader::Channel(r1),
-            ),
-        )
-    }
-
-    /// Access the underlying channel receiver. Only available for
-    /// channel-based connections (tests).
-    pub fn channel_receiver(&self) -> &Receiver<Message> {
-        self.channel_receiver
-            .as_ref()
-            .expect("channel_receiver not available for stdio connections")
-    }
-}
+pub use super::connection::Connection;
+pub use super::connection::IoThread;
+pub use super::connection::MessageReader;
 
 struct ServerConnection(Connection);
 
@@ -636,11 +542,9 @@ struct LspProgressState {
 
 impl LspProgressState {
     fn snapshot(&mut self) -> (String, u32) {
-        let mut percentage = if self.started == 0 {
-            0
-        } else {
-            (((self.finished * 100) / self.started) as u32).min(99)
-        };
+        let mut percentage = (self.finished * 100)
+            .checked_div(self.started)
+            .map_or(0, |v| (v as u32).min(99));
         if percentage < self.last_percentage {
             percentage = self.last_percentage;
         }
@@ -839,7 +743,11 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::CodeActionKind;
+
+    use super::SOURCE_FIX_ALL_PYREFLY;
     use super::format_diagnostic_message_for_markdown;
+    use super::matches_fix_all_kind;
 
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
@@ -879,6 +787,26 @@ mod tests {
     #[test]
     fn test_format_only_special_characters() {
         assert_eq!(format_diagnostic_message_for_markdown("***"), "\\*\\*\\*");
+    }
+
+    #[test]
+    fn test_fix_all_kind_filter_matches_supported_kinds() {
+        assert!(matches_fix_all_kind(&CodeActionKind::SOURCE_FIX_ALL));
+        assert!(matches_fix_all_kind(&CodeActionKind::new(
+            SOURCE_FIX_ALL_PYREFLY,
+        )));
+    }
+
+    #[test]
+    fn test_fix_all_kind_filter_rejects_unsupported_kinds() {
+        assert!(!matches_fix_all_kind(&CodeActionKind::new(
+            "source.fixAll.pyrefly.foo",
+        )));
+        assert!(!matches_fix_all_kind(&CodeActionKind::new(
+            "source.fixAll.pyreflyyyyyy",
+        )));
+        assert!(!matches_fix_all_kind(&CodeActionKind::QUICKFIX));
+        assert!(!matches_fix_all_kind(&CodeActionKind::REFACTOR_EXTRACT));
     }
 }
 
@@ -959,6 +887,13 @@ pub struct Server {
     currently_streaming_diagnostics_for_handles: RwLock<Option<SmallSet<Handle>>>,
     /// Whether the client supports markdown in diagnostic messages.
     diagnostic_markdown_support: bool,
+    /// Wire-shape version negotiated for the
+    /// `pyrefly/textDocument/typeErrorDisplayStatus` request, parsed from
+    /// `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`. The
+    /// server clamps unknown future values to
+    /// [`TypeErrorDisplayStatusVersion::LATEST`] (the richest shape this
+    /// server knows about) and a missing field to `V1`.
+    type_error_display_status_version: TypeErrorDisplayStatusVersion,
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
@@ -1021,10 +956,7 @@ pub fn initialize_start(
     sender: &Sender<Message>,
     reader: &mut MessageReader,
 ) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
-    loop {
-        let Some(msg) = reader.recv() else {
-            break;
-        };
+    while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
                 if x.method == Initialize::METHOD {
@@ -1082,6 +1014,12 @@ pub struct ServerCapabilitiesWithTypeHierarchy {
     type_hierarchy_provider: Option<bool>,
 }
 
+impl ServerCapabilitiesWithTypeHierarchy {
+    pub fn set_experimental(&mut self, value: Value) {
+        self.base.experimental = Some(value);
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InitializeResult<C> {
@@ -1105,10 +1043,7 @@ pub fn initialize_finish<C: Serialize>(
     if sender.send(response.into()).is_err() {
         return Ok(false);
     }
-    loop {
-        let Some(msg) = reader.recv() else {
-            break;
-        };
+    while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
                 error!("Unexpected request before initialized: {x:?}");
@@ -1302,6 +1237,7 @@ pub fn capabilities(
                 CodeActionKind::new("refactor.move"),
                 CodeActionKind::REFACTOR_INLINE,
                 CodeActionKind::SOURCE_FIX_ALL,
+                CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY),
             ]),
             ..Default::default()
         })),
@@ -1411,6 +1347,11 @@ pub enum ProcessEvent {
 }
 
 const PYTHON_SECTION: &str = "python";
+const SOURCE_FIX_ALL_PYREFLY: &str = "source.fixAll.pyrefly";
+
+fn matches_fix_all_kind(kind: &CodeActionKind) -> bool {
+    kind == &CodeActionKind::SOURCE_FIX_ALL || kind.as_str() == SOURCE_FIX_ALL_PYREFLY
+}
 
 struct TypeHierarchyTarget {
     def_index: ClassDefIndex,
@@ -1866,7 +1807,7 @@ impl Server {
                             url
                         )
                     })?;
-                    for cell_url in lsp_notebook.cell_urls() {
+                    for cell_url in lsp_notebook.code_cell_urls() {
                         self.open_notebook_cells
                             .write()
                             .insert(cell_url.clone(), notebook_path.clone());
@@ -1952,12 +1893,15 @@ impl Server {
 
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
+                // `TypeErrorDisplayStatusRequest` is in the list because cancelling it leaves the
+                // status-bar item hidden until the next unrelated event; stale data is fine here.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
                     ResolveCompletionItem::METHOD,
                     SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
                     ProvideType::METHOD,
+                    TypeErrorDisplayStatusRequest::METHOD,
                 ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
@@ -2336,6 +2280,14 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<ProvideType>(params, &x.id)
                     {
+                        // provide_type loads unopened files via transaction.run().
+                        // A concurrent config recheck can cancel the transaction,
+                        // silently aborting the load. Prevent this by detaching the
+                        // cancellation handle and resetting it before the handler runs.
+                        self.cancellation_handles
+                            .lock()
+                            .remove(&request_id_for_cancel);
+                        transaction.reset_cancellation();
                         self.send_response(new_response(
                             x.id,
                             Ok(self.provide_type(&mut transaction, params)),
@@ -2475,19 +2427,27 @@ impl Server {
                         .docstring_ranges(&transaction, &text_document)
                         .unwrap_or_default();
                     self.send_response(new_response(x.id, Ok(ranges)));
-                } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
+                } else if x.method == TypeErrorDisplayStatusRequest::METHOD {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
-                    if let Some(path) = self.path_for_uri_or_notebook_cell(&text_document.uri) {
-                        self.send_response(new_response(
-                            x.id,
-                            Ok(self.type_error_display_status(path.as_path())),
-                        ));
+                    let response = if let Some(path) =
+                        self.path_for_uri_or_notebook_cell(&text_document.uri)
+                    {
+                        self.type_error_display_status_response(path.as_path())
                     } else {
-                        self.send_response(new_response(
-                            x.id,
-                            Ok(TypeErrorDisplayStatus::NoConfigFile),
-                        ));
-                    }
+                        // No file — fall back to NoConfigFile in whatever
+                        // shape the client requested.
+                        match self.type_error_display_status_version {
+                            TypeErrorDisplayStatusVersion::V1 => {
+                                TypeErrorDisplayStatusResponse::V1(
+                                    TypeErrorDisplayStatus::NoConfigFile,
+                                )
+                            }
+                            TypeErrorDisplayStatusVersion::V2 => {
+                                TypeErrorDisplayStatusResponse::V2(default_v2_response())
+                            }
+                        }
+                    };
+                    self.send_response(new_response(x.id, Ok(response)));
                 } else if &x.method == "testing/doNotCommitNextRecheck" {
                     self.do_not_commit_recheck.store(true, Ordering::SeqCst);
                     info!("Set do_not_commit_recheck flag to true");
@@ -2555,6 +2515,19 @@ impl Server {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let type_error_display_status_version = negotiate_type_error_display_status_version(
+            initialize_params.initialization_options.as_ref(),
+        );
+
+        let dir_cache_enabled = initialize_params
+            .initialization_options
+            .as_ref()
+            .and_then(|opts| opts.get("pyrefly"))
+            .and_then(|pyrefly| pyrefly.get("experiments"))
+            .and_then(|exp| exp.get("dirEntryCache"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let should_request_workspace_settings = initialize_params
             .capabilities
             .workspace
@@ -2572,7 +2545,7 @@ impl Server {
             indexing_mode,
             workspace_indexing_limit,
             build_system_blocking,
-            state: State::new(config_finder, thread_count),
+            state: State::new_with_options(config_finder, thread_count, dir_cache_enabled),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
             published_workspace_diagnostics: Mutex::new(HashMap::new()),
@@ -2599,6 +2572,7 @@ impl Server {
             comment_folding_ranges,
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
             diagnostic_markdown_support,
+            type_error_display_status_version,
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
@@ -2631,6 +2605,10 @@ impl Server {
     }
 
     pub fn telemetry_state(&self) -> TelemetryServerState {
+        let mut active_experiments = Vec::new();
+        if self.state.dir_cache_enabled() {
+            active_experiments.push("dir_entry_cache".to_owned());
+        }
         TelemetryServerState {
             has_sourcedb: self.workspaces.sourcedb_available(),
             id: self.id,
@@ -2638,6 +2616,7 @@ impl Server {
             server_start_time: self.server_start_time,
             agent_session_id: self.agent_session_id.clone(),
             agent_invocation_id: self.agent_invocation_id.clone(),
+            active_experiments,
         }
     }
 
@@ -2781,26 +2760,10 @@ impl Server {
                 return None;
             }
 
-            // Check if we should filter based on error kind for ErrorMissingImports mode
-            let display_type_errors_mode = self
-                .workspaces
-                .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors)
-                .unwrap_or_default();
-
-            if !should_show_error_for_display_mode(e, display_type_errors_mode, type_error_status) {
-                return None;
-            }
-
-            // In NoConfigFile mode, downgrade certain error kinds to Warn severity
-            // so users without a config file see critical issues as warnings.
-            let overridden;
-            let e = match no_config_severity_override(e, type_error_status) {
-                Some(severity) => {
-                    overridden = e.with_severity(severity);
-                    &overridden
-                }
-                None => e,
-            };
+            // The resolved config's preset (Basic / Off / migrated) is
+            // the single source of truth for which errors are silenced;
+            // the `typeCheckingMode` IDE setting reaches us through the
+            // resolver at config synthesis time, not per-diagnostic.
 
             if let Some(lsp_file) = open_files.get(&path)
                 && config.project_includes.covers(&path)
@@ -2810,7 +2773,7 @@ impl Server {
                 return match &**lsp_file {
                     LspFile::Notebook(notebook) => {
                         let error_cell = e.get_notebook_cell()?;
-                        let error_cell_uri = notebook.get_cell_url(error_cell)?;
+                        let error_cell_uri = notebook.get_code_cell_url(error_cell)?;
                         if let Some(filter_cell) = cell_uri
                             && error_cell_uri != filter_cell
                         {
@@ -2856,34 +2819,66 @@ impl Server {
             .state
             .config_finder()
             .python_file(handle.module_kind(), handle.path());
-        match self
+
+        // Workspace-scoped kill switch is a clean boolean. `true`
+        // suppresses every diagnostic; `false` defers to the resolved
+        // config and any in-config `disable-type-errors-in-ide` flag.
+        // Legacy `displayTypeErrors = "force-off"` is mapped onto
+        // `true` by `apply_client_configuration`.
+        if self
             .workspaces
-            .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors)
+            .get_with(path.to_path_buf(), |(_, w)| w.disable_type_errors)
         {
-            Some(DisplayTypeErrors::ForceOn) => TypeErrorDisplayStatus::EnabledInIdeConfig,
-            Some(DisplayTypeErrors::ErrorMissingImports) => {
-                TypeErrorDisplayStatus::EnabledInIdeConfig
-            }
-            Some(DisplayTypeErrors::ForceOff) => TypeErrorDisplayStatus::DisabledInIdeConfig,
-            Some(DisplayTypeErrors::Default) | None => match &config.source {
-                // In this case, we don't have a config file.
-                ConfigSource::Synthetic => TypeErrorDisplayStatus::NoConfigFile,
-                // In this case, we have a config file like mypy.ini, or a pyproject.toml
-                // with Python tool sections but no [tool.pyrefly]. We don't parse it for
-                // pyrefly config, so treat it as if we don't have any config.
-                ConfigSource::PythonToolMarker(_)
-                | ConfigSource::Marker(_)
-                | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
-                // We actually have a pyrefly.toml, so we can decide based on the config.
-                ConfigSource::File(_) => {
-                    if config.disable_type_errors_in_ide(path) {
-                        TypeErrorDisplayStatus::DisabledInConfigFile
-                    } else {
-                        TypeErrorDisplayStatus::EnabledInConfigFile
-                    }
-                }
-            },
+            return TypeErrorDisplayStatus::DisabledInIdeConfig;
         }
+        match &config.source {
+            ConfigSource::Synthetic
+            | ConfigSource::PythonToolMarker(_)
+            | ConfigSource::Marker(_)
+            | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
+            ConfigSource::File(_) => {
+                if config.disable_type_errors_in_ide(path) {
+                    TypeErrorDisplayStatus::DisabledInConfigFile
+                } else {
+                    TypeErrorDisplayStatus::EnabledInConfigFile
+                }
+            }
+        }
+    }
+
+    /// Returns the typeErrorDisplayStatus response in whichever wire shape
+    /// the client negotiated at `initialize` time. V1 is the legacy bare
+    /// string; V2 is the rich struct used by the new status-bar UI.
+    fn type_error_display_status_response(&self, path: &Path) -> TypeErrorDisplayStatusResponse {
+        match self.type_error_display_status_version {
+            TypeErrorDisplayStatusVersion::V1 => {
+                TypeErrorDisplayStatusResponse::V1(self.type_error_display_status(path))
+            }
+            TypeErrorDisplayStatusVersion::V2 => {
+                TypeErrorDisplayStatusResponse::V2(self.type_error_display_status_v2(path))
+            }
+        }
+    }
+
+    /// Build the V2 status-bar response from the resolved config and the
+    /// workspace's `typeCheckingMode`.
+    fn type_error_display_status_v2(&self, path: &Path) -> TypeErrorDisplayStatusV2 {
+        let handle = make_open_handle(&self.state, path);
+        let config = self
+            .state
+            .config_finder()
+            .python_file(handle.module_kind(), handle.path());
+        let (workspace_disable_type_errors, workspace_type_checking_mode) =
+            self.workspaces.get_with(path.to_path_buf(), |(_, w)| {
+                (w.disable_type_errors, w.type_checking_mode)
+            });
+        derive_v2_response(
+            config.synthesized_preset_reason,
+            &config.source,
+            config.disable_type_errors_in_ide(path),
+            workspace_disable_type_errors,
+            workspace_type_checking_mode,
+        )
     }
 
     fn validate_in_memory_and_commit_if_possible<'a>(
@@ -2945,7 +2940,7 @@ impl Server {
             if let Some(lsp_file) = open_files.get(&handle_path_buf) {
                 match &**lsp_file {
                     LspFile::Notebook(notebook) => {
-                        for url in notebook.cell_urls() {
+                        for url in notebook.code_cell_urls() {
                             diags.insert(PathBuf::from(url.to_string()), Vec::new());
                         }
                     }
@@ -2963,10 +2958,10 @@ impl Server {
                 diags.insert(handle_path_buf, Vec::new());
             }
         }
-        let collected = transaction.get_errors(handles).collect_errors();
-        let mut output_errors = collected.ordinary;
-        output_errors.extend(collected.directives);
-        for e in output_errors {
+        for e in transaction
+            .get_errors(handles)
+            .collect_display_errors_with_unused_ignores()
+        {
             if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                 diags.entry(path.to_owned()).or_default().push(diag);
             }
@@ -3496,7 +3491,7 @@ impl Server {
         let path = url
             .to_file_path()
             .or_else(|_| {
-                if url.scheme() == "untitled" {
+                if url.scheme() == "untitled" || url.scheme() == "inmemory" {
                     Ok(self
                         .unsaved_file_tracker
                         .ensure_path_for_open(&url, "python"))
@@ -3870,7 +3865,7 @@ impl Server {
         match entry.get().as_ref() {
             LspFile::Notebook(notebook) => match kind {
                 DidCloseKind::NotebookDocument => {
-                    let cell_urls: Vec<_> = notebook.cell_urls().to_vec();
+                    let cell_urls: Vec<_> = notebook.code_cell_urls().to_vec();
                     for cell in cell_urls {
                         self.publish_diagnostics_for_uri(
                             cell.clone(),
@@ -4283,7 +4278,7 @@ impl Server {
                             if let Some(cell_idx) = info.to_cell_for_lsp(range.start())
                                 && let Some(path) = to_real_path(info.path())
                                 && let Some(notebook) = open_notebooks.get(&path)
-                                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                                && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
                             {
                                 uri = cell_url.clone();
                             }
@@ -4370,11 +4365,7 @@ impl Server {
         let only_kinds = params.context.only.as_ref();
         let allow_quickfix = only_kinds
             .is_none_or(|kinds| kinds.iter().any(|kind| kind == &CodeActionKind::QUICKFIX));
-        let allow_fix_all = only_kinds.is_none_or(|kinds| {
-            kinds
-                .iter()
-                .any(|kind| kind == &CodeActionKind::SOURCE_FIX_ALL)
-        });
+        let allow_fix_all = only_kinds.is_none_or(|kinds| kinds.iter().any(matches_fix_all_kind));
         let allow_refactor = only_kinds.is_none_or(|kinds| {
             kinds
                 .iter()
@@ -4392,7 +4383,7 @@ impl Server {
             // If the code action is triggered from a notebook cell, we need the cell's
             // index so that import quick-fixes can be redirected to the current cell
             // instead of always targeting cell 1 (position 0 of the combined AST).
-            let triggered_cell_index = self.maybe_get_cell_index(uri);
+            let triggered_cell_index = self.maybe_get_code_cell_index(uri);
             if let Some(quickfixes) = transaction.local_quickfix_code_actions_sorted(
                 &handle,
                 range,
@@ -4422,7 +4413,7 @@ impl Server {
                                     if let Some(LspFile::Notebook(notebook)) =
                                         open_files.get(&path).map(|f| &**f)
                                     {
-                                        notebook.get_cell_url(current_cell_idx).cloned()
+                                        notebook.get_code_cell_url(current_cell_idx).cloned()
                                     } else {
                                         None
                                     }
@@ -4476,7 +4467,7 @@ impl Server {
                 if !changes.is_empty() {
                     actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                         title: "Remove all redundant casts".to_owned(),
-                        kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                        kind: Some(CodeActionKind::new(SOURCE_FIX_ALL_PYREFLY)),
                         edit: Some(WorkspaceEdit {
                             changes: Some(changes),
                             ..Default::default()
@@ -4639,7 +4630,18 @@ impl Server {
                 .find_local_references(&handle, position, true)
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
-                    kind: None,
+                    kind: Some(
+                        if transaction
+                            .identifier_at(&handle, range.start())
+                            .expect("local references should point at identifiers")
+                            .context
+                            .is_write()
+                        {
+                            DocumentHighlightKind::WRITE
+                        } else {
+                            DocumentHighlightKind::READ
+                        },
+                    ),
                 }),
         ))
     }
@@ -4687,9 +4689,11 @@ impl Server {
                 return Err(reason);
             }
         };
+        let uri_for_telemetry = uri.clone();
         self.find_reference_queue.queue_task(
             TelemetryEventKind::FindFromDefinition,
             Box::new(move |server, telemetry, telemetry_event| {
+                server.set_file_stats(uri_for_telemetry, telemetry_event);
                 telemetry_event.set_activity_key(activity_key);
                 let mut transaction = server.state.cancellable_transaction();
                 server
@@ -4815,7 +4819,7 @@ impl Server {
                             if let Some(cell_idx) = info.to_cell_for_lsp(range.start())
                                 && let Some(path) = to_real_path(info.path())
                                 && let Some(notebook) = open_notebooks.get(&path)
-                                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                                && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
                             {
                                 uri = cell_url.clone();
                             }
@@ -4965,7 +4969,7 @@ impl Server {
         params: InlayHintParams,
     ) -> Result<Option<Vec<InlayHint>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let range = &params.range;
         let (handle, lsp_analysis_config) = self
             .make_handle_with_lsp_analysis_config_if_enabled(uri, Some(InlayHintRequest::METHOD))?;
@@ -5047,7 +5051,7 @@ impl Server {
         let runnable_code_lens = self
             .workspaces
             .get_with(path.clone(), |(_, workspace)| workspace.runnable_code_lens);
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self
             .make_handle_if_enabled(uri, Some(CodeLensRequest::METHOD))
             .ok()?;
@@ -5073,7 +5077,7 @@ impl Server {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
@@ -5089,7 +5093,7 @@ impl Server {
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensRangeRequest::METHOD))?;
         let module_info = transaction
             .get_module_info(&handle)
@@ -5109,7 +5113,7 @@ impl Server {
         params: DocumentSymbolParams,
     ) -> Result<Option<Vec<DocumentSymbol>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let path = self
             .path_for_uri_or_notebook_cell(uri)
             .ok_or(EmptyResponseReason::NoFilePath)?;
@@ -5313,7 +5317,7 @@ impl Server {
         text_document: &TextDocumentIdentifier,
     ) -> Option<Vec<Range>> {
         let uri = &text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, None).ok()?;
         let module = transaction.get_module_info(&handle)?;
         let docstring_ranges = transaction.docstring_ranges(&handle)?;
@@ -5335,7 +5339,7 @@ impl Server {
         params: FoldingRangeParams,
     ) -> Result<Option<Vec<FoldingRange>>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
-        let maybe_cell_idx = self.maybe_get_cell_index(uri);
+        let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(FoldingRangeRequest::METHOD))?;
         let module = transaction
             .get_module_info(&handle)
@@ -5410,10 +5414,10 @@ impl Server {
         let handle = make_open_handle(&self.state, &path);
         let mut items = Vec::new();
         let open_files = &self.open_files.read();
-        let collected = transaction.get_errors(once(&handle)).collect_errors();
-        let mut output_errors = collected.ordinary;
-        output_errors.extend(collected.directives);
-        for e in output_errors {
+        for e in transaction
+            .get_errors(once(&handle))
+            .collect_display_errors_with_unused_ignores()
+        {
             if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
                 items.push(diag);
             }
@@ -5663,7 +5667,7 @@ impl Server {
             // we don't know what URI refers to which cell.
             let path = to_real_path(definition_module_info.path())?;
             if let LspFile::Notebook(notebook) = &**self.open_files.read().get(&path)?
-                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
             {
                 uri = cell_url.clone();
             }
@@ -5676,13 +5680,13 @@ impl Server {
 
     /// If the uri is an open notebook cell, return the index of the cell within the notebook
     /// otherwise, return None.
-    fn maybe_get_cell_index(&self, cell_uri: &Url) -> Option<usize> {
+    fn maybe_get_code_cell_index(&self, cell_uri: &Url) -> Option<usize> {
         self.open_notebook_cells
             .read()
             .get(cell_uri)
             .and_then(|path| self.open_files.read().get(path).duped())
             .and_then(|file| match &*file {
-                LspFile::Notebook(notebook) => notebook.get_cell_index(cell_uri),
+                LspFile::Notebook(notebook) => notebook.get_code_cell_index(cell_uri),
                 _ => None,
             })
     }
@@ -5693,12 +5697,12 @@ impl Server {
         module: &ModuleInfo,
         position: Position,
     ) -> TextSize {
-        let notebook_cell = self.maybe_get_cell_index(uri);
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
         module.from_lsp_position(position, notebook_cell)
     }
 
     pub fn from_lsp_range(&self, uri: &Url, module: &ModuleInfo, position: Range) -> TextRange {
-        let notebook_cell = self.maybe_get_cell_index(uri);
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
         module.from_lsp_range(position, notebook_cell)
     }
 
@@ -6277,15 +6281,14 @@ impl TspInterface for Server {
         let url = Url::parse(uri)
             .ok()
             .or_else(|| Url::from_file_path(uri).ok())?;
-        let path = url.to_file_path().ok()?;
+        let path = self.path_for_uri_or_notebook_cell(&url)?;
+        let notebook_cell = self.maybe_get_code_cell_index(&url);
 
         let handle = make_open_handle(&self.state, &path);
         let transaction = self.state.transaction();
         let module_info = transaction.get_module_info(&handle)?;
-        let position = module_info.from_lsp_position(
-            lsp_types::Position { line, character },
-            /* notebook_cell */ None,
-        );
+        let position =
+            module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
         transaction.get_type_at(&handle, position)
     }
 
@@ -6300,5 +6303,34 @@ impl TspInterface for Server {
         let key = KeyUndecoratedFunctionRange(def_index);
         let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
         Some(bindings.get(idx).0.range())
+    }
+
+    fn resolve_module_uri(
+        &self,
+        source_uri: &str,
+        module: &pyrefly_types::module::ModuleType,
+    ) -> Option<PathBuf> {
+        let url = Url::parse(source_uri)
+            .ok()
+            .or_else(|| Url::from_file_path(source_uri).ok())?;
+        let source_path = self.path_for_uri_or_notebook_cell(&url)?;
+
+        let source_handle = make_open_handle(&self.state, &source_path);
+        let transaction = self.state.transaction();
+        let module_name = ModuleName::from_str(&module.to_string());
+        let finding = transaction
+            .import_handle(&source_handle, module_name, None)
+            .finding()?;
+
+        let path = to_real_path(finding.path())?;
+        Some(path.canonicalize().unwrap_or(path))
+    }
+
+    fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {
+        self.path_for_uri_or_notebook_cell(uri)
+    }
+
+    fn maybe_get_code_cell_index(&self, uri: &Url) -> Option<usize> {
+        Self::maybe_get_code_cell_index(self, uri)
     }
 }

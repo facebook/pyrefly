@@ -139,18 +139,27 @@ pub struct BuckCheckSourceDatabase {
     /// See <https://github.com/facebook/buck2/blob/03ed62f85e7cc487fd505ad097ef9f260fae2522/prelude/python/tools/wheel.py#L196C1-L198C1>.
     implicit_init: SmallMap<ModuleName, ModulePath>,
     sys_info: SysInfo,
+    check_dependencies: bool,
 }
 
 impl SourceDatabase for BuckCheckSourceDatabase {
     fn modules_to_check(&self) -> Vec<Handle> {
-        self.sources
-            .iter()
-            .flat_map(|(name, paths)| {
-                paths
-                    .iter()
-                    .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
-            })
-            .collect()
+        let sources = self.sources.iter().flat_map(|(name, paths)| {
+            paths
+                .iter()
+                .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
+        });
+        if self.check_dependencies {
+            sources
+                .chain(self.dependencies.iter().flat_map(|(name, paths)| {
+                    paths
+                        .iter()
+                        .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
+                }))
+                .collect()
+        } else {
+            sources.collect()
+        }
     }
 
     fn lookup(
@@ -207,6 +216,7 @@ impl BuckCheckSourceDatabase {
         dependency_manifests: &[PathBuf],
         typeshed_manifests: &[PathBuf],
         sys_info: SysInfo,
+        check_dependencies: bool,
     ) -> anyhow::Result<Self> {
         let sources = read_manifest_files(source_manifests)?;
         let dependencies = read_manifest_files(dependency_manifests)?;
@@ -216,6 +226,7 @@ impl BuckCheckSourceDatabase {
             dependencies,
             typeshed,
             sys_info,
+            check_dependencies,
         ))
     }
 
@@ -224,6 +235,7 @@ impl BuckCheckSourceDatabase {
         dependency_items: Vec<ManifestItem>,
         typeshed_items: Vec<ManifestItem>,
         sys_info: SysInfo,
+        check_dependencies: bool,
     ) -> Self {
         let mut implicit_init = SmallMap::new();
         for x in source_items
@@ -247,6 +259,7 @@ impl BuckCheckSourceDatabase {
             ),
             implicit_init,
             sys_info,
+            check_dependencies,
         }
     }
 }
@@ -333,6 +346,7 @@ mod tests {
                 module_path: baz_path.dupe(),
             }],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -383,6 +397,7 @@ mod tests {
             ],
             vec![],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -424,6 +439,7 @@ mod tests {
             ],
             vec![],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -486,6 +502,7 @@ mod tests {
                 },
             ],
             SysInfo::default(),
+            false,
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("a")),
@@ -525,6 +542,7 @@ mod tests {
             vec![],
             vec![],
             SysInfo::default(),
+            false,
         );
         let res = source_db.lookup(ModuleName::from_str("foo"), None, None);
         assert_eq!(res.unwrap().as_path().to_str().unwrap(), "/root/foo");

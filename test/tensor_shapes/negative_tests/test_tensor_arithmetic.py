@@ -274,5 +274,12 @@ def broadcast_same_tvt_prefix_extension[*Ts](
 def broadcast_different_tvt[*Ts, *Us](
     x: Tensor[*Ts, 3], y: Tensor[*Us, 3]
 ) -> Tensor[*Ts, 3]:
-    """ERROR: Different TypeVarTuples can't be broadcast"""
-    return x + y  # ERROR: incompatible middles
+    """ERROR: Different TypeVarTuples degrade to shapeless batch dims"""
+    return x + y  # ERROR: result is Tensor[*tuple[Unknown, ...], 3], not Tensor[*Ts, 3]
+
+
+def broadcast_different_tvt_any_batch[*Ts, *Us](
+    x: Tensor[*Ts, 3], y: Tensor[*Us, 3]
+) -> Tensor[*tuple[Any, ...], 3]:
+    """OK: Different TypeVarTuples degrade — accept with unbounded batch dims"""
+    return x + y

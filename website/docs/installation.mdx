@@ -115,7 +115,57 @@ This will add `# pyrefly: ignore` comments to your code, enabling you to silence
 
 ## Add Pyrefly to CI
 
-After your project passes type checks without errors, you can prevent new bugs from being introduced. Enforce this through CI (Continuous Integration) to prevent other maintainers from merging code with errors. Here is an example for GitHub.
+After your project passes type checks without errors, you can prevent new bugs from being introduced. Enforce this through CI (Continuous Integration) to prevent other maintainers from merging code with errors.
+
+### Using the GitHub Action (Recommended)
+
+The simplest way to add Pyrefly to GitHub Actions is with the official composite action. It handles Python setup, installation, and running the type checker with inline PR annotations enabled by default.
+
+```yaml
+- uses: facebook/pyrefly@main
+```
+
+Here is a complete workflow example:
+
+```yaml
+name: Pyrefly Type Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: facebook/pyrefly@main
+```
+
+You can pin a specific Pyrefly version, set the Python version, or pass extra arguments:
+
+```yaml
+      - uses: facebook/pyrefly@main
+        with:
+          version: "0.60.0"
+          python-version: "3.12"
+          args: "--summarize-errors"
+```
+
+The action accepts the following inputs:
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `version` | latest | Pyrefly version to install (e.g., `0.60.0`) |
+| `args` | | Extra arguments passed to `pyrefly check` |
+| `python-version` | `3.x` | Python version for `actions/setup-python` |
+| `working-directory` | `.` | Directory to run the type check in |
+
+Type errors appear as inline annotations on pull requests automatically via `--output-format=github`.
+
+### Manual Setup
+
+If you need more control or use a non-GitHub CI system (GitLab CI, Jenkins, etc.), you can set up Pyrefly manually.
 
 Save your workflow in the following path within your repository:
 
@@ -125,7 +175,7 @@ Save your workflow in the following path within your repository:
 
 GitHub automatically detects `.yml` files within `.github/workflows/` and sets up the defined workflows.
 
-```
+```yaml
 name: Pyrefly Type Check
 
 on:
@@ -145,7 +195,7 @@ jobs:
         uses: actions/setup-python@v5
 
       # Install Python dependencies and create environment
-      - name: Install dependencies and run type checking
+      - name: Install dependencies
         run: |
           python -m venv .venv
           source .venv/bin/activate
@@ -156,8 +206,8 @@ jobs:
       - name: Install Pyrefly
         run: pip install pyrefly
 
-        - name: Run Pyrefly Type Checker
-          run: pyrefly check
+      - name: Run Pyrefly Type Checker
+        run: pyrefly check --output-format=github
 ```
 
 ### Inline PR Annotations
@@ -167,9 +217,10 @@ Pyrefly can emit errors as [GitHub Actions workflow commands](https://docs.githu
 To enable this, pass `--output-format=github`:
 
 ```
-        - name: Run Pyrefly Type Checker
-          run: pyrefly check --output-format=github
+pyrefly check --output-format=github
 ```
+
+The GitHub Action enables this by default. For manual setups, add the flag to your workflow step.
 
 ### A few notes about this setup:
 
@@ -177,8 +228,8 @@ To enable this, pass `--output-format=github`:
 - Simply drop in `pyrefly check` to existing workflows that build and test your environment.
 
 ```
-        - name: Run Pyrefly Type Checker
-          run: pyrefly check
+      - name: Run Pyrefly Type Checker
+        run: pyrefly check
 ```
 
 - Your `pyrefly.toml` or Pyrefly configs in your `pyproject.toml` will be automatically detected. Learn how to [configure Pyrefly here](../configuration).

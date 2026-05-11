@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use dupe::Dupe;
 use pretty_assertions::assert_eq;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
@@ -17,6 +18,7 @@ use pyrefly_types::class::ClassType;
 use ruff_python_ast::name::Name;
 
 use crate::report::pysa::call_graph::Target;
+use crate::report::pysa::class::ClassId;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::context::PysaResolver;
@@ -49,6 +51,7 @@ fn create_function_definition(
     FunctionDefinition {
         base: FunctionBaseDefinition {
             name: Name::from(name),
+            name_location: None,
             parent,
             is_overload: false,
             is_staticmethod: false,
@@ -175,6 +178,7 @@ def foo(x: int) -> str:
                 PysaType::from_class_type(context.answers_context.stdlib.str(), context),
             )],
         )
+        .with_name_location(Some(create_location(2, 5, 2, 8)))
     },
 );
 
@@ -233,6 +237,7 @@ def complex_function(pos_arg: int, /, pos_or_kw: str, *args: float, kw_only: boo
                 PysaType::none(),
             )],
         )
+        .with_name_location(Some(create_location(2, 5, 2, 21)))
     },
 );
 
@@ -247,7 +252,7 @@ class MyClass:
         create_function_definition(
             "method",
             ScopeParent::Class {
-                location: create_location(2, 7, 2, 14),
+                class_id: ClassId::from_int(0),
             },
             /* overloads */
             vec![create_simple_signature(
@@ -263,6 +268,7 @@ class MyClass:
             )],
         )
         .with_defining_class(get_class_ref("test", "MyClass", context))
+        .with_name_location(Some(create_location(3, 9, 3, 15)))
     },
 );
 
@@ -278,7 +284,7 @@ class MyClass:
         create_function_definition(
             "static_method",
             ScopeParent::Class {
-                location: create_location(2, 7, 2, 14),
+                class_id: ClassId::from_int(0),
             },
             /* overloads */
             vec![create_simple_signature(
@@ -295,6 +301,7 @@ class MyClass:
         )
         .with_is_staticmethod(true)
         .with_defining_class(get_class_ref("test", "MyClass", context))
+        .with_name_location(Some(create_location(4, 9, 4, 22)))
     },
 );
 
@@ -310,7 +317,7 @@ class MyClass:
         create_function_definition(
             "class_method",
             ScopeParent::Class {
-                location: create_location(2, 7, 2, 14),
+                class_id: ClassId::from_int(0),
             },
             /* overloads */
             vec![create_simple_signature(
@@ -336,6 +343,7 @@ class MyClass:
         )
         .with_is_classmethod(true)
         .with_defining_class(get_class_ref("test", "MyClass", context))
+        .with_name_location(Some(create_location(4, 9, 4, 21)))
     },
 );
 
@@ -382,6 +390,7 @@ def foo(x: str | int) -> str | int:
                 ),
             ],
         )
+        .with_name_location(Some(create_location(9, 5, 9, 8)))
     },
 );
 
@@ -399,6 +408,7 @@ def foo() -> None:
             vec![create_simple_signature(vec![], PysaType::none())],
         )
         .with_is_stub(true)
+        .with_name_location(Some(create_location(2, 5, 2, 8)))
     },
 );
 
@@ -418,7 +428,7 @@ class MyClass:
             create_function_definition(
                 "foo",
                 ScopeParent::Class {
-                    location: create_location(2, 7, 2, 14),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -434,11 +444,12 @@ class MyClass:
                 )],
             )
             .with_is_property_getter(true)
-            .with_defining_class(get_class_ref("test", "MyClass", context)),
+            .with_defining_class(get_class_ref("test", "MyClass", context))
+            .with_name_location(Some(create_location(4, 9, 4, 12))),
             create_function_definition(
                 "foo",
                 ScopeParent::Class {
-                    location: create_location(2, 7, 2, 14),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -464,7 +475,8 @@ class MyClass:
                 )],
             )
             .with_is_property_setter(true)
-            .with_defining_class(get_class_ref("test", "MyClass", context)),
+            .with_defining_class(get_class_ref("test", "MyClass", context))
+            .with_name_location(Some(create_location(7, 9, 7, 12))),
         ]
     },
 );
@@ -477,22 +489,24 @@ def foo():
         pass
     return
 "#,
-    &|_: &ModuleContext| {
+    &|_context: &ModuleContext| {
         vec![
             create_function_definition(
                 "foo",
                 ScopeParent::TopLevel,
                 /* overloads */
                 vec![create_simple_signature(vec![], PysaType::none())],
-            ),
+            )
+            .with_name_location(Some(create_location(2, 5, 2, 8))),
             create_function_definition(
                 "bar",
                 ScopeParent::Function {
-                    location: create_location(2, 5, 2, 8),
+                    func_def_index: FuncDefIndex(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(vec![], PysaType::none())],
-            ),
+            )
+            .with_name_location(Some(create_location(3, 9, 3, 12))),
         ]
     },
 );
@@ -535,7 +549,8 @@ def foo(x: int) -> int:
                     }],
                     callable_int_to_int.clone(),
                 )],
-            ),
+            )
+            .with_name_location(Some(create_location(4, 5, 4, 14))),
             create_function_definition(
                 "foo",
                 ScopeParent::TopLevel,
@@ -559,7 +574,8 @@ def foo(x: int) -> int:
                     "decorator",
                     context,
                 ))],
-            )])),
+            )]))
+            .with_name_location(Some(create_location(8, 5, 8, 8))),
         ]
     },
 );
@@ -616,7 +632,8 @@ def foo(x: int) -> int:
                         context,
                     ),
                 )],
-            ),
+            )
+            .with_name_location(Some(create_location(4, 5, 4, 14))),
             create_function_definition(
                 "foo",
                 ScopeParent::TopLevel,
@@ -640,7 +657,8 @@ def foo(x: int) -> int:
                     "decorator",
                     context,
                 ))],
-            )])),
+            )]))
+            .with_name_location(Some(create_location(8, 5, 8, 8))),
         ]
     },
 );
@@ -687,7 +705,8 @@ def foo(x: int) -> int:
                     }],
                     callable_int_to_int.clone(),
                 )],
-            ),
+            )
+            .with_name_location(Some(create_location(4, 5, 4, 7))),
             create_function_definition(
                 "d2",
                 ScopeParent::TopLevel,
@@ -700,7 +719,8 @@ def foo(x: int) -> int:
                     }],
                     callable_int_to_int.clone(),
                 )],
-            ),
+            )
+            .with_name_location(Some(create_location(7, 5, 7, 7))),
             create_function_definition(
                 "foo",
                 ScopeParent::TopLevel,
@@ -726,7 +746,8 @@ def foo(x: int) -> int:
                     create_location(11, 2, 11, 4),
                     vec![Target::Function(get_function_ref("test", "d2", context))],
                 ),
-            ])),
+            ]))
+            .with_name_location(Some(create_location(12, 5, 12, 8))),
         ]
     },
 );
@@ -746,7 +767,7 @@ class Foo:
             create_function_definition(
                 "__hash__",
                 ScopeParent::Class {
-                    location: create_location(5, 7, 5, 10),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -767,7 +788,7 @@ class Foo:
             create_function_definition(
                 "__init__",
                 ScopeParent::Class {
-                    location: create_location(5, 7, 5, 10),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -806,7 +827,7 @@ class Foo:
             create_function_definition(
                 "__replace__",
                 ScopeParent::Class {
-                    location: create_location(5, 7, 5, 10),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -857,7 +878,7 @@ class Foo:
             create_function_definition(
                 "x",
                 ScopeParent::Class {
-                    location: create_location(3, 7, 3, 10),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -893,7 +914,7 @@ class Foo:
             create_function_definition(
                 "x",
                 ScopeParent::Class {
-                    location: create_location(3, 7, 3, 10),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -918,11 +939,12 @@ class Foo:
                     PysaType::from_class_type(context.answers_context.stdlib.int(), context),
                 )],
             )
-            .with_defining_class(get_class_ref("test", "Foo", context)),
+            .with_defining_class(get_class_ref("test", "Foo", context))
+            .with_name_location(Some(create_location(4, 9, 4, 10))),
             create_function_definition(
                 "y",
                 ScopeParent::Class {
-                    location: create_location(3, 7, 3, 10),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -969,7 +991,7 @@ class B(A):
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(2, 7, 2, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -981,11 +1003,12 @@ class B(A):
                     PysaType::none(),
                 )],
             )
-            .with_defining_class(get_class_ref("test", "A", context)),
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_name_location(Some(create_location(3, 9, 3, 15))),
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(6, 7, 6, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -998,7 +1021,8 @@ class B(A):
                 )],
             )
             .with_defining_class(get_class_ref("test", "B", context))
-            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context))
+            .with_name_location(Some(create_location(7, 9, 7, 15))),
         ]
     },
 );
@@ -1022,7 +1046,7 @@ class C(A):
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(2, 7, 2, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1034,11 +1058,12 @@ class C(A):
                     PysaType::none(),
                 )],
             )
-            .with_defining_class(get_class_ref("test", "A", context)),
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_name_location(Some(create_location(3, 9, 3, 15))),
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(9, 7, 9, 8),
+                    class_id: ClassId::from_int(2),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1051,7 +1076,8 @@ class C(A):
                 )],
             )
             .with_defining_class(get_class_ref("test", "C", context))
-            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context))
+            .with_name_location(Some(create_location(10, 9, 10, 15))),
         ]
     },
 );
@@ -1076,7 +1102,7 @@ class C(A, B):
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(2, 7, 2, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1088,11 +1114,12 @@ class C(A, B):
                     PysaType::none(),
                 )],
             )
-            .with_defining_class(get_class_ref("test", "A", context)),
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_name_location(Some(create_location(3, 9, 3, 15))),
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(6, 7, 6, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1104,11 +1131,12 @@ class C(A, B):
                     PysaType::none(),
                 )],
             )
-            .with_defining_class(get_class_ref("test", "B", context)),
+            .with_defining_class(get_class_ref("test", "B", context))
+            .with_name_location(Some(create_location(7, 9, 7, 15))),
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(10, 7, 10, 8),
+                    class_id: ClassId::from_int(2),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1121,7 +1149,8 @@ class C(A, B):
                 )],
             )
             .with_defining_class(get_class_ref("test", "C", context))
-            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context))
+            .with_name_location(Some(create_location(11, 9, 11, 15))),
         ]
     },
 );
@@ -1146,7 +1175,7 @@ class C(B):
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(2, 7, 2, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1158,11 +1187,12 @@ class C(B):
                     PysaType::none(),
                 )],
             )
-            .with_defining_class(get_class_ref("test", "A", context)),
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_name_location(Some(create_location(3, 9, 3, 15))),
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(6, 7, 6, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1175,11 +1205,12 @@ class C(B):
                 )],
             )
             .with_defining_class(get_class_ref("test", "B", context))
-            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context))
+            .with_name_location(Some(create_location(7, 9, 7, 15))),
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(10, 7, 10, 8),
+                    class_id: ClassId::from_int(2),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1192,7 +1223,8 @@ class C(B):
                 )],
             )
             .with_defining_class(get_class_ref("test", "C", context))
-            .with_overridden_base_method(get_method_ref("test", "B", "method", context)),
+            .with_overridden_base_method(get_method_ref("test", "B", "method", context))
+            .with_name_location(Some(create_location(11, 9, 11, 15))),
         ]
     },
 );
@@ -1215,7 +1247,7 @@ class B(A):
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(2, 7, 2, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1238,11 +1270,12 @@ class B(A):
                 )],
             )
             .with_is_classmethod(true)
-            .with_defining_class(get_class_ref("test", "A", context)),
+            .with_defining_class(get_class_ref("test", "A", context))
+            .with_name_location(Some(create_location(4, 9, 4, 15))),
             create_function_definition(
                 "method",
                 ScopeParent::Class {
-                    location: create_location(7, 7, 7, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1266,7 +1299,8 @@ class B(A):
             )
             .with_is_classmethod(true)
             .with_defining_class(get_class_ref("test", "B", context))
-            .with_overridden_base_method(get_method_ref("test", "A", "method", context)),
+            .with_overridden_base_method(get_method_ref("test", "A", "method", context))
+            .with_name_location(Some(create_location(9, 9, 9, 15))),
         ]
     },
 );
@@ -1289,7 +1323,7 @@ class B(A):
             create_function_definition(
                 "__init__",
                 ScopeParent::Class {
-                    location: create_location(8, 7, 8, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1315,11 +1349,12 @@ class B(A):
                 )],
             )
             .with_defining_class(get_class_ref("test", "B", context))
-            .with_overridden_base_method(get_method_ref("test", "A", "__init__", context)),
+            .with_overridden_base_method(get_method_ref("test", "A", "__init__", context))
+            .with_name_location(Some(create_location(9, 9, 9, 17))),
             create_function_definition(
                 "__init__",
                 ScopeParent::Class {
-                    location: create_location(5, 7, 5, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1350,7 +1385,7 @@ class B(A):
             create_function_definition(
                 "__replace__",
                 ScopeParent::Class {
-                    location: create_location(5, 7, 5, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1380,7 +1415,7 @@ class B(A):
             create_function_definition(
                 "__replace__",
                 ScopeParent::Class {
-                    location: create_location(8, 7, 8, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1429,7 +1464,7 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
             create_function_definition(
                 "__init__",
                 ScopeParent::Class {
-                    location: create_location(4, 1, 4, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 vec![create_simple_signature(
                     vec![
@@ -1464,7 +1499,7 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
             create_function_definition(
                 "__iter__",
                 ScopeParent::Class {
-                    location: create_location(4, 1, 4, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 vec![create_simple_signature(
                     vec![FunctionParameter::Pos {
@@ -1490,7 +1525,7 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
             create_function_definition(
                 "__new__",
                 ScopeParent::Class {
-                    location: create_location(4, 1, 4, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 vec![create_simple_signature(
                     vec![
@@ -1558,7 +1593,7 @@ class B(A):
             create_function_definition(
                 "my_property",
                 ScopeParent::Class {
-                    location: create_location(4, 7, 4, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1576,11 +1611,12 @@ class B(A):
             .with_decorator_callees(HashMap::from([(
                 create_location(6, 6, 6, 20),
                 vec![Target::Function(abstractmethod_ref.clone())],
-            )])),
+            )]))
+            .with_name_location(Some(create_location(7, 9, 7, 20))),
             create_function_definition(
                 "my_property",
                 ScopeParent::Class {
-                    location: create_location(4, 7, 4, 8),
+                    class_id: ClassId::from_int(0),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1608,11 +1644,12 @@ class B(A):
             .with_decorator_callees(HashMap::from([(
                 create_location(11, 6, 11, 20),
                 vec![Target::Function(abstractmethod_ref.clone())],
-            )])),
+            )]))
+            .with_name_location(Some(create_location(12, 9, 12, 20))),
             create_function_definition(
                 "my_property",
                 ScopeParent::Class {
-                    location: create_location(15, 7, 15, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1629,11 +1666,12 @@ class B(A):
             .with_overridden_base_method(
                 // TODO(T225700656): This should refer to the property getter, not the setter.
                 get_property_setter_ref("test", "A", "my_property", context),
-            ),
+            )
+            .with_name_location(Some(create_location(17, 9, 17, 20))),
             create_function_definition(
                 "my_property",
                 ScopeParent::Class {
-                    location: create_location(15, 7, 15, 8),
+                    class_id: ClassId::from_int(1),
                 },
                 /* overloads */
                 vec![create_simple_signature(
@@ -1662,7 +1700,8 @@ class B(A):
                 "A",
                 "my_property",
                 context,
-            )),
+            ))
+            .with_name_location(Some(create_location(21, 9, 21, 20))),
         ]
     },
 );

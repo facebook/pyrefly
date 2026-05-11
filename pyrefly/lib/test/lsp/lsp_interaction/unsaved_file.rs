@@ -67,3 +67,57 @@ math.
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_semantic_tokens_for_inmemory_file() {
+    let interaction = LspInteraction::new();
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let uri = Url::parse("inmemory:/repl-python-00000000-0000-0000-0000-000000000001").unwrap();
+    let text = r#"def foo():
+    return 1
+
+foo()
+"#;
+    interaction.client.did_open_uri(&uri, "python", text);
+
+    interaction
+        .client
+        .send_request::<SemanticTokensFullRequest>(json!({
+            "textDocument": { "uri": uri.to_string() }
+        }))
+        .expect_response_with(|response| match response {
+            Some(SemanticTokensResult::Tokens(xs)) => !xs.data.is_empty(),
+            _ => false,
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_completion_for_inmemory_file() {
+    let interaction = LspInteraction::new();
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let uri = Url::parse("inmemory:/repl-python-00000000-0000-0000-0000-000000000002").unwrap();
+    let text = r#"import math
+math.
+"#;
+    interaction.client.did_open_uri(&uri, "python", text);
+
+    interaction
+        .client
+        .send_request::<Completion>(json!({
+            "textDocument": {"uri": uri.to_string()},
+            "position": {"line": 1, "character": 5}
+        }))
+        .expect_completion_response_with(|list| !list.items.is_empty())
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

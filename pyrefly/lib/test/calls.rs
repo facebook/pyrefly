@@ -234,6 +234,18 @@ reduce(max, [1,2])
 );
 
 testcase!(
+    test_call_arg_lambda_contextual_typing,
+    r#"
+from typing import Callable
+
+def takes(cb: Callable[[int], int]) -> None: ...
+
+# This only errors because we're able to pass down the `int` hint through contextual typing.
+takes(lambda x: x + "")  # E:  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`
+    "#,
+);
+
+testcase!(
     test_union_with_type,
     r#"
 from typing import assert_type
@@ -406,18 +418,29 @@ def get_flow_version(run_id: str | None) -> str | None:
     "#,
 );
 
-// https://github.com/facebook/pyrefly/issues/2918
 testcase!(
-    bug = "Should error when calling NotImplemented (a constant, not a class)",
     test_call_not_implemented_constant,
     r#"
 # NotImplemented is a singleton constant, not a callable class.
 # Using NotImplemented() is always a mistake; they mean NotImplementedError().
 def broken():
-    raise NotImplemented()
+    raise NotImplemented()  # E: `NotImplemented` is not callable. Did you mean `NotImplementedError`?
 
 def also_broken():
-    raise NotImplemented("not yet done")
+    raise NotImplemented("not yet done")  # E: `NotImplemented` is not callable. Did you mean `NotImplementedError`?
+"#,
+);
+
+testcase!(
+    test_call_not_implemented_in_union,
+    r#"
+def f(condition: bool):
+    def g(): ...
+    if condition:
+        x = g
+    else:
+        x = NotImplemented
+    x()  # E: `NotImplemented` is not callable. Did you mean `NotImplementedError`?
 "#,
 );
 

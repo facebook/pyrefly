@@ -312,6 +312,10 @@ class RMSNorm(Module):
 
 class GroupNorm(Module):
     """Applies Group Normalization"""
+
+    weight: Tensor
+    bias: Tensor
+
     def __init__(
         self,
         num_groups: int,
@@ -493,18 +497,26 @@ class Conv2d[InC, OutC, K, S = 1, P = 0, D = 1](Module):
 
     Type parameters S, P, D are bound from constructor arguments via _Dim[T].
     PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
+
+    kernel_size, stride, padding, and dilation also accept tuple[int, int]
+    for per-axis values.  When a tuple is passed the corresponding type
+    parameter is unbound and the spatial formula produces Unknown — this
+    is expected since a single K can't represent (Kh, Kw).  Proper per-axis
+    tracking would require DSL-based inference, but nn.Sequential currently
+    dispatches via stub signatures, not DSL.
     """
 
     weight: Tensor[OutC, InC, K, K]
+    bias: Tensor[OutC] | None
 
     def __init__(
         self,
         in_channels: _Dim[InC],
         out_channels: _Dim[OutC],
-        kernel_size: _Dim[K],
-        stride: _Dim[S] = 1,
-        padding: _Dim[P] = 0,
-        dilation: _Dim[D] = 1,
+        kernel_size: _Dim[K] | tuple[int, int],
+        stride: _Dim[S] | tuple[int, int] = 1,
+        padding: _Dim[P] | tuple[int, int] | str = 0,
+        dilation: _Dim[D] | tuple[int, int] = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = "zeros",
@@ -845,6 +857,35 @@ class LSTMCell(Module):
         self, input: Tensor, hx: tuple[Tensor, Tensor] | None = None
     ) -> tuple[Tensor, Tensor]: ...
 
+class GRU(Module):
+    """Gated Recurrent Unit RNN.
+
+    Input:  Tensor[B, T, InputSize]  (batch_first=True assumed)
+    Output: (Tensor[B, T, HiddenSize * ND],
+             Tensor[NL * ND, B, HiddenSize])
+
+    ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
+
+    Shape inference via DSL + NNModule init capture.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_layers: int = 1,
+        bias: bool = True,
+        batch_first: bool = False,
+        dropout: float = 0.0,
+        bidirectional: bool = False,
+    ) -> None: ...
+    def flatten_parameters(self) -> None:
+        """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
+        ...
+    def forward(
+        self, input: Tensor, hx: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]: ...
+
 class GRUCell(Module):
     """Gated Recurrent Unit cell.
 
@@ -1000,6 +1041,31 @@ class CTCLoss(Module):
 # Misc Modules
 # ==============================================================================
 
+class ParameterList[T](Module):
+    """Holds parameters in a list."""
+    def __init__(self, parameters: Iterable[T] | None = None) -> None: ...
+    def __getitem__(self, idx: int) -> T: ...
+    def __iter__(self) -> Iterator[T]: ...
+    def __len__(self) -> int: ...
+
+class LazyLinear[OUT](Module):
+    """Linear layer with lazy in_features initialization.
+
+    out_features is known at construction; in_features is inferred at first forward.
+    """
+
+    weight: Tensor
+    bias: Tensor | None
+
+    def __init__(
+        self,
+        out_features: _Dim[OUT],
+        bias: bool = True,
+        device: Any = None,
+        dtype: Any = None,
+    ) -> None: ...
+    def forward[*Bs](self, input: Tensor[*Bs, Any]) -> Tensor[*Bs, OUT]: ...
+
 class Flatten(Module):
     """Flattens a contiguous range of dims.
 
@@ -1150,8 +1216,11 @@ __all__ = [
     # RNN cells
     "LSTM",
     "LSTMCell",
+    "GRU",
     "GRUCell",
     # Misc modules
+    "ParameterList",
+    "LazyLinear",
     "Flatten",
     "Unflatten",
     "ReflectionPad2d",

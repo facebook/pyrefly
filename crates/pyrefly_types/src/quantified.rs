@@ -15,9 +15,12 @@ use parse_display::Display;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_util::display::Fmt;
-use pyrefly_util::uniques::Unique;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
+use ruff_text_size::TextRange;
 
 use crate::class::ClassType;
 use crate::heap::TypeHeap;
@@ -27,19 +30,132 @@ use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::types::Type;
 
+/// Discriminator for the origin of a `Quantified`, making collisions structurally impossible
+/// between quantifieds that share the same anchor range but have different origins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum QuantifiedOrigin {
+    /// Legacy TypeVar scoped to a function/class/alias owner.
+    ScopedLegacy,
+    /// PEP 695 type parameter — has its own definition range, no ambiguity.
+    Pep695,
+    /// Synthetic Self quantified synthesized for `__new__` on a class.
+    SyntheticSelf,
+    /// Synthetic binder created during callable/tuple instantiation (TypeVarTuple residual).
+    SyntheticCallableResidual,
+}
+
+/// A source range plus an index that disambiguates multiple quantifieds sharing the same range.
+/// Index 0 is used when a range produces exactly one quantified; higher indices are used when
+/// a single range produces several (e.g. multiple type parameters anchored to the same scope).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AnchorIndex {
+    pub range: TextRange,
+    pub index: u32,
+}
+
+impl AnchorIndex {
+    pub fn new(range: TextRange, index: u32) -> Self {
+        Self { range, index }
+    }
+
+    pub fn first(range: TextRange) -> Self {
+        Self { range, index: 0 }
+    }
+}
+
+impl PartialOrd for AnchorIndex {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AnchorIndex {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // TextRange doesn't implement Ord, so compare start/end as u32.
+        u32::from(self.range.start())
+            .cmp(&u32::from(other.range.start()))
+            .then_with(|| u32::from(self.range.end()).cmp(&u32::from(other.range.end())))
+            .then_with(|| self.index.cmp(&other.index))
+    }
+}
+
+/// Deterministic identity for a `Quantified`, derived from source locations rather than
+/// allocation order. Two quantifieds are the same iff their identity is the same.
+///
+/// Globally unique because `module` distinguishes cross-module collisions, `anchor` pins
+/// the source location and index, and `origin` prevents collisions between quantifieds
+/// of different kinds at the same anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QuantifiedIdentity {
+    pub module: ModuleName,
+    pub anchor: AnchorIndex,
+    pub origin: QuantifiedOrigin,
+}
+
+impl PartialOrd for QuantifiedIdentity {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for QuantifiedIdentity {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.module
+            .cmp(&other.module)
+            .then_with(|| self.anchor.cmp(&other.anchor))
+            .then_with(|| self.origin.cmp(&other.origin))
+    }
+}
+
+impl QuantifiedIdentity {
+    pub fn new(module: ModuleName, anchor: AnchorIndex, origin: QuantifiedOrigin) -> Self {
+        Self {
+            module,
+            anchor,
+            origin,
+        }
+    }
+}
+
+// None of these types contain Type values; they are visit leaves.
+impl<To> Visit<To> for QuantifiedOrigin {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+impl<To> VisitMut<To> for QuantifiedOrigin {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
+impl<To> Visit<To> for AnchorIndex {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+impl<To> VisitMut<To> for AnchorIndex {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
+impl<To> Visit<To> for QuantifiedIdentity {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+impl<To> VisitMut<To> for QuantifiedIdentity {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
+}
+
 #[derive(Debug, Clone, Eq)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct Quantified {
-    /// Unique identifier
-    unique: Unique,
+    /// Deterministic identity based on source location.
+    identity: QuantifiedIdentity,
     pub name: Name,
     pub kind: QuantifiedKind,
     pub default: Option<Type>,
     pub restriction: Restriction,
-    /// The *declared* variance of this type parameter, as specified by the user
-    /// For function type parameters, variance has no meaning
+    /// The *declared* variance of this type parameter, as specified by the user.
+    /// For function type parameters, variance has no meaning.
     /// We store it here for convenience of our variance inference and checking
-    /// infrastructure so it can directly read it from the type
+    /// infrastructure so it can directly read it from the type.
     variance: PreInferenceVariance,
     /// Qualified owner, e.g. `"mod.func"`, set for function type params to enable
     /// disambiguation in display (e.g. `T@mod.func`).
@@ -50,7 +166,7 @@ impl Quantified {
     pub fn with_restriction(self, restriction: Restriction) -> Self {
         Self {
             restriction,
-            unique: self.unique,
+            identity: self.identity,
             name: self.name,
             kind: self.kind,
             default: self.default,
@@ -62,36 +178,21 @@ impl Quantified {
 
 impl PartialEq for Quantified {
     fn eq(&self, other: &Self) -> bool {
-        self.unique == other.unique
+        self.identity == other.identity
     }
 }
 
 impl Hash for Quantified {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.unique.hash(state);
+        self.identity.hash(state);
     }
 }
 
 impl Ord for Quantified {
     fn cmp(&self, other: &Self) -> Ordering {
-        // This function wants to serve two purposes, and currently we can't do both,
-        // so we compromise. The Ord is used to order the types in a union. Problems:
-        //
-        // 1. The `Unique` is non-deterministic, so if you sort on it, types like
-        //    Q.a and Q.b will not be sorted consistently.
-        // 2. For a union we deduplicate adjacent elements, meaning we do need to sort
-        //    on the unique to deduplicate (see test_quantified_accumulation for if)
-        //    we don't.
-        //
-        // So we sort on unique last, which is slightly better, solves 2. but leaves
-        // 1. as a partial problem.
-        self.name
-            .cmp(&other.name)
-            .then_with(|| self.kind.cmp(&other.kind))
-            .then_with(|| self.default.cmp(&other.default))
-            .then_with(|| self.restriction.cmp(&other.restriction))
-            .then_with(|| self.variance.cmp(&other.variance))
-            .then_with(|| self.unique.cmp(&other.unique))
+        // Identity is fully deterministic, so sort on it directly.
+        // This is used to order types in a union (and deduplication relies on Ord).
+        self.identity.cmp(&other.identity)
     }
 }
 
@@ -127,6 +228,19 @@ impl QuantifiedKind {
     }
 }
 
+impl Display for QuantifiedIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}@{}[{}]:{:?}",
+            self.module,
+            u32::from(self.anchor.range.start()),
+            self.anchor.index,
+            self.origin,
+        )
+    }
+}
+
 impl Display for Quantified {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)
@@ -135,7 +249,7 @@ impl Display for Quantified {
 
 impl Quantified {
     pub fn new(
-        unique: Unique,
+        identity: QuantifiedIdentity,
         name: Name,
         kind: QuantifiedKind,
         default: Option<Type>,
@@ -143,7 +257,7 @@ impl Quantified {
         variance: PreInferenceVariance,
     ) -> Self {
         Quantified {
-            unique,
+            identity,
             name,
             kind,
             default,
@@ -160,13 +274,13 @@ impl Quantified {
 
     pub fn type_var(
         name: Name,
-        unique: Unique,
+        identity: QuantifiedIdentity,
         default: Option<Type>,
         restriction: Restriction,
         variance: PreInferenceVariance,
     ) -> Self {
         Self::new(
-            unique,
+            identity,
             name,
             QuantifiedKind::TypeVar,
             default,
@@ -176,19 +290,19 @@ impl Quantified {
     }
 
     /// Creates a Quantified from a TypeVar, extracting all relevant fields.
-    pub fn from_type_var(tv: &TypeVar, unique: Unique) -> Self {
+    pub fn from_type_var(tv: &TypeVar, identity: QuantifiedIdentity) -> Self {
         Self::type_var(
             tv.qname().id().clone(),
-            unique,
+            identity,
             tv.default().cloned(),
             tv.restriction().clone(),
             tv.variance(),
         )
     }
 
-    pub fn param_spec(name: Name, unique: Unique, default: Option<Type>) -> Self {
+    pub fn param_spec(name: Name, identity: QuantifiedIdentity, default: Option<Type>) -> Self {
         Self::new(
-            unique,
+            identity,
             name,
             QuantifiedKind::ParamSpec,
             default,
@@ -197,9 +311,9 @@ impl Quantified {
         )
     }
 
-    pub fn type_var_tuple(name: Name, unique: Unique, default: Option<Type>) -> Self {
+    pub fn type_var_tuple(name: Name, identity: QuantifiedIdentity, default: Option<Type>) -> Self {
         Self::new(
-            unique,
+            identity,
             name,
             QuantifiedKind::TypeVarTuple,
             default,
@@ -292,8 +406,8 @@ impl Quantified {
         matches!(self.kind, QuantifiedKind::TypeVarTuple)
     }
 
-    pub fn unique(&self) -> Unique {
-        self.unique
+    pub fn identity(&self) -> &QuantifiedIdentity {
+        &self.identity
     }
 
     pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {

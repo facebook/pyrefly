@@ -60,7 +60,7 @@ pub fn provide_type(
 
     for position in positions {
         let text_size = info.from_lsp_position(position, None);
-        if let Some(ty) = transaction.get_result_type_at(handle, text_size) {
+        if let Some(ty) = transaction.get_result_type_at_for_display(handle, text_size) {
             let mut c = TypeDisplayContext::new(&[&ty]);
             c.set_lsp_display_mode(LspDisplayMode::ProvideType);
             contents.push(MarkupContent {

@@ -12,6 +12,7 @@ use clap::Parser;
 use clap::crate_version;
 use library::Command;
 use library::util::CommonGlobalArgs;
+use pyrefly::commands::lsp::filter_unrecognized_lsp_args;
 use pyrefly::library::library::library::library;
 use pyrefly_util::args::get_args_expanded;
 use pyrefly_util::panic::exit_on_panic;
@@ -46,7 +47,9 @@ struct Args {
 
 /// Run based on the command line arguments.
 async fn run() -> anyhow::Result<ExitCode> {
-    let args = Args::parse_from(get_args_expanded(args_os())?);
+    let expanded_args = get_args_expanded(args_os())?;
+    let filtered_args = filter_unrecognized_lsp_args(expanded_args);
+    let args = Args::parse_from(filtered_args);
     args.common.init(false);
     let thread_count = args.common.thread_count();
     let (status, _) = args

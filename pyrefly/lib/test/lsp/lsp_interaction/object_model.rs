@@ -66,6 +66,7 @@ use lsp_types::request::Shutdown;
 use lsp_types::request::SignatureHelpRequest;
 use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkspaceConfiguration;
+use lsp_types::request::WorkspaceSymbolRequest;
 use pretty_assertions::assert_eq;
 use pyrefly::commands::lsp::IndexingMode;
 use pyrefly::commands::lsp::LspArgs;
@@ -78,17 +79,18 @@ use pyrefly::lsp::non_wasm::protocol::Notification;
 use pyrefly::lsp::non_wasm::protocol::Request;
 use pyrefly::lsp::non_wasm::protocol::Response;
 use pyrefly::lsp::non_wasm::server::Connection;
+use pyrefly::lsp::non_wasm::server::TypeErrorDisplayStatusRequest;
 use pyrefly::lsp::wasm::provide_type::ProvideType;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::lock::FinishHandle;
 use pyrefly_util::telemetry::NoTelemetry;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::thread_pool::ThreadCount;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::init::TEST_THREAD_COUNT;
 use crate::init::init_test;
 
 #[derive(Debug)]
@@ -597,6 +599,13 @@ impl TestClient {
                 "includeDeclaration": include_declaration
             },
         }))
+    }
+
+    pub fn send_workspace_symbol(
+        &self,
+        query: &str,
+    ) -> ClientRequestHandle<'_, WorkspaceSymbolRequest> {
+        self.send_request(json!({ "query": query }))
     }
 
     pub fn inlay_hint(
@@ -1351,7 +1360,6 @@ impl LspInteraction {
             indexing_mode,
             workspace_indexing_limit: 50,
             build_system_blocking: false,
-            enable_external_references: false,
         };
         Self::new_with_args(args, NoTelemetry, None, None)
     }
@@ -1361,7 +1369,6 @@ impl LspInteraction {
             indexing_mode: IndexingMode::None,
             workspace_indexing_limit: 50,
             build_system_blocking: false,
-            enable_external_references: false,
         };
         Self::new_with_args(args, NoTelemetry, None, thrift_remapper)
     }
@@ -1888,7 +1895,7 @@ impl LspInteraction {
         let id = self.client.next_request_id();
         self.client.send_message(Message::Request(Request {
             id: id.clone(),
-            method: "pyrefly/textDocument/typeErrorDisplayStatus".to_owned(),
+            method: TypeErrorDisplayStatusRequest::METHOD.to_owned(),
             params: json!({
                 "uri": cell_uri
             }),

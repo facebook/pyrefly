@@ -50,7 +50,7 @@ testcase!(
     test_implicit_any_no_inference,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::SkipAndInferReturnAny)
         .enable_unannotated_return_error()
-        .enable_unannotated_parameter_error(),
+        .enable_implicit_any_parameter_error(),
     r#"
 def foo(x, y):  # E: `foo` is missing an annotation for parameter `x` # E: `foo` is missing an annotation for parameter `y` # E: `foo` is missing a return annotation
     return 1
@@ -61,7 +61,7 @@ testcase!(
     test_implicit_any_with_inference,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::CheckAndInferReturnType)
         .enable_unannotated_return_error()
-        .enable_unannotated_parameter_error(),
+        .enable_implicit_any_parameter_error(),
     r#"
 def foo(x, y):  # E: `foo` is missing an annotation for parameter `x` # E: `foo` is missing an annotation for parameter `y` # E: `foo` is missing a return annotation
     return 1
@@ -85,7 +85,7 @@ class C:
 // https://github.com/facebook/pyrefly/issues/2327
 testcase!(
     test_unannotated_parameter_first_param_by_position,
-    TestEnv::new().enable_unannotated_parameter_error(),
+    TestEnv::new().enable_implicit_any_parameter_error(),
     r#"
 class A:
     def __new__(cls, a: int) -> "A": ...
@@ -173,7 +173,7 @@ x2 = {}
 
 testcase!(
     test_warn_on_implicit_any_in_attribute,
-    TestEnv::new().enable_unannotated_attribute_error(),
+    TestEnv::new().enable_implicit_any_attribute_error(),
     r#"
 from typing import Any
 class A:

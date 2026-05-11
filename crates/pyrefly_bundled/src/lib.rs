@@ -51,7 +51,9 @@ impl PathFilter {
     }
 }
 
-fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap<PathBuf, String>> {
+fn extract_pyi_files_from_archive(
+    filter: PathFilter,
+) -> anyhow::Result<(SmallMap<PathBuf, String>, SmallMap<PathBuf, String>)> {
     let decoder = Decoder::new(filter.archive_bytes())?;
     let mut archive = Archive::new(decoder);
     let entries = archive
@@ -59,6 +61,7 @@ fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap
         .context("Cannot query all entries in archive")?;
 
     let mut items = SmallMap::new();
+    let mut path_to_package = SmallMap::new();
 
     for maybe_entry in entries {
         let mut entry = maybe_entry.context("Cannot read individual entry in typeshed archive")?;
@@ -87,8 +90,19 @@ fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap
         // An example of this might be the path typeshed/stubs/JACK-Client/jack/other.pyi
         // In this case we want out path to be jack/other.pyi, so we skip over "stubs" and "JACK-Client".
         let relative_path = if filter == PathFilter::ThirdPartyTypeshedStubs {
-            relative_path_components.next();
-            relative_path_components.collect::<PathBuf>()
+            let package_component = relative_path_components.next();
+            let remaining: PathBuf = relative_path_components.collect();
+            // Capture path→package mapping (e.g., "google/protobuf/__init__.pyi" → "protobuf").
+            // Keyed by full path to handle namespace packages like google/ that span
+            // multiple typeshed packages (protobuf, google-cloud-ndb, etc.).
+            if let Some(pkg) = package_component
+                && let Some(pkg_name) = pkg.as_os_str().to_str()
+            {
+                path_to_package
+                    .entry(remaining.clone())
+                    .or_insert(pkg_name.to_string());
+            }
+            remaining
         } else if filter == PathFilter::ThirdPartyStubs {
             // Include first_component (e.g., "conans-stubs") in the path
             let mut path = PathBuf::from(first_component.unwrap().as_os_str());
@@ -111,21 +125,22 @@ fn extract_pyi_files_from_archive(filter: PathFilter) -> anyhow::Result<SmallMap
         items.entry(relative_path).or_insert(contents);
     }
 
-    Ok(items)
+    Ok((items, path_to_package))
 }
 
 pub fn bundled_typeshed() -> anyhow::Result<SmallMap<PathBuf, String>> {
-    extract_pyi_files_from_archive(PathFilter::Stdlib)
+    extract_pyi_files_from_archive(PathFilter::Stdlib).map(|(files, _)| files)
 }
 
-pub fn bundled_third_party_stubs() -> anyhow::Result<SmallMap<PathBuf, String>> {
+pub fn bundled_third_party_stubs()
+-> anyhow::Result<(SmallMap<PathBuf, String>, SmallMap<PathBuf, String>)> {
     extract_pyi_files_from_archive(PathFilter::ThirdPartyTypeshedStubs)
 }
 
 /// Extract third-party stubs from the bundled archive.
 /// These are stubs that are not included in typeshed (e.g., pandas-stubs, boto3-stubs).
 pub fn bundled_third_party() -> anyhow::Result<SmallMap<PathBuf, String>> {
-    extract_pyi_files_from_archive(PathFilter::ThirdPartyStubs)
+    extract_pyi_files_from_archive(PathFilter::ThirdPartyStubs).map(|(files, _)| files)
 }
 
 #[cfg(test)]
@@ -156,7 +171,7 @@ mod tests {
         let result = bundled_third_party_stubs();
         assert!(result.is_ok(), "bundled_typeshed should succeed");
 
-        let files = result.unwrap();
+        let (files, _) = result.unwrap();
         assert!(!files.is_empty(), "Should contain .pyi files");
 
         // Verify all returned paths are .pyi files
@@ -188,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_bundled_typeshed_third_party_resolves_path() {
-        let result = bundled_third_party_stubs().unwrap();
+        let (result, _) = bundled_third_party_stubs().unwrap();
 
         // Verify paths don't start with "stubs" (it should be stripped)
         for (path, _) in result.iter() {
@@ -244,7 +259,7 @@ mod tests {
         let result = extract_pyi_files_from_archive(PathFilter::Stdlib);
         assert!(result.is_ok(), "Should successfully extract stdlib files");
 
-        let files = result.unwrap();
+        let (files, _) = result.unwrap();
         assert!(
             !files.is_empty(),
             "Should extract at least some stdlib files"
@@ -286,7 +301,7 @@ mod tests {
     #[test]
     fn test_no_non_pyi_files_included() {
         let stdlib_files = bundled_typeshed().unwrap();
-        let third_party_files = bundled_third_party_stubs().unwrap();
+        let (third_party_files, _) = bundled_third_party_stubs().unwrap();
 
         for (path, _) in stdlib_files.iter().chain(third_party_files.iter()) {
             let ext = path.extension().and_then(|e| e.to_str());

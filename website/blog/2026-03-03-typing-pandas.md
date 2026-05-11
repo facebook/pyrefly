@@ -38,7 +38,7 @@ We therefore amend Pyright's calculation to exclude these "technically public bu
 
 ## Moving the needle in pandas
 
-Investigating sources of missing type-completeness in pandas was quite a circular exercise. For example, suppose that `DataFrame` and `Series` were type-complete, but `Index` had an untyped attribute. Here is what would would happen:
+Investigating sources of missing type-completeness in pandas was quite a circular exercise. For example, suppose that `DataFrame` and `Series` were type-complete, but `Index` had an untyped attribute. Here is what would happen:
 
 - `Index` would be reported as "partially unknown" because of its untyped attribute.
 - `DataFrame` would be reported as "partially unknown" because its method `.index` returns `Index`, which is partially unknown.

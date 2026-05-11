@@ -895,6 +895,306 @@ Definition Result: None
 }
 
 #[test]
+fn import_via_module_getattr_test() {
+    // `from m import name` where `m` defines a module-level
+    // `__getattr__`. Go-to-definition for `name` (in the import
+    // statement and at usage sites) should land on `__getattr__`
+    // in the imported module.
+    let code_provider: &str = r#"
+def __getattr__(name: str) -> int: ...
+"#;
+    let code_test: &str = r#"
+from .provider import foo
+#                     ^
+
+bar = foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code_test), ("provider", code_provider)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .provider import foo
+                          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+5 | bar = foo
+          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+
+# provider.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn import_via_reexported_module_getattr_test() {
+    // `from m import name` where `m` re-exports `__getattr__` from
+    // another module. Go-to-definition should follow the re-export
+    // chain to where `__getattr__` is actually defined.
+    let code_inner: &str = r#"
+def __getattr__(name: str) -> int: ...
+"#;
+    let code_provider: &str = r#"
+from .inner import __getattr__
+"#;
+    let code_test: &str = r#"
+from .provider import foo
+#                     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("provider", code_provider),
+            ("inner", code_inner),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .provider import foo
+                          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+
+# provider.py
+
+# inner.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn import_via_reexported_module_getattr_indirect_test() {
+    // `from m import name` where `m` re-exports `name` from another
+    // module that itself only resolves `name` via `__getattr__`. The
+    // chase walks `provider` -> `inner`, finds `name` missing there,
+    // and the `__getattr__` fallback in `resolve_named_import` lands
+    // at `__getattr__` in `inner`.
+    let code_inner: &str = r#"
+def __getattr__(name: str) -> int: ...
+"#;
+    let code_provider: &str = r#"
+from .inner import foo
+"#;
+    let code_test: &str = r#"
+from .provider import foo
+#                     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("provider", code_provider),
+            ("inner", code_inner),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .provider import foo
+                          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+
+# provider.py
+
+# inner.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn import_submodule_via_from_test() {
+    // `from pkg import sub` where `sub` is a submodule of `pkg`
+    // (not an explicit export of `pkg/__init__.py`). Go-to-definition
+    // for `sub` should land on `pkg/sub.py`.
+    let code_pkg_init: &str = r#"# pkg/__init__.py
+"#;
+    let code_pkg_sub: &str = r#"# pkg/sub.py
+def f(): pass
+"#;
+    let code_test: &str = r#"
+from pkg import sub
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("pkg", code_pkg_init),
+            ("pkg.sub", code_pkg_sub),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from pkg import sub
+                    ^
+Definition Result:
+1 | # pkg/sub.py
+    ^
+
+
+# pkg.py
+
+# pkg.sub.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn unresolved_no_hop_import_test() {
+    // `from x import Y` where `x` doesn't define `Y` and has no
+    // fallback. Go-to-def lands at the import statement -- the
+    // import-site fallback in `resolve_intermediate_definition`
+    // gives the user somewhere meaningful to land when the chase
+    // finds nothing.
+    let code_x: &str = r#"
+"#;
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code_test), ("x", code_x)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+
+
+# x.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn unresolved_multi_hop_import_test() {
+    // `from x import Y` where `x` re-exports `Y` from `z` but `z`
+    // doesn't define `Y`. Go-to-def lands at the import statement,
+    // matching `unresolved_no_hop_import_test`.
+    let code_z: &str = r#"
+"#;
+    let code_x: &str = r#"
+from z import Y
+"#;
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code_test), ("x", code_x), ("z", code_z)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+
+
+# x.py
+
+# z.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn unresolved_no_hop_missing_module_test() {
+    // `from x import Y` where `x` itself can't be found. Same
+    // import-site fallback as `unresolved_no_hop_import_test`:
+    // go-to-def lands at the import statement.
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code_test)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn unresolved_multi_hop_missing_module_test() {
+    // `from x import Y` where `x` re-exports `from z import Y`
+    // but `z` itself can't be found. Same result as
+    // `unresolved_multi_hop_import_test`: lands at the import
+    // statement.
+    let code_x: &str = r#"
+from z import Y
+"#;
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code_test), ("x", code_x)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+
+
+# x.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn goto_def_dead_code() {
     let code: &str = r#"
 if False:

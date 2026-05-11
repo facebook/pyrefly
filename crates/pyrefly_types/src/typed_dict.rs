@@ -17,6 +17,7 @@ use crate::annotation::Qualifier;
 use crate::class::Class;
 use crate::heap::TypeHeap;
 use crate::read_only::ReadOnlyReason;
+use crate::simplify;
 use crate::stdlib::Stdlib;
 use crate::types::Substitution;
 use crate::types::TArgs;
@@ -86,7 +87,16 @@ impl TypedDictInner {
 )]
 pub struct AnonymousTypedDictInner {
     pub fields: Vec<(Name, TypedDictField)>,
-    pub value_type: Type,
+}
+
+impl AnonymousTypedDictInner {
+    /// Compute the union of all field value types. This is derived from `fields`
+    /// rather than stored, to avoid duplicating the type tree at each nesting
+    /// level (which caused 2^N memory growth for nested dict literals).
+    pub fn compute_value_type(&self, heap: &TypeHeap) -> Type {
+        let tys: Vec<Type> = self.fields.iter().map(|(_, f)| f.ty.clone()).collect();
+        simplify::unions(tys, heap)
+    }
 }
 
 #[derive(

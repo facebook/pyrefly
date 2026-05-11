@@ -127,6 +127,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[Idx<KeyDecorator>],
         is_new_type: bool,
         pydantic_config_dict: &PydanticConfigDict,
+        pydantic_before_validator_fields: &[Name],
         django_field_info: &DjangoFieldInfo,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
@@ -254,7 +255,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 custom_primary_key_field: django_field_info.primary_key_field.clone().or_else(
                     || inherited_django_metadata.and_then(|dm| dm.custom_primary_key_field.clone()),
                 ),
-                foreign_key_fields: django_field_info.foreign_key_fields.clone(),
+                foreign_key_like_fields: django_field_info.foreign_key_like_fields.clone(),
                 fields_with_choices: django_field_info.fields_with_choices.clone(),
             })
         } else {
@@ -271,6 +272,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         || metadata.is_marshmallow_schema()
                 });
 
+        let is_factory_boy_factory =
+            bases_with_metadata
+                .iter()
+                .any(|(base_class_object, metadata)| {
+                    base_class_object
+                        .has_toplevel_qname(ModuleName::factory_base().as_str(), "Factory")
+                        || metadata.is_factory_boy_factory()
+                });
+
         let is_metaclass = bases_with_metadata
             .iter()
             .any(|(base_class_object, metadata)| {
@@ -285,7 +295,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let named_tuple_metadata =
             self.named_tuple_metadata(cls, bases, &bases_with_metadata, errors);
-        if named_tuple_metadata.is_some() && bases_with_metadata.len() > 1 {
+        if named_tuple_metadata.is_some()
+            && bases_with_metadata.len() > 1
+            && !cls.module().path().is_interface()
+        {
+            // Typeshed models some stdlib namedtuple result objects, such as urllib.parse.ParseResult,
+            // by mixing methods into a NamedTuple subclass inside a `.pyi`. Keep rejecting this in
+            // user code, but allow it in stubs so we can type-check those result objects precisely.
             self.error(
                 errors,
                 cls.range(),
@@ -383,6 +399,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &bases_with_metadata,
             dataclass_from_dataclass_transform,
             pydantic_config.as_ref(),
+            pydantic_before_validator_fields,
             is_attrs_class,
             protocol_metadata.is_some(),
             enum_metadata.is_some(),
@@ -487,6 +504,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_attrs_class,
             django_model_metadata,
             is_marshmallow_schema,
+            is_factory_boy_factory,
             is_metaclass,
             slots_info,
         )
@@ -804,11 +822,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<EnumMetadata> {
         let is_django = is_django_choices_subclass(bases_with_metadata);
 
-        if let Some(metaclass) = metaclass
-            && self
-                .as_superclass(metaclass, self.stdlib.enum_meta().class_object())
+        let metaclass_is_enum = metaclass.is_some_and(|m| {
+            self.as_superclass(m, self.stdlib.enum_meta().class_object())
                 .is_some()
-        {
+        });
+        let base_is_enum = bases_with_metadata.iter().any(|(_, meta)| meta.is_enum());
+
+        if metaclass_is_enum || base_is_enum {
             // NOTE(grievejia): This may create potential cycle if metaclass is generic. Need to look into
             // whether it can be removed or not.
             if !self.get_class_tparams(cls).is_empty() {
@@ -963,6 +983,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
         dataclass_from_dataclass_transform: Option<(DataclassKeywords, Vec<CalleeKind>)>,
         pydantic_config: Option<&PydanticConfig>,
+        pydantic_before_validator_fields: &[Name],
         is_attrs_class: bool,
         is_protocol: bool,
         is_enum: bool,
@@ -1007,6 +1028,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
+                        pydantic_before_validator_fields: SmallSet::new(),
                     });
                 }
                 // `@dataclass(...)`
@@ -1029,6 +1051,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
+                        pydantic_before_validator_fields: SmallSet::new(),
                     });
                 }
                 _ => {}
@@ -1069,6 +1092,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if let Some((kws, field_specifiers)) = dataclass_from_dataclass_transform {
+            // Inherit before-validator fields from base pydantic models, then add our own.
+            let mut inherited_before_validator_fields: SmallSet<Name> = bases_with_metadata
+                .iter()
+                .filter(|(_, metadata)| metadata.is_pydantic_model())
+                .filter_map(|(_, metadata)| metadata.dataclass_metadata())
+                .flat_map(|dm| dm.pydantic_before_validator_fields.iter().cloned())
+                .collect();
+            inherited_before_validator_fields
+                .extend(pydantic_before_validator_fields.iter().cloned());
             dataclass_metadata = Some(DataclassMetadata {
                 fields: self.get_dataclass_fields(cls, bases_with_metadata),
                 kws,
@@ -1076,6 +1108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 alias_keyword,
                 init_defaults,
                 default_can_be_positional,
+                pydantic_before_validator_fields: inherited_before_validator_fields,
             });
         }
         dataclass_metadata
@@ -1179,6 +1212,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
             }
+            Type::None if is_new_type => {
+                let base_cls = self.stdlib.none_type().class_object();
+                let metadata = self.get_metadata_for_class(base_cls);
+                BaseClassParseResult::Parsed({
+                    ParsedBaseClass {
+                        class_object: base_cls.dupe(),
+                        range,
+                        metadata,
+                    }
+                })
+            }
             Type::Type(box Type::Any(_)) => {
                 // `type[Any]` is equivalent to `type` or `Type`
                 let type_obj = self.stdlib.builtins_type().class_object();
@@ -1204,6 +1248,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Ignore all type errors here since they'll be reported in `class_bases_of` anyway
                 let errors = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
                 let ty = self.base_class_expr_infer_for_metadata(x, &errors);
+                // The value `None` has type `Type::None`, which `untype_opt` passes
+                // through because `None` is both a value and a type. But as a NewType
+                // base, the value `None` is not valid — only the class `NoneType` is.
+                // Reject it here before `untype_opt` erases the distinction.
+                if is_new_type && matches!(&ty, Type::None) {
+                    return BaseClassParseResult::InvalidType(ty, x.range());
+                }
                 match self.untype_opt(ty.clone(), x.range(), &errors) {
                     None => BaseClassParseResult::InvalidType(ty, x.range()),
                     Some(ty) => parse_base_class_type(ty),
@@ -1337,8 +1388,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     metadata,
                 }) => {
-                    if metadata.is_final()
-                        || (metadata.is_enum() && !self.get_enum_members(&class_object).is_empty())
+                    if !is_new_type
+                        && (metadata.is_final()
+                            || (metadata.is_enum()
+                                && !self.get_enum_members(&class_object).is_empty()))
                     {
                         self.error(
                             errors,

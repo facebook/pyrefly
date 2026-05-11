@@ -305,69 +305,51 @@ test_rand_n(_t53)
 
 
 def test_einsum_matmul[N, M, K](a: Tensor[N, M], b: Tensor[M, K]):
-    """einsum - shape inference not yet working for symbolic shapes"""
-    # einsum('ij,jk->ik') performs matrix multiplication
-    # Contracts index 'j' (middle dimension), keeps 'i' and 'k'
+    """einsum matrix multiplication with symbolic shapes"""
     y = torch.einsum("ij,jk->ik", a, b)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[N, K])
 
 
 def test_einsum_batch_matmul[B, N, M, K](a: Tensor[B, N, M], b: Tensor[B, M, K]):
-    """einsum batch matrix multiplication - shape inference not yet working"""
-    # 'bij,bjk->bik' performs batched matmul
-    # Keeps batch dimension 'b', contracts 'j', keeps 'i' and 'k'
+    """einsum batch matrix multiplication with symbolic shapes"""
     y = torch.einsum("bij,bjk->bik", a, b)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[B, N, K])
 
 
 def test_einsum_transpose[N, M](x: Tensor[N, M]):
-    """einsum transpose operation - shape inference not yet working"""
-    # 'ij->ji' swaps dimensions
+    """einsum transpose operation"""
     y = torch.einsum("ij->ji", x)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[M, N])
 
 
 def test_einsum_trace[N](x: Tensor[N, N]):
-    """einsum trace operation - shape inference not yet working"""
-    # 'ii->i' extracts diagonal (same index appears twice)
+    """einsum trace: extracts diagonal"""
     y = torch.einsum("ii->i", x)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[N])
 
 
 def test_einsum_trace_scalar[N](x: Tensor[N, N]):
-    """einsum trace to scalar - shape inference not yet working"""
-    # 'ii->' sums the diagonal to scalar
+    """einsum trace to scalar: sums the diagonal"""
     y = torch.einsum("ii->", x)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[()])
 
 
 def test_einsum_elementwise[N, M](a: Tensor[N, M], b: Tensor[N, M]):
-    """einsum element-wise multiplication - shape inference not yet working"""
-    # 'ij,ij->ij' element-wise multiply (all indices preserved)
+    """einsum element-wise multiplication"""
     y = torch.einsum("ij,ij->ij", a, b)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[N, M])
 
 
 def test_einsum_sum_reduction[N, M](x: Tensor[N, M]):
-    """einsum sum all elements to scalar - shape inference not yet working"""
-    # 'ij->' sums all elements
+    """einsum sum all elements to scalar"""
     y = torch.einsum("ij->", x)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[()])
 
 
 def test_einsum_outer_product[N, M](a: Tensor[N], b: Tensor[M]):
-    """einsum outer product - shape inference not yet working"""
-    # 'i,j->ij' creates outer product
+    """einsum outer product"""
     y = torch.einsum("i,j->ij", a, b)
-    # TODO: Fix einsum binding to capture tensor operands
-    assert_type(y, Tensor)  # Currently returns shapeless
+    assert_type(y, Tensor[N, M])
 
 
 def test_masked_select_documented_limitation[N, M](x: Tensor[N, M], mask: Tensor[N, M]):

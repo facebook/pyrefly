@@ -11,6 +11,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
+use std::fmt::Debug;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::BufWriter;
@@ -41,6 +42,9 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::demand_tree::DemandCollector;
+use pyrefly_util::demand_tree::DemandEdge;
+use pyrefly_util::demand_tree::DemandSpan;
 use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lock::Mutex;
@@ -105,6 +109,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::export::exports::ExportOrigin;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
@@ -183,20 +188,46 @@ pub struct ModuleDeps {
 pub struct ModuleChanges(pub ModuleDeps);
 
 // A single dependency, passed during lookup. Can be merged into ModuleDeps.
+//
+// The metadata-flavored lookups (`is_special_export`, `is_reexport`,
+// `get_deprecated`, `is_final`, `docstring_range`,
+// `is_submodule_imported_implicitly`) all record "depends on the
+// metadata of this name" and funnel into the same `ModuleDeps` slot.
+// They're kept distinct so the demand tree can label each lookup
+// precisely; the shared funneling lives in `ModuleDeps::add_dep`.
 pub enum ModuleDep {
-    // Depend on the existence of a module
+    /// Depend on the existence of a module.
     Exists,
-    // Depend on the TypeEq result of an exported key
+    /// Depend on the TypeEq result of an exported key. Used by
+    /// `LookupAnswer` to track value-level dependencies on specific
+    /// exported computations.
     Key(AnyExportedKey),
-    // Depend on the existence of an exported name, not necessarily it's type
-    // Currently unused, but we should use this in LookupExport
-    #[allow(unused)]
+    /// `LookupExport::export_exists` — depends on whether a name is
+    /// exported, not on its type.
     NameExists(Name),
-    // Depend on metadata (deprecation, docstring) of an exported name
+    /// Depend on metadata (deprecation, docstring, etc.) of an exported
+    /// name. The metadata-flavored `LookupExport` variants below all
+    /// funnel here.
     NameMetadata(Name),
-    // Depend on the set of wildcard exported names
+    /// `LookupExport::is_special_export`.
+    IsSpecialExport(Name),
+    /// `LookupExport::is_reexport`.
+    IsReexport(Name),
+    /// `LookupExport::get_deprecated`.
+    GetDeprecated(Name),
+    /// `LookupExport::export_origin`.
+    ExportOrigin(Name),
+    /// `LookupExport::docstring_range`.
+    DocstringRange(Name),
+    /// `LookupExport::is_submodule_imported_implicitly`.
+    IsSubmoduleImportedImplicitly(Name),
+    /// `LookupExport::get_wildcard` — depends on the wildcard export set.
     Wildcard,
-    // Depend on a class definition (fields, metadata, etc.)
+    /// `LookupExport::get_every_export_untracked` — intentionally
+    /// existence-level only; used by call sites that want every export
+    /// without establishing per-name dependencies.
+    EveryExportUntracked,
+    /// Depend on a class definition (fields, metadata, etc.).
     Class(ClassDefIndex),
 }
 
@@ -292,12 +323,18 @@ impl ModuleDeps {
 
     pub fn add_dep(&mut self, dep: ModuleDep) {
         match dep {
-            ModuleDep::Exists => {}
+            ModuleDep::Exists | ModuleDep::EveryExportUntracked => {}
             ModuleDep::Key(key) => self.add_key(key),
             ModuleDep::NameExists(name) => {
                 self.names.entry(name).or_default();
             }
-            ModuleDep::NameMetadata(name) => {
+            ModuleDep::NameMetadata(name)
+            | ModuleDep::IsSpecialExport(name)
+            | ModuleDep::IsReexport(name)
+            | ModuleDep::GetDeprecated(name)
+            | ModuleDep::ExportOrigin(name)
+            | ModuleDep::DocstringRange(name)
+            | ModuleDep::IsSubmoduleImportedImplicitly(name) => {
                 self.names.entry(name).or_default().metadata = true;
             }
             ModuleDep::Wildcard => {
@@ -374,6 +411,31 @@ impl ModuleDeps {
         self.type_aliases
             .iter()
             .any(|t| changed.0.type_aliases.contains(t))
+    }
+}
+
+impl ModuleDep {
+    /// Short, stable label identifying this demand for the demand-tree
+    /// output (`pyrefly check --report-demand-tree`). One label per
+    /// variant — derived structurally so adding a new variant requires
+    /// deciding the label here, with no risk of the label drifting
+    /// from the structural dependency.
+    fn demand_label(&self) -> &'static str {
+        match self {
+            ModuleDep::Exists => "module_exists",
+            ModuleDep::Key(_) => "key",
+            ModuleDep::NameExists(_) => "export_exists",
+            ModuleDep::NameMetadata(_) => "name_metadata",
+            ModuleDep::IsSpecialExport(_) => "is_special_export",
+            ModuleDep::IsReexport(_) => "is_reexport",
+            ModuleDep::GetDeprecated(_) => "get_deprecated",
+            ModuleDep::ExportOrigin(_) => "export_origin",
+            ModuleDep::DocstringRange(_) => "docstring_range",
+            ModuleDep::IsSubmoduleImportedImplicitly(_) => "is_submodule_imported_implicitly",
+            ModuleDep::Wildcard => "get_wildcard",
+            ModuleDep::EveryExportUntracked => "get_every_export_untracked",
+            ModuleDep::Class(_) => "class",
+        }
     }
 }
 
@@ -484,6 +546,72 @@ impl StateData {
     }
 }
 
+/// Copy atomic timing counters into telemetry stats for scuba logging.
+fn copy_timing_counters(t: &TransactionTimingCounters, stats: &mut TelemetryTransactionStats) {
+    stats.step_load_time = Duration::from_nanos(t.step_load_ns.load(Ordering::Relaxed));
+    stats.step_load_count = t.step_load_count.load(Ordering::Relaxed) as usize;
+    stats.step_ast_time = Duration::from_nanos(t.step_ast_ns.load(Ordering::Relaxed));
+    stats.step_ast_count = t.step_ast_count.load(Ordering::Relaxed) as usize;
+    stats.step_exports_time = Duration::from_nanos(t.step_exports_ns.load(Ordering::Relaxed));
+    stats.step_exports_count = t.step_exports_count.load(Ordering::Relaxed) as usize;
+    stats.step_answers_time = Duration::from_nanos(t.step_answers_ns.load(Ordering::Relaxed));
+    stats.step_answers_count = t.step_answers_count.load(Ordering::Relaxed) as usize;
+    stats.step_solutions_time = Duration::from_nanos(t.step_solutions_ns.load(Ordering::Relaxed));
+    stats.step_solutions_count = t.step_solutions_count.load(Ordering::Relaxed) as usize;
+    stats.clean_time = Duration::from_nanos(t.clean_ns.load(Ordering::Relaxed));
+    stats.clean_count = t.clean_count.load(Ordering::Relaxed) as usize;
+    stats.find_import_time = Duration::from_nanos(t.find_import_ns.load(Ordering::Relaxed));
+    stats.find_import_count = t.find_import_count.load(Ordering::Relaxed) as usize;
+    stats.demand_wait_time = Duration::from_nanos(t.demand_wait_ns.load(Ordering::Relaxed));
+    stats.demand_wait_count = t.demand_wait_count.load(Ordering::Relaxed) as usize;
+    stats.cold_modules = t.cold_modules.load(Ordering::Relaxed) as usize;
+    stats.warm_modules = t.warm_modules.load(Ordering::Relaxed) as usize;
+    stats.total_stat_count = t.total_stat_count.load(Ordering::Relaxed) as usize;
+    stats.slow_stat_count = t.slow_stat_count.load(Ordering::Relaxed) as usize;
+    stats.slow_stat_time = Duration::from_nanos(t.slow_stat_ns.load(Ordering::Relaxed));
+    stats.total_read_count = t.total_read_count.load(Ordering::Relaxed) as usize;
+    stats.slow_read_count = t.slow_read_count.load(Ordering::Relaxed) as usize;
+    stats.slow_read_time = Duration::from_nanos(t.slow_read_ns.load(Ordering::Relaxed));
+}
+
+/// Atomic nanosecond counters accumulated across worker threads during a transaction.
+/// Stored on `Transaction` (not `TransactionData`) so they reset on each save/restore cycle,
+/// ensuring per-request deltas rather than cumulative totals.
+#[derive(Default)]
+pub struct TransactionTimingCounters {
+    // Per-step compute time (inside guard.compute())
+    pub step_load_ns: AtomicU64,
+    pub step_load_count: AtomicU64,
+    pub step_ast_ns: AtomicU64,
+    pub step_ast_count: AtomicU64,
+    pub step_exports_ns: AtomicU64,
+    pub step_exports_count: AtomicU64,
+    pub step_answers_ns: AtomicU64,
+    pub step_answers_count: AtomicU64,
+    pub step_solutions_ns: AtomicU64,
+    pub step_solutions_count: AtomicU64,
+    // Clean phase
+    pub clean_ns: AtomicU64,
+    pub clean_count: AtomicU64,
+    // find_import time (imports cache miss in TransactionHandle::get_module)
+    pub find_import_ns: AtomicU64,
+    pub find_import_count: AtomicU64,
+    // Condvar wait time (waiting for another thread to finish computing a module)
+    pub demand_wait_ns: AtomicU64,
+    pub demand_wait_count: AtomicU64,
+    // Module temperature
+    pub cold_modules: AtomicU64,
+    pub warm_modules: AtomicU64,
+    // Filesystem stat latency (is_file, exists, is_dir in finder)
+    pub total_stat_count: AtomicU64,
+    pub slow_stat_count: AtomicU64,
+    pub slow_stat_ns: AtomicU64,
+    // Filesystem read latency (read_to_string in load, pkgutil detection in finder)
+    pub total_read_count: AtomicU64,
+    pub slow_read_count: AtomicU64,
+    pub slow_read_ns: AtomicU64,
+}
+
 /// `TransactionData` contains most of the information in `Transaction`, but it doesn't lock
 /// the read of `State`.
 /// It is used to store uncommitted transaction state in between transaction runs.
@@ -531,6 +659,8 @@ impl<'a> TransactionData<'a> {
                 }),
                 sub_task_telemetry: None,
                 readable,
+                timing: Default::default(),
+                demand_collector: None,
             })
         } else {
             Err(state_lock_blocked)
@@ -548,6 +678,12 @@ pub struct Transaction<'a> {
     stats: Mutex<TelemetryTransactionStats>,
     sub_task_telemetry: Option<SubTaskTelemetry<'a>>,
     readable: RwLockReadGuard<'a, StateData>,
+    /// Atomic nanosecond counters accumulated across worker threads during a transaction.
+    timing: TransactionTimingCounters,
+    /// Optional demand-tree collector for this run. Set via
+    /// [`Transaction::set_demand_collector`] before `run`; read by
+    /// `TransactionHandle` event sites.
+    demand_collector: Option<DemandCollector>,
 }
 
 impl<'a> Transaction<'a> {
@@ -558,16 +694,85 @@ impl<'a> Transaction<'a> {
             stats,
             sub_task_telemetry: _,
             readable,
+            timing,
+            demand_collector: _,
         } = self;
         drop(readable);
         let mut stats = stats.into_inner();
         stats.cancelled = data.todo.get_cancellation_handle().is_cancelled();
+        copy_timing_counters(&timing, &mut stats);
         telemetry.set_transaction_stats(stats);
         data
     }
 
+    fn timing(&self) -> &TransactionTimingCounters {
+        &self.timing
+    }
+
     pub fn set_subscriber(&mut self, subscriber: Option<Box<dyn Subscriber>>) {
         self.data.subscriber = subscriber;
+    }
+
+    /// Install a demand-tree collector for this transaction. Pass `None` to
+    /// disable collection. Collected events come from `TransactionHandle`
+    /// event sites; call [`Transaction::take_demand_roots`] after `run` to
+    /// harvest the tree.
+    pub fn set_demand_collector(&mut self, collector: Option<DemandCollector>) {
+        self.demand_collector = collector;
+    }
+
+    /// Take the demand-tree roots collected during this run. Returns an
+    /// empty vec if no collector was installed.
+    pub fn take_demand_roots(&self) -> Vec<DemandEdge> {
+        self.demand_collector
+            .as_ref()
+            .map(|c| c.take_roots())
+            .unwrap_or_default()
+    }
+
+    /// Record a leaf `Load`-event in the demand tree, if a collector
+    /// is installed. No-op otherwise.
+    fn record_demand_load_event(
+        &self,
+        from: impl Display,
+        target: impl Display,
+        label: &'static str,
+    ) {
+        if let Some(c) = self.demand_collector.as_ref() {
+            c.load_event(from, target, label);
+        }
+    }
+
+    /// Record a leaf `Exports`-event in the demand tree, if a collector
+    /// is installed. No-op otherwise. Callers obtain the label via
+    /// [`ModuleDep::demand_label`] before moving the dep into
+    /// [`Self::get_module`], so the demand-tree label can't drift from
+    /// the dependency that triggered it.
+    fn record_demand_exports_event(
+        &self,
+        from: impl Display,
+        target: impl Display,
+        label: &'static str,
+    ) {
+        if let Some(c) = self.demand_collector.as_ref() {
+            c.exports_event(from, target, label);
+        }
+    }
+
+    /// Open a demand-tree span for an in-flight `Answer` lookup, if a
+    /// collector is installed. The returned guard (if any) must be held
+    /// for the duration of the lookup so the per-thread nesting stack
+    /// stays balanced.
+    #[must_use = "demand span is closed when the guard is dropped; hold it for the duration of the lookup"]
+    fn enter_demand_answer_span<'b>(
+        &'b self,
+        from: impl Display,
+        target: impl Display,
+        key: impl Debug,
+    ) -> Option<DemandSpan<'b>> {
+        self.demand_collector
+            .as_ref()
+            .map(|c| c.enter(from, target, key))
     }
 
     /// Set the pysa reporter for inline extraction during type checking.
@@ -618,6 +823,12 @@ impl<'a> Transaction<'a> {
     /// Returns a handle that can be used to cancel ongoing work in this transaction.
     pub fn get_cancellation_handle(&self) -> CancellationHandle {
         self.data.todo.get_cancellation_handle()
+    }
+
+    /// Replace the internal cancellation handle so that a previously cancelled
+    /// transaction can run work again.
+    pub fn reset_cancellation(&mut self) {
+        self.data.todo.reset_cancellation();
     }
 
     /// Sets an instance of a [`SubTaskTelemetry`], which will enable the creation and logging of
@@ -829,10 +1040,7 @@ impl<'a> Transaction<'a> {
     pub fn get_transitive_rdeps(&self, handle: Handle) -> HashSet<Handle> {
         let mut transitive_rdeps = HashSet::new();
         let mut work_list = vec![handle];
-        loop {
-            let Some(handle) = work_list.pop() else {
-                break;
-            };
+        while let Some(handle) = work_list.pop() {
             if !transitive_rdeps.insert(handle.dupe()) {
                 continue;
             }
@@ -946,7 +1154,7 @@ impl<'a> Transaction<'a> {
             Some(path) => FindingOrError::new_finding(path.dupe()),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import(module, Some(handle.path())),
+                .find_import(module, Some(handle.path()), Some(&self.timing)),
         };
         path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
@@ -962,7 +1170,7 @@ impl<'a> Transaction<'a> {
             Some(path) => FindingOrError::new_finding(path.dupe()),
             None => self
                 .get_cached_loader(&self.get_module(handle).config.read())
-                .find_import_prefer_executable(module, Some(handle.path())),
+                .find_import_prefer_executable(module, Some(handle.path()), Some(&self.timing)),
         };
         path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
@@ -1015,8 +1223,11 @@ impl<'a> Transaction<'a> {
         if dirty.load()
             && let Some(old_load) = guard.get_load()
         {
-            let (file_contents, self_error) =
-                Load::load_from_path(module_data.handle.path(), &self.memory_lookup());
+            let (file_contents, self_error) = Load::load_from_path(
+                module_data.handle.path(),
+                &self.memory_lookup(),
+                Some(&self.timing),
+            );
             if self_error.is_some()
                 || match &file_contents {
                     FileContents::Source(code) => {
@@ -1065,7 +1276,11 @@ impl<'a> Transaction<'a> {
             // need `find_import` re-validation. The cached value is the same type
             // returned by `find_import`, so we just compare for equality.
             for (module_name, cached) in module_data.imports.read().iter() {
-                let fresh = loader.find_import(*module_name, Some(module_data.handle.path()));
+                let fresh = loader.find_import(
+                    *module_name,
+                    Some(module_data.handle.path()),
+                    Some(&self.timing),
+                );
                 if *cached != fresh {
                     is_dirty = true;
                     break;
@@ -1124,7 +1339,12 @@ impl<'a> Transaction<'a> {
         if !module_data.state.is_checked(self.data.now)
             && let Some(guard) = module_data.state.try_start_clean(self.data.now)
         {
+            let clean_start = Instant::now();
             self.clean(module_data, guard);
+            self.timing
+                .clean_ns
+                .fetch_add(clean_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            self.timing.clean_count.fetch_add(1, Ordering::Relaxed);
             computed = true;
         }
 
@@ -1136,12 +1356,21 @@ impl<'a> Transaction<'a> {
             }
 
             // Try to acquire exclusive compute access for the next step.
-            let guard = match module_data.state.try_start_compute(step) {
+            let wait_start = Instant::now();
+            let result = module_data.state.try_start_compute(step);
+            let wait_ns = wait_start.elapsed().as_nanos() as u64;
+            if wait_ns > 1000 {
+                self.timing
+                    .demand_wait_ns
+                    .fetch_add(wait_ns, Ordering::Relaxed);
+                self.timing
+                    .demand_wait_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            let guard = match result {
                 Some(guard) => guard,
-                None => {
-                    // Another thread finished computing the step, we're done.
-                    break;
-                }
+                // Another thread finished computing the step while we waited.
+                None => break,
             };
 
             // The step we are going to compute. This makes progress toward computing `step`.
@@ -1182,13 +1411,39 @@ impl<'a> Transaction<'a> {
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context,
                 cinderx_enabled: self.data.cinderx_reporter.is_some(),
+                timing: Some(&self.timing),
             };
 
             // Compute the step. This stores the result and advances current_step,
             // then releases the computing flag and notifies waiting threads.
             // Post-compute work (diffing, invalidation, eviction) runs without
             // the flag held.
+            let compute_start = Instant::now();
             let post = guard.compute(&ctx);
+            let elapsed_ns = compute_start.elapsed().as_nanos() as u64;
+            let (ns_counter, count_counter) = match todo {
+                Step::Load => (&self.timing.step_load_ns, &self.timing.step_load_count),
+                Step::Ast => (&self.timing.step_ast_ns, &self.timing.step_ast_count),
+                Step::Exports => (
+                    &self.timing.step_exports_ns,
+                    &self.timing.step_exports_count,
+                ),
+                Step::Answers => (
+                    &self.timing.step_answers_ns,
+                    &self.timing.step_answers_count,
+                ),
+                Step::Solutions => (
+                    &self.timing.step_solutions_ns,
+                    &self.timing.step_solutions_count,
+                ),
+            };
+            ns_counter.fetch_add(elapsed_ns, Ordering::Relaxed);
+            count_counter.fetch_add(1, Ordering::Relaxed);
+
+            // Notify subscriber of step completion.
+            if let Some(subscriber) = &self.data.subscriber {
+                subscriber.step_computed(&module_data.handle, todo);
+            }
 
             let mut load_result = None;
             // Compute which exports changed for fine-grained invalidation.
@@ -1398,8 +1653,13 @@ impl<'a> Transaction<'a> {
         // Figure out if we won the race, and thus are the person who actually did the creation.
         if inserted {
             self.stats.lock().modules += 1;
-            if created && let Some(subscriber) = &self.data.subscriber {
-                subscriber.start_work(handle);
+            if created {
+                self.timing.cold_modules.fetch_add(1, Ordering::Relaxed);
+                if let Some(subscriber) = &self.data.subscriber {
+                    subscriber.start_work(handle);
+                }
+            } else {
+                self.timing.warm_modules.fetch_add(1, Ordering::Relaxed);
             }
         }
         (res, created)
@@ -1499,7 +1759,7 @@ impl<'a> Transaction<'a> {
                 let actual_name = alias.as_ref().unwrap_or(name);
                 let loader = self.get_cached_loader(&module_data.config.read());
                 let other_path = loader
-                    .find_import(*other_module, Some(handle.path()))
+                    .find_import(*other_module, Some(handle.path()), Some(&self.timing))
                     .finding()?;
                 let other_handle = Handle::new(*other_module, other_path, handle.sys_info().dupe());
                 self.lookup_export_location(&other_handle, actual_name)
@@ -1569,7 +1829,10 @@ impl<'a> Transaction<'a> {
             .updated_loaders
             .ensure(loader, || match self.readable.loaders.get(loader) {
                 Some(v) => v.dupe(),
-                None => Arc::new(LoaderFindCache::new(loader.dupe())),
+                None => Arc::new(LoaderFindCache::new(
+                    loader.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
             })
             .0
             .dupe()
@@ -1611,11 +1874,15 @@ impl<'a> Transaction<'a> {
             let v = Arc::new(Stdlib::new(
                 k.version(),
                 &|module, name| {
-                    let path = loader.find_import(module, None).finding()?;
+                    let path = loader
+                        .find_import(module, None, Some(&self.timing))
+                        .finding()?;
                     self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &thread_state)
                 },
                 &|module, name| {
-                    let path = loader.find_import(module, None).finding()?;
+                    let path = loader
+                        .find_import(module, None, Some(&self.timing))
+                        .finding()?;
                     let handle = Handle::new(module, path, (*k).dupe());
                     self.lookup_export_location(&handle, name)
                 },
@@ -1937,10 +2204,22 @@ impl<'a> Transaction<'a> {
     fn invalidate_find(&mut self) {
         let new_loaders = LockedMap::new();
         for loader in self.data.updated_loaders.keys() {
-            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
+            new_loaders.insert(
+                loader.dupe(),
+                Arc::new(LoaderFindCache::new(
+                    loader.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
+            );
         }
         for loader in self.readable.loaders.keys() {
-            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
+            new_loaders.insert(
+                loader.dupe(),
+                Arc::new(LoaderFindCache::new(
+                    loader.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
+            );
         }
         self.data.updated_loaders = new_loaders;
 
@@ -2000,7 +2279,13 @@ impl<'a> Transaction<'a> {
                 new_loaders.insert(c.dupe(), l.dupe());
             });
         configs.iter().for_each(|config| {
-            new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
+            new_loaders.insert(
+                config.dupe(),
+                Arc::new(LoaderFindCache::new(
+                    config.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
+            );
         });
         self.data.updated_loaders = new_loaders;
 
@@ -2115,6 +2400,7 @@ impl<'a> Transaction<'a> {
                 recursion_limit_config: config.recursion_limit_config(),
                 pysa_context: None,
                 cinderx_enabled: false,
+                timing: None,
             };
             while let Some(step) = alt.next_step() {
                 let start = Instant::now();
@@ -2177,8 +2463,8 @@ impl<'a> Transaction<'a> {
                 let deps: Vec<PathBuf> = module_data
                     .deps
                     .read()
-                    .iter()
-                    .flat_map(|(h, _)| included.get(&h.module()).cloned())
+                    .keys()
+                    .flat_map(|h| included.get(&h.module()).cloned())
                     .collect();
                 graph.push((entry_path.clone(), deps));
             }
@@ -2305,10 +2591,24 @@ impl<'a> TransactionHandle<'a> {
                     Some(path) => path.dupe(),
                     None => {
                         drop(imports_read);
+                        let fi_start = Instant::now();
                         let finding = self
                             .transaction
                             .get_cached_loader(&self.module_data.config.read())
-                            .find_import(module, Some(self.module_data.handle.path()));
+                            .find_import(
+                                module,
+                                Some(self.module_data.handle.path()),
+                                Some(self.transaction.timing()),
+                            );
+                        let fi_ns = fi_start.elapsed().as_nanos() as u64;
+                        self.transaction
+                            .timing()
+                            .find_import_ns
+                            .fetch_add(fi_ns, Ordering::Relaxed);
+                        self.transaction
+                            .timing()
+                            .find_import_count
+                            .fetch_add(1, Ordering::Relaxed);
                         self.module_data
                             .imports
                             .write()
@@ -2345,7 +2645,13 @@ impl<'a> TransactionHandle<'a> {
         f: impl FnOnce(&Exports, &Self) -> T,
         dep: ModuleDep,
     ) -> Option<T> {
+        let label = dep.demand_label();
         let module_data = self.get_module(module, None, dep).finding()?;
+        self.transaction.record_demand_exports_event(
+            self.module_data.handle.module(),
+            module,
+            label,
+        );
         let exports = self.transaction.lookup_export(module_data);
         let lookup = TransactionHandle {
             transaction: self.transaction,
@@ -2449,13 +2755,10 @@ impl Drop for TransactionHandle<'_> {
 
 impl<'a> LookupExport for TransactionHandle<'a> {
     fn export_exists(&self, module: ModuleName, name: &Name) -> bool {
-        // TODO: This should be ModuleDep::NameExists instead
-        // but tests fail.
-        let dep = ModuleDep::Key(AnyExportedKey::KeyExport(KeyExport(name.clone())));
         self.with_exports(
             module,
             |exports, lookup| exports.exports(lookup).contains_key(name),
-            dep,
+            ModuleDep::NameExists(name.clone()),
         )
         .unwrap_or(false)
     }
@@ -2469,9 +2772,18 @@ impl<'a> LookupExport for TransactionHandle<'a> {
     }
 
     fn module_exists(&self, module: ModuleName) -> FindingOrError<()> {
+        // An existence bit would be enough in theory, but in practice
+        // the incremental change-detection path only kicks in for
+        // modules that have a stored Load result, so we demand Load
+        // here to keep file edits to the target observable.
         self.get_module(module, None, ModuleDep::Exists)
             .map(|module_data| {
-                self.transaction.lookup_export(module_data);
+                self.transaction.record_demand_load_event(
+                    self.module_data.handle.module(),
+                    module,
+                    ModuleDep::Exists.demand_label(),
+                );
+                self.transaction.demand(module_data, Step::Load);
             })
     }
 
@@ -2479,7 +2791,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         self.with_exports(
             module,
             |exports, _lookup| exports.is_submodule_imported_implicitly(name),
-            ModuleDep::NameMetadata(name.clone()),
+            ModuleDep::IsSubmoduleImportedImplicitly(name.clone()),
         )
         .unwrap_or(false)
     }
@@ -2494,7 +2806,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     .cloned()
                     .collect::<SmallSet<Name>>()
             },
-            ModuleDep::Exists,
+            ModuleDep::EveryExportUntracked,
         )
     }
 
@@ -2508,7 +2820,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 }) => Some(d.clone()),
                 _ => None,
             },
-            ModuleDep::NameMetadata(name.clone()),
+            ModuleDep::GetDeprecated(name.clone()),
         )?
     }
 
@@ -2521,7 +2833,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                     Some(ExportLocation::OtherModule(..))
                 )
             },
-            ModuleDep::NameMetadata(name.clone()),
+            ModuleDep::IsReexport(name.clone()),
         )
         .unwrap_or(false)
     }
@@ -2549,7 +2861,7 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                         Some(Ok((*other_module, original_name.clone())))
                     }
                 },
-                ModuleDep::NameMetadata(name.clone()),
+                ModuleDep::IsSpecialExport(name.clone()),
             )??;
 
             match next {
@@ -2573,41 +2885,47 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 }) => *docstring_range,
                 _ => None,
             },
-            ModuleDep::NameMetadata(name.clone()),
+            ModuleDep::DocstringRange(name.clone()),
         )?
     }
 
-    fn is_final(&self, mut module: ModuleName, name: &Name) -> bool {
+    fn export_origin(&self, mut module: ModuleName, name: &Name) -> ExportOrigin {
         let mut seen = HashSet::new();
         let mut name = name.clone();
 
-        loop {
+        let is_final = loop {
             if !seen.insert(module) {
-                return false; // Cycle detected
+                break false; // Cycle detected
             }
 
-            let next = self.with_exports(
-                module,
-                |exports, lookup| match exports.exports(lookup).get(&name) {
-                    Some(ExportLocation::ThisModule(Export { is_final, .. })) => Err(*is_final),
-                    Some(ExportLocation::OtherModule(other_module, original_name)) => {
-                        Ok((*other_module, original_name.clone()))
-                    }
-                    None => Err(false),
-                },
-                ModuleDep::NameMetadata(name.clone()),
-            );
+            let next = self
+                .with_exports(
+                    module,
+                    |exports, lookup| match exports.exports(lookup).get(&name) {
+                        Some(ExportLocation::ThisModule(Export { is_final, .. })) => Err(*is_final),
+                        Some(ExportLocation::OtherModule(other_module, original_name)) => {
+                            Ok((*other_module, original_name.clone()))
+                        }
+                        None => Err(false),
+                    },
+                    ModuleDep::ExportOrigin(name.clone()),
+                )
+                .unwrap_or(Err(false));
 
             match next {
-                Some(Err(is_final)) => return is_final,
-                Some(Ok((other_module, original_name))) => {
+                Err(is_final) => break is_final,
+                Ok((other_module, original_name)) => {
                     if let Some(original_name) = original_name {
                         name = original_name;
                     }
                     module = other_module;
                 }
-                None => return false,
             }
+        };
+
+        ExportOrigin {
+            origin: (module, name),
+            is_final,
         }
     }
 }
@@ -2631,6 +2949,12 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
             .get_module(module, path, ModuleDep::Key(k.to_anykey()))
             .finding()
             .unwrap();
+        // Hold the span guard for the duration of the lookup so that a panic
+        // inside `lookup_answer` still closes the span (keeping the per-thread
+        // demand stack balanced on this worker for subsequent demands).
+        let _demand_span =
+            self.transaction
+                .enter_demand_answer_span(self.module_data.handle.module(), module, k);
         let res = self.transaction.lookup_answer(module_data, k, thread_state);
         if res.is_none() {
             let msg = format!(
@@ -2861,10 +3185,19 @@ pub struct State {
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
+    dir_cache_enabled: bool,
 }
 
 impl State {
     pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
+        Self::new_with_options(config_finder, thread_count, false)
+    }
+
+    pub fn new_with_options(
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+        dir_cache_enabled: bool,
+    ) -> Self {
         Self {
             threads: ThreadPool::new(thread_count),
             uniques: UniqueFactory::new(),
@@ -2872,11 +3205,16 @@ impl State {
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),
+            dir_cache_enabled,
         }
     }
 
     pub fn config_finder(&self) -> &ConfigFinder {
         &self.config_finder
+    }
+
+    pub fn dir_cache_enabled(&self) -> bool {
+        self.dir_cache_enabled
     }
 
     fn get_config(&self, handle: &Handle) -> ArcId<ConfigFile> {
@@ -2908,6 +3246,8 @@ impl State {
                 ..Default::default()
             }),
             sub_task_telemetry: None,
+            timing: Default::default(),
+            demand_collector: None,
             data: TransactionData {
                 state: self,
                 stdlib,
@@ -2978,6 +3318,8 @@ impl State {
                     readable,
                     stats,
                     sub_task_telemetry: _,
+                    timing,
+                    demand_collector: _,
                     data:
                         TransactionData {
                             stdlib,
@@ -3003,6 +3345,7 @@ impl State {
 
         let mut stats = stats.into_inner();
         stats.committed = true;
+        copy_timing_counters(&timing, &mut stats);
 
         // ArcId<ModuleDataMut> is shared across todo, changed, dirty, and
         // updated_modules during a transaction. All of these except

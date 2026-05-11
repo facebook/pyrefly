@@ -46,6 +46,11 @@ pub struct SecondaryAnnotation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ErrorQuickFix {
+    ReplaceWithEnumMember { replacement: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Error {
     module: Module,
     range: TextRange,
@@ -59,6 +64,8 @@ pub struct Error {
     msg_details: Option<Box<str>>,
     /// Additional labeled spans in the same file for richer diagnostics.
     secondary_annotations: Vec<SecondaryAnnotation>,
+    /// Structured fixes that can be exposed by editor integrations.
+    quick_fixes: Vec<ErrorQuickFix>,
 }
 
 impl Ranged for Error {
@@ -353,6 +360,7 @@ impl Error {
             msg_header,
             msg_details,
             secondary_annotations: Vec::new(),
+            quick_fixes: Vec::new(),
         }
     }
 
@@ -363,6 +371,11 @@ impl Error {
             range,
             label: label.into_boxed_str(),
         });
+        self
+    }
+
+    pub fn with_quick_fix(mut self, quick_fix: ErrorQuickFix) -> Self {
+        self.quick_fixes.push(quick_fix);
         self
     }
 
@@ -400,11 +413,12 @@ impl Error {
         if self.error_kind == ErrorKind::UnusedIgnore {
             return false;
         }
-        self.module.is_ignored(
-            &self.display_range,
-            self.error_kind.to_name(),
-            enabled_ignores,
-        )
+        // Check both this kind's name and any parent kind's name, so that e.g.
+        // `# pyrefly: ignore[bad-override]` also suppresses `bad-override-mutable-attribute`.
+        self.error_kind.suppression_names().any(|name| {
+            self.module
+                .is_ignored(&self.display_range, name, enabled_ignores)
+        })
     }
 
     pub fn error_kind(&self) -> ErrorKind {
@@ -414,6 +428,10 @@ impl Error {
     /// Return the secondary annotations attached to this error.
     pub fn secondary_annotations(&self) -> &[SecondaryAnnotation] {
         &self.secondary_annotations
+    }
+
+    pub fn quick_fixes(&self) -> &[ErrorQuickFix] {
+        &self.quick_fixes
     }
 }
 

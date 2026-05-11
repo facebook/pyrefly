@@ -1,4 +1,3 @@
-# {{PROJECT_NAME}} {{VERSION}}
 **Status : {{STATUS}}**
 *Release date: {{RELEASE_DATE}}*
 

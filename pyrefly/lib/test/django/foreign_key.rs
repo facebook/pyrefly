@@ -161,6 +161,64 @@ assert_type(b.reporter_id, UUID)
 );
 
 django_testcase!(
+    test_one_to_one_field_id,
+    r#"
+from typing import assert_type
+
+from django.db import models
+
+class Reporter(models.Model):
+    full_name = models.CharField(max_length=70)
+
+class Article(models.Model):
+    reporter = models.OneToOneField(Reporter, on_delete=models.CASCADE)
+
+article = Article()
+assert_type(article.reporter, Reporter)
+assert_type(article.reporter.full_name, str)
+assert_type(article.reporter_id, int)
+"#,
+);
+
+django_testcase!(
+    test_one_to_one_field_nullable_id,
+    r#"
+from typing import assert_type
+
+from django.db import models
+
+class Reporter(models.Model): ...
+
+class Article(models.Model):
+    reporter = models.OneToOneField(Reporter, null=True, on_delete=models.CASCADE)
+
+article = Article()
+assert_type(article.reporter, Reporter | None)
+assert_type(article.reporter_id, int | None)
+"#,
+);
+
+django_testcase!(
+    test_one_to_one_field_custom_pk,
+    r#"
+from typing import assert_type
+from uuid import UUID
+
+from django.db import models
+
+class Reporter(models.Model):
+    uuid = models.UUIDField(primary_key=True)
+
+class Article(models.Model):
+    reporter = models.OneToOneField(Reporter, on_delete=models.CASCADE)
+
+article = Article()
+assert_type(article.reporter, Reporter)
+assert_type(article.reporter_id, UUID)
+"#,
+);
+
+django_testcase!(
     test_foreign_key_in_function,
     r#"
 from django.db import models

@@ -216,11 +216,6 @@ impl TypeCheckKind {
                 ctx.display(got),
                 ctx.display(want)
             ),
-            Self::CycleBreaking => format!(
-                "Pyrefly detected conflicting types while breaking a dependency cycle: `{}` is not assignable to `{}`. Adding explicit type annotations might possibly help.",
-                ctx.display(got),
-                ctx.display(want)
-            ),
             Self::ExceptionClass => format!(
                 "Invalid exception class: `{}` does not inherit from `{}`",
                 ctx.display(got),

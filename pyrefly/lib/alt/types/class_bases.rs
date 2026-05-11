@@ -124,7 +124,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if matches!(&base, Type::ClassDef(t) if t.name() == "tuple") {
             base = self
                 .heap
-                .mk_type_form(self.heap.mk_special_form(SpecialForm::Tuple));
+                .mk_type_of(self.heap.mk_special_form(SpecialForm::Tuple));
         }
         let mut has_strict = false;
         let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
@@ -151,7 +151,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let tys = arguments_untype(slice, &mut has_strict);
                 self.specialize_forall_in_base_class(*forall, tys, range, errors)
             }
-            Type::ClassDef(cls) => self.heap.mk_type_form(self.specialize_in_base_class(
+            Type::ClassDef(cls) => self.heap.mk_type_of(self.specialize_in_base_class(
                 &cls,
                 arguments_untype(slice, &mut has_strict),
                 range,

@@ -17,10 +17,9 @@ use pyrefly_derive::VisitMut;
 use pyrefly_util::display::commas_iter;
 
 use crate::class::ClassType;
-pub use crate::dimension::ShapeError;
-pub use crate::dimension::SizeExpr;
+use crate::dimension::ShapeError;
+use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
-pub use crate::dimension::contains_var_in_type;
 use crate::tuple::Tuple;
 use crate::types::Type;
 
@@ -587,13 +586,15 @@ fn broadcast_unpacked_with_unpacked(
             result_suffix,
         ))))
     } else {
-        // Different TypeVarTuples or structural mismatch
-        Err(ShapeError::ShapeComputation {
-            message: format!(
-                "Cannot broadcast variadic shapes: incompatible middles *{} vs *{}",
-                am, bm
-            ),
-        })
+        // Different TypeVarTuples or structural mismatch — degrade to shapeless
+        // batch dims rather than producing a hard error. At runtime the middles
+        // are often identical (e.g. two Linear.forward calls on the same batch)
+        // but the checker can't prove it.
+        Ok(TensorShape::Unpacked(Box::new((
+            vec![],
+            Type::any_tuple(),
+            result_suffix,
+        ))))
     }
 }
 

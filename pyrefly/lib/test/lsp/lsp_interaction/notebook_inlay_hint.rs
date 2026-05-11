@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use serde_json::json;
+
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::check_inlay_hint_label_values;
@@ -17,7 +19,9 @@ fn test_inlay_hints() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();

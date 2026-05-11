@@ -59,13 +59,13 @@ ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Te
    |            ^^^^^^
    |
   Size mismatch: expected 4, got 2
- INFO revealed type: Dim[(M * N)] [reveal-type]
+ INFO revealed type: Dim[(N * M)] [reveal-type]
   --> *test_check_symbolic_binding.py:40:16 (glob)
    |
 40 |     reveal_type(s)
    |                ---
    |
-ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Dim[(M + N)]` [bad-return]
+ERROR Returned type `Dim[(N * M)]` is not assignable to declared return type `Dim[(N + M)]` [bad-return]
   --> *test_check_symbolic_binding.py:41:12 (glob)
    |
 38 | def numel_returns_bad_explicit_symint[N, M](x: Tensor[N, M]) -> Dim[N + M]:
@@ -75,14 +75,14 @@ ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Di
 41 |     return s
    |            ^
    |
-  Size mismatch: expected (M + N), got (M * N)
- INFO revealed type: Tensor[(M * N)] [reveal-type]
+  Size mismatch: expected (N + M), got (N * M)
+ INFO revealed type: Tensor[(N * M)] [reveal-type]
   --> *test_check_symbolic_binding.py:46:16 (glob)
    |
 46 |     reveal_type(v)
    |                ---
    |
-ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type `Tensor[(M + N)]` [bad-return]
+ERROR Returned type `Tensor[(N * M)]` is not assignable to declared return type `Tensor[(N + M)]` [bad-return]
   --> *test_check_symbolic_binding.py:47:12 (glob)
    |
 44 | def view_returns_bad_explicit_tensor[N, M](x: Tensor[N, M]) -> Tensor[N + M]:
@@ -92,14 +92,14 @@ ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type 
 47 |     return v
    |            ^
    |
-  Size mismatch: expected (M + N), got (M * N)
- INFO revealed type: Dim[(M * N)] [reveal-type]
+  Size mismatch: expected (N + M), got (N * M)
+ INFO revealed type: Dim[(N * M)] [reveal-type]
   --> *test_check_symbolic_binding.py:52:16 (glob)
    |
 52 |     reveal_type(s)
    |                ---
    |
-ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Dim[K]` [bad-return]
+ERROR Returned type `Dim[(N * M)]` is not assignable to declared return type `Dim[K]` [bad-return]
   --> *test_check_symbolic_binding.py:53:12 (glob)
    |
 50 | def numel_returns_bad_implicit_symint[N, M, K](x: Tensor[N, M]) -> Dim[K]:
@@ -109,14 +109,14 @@ ERROR Returned type `Dim[(M * N)]` is not assignable to declared return type `Di
 53 |     return s
    |            ^
    |
-  Size mismatch: expected K, got (M * N)
- INFO revealed type: Tensor[(M * N)] [reveal-type]
+  Size mismatch: expected K, got (N * M)
+ INFO revealed type: Tensor[(N * M)] [reveal-type]
   --> *test_check_symbolic_binding.py:58:16 (glob)
    |
 58 |     reveal_type(v)
    |                ---
    |
-ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type `Tensor[K]` [bad-return]
+ERROR Returned type `Tensor[(N * M)]` is not assignable to declared return type `Tensor[K]` [bad-return]
   --> *test_check_symbolic_binding.py:59:12 (glob)
    |
 56 | def view_returns_bad_implicit_tensor[N, M, K](x: Tensor[N, M]) -> Tensor[K]:
@@ -126,7 +126,7 @@ ERROR Returned type `Tensor[(M * N)]` is not assignable to declared return type 
 59 |     return v
    |            ^
    |
-  Size mismatch: expected K, got (M * N)
+  Size mismatch: expected K, got (N * M)
  INFO revealed type: Dim [reveal-type]
   --> *test_check_symbolic_binding.py:64:16 (glob)
    |
@@ -225,7 +225,7 @@ $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_concat_flatten_types.py"
 19 |     reveal_type(y)
    |                ---
    |
- INFO revealed type: Tensor[(M + N), 3] [reveal-type]
+ INFO revealed type: Tensor[(N + M), 3] [reveal-type]
   --> *test_concat_flatten_types.py:21:16 (glob)
    |
 21 |     reveal_type(z)
@@ -480,7 +480,7 @@ ERROR Returned type `Tensor[N, 3]` is not assignable to declared return type `Te
    |            ^
    |
   Size mismatch: expected 5, got 3
-ERROR Returned type `Tensor[N, M]` is not assignable to declared return type `Tensor[(M + N)]` [bad-return]
+ERROR Returned type `Tensor[N, M]` is not assignable to declared return type `Tensor[(N + M)]` [bad-return]
   --> *test_tensor_subtyping.py:88:12 (glob)
    |
 86 | def tensor_add_dims[N, M](x: Tensor[N, M]) -> Tensor[N + M]:
@@ -500,7 +500,7 @@ ERROR Returned type `Tensor[(1 + N), 3]` is not assignable to declared return ty
    |            ^
    |
   Size mismatch: expected (2 + N), got (1 + N)
-ERROR Returned type `Tensor[(M + N), 3]` is not assignable to declared return type `Tensor[(M * N), 3]` [bad-return]
+ERROR Returned type `Tensor[(N + M), 3]` is not assignable to declared return type `Tensor[(N * M), 3]` [bad-return]
    --> *test_tensor_subtyping.py:108:12 (glob)
     |
 106 | def tensor_add_vs_mul[N, M](x: Tensor[N + M, 3]) -> Tensor[N * M, 3]:
@@ -509,7 +509,7 @@ ERROR Returned type `Tensor[(M + N), 3]` is not assignable to declared return ty
 108 |     return x  # ERROR: N + M not equal to N * M
     |            ^
     |
-  Size mismatch: expected (M * N), got (M + N)
+  Size mismatch: expected (N * M), got (N + M)
 ERROR Returned type `Tensor[2, 3]` is not assignable to declared return type `Tensor[4, 3]` [bad-return]
    --> *test_tensor_subtyping.py:123:12 (glob)
     |
@@ -602,10 +602,13 @@ ERROR Cannot broadcast tensor shapes: Cannot broadcast concrete dims with variad
 244 |     return x + y  # ERROR: Cannot broadcast concrete dims with variadic shape
     |            ^^^^^
     |
-ERROR Cannot broadcast tensor shapes: Cannot broadcast variadic shapes: incompatible middles *Ts vs *Us [unsupported-operation]
+ERROR Returned type `Tensor[*tuple[Unknown, ...], 3]` is not assignable to declared return type `Tensor[*Ts, 3]` [bad-return]
    --> *test_tensor_arithmetic.py:278:12 (glob)
     |
-278 |     return x + y  # ERROR: incompatible middles
+276 | ) -> Tensor[*Ts, 3]:
+    |      -------------- declared return type
+277 |     """ERROR: Different TypeVarTuples degrade to shapeless batch dims"""
+278 |     return x + y  # ERROR: result is Tensor[*tuple[Unknown, ...], 3], not Tensor[*Ts, 3]
     |            ^^^^^
     |
 [1]
@@ -652,7 +655,7 @@ ERROR Returned type `Tensor[8, 5]` is not assignable to declared return type `Te
 
 ```scrut
 $ $PYREFLY check "$TENSOR_TEST_ROOT/negative_tests/test_tensor_expr_equiv.py"
-ERROR Returned type `Tensor[(M + N)]` is not assignable to declared return type `Tensor[(M * N)]` [bad-return]
+ERROR Returned type `Tensor[(N + M)]` is not assignable to declared return type `Tensor[(N * M)]` [bad-return]
   --> *test_tensor_expr_equiv.py:85:12 (glob)
    |
 83 | def add_not_equal_mul[N, M](x: Tensor[N + M]) -> Tensor[N * M]:
@@ -661,7 +664,7 @@ ERROR Returned type `Tensor[(M + N)]` is not assignable to declared return type 
 85 |     return x
    |            ^
    |
-  Size mismatch: expected (M * N), got (M + N)
+  Size mismatch: expected (N * M), got (N + M)
 ERROR Returned type `Tensor[(1 + N)]` is not assignable to declared return type `Tensor[(2 + N)]` [bad-return]
   --> *test_tensor_expr_equiv.py:90:12 (glob)
    |

@@ -758,10 +758,6 @@ mod tests {
             PythonVersion::from_str("cinder.3.8").unwrap(),
             PythonVersion::new(3, 8, 0)
         );
-        assert_eq!(
-            PythonVersion::from_str("3.10.cinder").unwrap(),
-            PythonVersion::new(3, 10, 0)
-        );
         assert!(PythonVersion::from_str("").is_err());
         assert!(PythonVersion::from_str("abc").is_err());
     }

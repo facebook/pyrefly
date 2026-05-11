@@ -415,18 +415,17 @@ assert_type(z, dict[str, int])
 );
 
 testcase!(
-    bug = "Container contents should be promoted",
     test_redundant_empty_container_constructor_call,
     r#"
 from typing import assert_type
 
 x = list([])
 x.append(1)
-assert_type(x, list[int])  # E: assert_type(list[Literal[1]], list[int])
+assert_type(x, list[int])
 
 y = dict({})
 y['k'] = 3
-assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]], dict[str, int])
+assert_type(y, dict[str, int])
     "#,
 );
 
@@ -495,5 +494,49 @@ def h(x: ThisIsANameError):  # E: Could not find name
     y = f(x)
     y.append(1)
     assert_type(y, list[Any])
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3088
+testcase!(
+    test_dict_with_initial_none_values,
+    r#"
+def parse(obj):
+    data = {"a": None, "b": None, "c": None, "d": None, "e": None, "f": None, "g": None}
+
+    for item in obj.select("div"):
+        child = item.next_sibling.select_one("span")
+
+        if item.string == "list_case":
+            value = [x.strip() for x in child.strings][:-1]
+        elif item.string == "update_case":
+            data.update(
+                {"a": child.select_one("a"), "b": child.select_one("b"), "c": None}
+            )
+            continue
+        else:
+            value = child.text
+
+        data[item.string] = value
+    return data
+    "#,
+);
+
+testcase!(
+    test_partial_inference_of_dict_through_overload,
+    r#"
+from typing import assert_type, overload, TypeVar
+
+T = TypeVar('T')
+d = {}
+
+@overload
+def f(x: dict[T, T], flag: str) -> None: ...
+@overload
+def f(x: dict[str, int], flag: int) -> None: ...
+def f(x, flag) -> None: ...
+
+f(d, 42)
+assert_type(d, dict[str, int])
     "#,
 );

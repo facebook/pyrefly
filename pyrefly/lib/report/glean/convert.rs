@@ -48,6 +48,7 @@ use vec1::Vec1;
 use crate::module::module_info::ModuleInfo;
 use crate::report::glean::facts::*;
 use crate::report::glean::schema::*;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::state::Transaction;
 use crate::types::types::Type;
@@ -143,11 +144,20 @@ fn to_span(range: TextRange) -> src::ByteSpan {
 
 /// Create a Glean file fact from module info, using forward slashes for
 /// cross-platform consistency regardless of the OS path separator.
+/// Symlinks are resolved so the same physical file always gets the same key.
 fn file_fact(module_info: &ModuleInfo) -> src::File {
     let file_path = module_info.path().as_path();
-    let relative_path = file_path
-        .strip_prefix(current_dir().unwrap_or_default())
-        .unwrap_or(file_path)
+    let cwd = current_dir().unwrap_or_default();
+    let (resolved_path, resolved_cwd) = match (
+        std::fs::canonicalize(file_path),
+        std::fs::canonicalize(&cwd),
+    ) {
+        (Ok(p), Ok(c)) => (p, c),
+        _ => (file_path.to_path_buf(), cwd),
+    };
+    let relative_path = resolved_path
+        .strip_prefix(&resolved_cwd)
+        .unwrap_or(&resolved_path)
         .to_str()
         .unwrap();
 
@@ -245,7 +255,7 @@ struct GleanState<'a> {
 
 struct AssignInfo<'a> {
     range: TextRange,
-    annotation: Option<&'a Expr>,
+    type_info: Option<python::TypeInfo>,
     value: Option<&'a Expr>,
 }
 
@@ -306,7 +316,7 @@ impl GleanState<'_> {
 
     fn gencode_fact(&mut self) -> Option<gencode::GenCode> {
         let generated_pattern = RegexBuilder::new(
-            r"^.*@(?P<tag>(partially-)?generated)( SignedSource<<(?P<sign>[0-9a-f]+)>>)?$",
+            r"^.*@(?P<tag>(partially-)?generated)( (?:SignedSource<<(?P<sign>[0-9a-f]+)>>|<<SignedSource::[^>]+>>))?$",
         )
         .multi_line(true)
         .build()
@@ -569,7 +579,7 @@ impl GleanState<'_> {
             Expr::Subscript(expr_subscript) => {
                 self.find_definition_for_expr(&expr_subscript.value, only_resolved_name)
             }
-            Expr::Attribute(attr) => self.find_definition_for_attribute(attr),
+            Expr::Attribute(attr) => self.find_definition_for_expr_attribute(attr),
             Expr::Name(name) => self.find_definition_for_expr_name(name, only_resolved_name),
             _ => vec![],
         }
@@ -615,6 +625,26 @@ impl GleanState<'_> {
         definitions
     }
 
+    fn resolve_name_use(
+        &self,
+        identifier: &Identifier,
+        only_resolved_name: bool,
+        definition: Option<FindDefinitionItemWithDocstring>,
+    ) -> Vec<DefinitionLocation> {
+        let additional_definitions =
+            self.get_additional_definitions(identifier.range(), only_resolved_name);
+
+        match definition {
+            Some(def) => self.get_definition_location(
+                def.definition_range,
+                &def.module,
+                None,
+                additional_definitions,
+            ),
+            None => additional_definitions,
+        }
+    }
+
     fn find_definition_for_name_use(
         &self,
         identifier: Identifier,
@@ -624,42 +654,30 @@ impl GleanState<'_> {
             .transaction
             .find_definition_for_name_use(self.handle, &identifier, find_preference_glean())
             .unwrap_or(None);
-
-        let additional_definitions =
-            self.get_additional_definitions(identifier.range(), only_resolved_name);
-
-        definition.map_or(additional_definitions.clone(), |def| {
-            self.get_definition_location(
-                def.definition_range,
-                &def.module,
-                None,
-                additional_definitions,
-            )
-        })
+        self.resolve_name_use(&identifier, only_resolved_name, definition)
     }
 
-    fn find_definition_for_str_literal(&self, range: TextRange) -> Vec<DefinitionLocation> {
+    fn find_definition_for_str_literal(
+        &self,
+        range: TextRange,
+        base_range: Option<TextRange>,
+    ) -> Vec<DefinitionLocation> {
         let name = self.module.code_at(range);
-        let fqname = join_names(self.module_name.as_str(), name);
-        let identifier = Identifier::new(name, range);
-        let definition = self
-            .transaction
-            .find_definition_for_name_use(self.handle, &identifier, find_preference_glean())
-            .unwrap_or(None);
-        let additional_definitions = if definition.is_some() || self.names.contains(&fqname) {
-            self.get_additional_definitions(range, false)
+        if let Some(base_range) = base_range {
+            self.find_definition_for_typed_attribute(base_range, &Name::new(name))
         } else {
-            vec![]
-        };
-
-        definition.map_or(additional_definitions.clone(), |def| {
-            self.get_definition_location(
-                def.definition_range,
-                &def.module,
-                None,
-                additional_definitions,
-            )
-        })
+            let as_name = join_names(self.module_name.as_str(), name);
+            let identifier = Identifier::new(name, range);
+            let definition = self
+                .transaction
+                .find_definition_for_name_use(self.handle, &identifier, find_preference_glean())
+                .unwrap_or(None);
+            if definition.is_some() || self.names.contains(&as_name) {
+                self.resolve_name_use(&identifier, false, definition)
+            } else {
+                vec![]
+            }
+        }
     }
 
     fn find_definition_for_literal_symbol(&self, name: &str) -> DefinitionLocation {
@@ -692,28 +710,49 @@ impl GleanState<'_> {
 
         ranges
             .flat_map(|range| {
-                let name = self.module.code_at(range);
-                let definitions = if name == "None" {
-                    vec![self.find_definition_for_literal_symbol(name)]
+                let token = self.module.code_at(range);
+                if token == "None" {
+                    vec![(self.find_definition_for_literal_symbol(token), range)]
                 } else {
-                    self.find_definition_for_str_literal(range)
-                };
-                definitions.into_iter().map(move |def| (def, range))
+                    token
+                        .split('.')
+                        .scan(
+                            (range.start(), None::<TextRange>),
+                            |(pos, base_range), name| {
+                                let name_start = *pos;
+                                let name_end = name_start + TextSize::try_from(name.len()).unwrap();
+                                let name_range = TextRange::new(name_start, name_end);
+
+                                let defs =
+                                    self.find_definition_for_str_literal(name_range, *base_range);
+
+                                *base_range = Some(TextRange::new(range.start(), name_end));
+                                *pos = name_end + TextSize::new(1);
+
+                                Some(defs.into_iter().map(move |def| (def, name_range)))
+                            },
+                        )
+                        .flatten()
+                        .collect()
+                }
             })
             .collect()
     }
 
-    fn find_definition_for_attribute(&self, expr_attr: &ExprAttribute) -> Vec<DefinitionLocation> {
-        let attr_name = &expr_attr.attr;
-        let base_expr = expr_attr.value.as_ref();
-
-        let definitions_with_type = if let Some(answers) = self.transaction.get_answers(self.handle)
-            && let Some(base_type) = answers.get_type_trace(base_expr.range())
+    /// Type-driven attribute definition lookup. Returns empty when no type trace
+    /// exists for `base_range`; caller is responsible for fallback.
+    fn find_definition_for_typed_attribute(
+        &self,
+        base_range: TextRange,
+        attr_name: &Name,
+    ) -> Vec<DefinitionLocation> {
+        let definitions_with_type: Vec<_> = if let Some(answers) =
+            self.transaction.get_answers(self.handle)
+            && let Some(base_type) = answers.get_type_trace(base_range)
         {
             self.transaction
                 .ad_hoc_solve(self.handle, "glean_attribute_definition", |solver| {
-                    let name = attr_name.id();
-                    let completions = |ty| solver.completions(ty, Some(name), false);
+                    let completions = |ty| solver.completions(ty, Some(attr_name), false);
 
                     let tys = match base_type.clone() {
                         Type::Union(box Union { members: tys, .. })
@@ -728,7 +767,7 @@ impl GleanState<'_> {
                                     self.handle,
                                     find_preference_glean(),
                                     completions(ty.clone()),
-                                    name,
+                                    attr_name,
                                 )
                                 .map(|def| (ty, def))
                         })
@@ -736,43 +775,57 @@ impl GleanState<'_> {
                 })
                 .unwrap_or_default()
         } else {
-            vec![]
+            return vec![];
         };
 
         if definitions_with_type.is_empty() {
-            self.find_definition_for_expr(base_expr, false)
+            return vec![];
+        }
+
+        let base_expr_name = join_names(self.module_name.as_str(), self.module.code_at(base_range));
+        let additional_definitions = if self.names.contains(&base_expr_name) {
+            self.get_additional_definitions(base_range, false)
                 .into_iter()
-                .map(|base_expr| DefinitionLocation {
-                    name: join_names(&base_expr.name, attr_name),
-                    file: base_expr.file,
+                .map(|ty| DefinitionLocation {
+                    name: join_names(&ty.name, attr_name),
+                    file: ty.file,
                 })
                 .collect()
         } else {
-            let base_expr_name = join_names(
-                self.module_name.as_str(),
-                self.module.code_at(base_expr.range()),
-            );
-            let additional_definitions = if self.names.contains(&base_expr_name) {
-                self.get_additional_definitions(base_expr.range(), false)
-                    .into_iter()
-                    .map(|ty| DefinitionLocation {
-                        name: join_names(&ty.name, attr_name),
-                        file: ty.file,
-                    })
-                    .collect()
-            } else {
-                vec![]
-            };
+            vec![]
+        };
 
-            definitions_with_type
+        definitions_with_type
+            .into_iter()
+            .flat_map(|(ty, def)| {
+                self.get_definition_location(
+                    def.definition_range,
+                    &def.module,
+                    Some(&ty),
+                    additional_definitions.clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn find_definition_for_expr_attribute(
+        &self,
+        expr_attr: &ExprAttribute,
+    ) -> Vec<DefinitionLocation> {
+        let attr_name = &expr_attr.attr;
+        let base_expr = expr_attr.value.as_ref();
+
+        let definitions =
+            self.find_definition_for_typed_attribute(base_expr.range(), attr_name.id());
+
+        if !definitions.is_empty() {
+            definitions
+        } else {
+            self.find_definition_for_expr(base_expr, false)
                 .into_iter()
-                .flat_map(|(ty, def)| {
-                    self.get_definition_location(
-                        def.definition_range,
-                        &def.module,
-                        Some(&ty),
-                        additional_definitions.clone(),
-                    )
+                .map(|base_def| DefinitionLocation {
+                    name: join_names(&base_def.name, attr_name),
+                    file: base_def.file,
                 })
                 .collect()
         }
@@ -836,26 +889,16 @@ impl GleanState<'_> {
         include_str_lit_xrefs: bool,
     ) -> Vec<(DefinitionLocation, TextRange)> {
         match expr {
-            Expr::Attribute(attr) => {
-                if attr.ctx.is_load() {
-                    self.find_definition_for_attribute(attr)
-                        .into_iter()
-                        .map(|name| (name, attr.attr.range()))
-                        .collect()
-                } else {
-                    vec![]
-                }
-            }
-            Expr::Name(name) => {
-                if name.ctx.is_load() {
-                    self.find_definition_for_expr_name(name, false)
-                        .into_iter()
-                        .map(|x| (x, name.range()))
-                        .collect()
-                } else {
-                    vec![]
-                }
-            }
+            Expr::Attribute(attr) if attr.ctx.is_load() => self
+                .find_definition_for_expr_attribute(attr)
+                .into_iter()
+                .map(|name| (name, attr.attr.range()))
+                .collect(),
+            Expr::Name(name) if name.ctx.is_load() => self
+                .find_definition_for_expr_name(name, false)
+                .into_iter()
+                .map(|x| (x, name.range()))
+                .collect(),
             Expr::StringLiteral(str_lit) if include_str_lit_xrefs => {
                 self.get_xrefs_for_str_lit(str_lit)
             }
@@ -1146,8 +1189,13 @@ impl GleanState<'_> {
             let fqname = self.make_fq_name_for_declaration(&name_id, &ctx.container, scope_type);
             let docstring_range =
                 next.and_then(|stmt| Docstring::range_from_stmts(slice::from_ref(stmt)));
-            let type_info = self.visit_annotation_exprs(info.annotation, &ctx.container);
-            def_infos.push(self.variable_info(fqname, info.range, type_info, docstring_range, ctx));
+            def_infos.push(self.variable_info(
+                fqname,
+                info.range,
+                info.type_info.clone(),
+                docstring_range,
+                ctx,
+            ));
 
             if name.id == dunder::ALL
                 && let Some(Expr::List(list_expr)) = info.value
@@ -1539,7 +1587,7 @@ impl GleanState<'_> {
             Stmt::Assign(assign) => {
                 let info = AssignInfo {
                     range: assign.range(),
-                    annotation: None,
+                    type_info: None,
                     value: Some(assign.value.as_ref()),
                 };
                 assign.targets.visit(&mut |target| {
@@ -1549,9 +1597,10 @@ impl GleanState<'_> {
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::AnnAssign(assign) => {
+                let type_info = self.visit_annotation_exprs(Some(&assign.annotation), container);
                 let info = AssignInfo {
                     range: assign.range(),
-                    annotation: Some(&assign.annotation),
+                    type_info,
                     value: assign.value.as_ref().map(|v| v.as_ref()),
                 };
                 self.variable_facts(&assign.target, &info, context, next, &mut decl_infos);
@@ -1561,7 +1610,7 @@ impl GleanState<'_> {
             Stmt::AugAssign(assign) => {
                 let info = AssignInfo {
                     range: assign.range(),
-                    annotation: None,
+                    type_info: None,
                     value: Some(assign.value.as_ref()),
                 };
                 self.variable_facts(&assign.target, &info, context, next, &mut decl_infos);
@@ -1580,7 +1629,7 @@ impl GleanState<'_> {
                 let range = TextRange::new(stmt_for.range().start(), stmt_for.iter.range().end());
                 let info = AssignInfo {
                     range,
-                    annotation: None,
+                    type_info: None,
                     value: None,
                 };
                 stmt_for.target.visit(&mut |target| {
@@ -1601,7 +1650,7 @@ impl GleanState<'_> {
                     item.optional_vars.visit(&mut |target| {
                         let info = AssignInfo {
                             range: target.range(),
-                            annotation: None,
+                            type_info: None,
                             value: None,
                         };
                         self.variable_facts(target, &info, context, next, &mut decl_infos)

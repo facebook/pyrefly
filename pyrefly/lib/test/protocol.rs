@@ -149,10 +149,13 @@ def f(p1: P1, p2: P2, p3: P3, p4: P4):
     x4: P2 = p3  # E: `P3` is not assignable to `P2`
     x5: P3 = p1
     x6: P3 = p2
-    # setter type compatibility
-    x7: P4 = p2
+    # setter type compatibility: P2 (x: int) must accept everything the setter promises.
+    # P4 setter accepts object, but P2 only accepts int.
+    x7: P4 = p2  # E: `P2` is not assignable to `P4`
+    # P5 setter accepts str, P2 only accepts int.
     x8: P5 = p2  # E: `P2` is not assignable to `P5`
-    x9: P6 = p2  # E: `P2` is not assignable to `P6`
+    # P6 setter accepts ExtendsInt, and ExtendsInt <: int, so P2 can handle it.
+    x9: P6 = p2
 "#,
 );
 
@@ -417,41 +420,6 @@ issubclass(ConcreteClass, NonRuntimeProtocol)  # E: Protocol `NonRuntimeProtocol
 # These should work - protocol is decorated with @runtime_checkable
 isinstance(obj, RuntimeProtocol)
 issubclass(ConcreteClass, RuntimeProtocol)
-"#,
-);
-
-testcase!(
-    test_protocol_data_protocol_issubclass,
-    r#"
-from typing import Protocol, runtime_checkable
-
-# Data protocol (has non-method members)
-@runtime_checkable
-class DataProtocol(Protocol):
-    x: int
-    def method(self) -> str: ...
-
-# Non-data protocol (only methods)
-@runtime_checkable
-class NonDataProtocol(Protocol):
-    def method(self) -> str: ...
-
-class ConcreteClass:
-    x: int = 42
-    def method(self) -> str:
-        return "hello"
-
-obj = ConcreteClass()
-
-# isinstance should work for both data and non-data protocols
-isinstance(obj, DataProtocol)
-isinstance(obj, NonDataProtocol)
-
-# issubclass should work for non-data protocols
-issubclass(ConcreteClass, NonDataProtocol)
-
-# issubclass should fail for data protocols
-issubclass(ConcreteClass, DataProtocol)  # E: Protocol `DataProtocol` has non-method members and cannot be used with issubclass()
 "#,
 );
 

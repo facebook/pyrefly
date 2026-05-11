@@ -704,6 +704,27 @@ class C4(Generic[int]):  # E: Expected a type variable, got `int`
     "#,
 );
 
+testcase!(
+    test_typevar_not_treated_as_bad_implicit_alias,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, TypeVarTuple, assert_type
+
+T = TypeVar("T")
+P = ParamSpec("P")
+Ts = TypeVarTuple("Ts")
+
+def f(x: T) -> T:
+    assert_type(x, T)
+    return x
+
+def g(cb: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    return cb(*args, **kwargs)
+
+def h(x: tuple[*Ts]) -> tuple[*Ts]:
+    return x
+    "#,
+);
+
 fn env_exported_type_var() -> TestEnv {
     TestEnv::one(
         "lib",
@@ -822,7 +843,7 @@ testcase!(
     r#"
 from typing import assert_type, Literal
 def f(x: bool):
-    if bool(x):
+    if bool(x):  # E: Unnecessary `bool()` call; argument is already of type `bool`
         assert_type(x, Literal[True])
     else:
         assert_type(x, Literal[False])
@@ -889,4 +910,27 @@ class MyList(Generic[foo.T], list[tuple[foo.C, foo.T]]):
 my_list: MyList[int] = MyList()
 my_list.my_append(foo.C(), 5)  # E: Argument `Literal[5]` is not assignable to parameter `t` with type `TypeVar[T]` in function `MyList.my_append`
     "#,
+);
+
+fn env_with_package() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path("pkg", "pkg/__init__.py", "");
+    env.add_with_path(
+        "pkg.lib",
+        "pkg/lib.py",
+        "from typing import TypeVar\nT = TypeVar('T')",
+    );
+    env
+}
+
+testcase!(
+    test_class_generic_typevar_from_imported_module,
+    env_with_package(),
+    r#"
+from pkg import lib
+from typing import Generic
+
+class MyGeneric(Generic[lib.T]):
+  pass
+"#,
 );

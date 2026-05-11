@@ -103,7 +103,7 @@ fn dump_config(
     wrapper: Option<ConfigConfigurerWrapper>,
 ) -> anyhow::Result<CommandExitStatus> {
     config_override.validate()?;
-    let (files_to_check, config_finder) = files.resolve(config_override, wrapper)?;
+    let (files_to_check, config_finder, _) = files.resolve(config_override, wrapper)?;
 
     let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> = SmallMap::new();
     let handles = Handles::new(config_finder.checkpoint(files_to_check.files())?);

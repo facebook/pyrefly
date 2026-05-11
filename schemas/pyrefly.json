@@ -109,6 +109,11 @@
     {
       "type": "object",
       "properties": {
+        "preset": {
+          "description": "Named preset that provides default error severities and behavior settings. User-specified settings override the preset.",
+          "type": "string",
+          "enum": ["off", "basic", "legacy", "default", "strict"]
+        },
         "project-includes": {
           "description": "The glob patterns used to describe which files to type check, typically understood as user-space files. This does not specify import resolution priority.",
           "type": "array",

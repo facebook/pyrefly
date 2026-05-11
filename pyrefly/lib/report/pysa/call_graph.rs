@@ -97,6 +97,13 @@ use crate::report::pysa::types::string_for_type;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 
+fn pysa_find_preference() -> FindPreference {
+    FindPreference {
+        disable_style_fallback: true,
+        ..FindPreference::default()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Hash, PartialOrd, Ord)]
 pub enum OriginKind {
     GetAttrConstantLiteral,
@@ -113,6 +120,7 @@ pub enum OriginKind {
     AugmentedAssignStatement,
     ForIter,
     ForNext,
+    ForAssign,
     ReprCall,
     AbsCall,
     IterCall,
@@ -145,6 +153,7 @@ impl std::fmt::Display for OriginKind {
             Self::AugmentedAssignStatement => write!(f, "augmented-assign-statement"),
             Self::ForIter => write!(f, "for-iter"),
             Self::ForNext => write!(f, "for-next"),
+            Self::ForAssign => write!(f, "for-assign"),
             Self::ReprCall => write!(f, "repr-call"),
             Self::AbsCall => write!(f, "abs-call"),
             Self::IterCall => write!(f, "iter-call"),
@@ -1684,6 +1693,9 @@ impl<'a> CallGraphVisitor<'a> {
         if receiver_class.is_none() {
             return Target::Function(callee);
         }
+        if callee_definition.defining_class.is_none() {
+            return Target::Function(callee);
+        }
         // Pysa is responsible for filtering the overridden methods
         // to only those from classes that extend the receiver_class.
         Target::Overrides(callee)
@@ -2309,7 +2321,7 @@ impl<'a> CallGraphVisitor<'a> {
         let go_to_definition = self
             .module_context
             .resolver
-            .find_definition_for_name_use(&identifier, FindPreference::default());
+            .find_definition_for_name_use(&identifier, pysa_find_preference());
 
         if let Some(go_to_definition) = go_to_definition.as_ref() {
             debug_println!(
@@ -2573,7 +2585,7 @@ impl<'a> CallGraphVisitor<'a> {
         let go_to_definitions = self.module_context.resolver.find_definition_for_attribute(
             base.range(),
             attribute,
-            FindPreference::default(),
+            pysa_find_preference(),
         );
 
         let callee_expr_suffix = Some(attribute.as_str());
@@ -3297,7 +3309,10 @@ impl<'a> CallGraphVisitor<'a> {
                     dunder::SETITEM,
                     Origin {
                         kind: OriginKind::SubscriptSetItem,
-                        location: self.pysa_location(assign.range()),
+                        location: self.pysa_location(TextRange::new(
+                            subscript.value.start(),
+                            assign.range().end(),
+                        )),
                     },
                 )
             }
@@ -3308,14 +3323,33 @@ impl<'a> CallGraphVisitor<'a> {
                         head: Box::new(OriginKind::SubscriptSetItem),
                         tail: Box::new(OriginKind::AugmentedAssignStatement),
                     },
-                    location: self.pysa_location(assign.range()),
+                    location: self.pysa_location(TextRange::new(
+                        subscript.value.start(),
+                        assign.range().end(),
+                    )),
                 },
             ),
             Some(Stmt::AnnAssign(assign)) if assign.target.range() == subscript_range => (
                 dunder::SETITEM,
                 Origin {
                     kind: OriginKind::SubscriptSetItem,
-                    location: self.pysa_location(assign.range()),
+                    location: self.pysa_location(TextRange::new(
+                        subscript.value.start(),
+                        assign.range().end(),
+                    )),
+                },
+            ),
+            Some(Stmt::For(stmt_for)) if stmt_for.target.range() == subscript_range => (
+                dunder::SETITEM,
+                Origin {
+                    kind: OriginKind::Nested {
+                        head: Box::new(OriginKind::SubscriptSetItem),
+                        tail: Box::new(OriginKind::ForAssign),
+                    },
+                    location: self.pysa_location(TextRange::new(
+                        subscript.value.start(),
+                        stmt_for.iter.end(),
+                    )),
                 },
             ),
             _ => (
@@ -4103,7 +4137,7 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
                         .resolver
                         .find_definition(
                             decorator.expression.end(),
-                            FindPreference::default(),
+                            pysa_find_preference(),
                         ),
                     _ => vec![],
                 })

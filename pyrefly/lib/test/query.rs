@@ -12,14 +12,14 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::lined_buffer::PythonASTRange;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use serde_json::json;
 use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
-use crate::query::PythonASTRange;
 use crate::query::Query;
-use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 /// Helper to create a Query with a ConfigFinder that doesn't use sourcedb.

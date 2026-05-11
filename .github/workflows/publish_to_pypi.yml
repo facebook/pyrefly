@@ -64,3 +64,11 @@ jobs:
       tag_name: ${{ needs.push-tag.outputs.version }}
     secrets:
       DISCORD_RELEASES_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+  release-binaries:
+    name: Release binaries
+    needs:
+      - push-tag
+      - create-release
+    uses: ./.github/workflows/release_binaries.yml
+    with:
+      tag_name: ${{ needs.push-tag.outputs.version }}

@@ -295,6 +295,10 @@ impl ModuleName {
         Self::from_str("django.utils.functional")
     }
 
+    pub fn factory_base() -> Self {
+        Self::from_str("factory.base")
+    }
+
     pub fn marshmallow_schema() -> Self {
         Self::from_str("marshmallow.schema")
     }
@@ -492,6 +496,12 @@ impl ModuleName {
                 {
                     out.push(x.to_string_lossy());
                 }
+            }
+            // strip `-stubs` from the top-level directory (e.g. `scipy-stubs/` -> `scipy`)
+            if let Some(first) = out.first_mut()
+                && let Some(stripped) = first.strip_suffix("-stubs")
+            {
+                *first = stripped.to_owned().into();
             }
             if out.is_empty() {
                 None
@@ -702,5 +712,72 @@ mod tests {
             ),
             Some(ModuleName::from_str("service.types.cinc"))
         );
+    }
+
+    #[test]
+    fn test_module_from_path_first_match_wins() {
+        // from_path uses first-match semantics. Callers must pass paths in the
+        // right priority order: explicit search paths, then site-package paths,
+        // then heuristic paths like import_root.
+        let project_root = PathBuf::from("/project");
+        let site_packages = PathBuf::from("/project/venv/lib/python3.13/site-packages");
+
+        // With site-packages before project root, the file resolves correctly.
+        let site_pkg_first = [site_packages.clone(), project_root.clone()];
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/project/venv/lib/python3.13/site-packages/fastapi/__init__.py"),
+                site_pkg_first.iter(),
+                &[]
+            ),
+            Some(ModuleName::from_str("fastapi"))
+        );
+
+        // With project root first, it matches before site-packages and
+        // produces a bogus module name — this is the ordering callers must
+        // avoid for heuristic paths like import_root.
+        let root_first = [project_root.clone(), site_packages.clone()];
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/project/venv/lib/python3.13/site-packages/fastapi/__init__.py"),
+                root_first.iter(),
+                &[]
+            ),
+            Some(ModuleName::from_str(
+                "venv.lib.python3.13.site-packages.fastapi"
+            ))
+        );
+
+        // User's own source still resolves from the project root regardless
+        // of order, since it's not under site-packages.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/project/myapp/main.py"),
+                site_pkg_first.iter(),
+                &[]
+            ),
+            Some(ModuleName::from_str("myapp.main"))
+        );
+    }
+
+    #[test]
+    fn test_module_from_path_stubs_suffix() {
+        // PEP 561: `-stubs` suffix on the top-level directory should be stripped.
+        let includes = [PathBuf::from("/sp")];
+        let assert_module_name = |path: &str, expected: &str| {
+            assert_eq!(
+                ModuleName::from_path(Path::new(path), includes.iter(), &[]),
+                Some(ModuleName::from_str(expected))
+            );
+        };
+
+        assert_module_name("/sp/scipy-stubs/stats/foo.pyi", "scipy.stats.foo");
+        assert_module_name("/sp/scipy-stubs/__init__.pyi", "scipy");
+
+        // Non-top-level `-stubs` should not be stripped.
+        assert_module_name("/sp/pkg/nested-stubs/foo.py", "pkg.nested-stubs.foo");
+
+        // Plain package without `-stubs` is unchanged.
+        assert_module_name("/sp/scipy/stats/foo.py", "scipy.stats.foo");
     }
 }

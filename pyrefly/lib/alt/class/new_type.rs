@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use ruff_python_ast::name::Name;
 use starlark_map::smallmap;
@@ -45,7 +44,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
+            metadata: FuncMetadata::method(cls, dunder::INIT),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -54,14 +53,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let params = vec![
             Param::Pos(
                 Name::new_static("cls"),
-                self.heap.mk_type_form(self.instantiate(cls)),
+                self.heap.mk_type_of(self.instantiate(cls)),
                 Required::Required,
             ),
             Param::Pos(Name::new_static("_x"), base_type, Required::Required),
         ];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW, None),
+            metadata: FuncMetadata::method(cls, dunder::NEW),
         });
         ClassSynthesizedField::new(ty)
     }

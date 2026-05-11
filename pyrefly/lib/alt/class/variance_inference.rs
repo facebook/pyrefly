@@ -148,21 +148,17 @@ fn on_type(
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
     on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
 ) {
-    match typ {
-        Type::Type(t) => {
-            on_type(variance, inj, t, on_edge, on_var);
-        }
-
-        Type::Function(t) => {
+    let sigs = typ.callable_signatures();
+    if !sigs.is_empty() {
+        for callable in sigs {
             // Walk return type covariantly
-            on_type(variance, inj, &t.signature.ret, on_edge, on_var);
+            on_type(variance, inj, &callable.ret, on_edge, on_var);
 
             // Walk parameters contravariantly
-            match &t.signature.params {
+            match &callable.params {
                 Params::List(param_list) => {
                     for param in param_list.items().iter() {
-                        let ty = param.as_type();
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
+                        on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
                     }
                 }
                 Params::Ellipsis | Params::Materialization => {
@@ -176,7 +172,13 @@ fn on_type(
                 }
             }
         }
+        return;
+    }
 
+    match typ {
+        Type::Type(t) => {
+            on_type(variance, inj, t, on_edge, on_var);
+        }
         Type::ClassType(class) => {
             let targs = class.targs().as_slice();
 
@@ -213,12 +215,6 @@ fn on_type(
                 on_type(variance, inj, ty, on_edge, on_var);
             }
         }
-        Type::Overload(t) => {
-            let sigs = &t.signatures;
-            for sig in sigs {
-                on_type(variance, inj, &sig.as_type(), on_edge, on_var);
-            }
-        }
         Type::Tensor(tensor) => {
             // Tensor dimensions are invariant - Tensor[2, 3] is not a subtype of Tensor[3, 2]
             let mut visit_dim = |ty: &Type| {
@@ -247,42 +243,8 @@ fn on_type(
                 on_type(Variance::Invariant, inj, ty, on_edge, on_var);
             }
         }
-        Type::Callable(t) => {
-            // Walk return type covariantly
-            on_type(variance, inj, &t.ret, on_edge, on_var);
-
-            // Walk parameters contravariantly
-            match &t.params {
-                Params::List(param_list) => {
-                    for param in param_list.items().iter() {
-                        let ty = param.as_type();
-                        on_type(variance.inv(), inj, ty, on_edge, on_var);
-                    }
-                }
-                Params::Ellipsis | Params::Materialization => {
-                    // Unknown params
-                }
-                Params::ParamSpec(prefix, param_spec) => {
-                    for p in prefix.iter() {
-                        on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
-                    }
-                    on_type(variance.inv(), inj, param_spec, on_edge, on_var);
-                }
-            }
-        }
         Type::Tuple(t) => {
             handle_tuple_type(t, variance, inj, on_edge, on_var);
-        }
-        Type::Forall(forall) => {
-            // Methods with type parameters are wrapped in Forall. We need to visit
-            // the body to find class-level type variables used within.
-            on_type(
-                variance,
-                inj,
-                &forall.body.clone().as_type(),
-                on_edge,
-                on_var,
-            );
         }
         Type::Dim(inner) => {
             // Dim wraps a dimension type - invariant
@@ -302,7 +264,6 @@ fn on_type(
                 }
             }
         }
-
         _ => {}
     }
 }
@@ -395,64 +356,32 @@ fn check_typevar(
 
 /// Check method for variance violations (shallow - only direct TypeVars in params/return).
 fn check_method_shallow(typ: &Type, range: TextRange, violations: &mut Vec<VarianceViolation>) {
-    match typ {
-        Type::Forall(forall) => {
-            check_method_shallow(&forall.body.clone().as_type(), range, violations);
+    typ.visit_toplevel_callable(|callable| {
+        // Check return type (covariant position)
+        if let Type::Quantified(q) = &callable.ret {
+            check_typevar(
+                q.name(),
+                Variance::Covariant,
+                q.variance(),
+                range,
+                violations,
+            );
         }
-        Type::Function(t) => {
-            // Check return type (covariant position)
-            if let Type::Quantified(q) = &t.signature.ret {
-                check_typevar(
-                    q.name(),
-                    Variance::Covariant,
-                    q.variance(),
-                    range,
-                    violations,
-                );
-            }
-            // Check parameters (contravariant position)
-            if let Params::List(param_list) = &t.signature.params {
-                for param in param_list.items().iter() {
-                    if let Type::Quantified(q) = param.as_type() {
-                        check_typevar(
-                            q.name(),
-                            Variance::Contravariant,
-                            q.variance(),
-                            range,
-                            violations,
-                        );
-                    }
+        // Check parameters (contravariant position)
+        if let Params::List(param_list) = &callable.params {
+            for param in param_list.items().iter() {
+                if let Type::Quantified(q) = param.as_type() {
+                    check_typevar(
+                        q.name(),
+                        Variance::Contravariant,
+                        q.variance(),
+                        range,
+                        violations,
+                    );
                 }
             }
         }
-        Type::Callable(t) => {
-            // Check return type (covariant position)
-            if let Type::Quantified(q) = &t.ret {
-                check_typevar(
-                    q.name(),
-                    Variance::Covariant,
-                    q.variance(),
-                    range,
-                    violations,
-                );
-            }
-            // Check parameters (contravariant position)
-            if let Params::List(param_list) = &t.params {
-                for param in param_list.items().iter() {
-                    if let Type::Quantified(q) = param.as_type() {
-                        check_typevar(
-                            q.name(),
-                            Variance::Contravariant,
-                            q.variance(),
-                            range,
-                            violations,
-                        );
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 fn initial_inference_status(gp: &Quantified) -> InferenceStatus {

@@ -349,6 +349,17 @@ testcase!(
 );
 
 testcase!(
+    test_tuple_with_never_element_preserves_shape,
+    r#"
+from typing import Literal, NoReturn, assert_type
+
+def f(x: NoReturn) -> None:
+    t = (x, 1)
+    assert_type(t[1], Literal[1])
+"#,
+);
+
+testcase!(
     test_unpacked_tuple_subtype,
     r#"
 from typing import Sequence
@@ -659,7 +670,7 @@ testcase!(
 from typing import Iterable
 def f(x: tuple[str, ...]): ...
 def g(x: Iterable[int]):
-    f(tuple(x))  # E: `Iterable[int]` is not assignable to parameter `iterable` with type `Iterable[str]`
+    f(tuple(x))  # E: `tuple[int, ...]` is not assignable to parameter `x` with type `tuple[str, ...]`
     "#,
 );
 

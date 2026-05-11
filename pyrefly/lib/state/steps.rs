@@ -35,6 +35,7 @@ use crate::solver::solver::Solver;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
+use crate::state::state::TransactionTimingCounters;
 use crate::types::stdlib::Stdlib;
 
 /// Context for pysa data extraction during the Solutions step.
@@ -64,6 +65,8 @@ pub struct Context<'a, Lookup> {
     pub pysa_context: Option<PysaContext<'a>>,
     /// Build compact CinderX solutions during the Solutions step.
     pub cinderx_enabled: bool,
+    /// Timing counters for filesystem stat/read latency tracking.
+    pub timing: Option<&'a TransactionTimingCounters>,
 }
 
 #[derive(Debug, Default, Dupe, Clone)]
@@ -106,6 +109,20 @@ pub enum Step {
 }
 
 impl Step {
+    /// Variant name as a static string. Used by demand-tree consumers
+    /// (`pyrefly check --report-demand-tree` and the laziness test
+    /// framework) so the label survives across crates without forcing
+    /// callers to format through `Display`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Step::Load => "Load",
+            Step::Ast => "Ast",
+            Step::Exports => "Exports",
+            Step::Answers => "Answers",
+            Step::Solutions => "Solutions",
+        }
+    }
+
     /// Encode a step as a u8 for atomic storage.
     fn to_u8(self) -> u8 {
         self as u8
@@ -377,7 +394,7 @@ impl Step {
         } else {
             ErrorStyle::Never
         };
-        let (file_contents, self_error) = Load::load_from_path(ctx.path, ctx.memory);
+        let (file_contents, self_error) = Load::load_from_path(ctx.path, ctx.memory, ctx.timing);
         Arc::new(Load::load_from_data(
             ctx.module,
             ctx.path.dupe(),
@@ -430,7 +447,6 @@ impl Step {
             ctx.lookup,
             *ctx.sys_info,
             &load.errors,
-            ctx.uniques,
             enable_trace,
             ctx.check_unannotated_defs,
             ctx.require.keep_index(),

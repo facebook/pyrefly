@@ -5,12 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::keywords::ConverterMap;
 use pyrefly_types::tuple::Tuple;
-use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use starlark_map::ordered_map::OrderedMap;
@@ -240,12 +238,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     return converted;
                 }
-
-                let tparams = self.get_class_tparams(class_obj);
-                self.heap.mk_class_type(ClassType::new(
-                    class_obj.dupe(),
-                    TArgs::new(tparams, expanded_targs),
-                ))
+                self.heap.mk_any_explicit()
             }
             Type::Union(box Union { members, .. }) => {
                 let expanded_members = self.expand_types(members);

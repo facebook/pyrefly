@@ -331,8 +331,11 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
 
 /// Apply normalization to a type before exporting it to Pysa.
 pub fn preprocess_type(type_: &Type, context: &ModuleAnswersContext) -> Type {
+    // Pysa is an export boundary: force/flatten away solver-internal placeholders
+    // (including callable residuals) before report conversion.
+    let type_ = context.answers.solver().for_export_boundary(type_.clone());
     // Promote `Literal[..]` into `str` or `int`.
-    let type_ = type_.clone().promote_implicit_literals(&context.stdlib);
+    let type_ = type_.promote_implicit_literals(&context.stdlib);
     strip_self_type(context.answers.heap(), type_)
 }
 

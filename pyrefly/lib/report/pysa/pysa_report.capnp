@@ -77,8 +77,8 @@ struct PysaType {
 
 struct ScopeParent {
   union {
-    function @0 :PysaLocation;
-    class    @1 :PysaLocation;
+    function @0 :UInt32;
+    class    @1 :UInt32;
     topLevel @2 :Void;
   }
 }
@@ -183,16 +183,17 @@ struct DecoratorCallee {
 
 struct FunctionDefinition {
   # FunctionBaseDefinition fields (flattened)
-  name              @0  :Text;
-  parent            @1  :ScopeParent;
-  isOverload        @2  :Bool;
-  isStaticmethod    @3  :Bool;
-  isClassmethod     @4  :Bool;
-  isPropertyGetter  @5  :Bool;
-  isPropertySetter  @6  :Bool;
-  isStub            @7  :Bool;
-  isDefStatement    @8  :Bool;
-  definingClass     @9  :ClassRef;  # null if absent
+  name               @0  :Text;
+  defineNameLocation @15 :PysaLocation;  # null if absent
+  parent             @1  :ScopeParent;
+  isOverload         @2  :Bool;
+  isStaticmethod     @3  :Bool;
+  isClassmethod      @4  :Bool;
+  isPropertyGetter   @5  :Bool;
+  isPropertySetter   @6  :Bool;
+  isStub             @7  :Bool;
+  isDefStatement     @8  :Bool;
+  definingClass      @9  :ClassRef;  # null if absent
 
   # FunctionDefinition-specific fields
   functionId              @10 :Text;  # FunctionId serialized as string
@@ -227,9 +228,9 @@ struct PysaClassMro {
 }
 
 struct ClassDefinition {
-  location         @0  :PysaLocation;  # inlined from HashMap key
   classId          @1  :UInt32;
   name             @2  :Text;
+  nameLocation     @0  :PysaLocation;
   bases            @3  :List(ClassRef);
   mro              @4  :PysaClassMro;
   parent           @5  :ScopeParent;

@@ -16,10 +16,14 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Params;
+use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedOrigin;
+use pyrefly_types::type_var::Restriction;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::TParams;
@@ -30,9 +34,7 @@ use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
-use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::Identifier;
-use ruff_python_ast::Number;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -88,23 +90,15 @@ use crate::types::types::Overload;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
-/// Extract a display string for default values whose types don't preserve the literal value.
-/// Float literals like `3.14` become `ClassType(float)` which loses the actual value.
-fn default_display_for_expr(expr: &Expr) -> Option<String> {
-    let (is_negative, inner_expr) = match expr {
-        Expr::UnaryOp(x) if x.op == UnaryOp::USub => (true, x.operand.as_ref()),
-        _ => (false, expr),
+/// Extract a display string for numeric default values whose types don't preserve
+/// the source spelling. This preserves both values that lose precision in the
+/// type, like floats, and integer literal spelling, like `0o777`.
+fn default_display_for_expr(expr: &Expr, source: &str) -> Option<String> {
+    let inner_expr = match expr {
+        Expr::UnaryOp(x) if x.op == UnaryOp::USub => x.operand.as_ref(),
+        _ => expr,
     };
-
-    if let Expr::NumberLiteral(ExprNumberLiteral {
-        value: Number::Float(f),
-        ..
-    }) = inner_expr
-    {
-        Some(format!("{}{f}", if is_negative { "-" } else { "" }))
-    } else {
-        None
-    }
+    matches!(inner_expr, Expr::NumberLiteral(_)).then(|| source.to_owned())
 }
 
 fn is_class_property_decorator_class_object(cls: &Class) -> bool {
@@ -437,6 +431,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &FunctionDefData,
         def_index: FuncDefIndex,
         stub_or_impl: FunctionStubOrImpl,
+        placeholder_body_kind: Option<PlaceholderBodyKind>,
+        is_return_inferred: bool,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
@@ -460,6 +456,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut flags = FuncFlags {
             is_staticmethod: is_dunder_new,
             is_classmethod: is_dunder_init_subclass,
+            is_async: def.is_async,
+            placeholder_body_kind,
+            is_return_inferred,
             ..Default::default()
         };
         let mut found_class_property = false;
@@ -517,7 +516,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // accordingly. This is not totally correct, since it doesn't account for chaining
         // decorators, or weird cases like both decorators existing at the same time.
         if flags.is_classmethod || found_class_property || is_dunder_new {
-            self_type = self_type.map(|t| self.heap.mk_type_form(t));
+            self_type = self_type.map(|t| self.heap.mk_type_of(t));
         } else if flags.is_staticmethod {
             self_type = None;
         }
@@ -600,7 +599,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     p.name().range(),
-                    ErrorInfo::Kind(ErrorKind::UnannotatedParameter),
+                    ErrorInfo::Kind(ErrorKind::ImplicitAnyParameter),
                     format!(
                         "`{}` is missing an annotation for parameter `{name}`",
                         stmt.name
@@ -703,10 +702,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Callable::list(ParamList::new(def.params.clone()), ret)
         };
         if let Some(cls) = &def.defining_cls {
-            if stmt.name.id == dunder::INIT {
-                self.validate_init_self_annotation(cls, &callable, def.id_range(), errors);
-            } else if is_dunder_new {
-                self.validate_new_cls_annotation(cls, &callable, def.id_range(), errors);
+            // Constructors are always validated per spec. For other methods,
+            // skip overload variants because self/cls annotations in overloads
+            // are a valid pattern for type narrowing.
+            let is_constructor = stmt.name.id == dunder::INIT || is_dunder_new;
+            let should_validate = is_constructor || !def.metadata.flags.is_overload;
+            if should_validate {
+                if def.metadata.flags.is_classmethod || is_dunder_new {
+                    self.validate_cls_annotation(
+                        cls,
+                        &stmt.name.id,
+                        &callable,
+                        def.id_range(),
+                        errors,
+                    );
+                } else if !def.metadata.flags.is_staticmethod {
+                    self.validate_self_annotation(
+                        cls,
+                        &stmt.name.id,
+                        &callable,
+                        def.id_range(),
+                        errors,
+                    );
+                }
             }
         }
         // Extend tparams with any implicit jaxtyping dimension TypeVars found
@@ -877,7 +895,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Required::Optional(None)
             }
             Some(default) => {
-                let display = default_display_for_expr(default);
+                let display =
+                    default_display_for_expr(default, self.module().code_at(default.range()));
                 let ty = self.expr(default, check, errors);
                 Required::Optional(Some(match display {
                     Some(d) => DefaultValue::with_display(ty, d),
@@ -1373,6 +1392,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Returns a copy of `decoratee` with a leading `Self` receiver in its first positional
+    /// parameter replaced by its bound class type, or `None` if no such rewrite applies.
+    /// Decorators that accept the concrete class but not `Self` can then type-check against
+    /// the rewritten signature without weakening general callable subtyping.
+    fn decorator_compatible_decoratee_arg(&self, decoratee: &Type) -> Option<Type> {
+        let bound_receiver_type = |ty: &Type| match ty {
+            Type::SelfType(cls) => Some(self.heap.mk_class_type(cls.clone())),
+            Type::Quantified(q)
+                if q.identity().origin == QuantifiedOrigin::SyntheticSelf
+                    && let Restriction::Bound(bound) = q.restriction() =>
+            {
+                Some(bound.clone())
+            }
+            _ => None,
+        };
+
+        // `*args`/keyword-only/`**kwargs` can never be the `self` receiver, so don't try.
+        let normalize_first_param = |params: &Params| -> Option<Params> {
+            let Params::List(param_list) = params else {
+                return None;
+            };
+            let first = param_list.items().first()?;
+            let new_first = match first {
+                Param::PosOnly(name, ty, required) => {
+                    Param::PosOnly(name.clone(), bound_receiver_type(ty)?, required.clone())
+                }
+                Param::Pos(name, ty, required) => {
+                    Param::Pos(name.clone(), bound_receiver_type(ty)?, required.clone())
+                }
+                Param::Varargs(..) | Param::KwOnly(..) | Param::Kwargs(..) => return None,
+            };
+            let mut items = param_list.items().to_vec();
+            items[0] = new_first;
+            Some(Params::List(ParamList::new(items)))
+        };
+
+        match decoratee {
+            Type::Function(func) => {
+                let params = normalize_first_param(&func.signature.params)?;
+                Some(self.heap.mk_function(Function {
+                    signature: Callable {
+                        params,
+                        ret: func.signature.ret.clone(),
+                    },
+                    metadata: func.metadata.clone(),
+                }))
+            }
+            Type::Callable(callable) => {
+                let params = normalize_first_param(&callable.params)?;
+                Some(self.heap.mk_callable_from(Callable {
+                    params,
+                    ret: callable.ret.clone(),
+                }))
+            }
+            _ => None,
+        }
+    }
+
     fn decorate_returned_callable(
         &self,
         returned_ty: Type,
@@ -1424,6 +1501,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if cls.has_qname("functools", "_Wrapped")
                     || (original_decoratee.property_metadata().is_some()
                         && cls.has_qname("functools", "_lru_cache_wrapper")) =>
+            {
+                original_decoratee.clone()
+            }
+            // Heuristic for union-typed decorators (e.g. dual-use decorators that
+            // can be applied with or without parentheses like @d or @d(flag)):
+            //
+            // If a decorator `d` is of type `T1 | ... | Tn`, and any of `T1`, ..., `Tn`,
+            // has the `*args: Any, **kwargs: Any -> Any` signature (or is
+            // a `functools._Wrapped`), we throw all of the other type info away
+            // and claim `d` as having the signature-preserving type `T -> T`
+            // (where `T <: Callable`), i.e. the decorated function keeps its
+            // original signature.
+            Type::Union(ref u)
+                if u.members.iter().any(|m| match m {
+                    Type::Function(f) => f.signature.is_args_kwargs_wrapper(),
+                    Type::Callable(c) => c.is_args_kwargs_wrapper(),
+                    Type::ClassType(cls) => cls.has_qname("functools", "_Wrapped"),
+                    _ => false,
+                }) =>
+            {
+                original_decoratee.clone()
+            }
+            // If the decorator's return type is a union where every member is
+            // fully unknown (either Unknown itself or a callable with all-Unknown
+            // params and return), the decorator is completely unannotated and its
+            // return carries no useful type information. Preserve the original
+            // function signature rather than replacing it with a useless union.
+            Type::Union(ref u)
+                if u.members.iter().all(|m| match m {
+                    Type::Function(f) => f.signature.is_fully_unknown(),
+                    Type::Callable(c) => c.is_fully_unknown(),
+                    Type::Any(AnyStyle::Implicit) => true,
+                    _ => false,
+                }) =>
             {
                 original_decoratee.clone()
             }
@@ -1491,16 +1602,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return decoratee;
         }
         let application = self.prepare_decorator_application(decorator, decoratee, range, errors);
-        let raw_return = self.call_infer(
-            application.call_target.clone(),
-            &[CallArg::ty(&application.decoratee_arg, range)],
-            &[],
-            range,
-            errors,
-            None,
-            None,
-            None,
-        );
+        // Run a decorator call, buffering errors so we can decide between the primary
+        // and Self-rewritten fallback without double-reporting.
+        let try_call = |arg: &Type| {
+            let call_errors = ErrorCollector::new(errors.module().dupe(), errors.style());
+            let ret = self.call_infer(
+                application.call_target.clone(),
+                &[CallArg::ty(arg, range)],
+                &[],
+                range,
+                &call_errors,
+                None,
+                None,
+                None,
+            );
+            (ret, call_errors)
+        };
+        let (primary_return, primary_errors) = try_call(&application.decoratee_arg);
+        // Many decorators can't accept Self but are semantically valid on the method;
+        // retry with the receiver normalized to its bound class.
+        let raw_return = if primary_errors.is_empty() {
+            primary_return
+        } else if let Some(rewritten) =
+            self.decorator_compatible_decoratee_arg(&application.decoratee_arg)
+            && let (fallback_return, fallback_errors) = try_call(&rewritten)
+            && fallback_errors.is_empty()
+        {
+            fallback_return
+        } else {
+            errors.extend(primary_errors);
+            primary_return
+        };
         let decorated_value =
             self.decorate_returned_callable(raw_return, metadata, &application.original_decoratee);
         // Given the raw `decorated_value`, which may include `Type::Quantified` type variables
@@ -1749,14 +1881,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(Arc::new(all_tparams))
             }
         };
+        let has_self_param = def.defining_cls().is_some() && !def.metadata().flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone();
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
+            // Skip self/cls to avoid false positive overload errors on narrowed self types.
+            if has_self_param {
+                let mut owner = Owner::new();
+                if let Some((_, rest)) = sig.split_first_param(&mut owner) {
+                    sig = rest;
+                }
+            }
             sig
         };
         // Collect param name -> default map from implementation so we can check for
         // inconsistencies between the default and the param type in overloads.
+        // This uses the original parameter lists instead of `sig_for_input_check`:
+        // self/cls never has a default, so stripping the receiver is unnecessary here.
         let mut defaults = match &impl_sig.params {
             Params::List(params) => params
                 .items()
@@ -1996,7 +2138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
         self.bind_function(
             t,
-            &self.heap.mk_type_form(self.heap.mk_self_type(cls)),
+            &self.heap.mk_type_of(self.heap.mk_self_type(cls)),
             false,
             &mut |a, b| self.is_subset_eq(a, b),
         )
@@ -2179,13 +2321,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Validate the self annotation on `__init__`.
-    /// Per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method
-    /// - The self type must be the defining class or a superclass of it.
-    /// - Class-scoped type variables should not be used in the self annotation.
-    fn validate_init_self_annotation(
+    /// Validate the self annotation on methods.
+    /// The self type must be the defining class or a superclass of it.
+    /// For `__init__`, class-scoped type variables should not be used in the self annotation
+    /// (per spec: https://typing.python.org/en/latest/spec/constructors.html#init-method).
+    fn validate_self_annotation(
         &self,
         cls: &Class,
+        method_name: &Name,
         callable: &Callable,
         range: TextRange,
         errors: &ErrorCollector,
@@ -2193,53 +2336,83 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Params::List(param_list) = &callable.params
             && let Some(Param::PosOnly(_, self_ty, _) | Param::Pos(_, self_ty, _)) =
                 param_list.items().first()
-            && let Type::ClassType(cls_ty) = self_ty
         {
             let cls_name = cls.name();
-            // The self type must be the defining class itself or a superclass of it.
-            if !self.type_order().has_superclass(cls, cls_ty.class_object()) {
-                errors.add(
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    vec1![format!(
-                        "`__init__` method self type `{}` is not a superclass of class `{cls_name}`",
-                        self.for_display(self_ty.clone()),
-                    )],
-                );
-                return;
-            }
-            let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
-            let mut class_scoped_tvars = SmallSet::new();
-            for (_, ty) in cls_ty.targs().iter_paired() {
-                ty.collect_quantifieds(&mut class_scoped_tvars);
-            }
-            class_scoped_tvars.retain(|q| tparams_names.contains(q));
-            // FIXME: We're supressing invalid type variables errors for all
-            // interfaces here, because they are used in a few places in
-            // typeshed stdlib (with pyright-ignore lines).
-            if !class_scoped_tvars.is_empty() && !errors.module().path().is_interface() {
-                let targs = class_scoped_tvars
-                    .iter()
-                    .map(|q| format!("`{}`", q.name()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                errors.add(
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
-                    vec1![format!(
-                        "`__init__` method self type cannot reference class {} {targs}",
-                        pluralize(class_scoped_tvars.len(), "type parameter")
-                    )],
-                );
+            match self_ty {
+                Type::ClassType(cls_ty) => {
+                    // The self type must be the defining class itself or a superclass of it.
+                    // Skipping validation for protocols is on par with Pyright's behavior.
+                    // TODO: we could consider checking structural subtyping here.
+                    if !self.type_order().has_superclass(cls, cls_ty.class_object())
+                        && !self.type_order().is_protocol(cls_ty.class_object())
+                    {
+                        errors.add(
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                            vec1![format!(
+                                "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
+                                self.for_display(self_ty.clone()),
+                            )],
+                        );
+                        return;
+                    }
+                    // Class-scoped type variables check (only for __init__).
+                    if *method_name == dunder::INIT {
+                        let tparams_names = cls_ty.tparams().iter().collect::<SmallSet<_>>();
+                        let mut class_scoped_tvars = SmallSet::new();
+                        for (_, ty) in cls_ty.targs().iter_paired() {
+                            ty.collect_quantifieds(&mut class_scoped_tvars);
+                        }
+                        class_scoped_tvars.retain(|q| tparams_names.contains(q));
+                        // FIXME: We're suppressing invalid type variables errors for all
+                        // interfaces here, because they are used in a few places in
+                        // typeshed stdlib (with pyright-ignore lines).
+                        if !class_scoped_tvars.is_empty() && !errors.module().path().is_interface()
+                        {
+                            let targs = class_scoped_tvars
+                                .iter()
+                                .map(|q| format!("`{}`", q.name()))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            errors.add(
+                                range,
+                                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                                vec1![format!(
+                                    "`__init__` method self type cannot reference class {} {targs}",
+                                    pluralize(class_scoped_tvars.len(), "type parameter")
+                                )],
+                            );
+                        }
+                    }
+                }
+                // type[ClassType] where the ClassType is not a superclass is invalid.
+                // Protocol types are exempt because they use structural subtyping.
+                Type::Type(inner) => {
+                    if let Type::ClassType(cls_ty) = &**inner
+                        && !self.type_order().has_superclass(cls, cls_ty.class_object())
+                        && !self.type_order().is_protocol(cls_ty.class_object())
+                    {
+                        errors.add(
+                            range,
+                            ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                            vec1![format!(
+                                "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
+                                self.for_display(self_ty.clone()),
+                            )],
+                        );
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    /// Validate the cls annotation on `__new__`.
+    /// Validate the cls annotation on `__new__` and classmethods.
     /// The cls type must be `type[X]` where `X` is the defining class or a superclass of it.
-    fn validate_new_cls_annotation(
+    fn validate_cls_annotation(
         &self,
         cls: &Class,
+        method_name: &Name,
         callable: &Callable,
         range: TextRange,
         errors: &ErrorCollector,
@@ -2251,30 +2424,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let cls_name = cls.name();
             match cls_ty {
                 Type::Type(box Type::ClassType(inner_cls)) => {
+                    // Skipping validation for protocols is on par with Pyright's behavior.
+                    // TODO: we could consider checking structural subtyping here.
                     if inner_cls.name() != cls_name
                         && !self
                             .type_order()
                             .has_superclass(cls, inner_cls.class_object())
+                        && !self.type_order().is_protocol(inner_cls.class_object())
                     {
                         errors.add(
                             range,
                             ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                             vec1![format!(
-                                "`__new__` method cls type `{}` is not a superclass of class `{cls_name}`",
+                                "`{method_name}` method cls type `{}` is not a superclass of class `{cls_name}`",
                                 self.for_display(cls_ty.clone()),
                             )],
                         );
                     }
                 }
-                // allow Any, type[Any], type[Self] and type[TypeVar]
+                // allow Any, type[Any], type[Self], type[TypeVar], and bare TypeVar
+                // (bare TypeVar is allowed because it may have a `type[X]` bound,
+                // e.g. `TCls = TypeVar("TCls", bound=type["Foo"])`)
                 Type::Type(box Type::SelfType(_) | box Type::Quantified(_) | box Type::Any(_))
-                | Type::Any(_) => {}
+                | Type::Any(_)
+                | Type::Quantified(_) => {}
                 _ => {
                     errors.add(
                         range,
                         ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
                         vec1![format!(
-                            "`__new__` method cls type `{}` is not a valid `type[...]` annotation",
+                            "`{method_name}` method cls type `{}` is not a valid `type[...]` annotation",
                             self.for_display(cls_ty.clone()),
                         )],
                     );
