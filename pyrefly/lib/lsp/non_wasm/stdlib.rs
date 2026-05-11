@@ -12,7 +12,7 @@ use pyrefly_util::arc_id::ArcId;
 // Re-export from pyrefly_util for use in the LSP server.
 pub use pyrefly_util::stdlib::is_python_stdlib_file;
 
-use crate::lsp::non_wasm::server::TypeErrorDisplayStatus;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatus;
 
 pub fn should_show_stdlib_error(
     config: &ArcId<ConfigFile>,
