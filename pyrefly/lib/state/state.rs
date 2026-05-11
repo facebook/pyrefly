@@ -172,6 +172,8 @@ pub struct ModuleDeps {
     pub classes: SmallSet<ClassDefIndex>,
     /// Which type aliases do we depend on?
     pub type_aliases: SmallSet<TypeAliasIndex>,
+    /// Do we depend on module-level Django reverse relation metadata?
+    pub django_relations: bool,
 }
 
 /// Per-module change tracking. Represents what changed in a module's exports.

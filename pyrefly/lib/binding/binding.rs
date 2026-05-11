@@ -376,6 +376,7 @@ pub enum AnyExportedKey {
     KeyVariance(KeyVariance),
     KeyExport(KeyExport),
     KeyClassMetadata(KeyClassMetadata),
+    KeyDjangoRelations(KeyDjangoRelations),
     KeyClassMro(KeyClassMro),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
     KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry),
@@ -419,6 +420,7 @@ impl AnyExportedKey {
             AnyExportedKey::KeyDjangoRelations(_) => ChangedExport::DjangoRelations,
             AnyExportedKey::KeyClassMro(k) => ChangedExport::ClassDefIndex(k.0),
             AnyExportedKey::KeyAbstractClassCheck(k) => ChangedExport::ClassDefIndex(k.0),
+            AnyExportedKey::KeyClassSubscriptSymmetry(k) => ChangedExport::ClassDefIndex(k.0),
             AnyExportedKey::KeyTypeAlias(k) => ChangedExport::TypeAliasIndex(k.0),
         }
     }
@@ -777,7 +779,11 @@ impl Keyed for KeyDjangoRelations {
         TextRange::default()
     }
 }
-impl Exported for KeyDjangoRelations {}
+impl Exported for KeyDjangoRelations {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyDjangoRelations(self.clone())
+    }
+}
 impl Keyed for KeyClassMro {
     const EXPORTED: bool = true;
     type Value = BindingClassMro;
