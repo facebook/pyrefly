@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
@@ -105,8 +104,6 @@ fn has_keyword_false(call_expr: &ExprCall, name: &Name) -> bool {
     find_keyword(call_expr, name)
         .is_some_and(|v| matches!(v, Expr::BooleanLiteral(lit) if !lit.value))
 }
-
-const ONE_TO_ONE_FIELD: Name = Name::new_static("OneToOneField");
 
 const RELATED_NAME: Name = Name::new_static("related_name");
 
@@ -279,10 +276,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get RelatedManager class from django stubs
     fn get_related_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let django_related_module = ModuleName::django_models_fields_related_descriptors();
-        let django_related_module_exports = self.exports.get(django_related_module).finding()?;
-        if !django_related_module_exports
-            .exports(self.exports)
-            .contains_key(&RELATED_MANAGER)
+        if !self
+            .exports
+            .export_exists(django_related_module, &RELATED_MANAGER)
         {
             return None;
         }
@@ -658,6 +654,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn solve_django_reverse_relations(
         &self,
         binding: &BindingDjangoRelations,
+        _range: TextRange,
         _errors: &ErrorCollector,
     ) -> Arc<DjangoReverseRelationIndex> {
         let mut per_class = SmallMap::new();
@@ -672,10 +669,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
 
             let expr = match &binding.definition {
-                ClassFieldDefinition::AssignedInBody {
-                    value: ExprOrBinding::Expr(expr),
-                    ..
-                } => expr,
+                ClassFieldDefinition::AssignedInBody { value, .. } => match value.as_ref() {
+                    ExprOrBinding::Expr(expr) => expr,
+                    ExprOrBinding::Binding(_) => continue,
+                },
                 _ => continue,
             };
             let Some(call_expr) = expr.as_call_expr() else {
@@ -739,7 +736,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(DjangoRelationKind::OneToOne)
         } else if self.is_many_to_many_field(field_class) {
             Some(DjangoRelationKind::ManyToMany)
-        } else if self.is_foreign_key_field(field_class) {
+        } else if self.is_foreign_key_like_field(field_class) {
             Some(DjangoRelationKind::ForeignKey)
         } else {
             None

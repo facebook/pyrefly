@@ -98,59 +98,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // In practice we'll never hit this debugging, but there's no need to panic if we do.
                 "(None)".to_owned()
             }
-            Some(CalcId(bindings, idx)) => match idx {
-                AnyIdx::Key(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyExpect(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyConsistentOverrideCheck(idx) => {
-                    self.show_binding_for_with(&bindings, idx)
-                }
-                AnyIdx::KeyClass(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyTParams(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassBaseType(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassField(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyVariance(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassSynthesizedFields(idx) => {
-                    self.show_binding_for_with(&bindings, idx)
-                }
-                AnyIdx::KeyExport(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyDecorator(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyDecoratedFunction(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyUndecoratedFunction(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyAnnotation(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassMetadata(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyDjangoRelations(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassMro(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyAbstractClassCheck(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyLegacyTypeParam(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyYield(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyYieldFrom(idx) => self.show_binding_for_with(&bindings, idx),
-            },
-            Some(CalcId(bindings, idx)) => match idx {
-                AnyIdx::Key(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyExpect(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyConsistentOverrideCheck(idx) => {
-                    self.show_binding_for_with(&bindings, idx)
-                }
-                AnyIdx::KeyClass(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyTParams(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassBaseType(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassField(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyVariance(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassSynthesizedFields(idx) => {
-                    self.show_binding_for_with(&bindings, idx)
-                }
-                AnyIdx::KeyExport(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyDecorator(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyDecoratedFunction(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyUndecoratedFunction(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyAnnotation(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassMetadata(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyClassMro(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyAbstractClassCheck(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyLegacyTypeParam(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyYield(idx) => self.show_binding_for_with(&bindings, idx),
-                AnyIdx::KeyYieldFrom(idx) => self.show_binding_for_with(&bindings, idx),
-            },
             Some(CalcId(bindings, idx)) => {
                 dispatch_anyidx!(&idx, self, show_binding_for_with, &bindings)
             }
