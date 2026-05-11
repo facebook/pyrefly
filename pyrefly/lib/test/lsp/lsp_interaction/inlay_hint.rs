@@ -19,7 +19,9 @@ fn test_inlay_hint_default_config() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -181,6 +183,7 @@ fn test_inlay_hint_disable_variables() {
     interaction
         .initialize(InitializeSettings {
             configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"},
                 "analysis": {
                     "inlayHints": {
                         "variableTypes": false
@@ -258,6 +261,7 @@ fn test_inlay_hint_disable_returns() {
     interaction
         .initialize(InitializeSettings {
             configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"},
                 "analysis": {
                     "inlayHints": {
                         "functionReturnTypes": false
@@ -317,7 +321,9 @@ fn test_inlay_hint_labels_support_goto_type_definition() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -371,7 +377,9 @@ fn test_inlay_hint_tuple_type_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -444,7 +452,9 @@ fn test_inlay_hint_typevar_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -481,7 +491,9 @@ fn test_inlay_hint_typevartuple_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -520,7 +532,9 @@ fn test_inlay_hint_paramspec_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -557,7 +571,9 @@ fn test_inlay_hint_class_based_typed_dict_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -594,7 +610,9 @@ fn test_inlay_hint_anonymous_typed_dict_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -646,7 +664,9 @@ fn test_inlay_hint_never_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -683,7 +703,9 @@ fn test_inlay_hint_literal_string_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -722,7 +744,9 @@ fn test_inlay_hint_type_guard_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -773,7 +797,9 @@ fn test_inlay_hint_type_is_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -824,7 +850,9 @@ fn test_inlay_hint_unpack_has_location() {
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();

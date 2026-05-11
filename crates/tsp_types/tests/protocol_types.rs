@@ -76,7 +76,7 @@ fn test_variance_round_trip() {
 fn test_type_server_version_round_trip() {
     let v = TypeServerVersion::Current;
     let json = serde_json::to_value(&v).unwrap();
-    assert_eq!(json, serde_json::json!("0.4.0"));
+    assert_eq!(json, serde_json::json!("0.4.1"));
     let back: TypeServerVersion = serde_json::from_value(json).unwrap();
     assert_eq!(back, v);
 }

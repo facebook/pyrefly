@@ -41,6 +41,7 @@ use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::nn_module_specials::is_nn_sequential;
 use crate::alt::unwrap::HintRef;
+use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -62,6 +63,7 @@ use crate::types::type_var::Restriction;
 use crate::types::typed_dict::TypedDict;
 use crate::types::types::AnyStyle;
 use crate::types::types::BoundMethod;
+use crate::types::types::CallableResidualKind;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
@@ -145,7 +147,47 @@ impl CallTargetLookup {
     }
 }
 
+/// Result of `construct_{class,typed_dict}_inner`
+struct ConstructedInstance {
+    ty: Type,
+    /// Does the type match the provided hint? False if no hint was provided
+    matched_hint: bool,
+    errors: ErrorCollector,
+    specialization_errors: Option<Vec1<TypeVarSpecializationError>>,
+}
+
+impl ConstructedInstance {
+    fn take<Ans: LookupAnswer>(
+        self,
+        arguments_range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        answers: &AnswersSolver<Ans>,
+    ) -> Type {
+        errors.extend(self.errors);
+        if let Some(specialization_errors) = self.specialization_errors {
+            answers.add_specialization_errors(
+                specialization_errors,
+                arguments_range,
+                errors,
+                context,
+            );
+        }
+        self.ty
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn type_contains_overload_callable_residual(&self, ty: &Type) -> bool {
+        ty.any(|inner| {
+            matches!(
+                inner,
+                Type::CallableResidual(residual)
+                    if matches!(&residual.kind, CallableResidualKind::Overload { .. })
+            )
+        })
+    }
+
     fn error_call_target(
         &self,
         errors: &ErrorCollector,
@@ -212,7 +254,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )))
             }
             Type::BoundMethod(bm) => {
-                let BoundMethod { obj, func } = *bm;
+                let bound_method = *bm;
+                if self.type_contains_overload_callable_residual(&bound_method.obj) {
+                    let mut is_subset = |got: &Type, want: &Type| self.is_subset_eq(got, want);
+                    if let Some(bound) = self.bind_boundmethod(&bound_method, &mut is_subset) {
+                        return self.as_call_target_impl(bound, quantified);
+                    }
+                }
+                let BoundMethod { obj, func } = bound_method;
                 match self.as_call_target_impl(func.as_type(), quantified) {
                     CallTargetLookup::Ok(box CallTarget::Function(func)) => {
                         CallTargetLookup::Ok(Box::new(CallTarget::BoundMethod(obj, func)))
@@ -245,7 +294,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Type(box Type::Union(box Union { members: xs, .. })) => {
                 let union_of_types = self
                     .heap
-                    .mk_union(xs.into_iter().map(|x| self.heap.mk_type_form(x)).collect());
+                    .mk_union(xs.into_iter().map(|x| self.heap.mk_type_of(x)).collect());
                 self.as_call_target_impl(union_of_types, quantified)
             }
             Type::Type(box Type::SelfType(cls)) => CallTargetLookup::Ok(Box::new(
@@ -418,7 +467,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Type(box Type::Intersect(box (_, fallback))) => {
                 // TODO(rechen): implement calling `type[A & B]`
-                self.as_call_target_impl(self.heap.mk_type_form(fallback), quantified)
+                self.as_call_target_impl(self.heap.mk_type_of(fallback), quantified)
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Unrestricted => CallTargetLookup::Error(vec![]),
@@ -664,18 +713,63 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
     ) {
         for e in specialization_errors {
+            let kind = e.error_kind();
             self.error(
                 errors,
                 range,
-                ErrorInfo::new(ErrorKind::BadSpecialization, context),
+                ErrorInfo::new(kind, context),
                 e.to_error_msg(self),
             );
         }
     }
 
+    /// Handles union hint decomposition for class and TypedDict construction.
+    /// When the hint is a union, tries each member independently and keeps only
+    /// successful constructions, preferring those assignable to their hint member.
+    /// Falls back to constructing with no hint if all members produce errors or
+    /// the union is too wide.
+    fn construct_with_hint(
+        &self,
+        arguments_range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<HintRef>,
+        construct: impl Fn(Option<&Type>) -> ConstructedInstance,
+    ) -> Type {
+        if let Some(hint) = hint
+            && let hints = hint.types()
+            && hints.len() <= MAX_CALL_HINT_WIDTH
+        {
+            let mut ret_no_match_hint = None;
+            for member_hint in hints.iter() {
+                let ret = construct(Some(member_hint));
+                if !ret.errors.is_empty() {
+                    continue;
+                }
+                if ret.matched_hint && ret.specialization_errors.is_none() {
+                    // Take the first successful match. We require the result to be assignable to the
+                    // hint so that, in a case like `x: list[X] | None = [XChild()]`, we choose the
+                    // `list[X]` branch with contextually typed results.
+                    return ret.take(arguments_range, errors, context, self);
+                }
+                if ret_no_match_hint.is_none() {
+                    ret_no_match_hint = Some(ret);
+                }
+            }
+            if let Some(ret) = ret_no_match_hint {
+                // Even if none of the results were assignable to their hints, we still keep the
+                // first contextually typed result if it only produced specialization errors.
+                return ret.take(arguments_range, errors, context, self);
+            }
+        }
+        // If the hint is too wide or always produces non-specialization errors, don't use it.
+        let ret = construct(None);
+        ret.take(arguments_range, errors, context, self)
+    }
+
     fn construct_class(
         &self,
-        mut cls: ClassType,
+        cls: ClassType,
         constructor_kind: ConstructorKind,
         args: &[CallArg],
         keywords: &[CallKeyword],
@@ -685,26 +779,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
+        self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
+            self.construct_class_inner(
+                cls.clone(),
+                constructor_kind.clone(),
+                args,
+                keywords,
+                arguments_range,
+                callee_range,
+                context,
+                hint,
+            )
+        })
+    }
+
+    fn construct_class_inner(
+        &self,
+        mut cls: ClassType,
+        constructor_kind: ConstructorKind,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        callee_range: Option<TextRange>,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<&Type>,
+    ) -> ConstructedInstance {
         // Based on https://typing.readthedocs.io/en/latest/spec/constructors.html.
-        let vs = if let Some(hint) = hint {
+        let (vs, matched_hint) = if let Some(hint) = hint {
             let vs = self
                 .solver()
                 .freshen_class_targs(cls.targs_mut(), self.uniques);
 
-            self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint.ty());
+            let matched_hint = self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint);
             self.solver().generalize_class_targs(cls.targs_mut());
-            vs
+            (vs, matched_hint)
         } else {
-            QuantifiedHandle::empty()
+            (QuantifiedHandle::empty(), false)
         };
         let hint = None; // discard hint
         let class_metadata = self.get_metadata_for_class(cls.class_object());
         // Tracks whether we've already recorded a trace for IDE features.
         // Priority: metaclass __call__ > overridden __new__ > __init__.
         let mut recorded_trace = false;
-        if let Some(ret) =
-            self.call_metaclass(&cls, arguments_range, args, keywords, errors, context, hint)
-        {
+        let errors = self.error_collector();
+        if let Some(ret) = self.call_metaclass(
+            &cls,
+            arguments_range,
+            args,
+            keywords,
+            &errors,
+            context,
+            hint,
+        ) {
             if let Some(metaclass_dunder_call) = self.get_metaclass_dunder_call(&cls) {
                 if let Some(callee_range) = callee_range
                     && let Some(metaclass) = class_metadata.custom_metaclass()
@@ -722,23 +848,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // member lookup by value. A custom enum __new__ is used for member creation
             // during class definition and should not be re-applied at call sites.
             if class_metadata.is_enum() {
-                if let Err(e) = self
+                let specialization_errors = self
                     .solver()
-                    .finish_quantified(vs, self.solver().infer_with_first_use)
-                {
-                    self.add_specialization_errors(e, arguments_range, errors, context);
-                }
-                return ret;
+                    .finish_quantified_with_type_order(
+                        vs,
+                        self.solver().infer_with_first_use,
+                        self.type_order(),
+                    )
+                    .err();
+                return ConstructedInstance {
+                    ty: ret,
+                    matched_hint,
+                    errors,
+                    specialization_errors,
+                };
             }
             if !self.is_compatible_constructor_return(&ret, cls.class_object()) {
                 // Got something other than an instance of the class under construction.
-                if let Err(e) = self
+                let specialization_errors = self
                     .solver()
-                    .finish_quantified(vs, self.solver().infer_with_first_use)
-                {
-                    self.add_specialization_errors(e, arguments_range, errors, context);
-                }
-                return ret;
+                    .finish_quantified_with_type_order(
+                        vs,
+                        self.solver().infer_with_first_use,
+                        self.type_order(),
+                    )
+                    .err();
+                return ConstructedInstance {
+                    ty: ret,
+                    matched_hint,
+                    errors,
+                    specialization_errors,
+                };
             }
         }
         let mut dunder_new_ret = None;
@@ -746,9 +886,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (overrides_new, dunder_new_has_errors) =
             if let Some(new_method) = self.get_dunder_new(&cls, preserve_self) {
                 let cls_ty = if preserve_self {
-                    self.heap.mk_type_form(self.heap.mk_self_type(cls.clone()))
+                    self.heap.mk_type_of(self.heap.mk_self_type(cls.clone()))
                 } else {
-                    self.heap.mk_type_form(self.heap.mk_class_type(cls.clone()))
+                    self.heap.mk_type_of(self.heap.mk_class_type(cls.clone()))
                 };
                 let full_args = iter::once(CallArg::ty(&cls_ty, arguments_range))
                     .chain(args.iter().cloned())
@@ -759,7 +899,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         new_method.clone(),
                         CallStyle::Method(&dunder::NEW),
                         arguments_range,
-                        errors,
+                        &errors,
                         context,
                     ),
                     &full_args,
@@ -792,13 +932,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Any, using the class under construction is still more useful.
                     self.solver()
                         .finish_class_targs(cls.targs_mut(), self.uniques);
-                    if let Err(e) = self
+                    let specialization_errors = self
                         .solver()
-                        .finish_quantified(vs, self.solver().infer_with_first_use)
-                    {
-                        self.add_specialization_errors(e, arguments_range, errors, context);
-                    }
-                    return ret.subst(&cls.targs().substitution_map());
+                        .finish_quantified_with_type_order(
+                            vs,
+                            self.solver().infer_with_first_use,
+                            self.type_order(),
+                        )
+                        .err();
+                    return ConstructedInstance {
+                        ty: ret.subst(&cls.targs().substitution_map()),
+                        matched_hint,
+                        errors,
+                        specialization_errors,
+                    };
                 }
                 (true, has_errors)
             } else {
@@ -815,7 +962,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     init_method.clone(),
                     CallStyle::Method(&dunder::INIT),
                     arguments_range,
-                    errors,
+                    &errors,
                     context,
                 ),
                 args,
@@ -849,17 +996,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 dataclass,
                 args,
                 keywords,
-                errors,
+                &errors,
             );
         }
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
-        if let Err(e) = self
+        let specialization_errors = self
             .solver()
-            .finish_quantified(vs, self.solver().infer_with_first_use)
-        {
-            self.add_specialization_errors(e, arguments_range, errors, context);
-        }
+            .finish_quantified_with_type_order(
+                vs,
+                self.solver().infer_with_first_use,
+                self.type_order(),
+            )
+            .err();
         let result = if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
             ret
@@ -875,13 +1024,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && ct.targs().as_slice().len() == 1
         {
             let targ = ct.targs().as_slice()[0].clone();
-            self.heap.mk_unbounded_tuple(targ)
+            ConstructedInstance {
+                ty: self.heap.mk_unbounded_tuple(targ),
+                matched_hint,
+                errors,
+                specialization_errors,
+            }
         } else if let Type::ClassType(ct) = result {
             // Check for init capture: if the class has a registered init capture,
             // extract constructor arg values and wrap in Type::NNModule.
-            self.maybe_wrap_nn_module(&ct.clone(), args, keywords, errors, Type::ClassType(ct))
+            ConstructedInstance {
+                ty: self.maybe_wrap_nn_module(
+                    &ct.clone(),
+                    args,
+                    keywords,
+                    &errors,
+                    Type::ClassType(ct),
+                ),
+                matched_hint,
+                errors,
+                specialization_errors,
+            }
         } else {
-            result
+            ConstructedInstance {
+                ty: result,
+                matched_hint,
+                errors,
+                specialization_errors,
+            }
         }
     }
 
@@ -942,7 +1112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn construct_typed_dict(
         &self,
-        mut typed_dict: TypedDictInner,
+        typed_dict: TypedDictInner,
         args: &[CallArg],
         keywords: &[CallKeyword],
         arguments_range: TextRange,
@@ -950,43 +1120,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
-        let vs = if let Some(hint) = hint {
+        self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
+            self.construct_typed_dict_inner(
+                typed_dict.clone(),
+                args,
+                keywords,
+                arguments_range,
+                context,
+                hint,
+            )
+        })
+    }
+
+    fn construct_typed_dict_inner(
+        &self,
+        mut typed_dict: TypedDictInner,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        hint: Option<&Type>,
+    ) -> ConstructedInstance {
+        let (vs, matched_hint) = if let Some(hint) = hint {
             let vs = self
                 .solver()
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
-            self.is_subset_eq(&typed_dict.clone().to_type(self.heap), hint.ty());
+            let matched_hint = self.is_subset_eq(&typed_dict.clone().to_type(self.heap), hint);
             self.solver().generalize_class_targs(typed_dict.targs_mut());
-            vs
+            (vs, matched_hint)
         } else {
-            QuantifiedHandle::empty()
+            (QuantifiedHandle::empty(), false)
         };
         let hint = None; // discard hint
         let init_method = self.get_typed_dict_dunder_init(&typed_dict);
+        let errors = self.error_collector();
         self.call_infer(
             self.as_call_target_or_error(
                 init_method,
                 CallStyle::Method(&dunder::INIT),
                 arguments_range,
-                errors,
+                &errors,
                 context,
             ),
             args,
             keywords,
             arguments_range,
-            errors,
+            &errors,
             context,
             hint,
             Some(typed_dict.targs_mut()),
         );
         self.solver()
             .finish_class_targs(typed_dict.targs_mut(), self.uniques);
-        if let Err(e) = self
+        let specialization_errors = self
             .solver()
-            .finish_quantified(vs, self.solver().infer_with_first_use)
-        {
-            self.add_specialization_errors(e, arguments_range, errors, context);
+            .finish_quantified_with_type_order(
+                vs,
+                self.solver().infer_with_first_use,
+                self.type_order(),
+            )
+            .err();
+        ConstructedInstance {
+            ty: Type::TypedDict(TypedDict::TypedDict(typed_dict)),
+            matched_hint,
+            errors,
+            specialization_errors,
         }
-        Type::TypedDict(TypedDict::TypedDict(typed_dict))
     }
 
     fn first_arg_type(&self, args: &[CallArg], errors: &ErrorCollector) -> Option<Type> {
@@ -997,6 +1196,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else {
             None
+        }
+    }
+
+    fn check_unnecessary_type_conversion(
+        &self,
+        cls: &ClassType,
+        args: &[CallArg],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let builtin_names = ["str", "int", "float", "bool", "bytes"];
+        if !builtin_names
+            .iter()
+            .any(|name| cls.has_qname("builtins", name))
+        {
+            return;
+        }
+        if let Some(arg_ty) = self.first_arg_type(args, errors) {
+            let target_ty = self.heap.mk_class_type(cls.clone());
+            if !arg_ty.is_any() && arg_ty == target_ty {
+                self.error(
+                    errors,
+                    range,
+                    ErrorInfo::Kind(ErrorKind::UnnecessaryTypeConversion),
+                    format!(
+                        "Unnecessary `{}()` call; argument is already of type `{}`",
+                        cls.name(),
+                        arg_ty.deterministic_printing(),
+                    ),
+                );
+            }
         }
     }
 
@@ -1092,6 +1322,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 };
+                self.check_unnecessary_type_conversion(&cls, args, arguments_range, errors);
                 let constructed_type = self.construct_class(
                     cls,
                     constructor_kind,
@@ -1413,7 +1644,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             DescriptorBase::SelfInstance(classtype) => (
                 self.heap
-                    .mk_type_form(self.heap.mk_self_type(classtype.clone())),
+                    .mk_type_of(self.heap.mk_self_type(classtype.clone())),
                 self.heap.mk_self_type(classtype),
             ),
             DescriptorBase::ClassDef(class_base) => {
@@ -1633,7 +1864,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kws = x.arguments.keywords.map(CallKeyword::new);
             }
 
-            let result = self.distribute_over_union(&callee_ty, |ty| match ty.callee_kind() {
+            let result = self.distribute_over_union(&callee_ty, |ty| {
+                // NotImplemented is a singleton constant, not a callable class.
+                if matches!(ty, Type::ClassType(cls) if cls.is_builtin("_NotImplementedType") || cls.has_qname("types", "NotImplementedType"))
+                {
+                    return self.error(
+                        errors,
+                        x.func.range(),
+                        ErrorInfo::Kind(ErrorKind::NotCallable),
+                        "`NotImplemented` is not callable. Did you mean `NotImplementedError`?".to_owned(),
+                    );
+                }
+                match ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(
                         &x.arguments.args,
@@ -1729,7 +1971,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Check if this call applies a decorator with known typing effects to a function.
                 _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
-            });
+            }});
             // TypeIs and TypeGuard functions return bool at runtime
             match result {
                 Type::TypeIs(_) | Type::TypeGuard(_) => {

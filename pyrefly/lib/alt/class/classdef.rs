@@ -199,6 +199,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn as_superclass(&self, class: &ClassType, want: &Class) -> Option<ClassType> {
         if class.class_object() == want {
             Some(class.clone())
+        } else if !class.class_object().is_builtin("tuple")
+            && let Some(tuple) = self.as_tuple(class)
+            && self.has_superclass(self.stdlib.tuple_object(), want)
+        {
+            // NamedTuple subclasses support precise tuple operations via `as_tuple`, but their
+            // nominal base-class hierarchy still flows through `NamedTupleFallback`, whose tuple
+            // ancestor is `tuple[Any, ...]`. Route tuple-related superclass lookups through an
+            // erased tuple class so assignability to Sequence/Iterable/etc. uses the actual
+            // element types instead of `Any`.
+            let tuple_class = self.erase_tuple_type(tuple);
+            self.as_superclass(&tuple_class, want)
         } else {
             self.get_ancestor(class.class_object(), want)
                 .map(|ancestor| ancestor.substitute_with(&class.substitution()))

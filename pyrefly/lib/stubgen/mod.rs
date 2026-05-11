@@ -19,13 +19,13 @@ mod tests {
     use pyrefly_util::globs::Globs;
     use pyrefly_util::globs::HiddenDirFilter;
     use pyrefly_util::includes::Includes;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 
     use super::emit::emit_stub;
     use super::extract::ExtractConfig;
     use super::extract::extract_module_stub;
     use crate::state::require::Require;
     use crate::state::state::State;
-    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn run_stubgen(input: &str) -> String {
@@ -231,6 +231,27 @@ class MyClass:
         assert!(
             !without.contains("A class with a docstring."),
             "Class docstring should not appear with include_docstrings=false:\n{without}"
+        );
+    }
+
+    #[test]
+    fn test_stubgen_unannotated_dunder_new_uses_self() {
+        let actual = run_stubgen(
+            r#"
+class C:
+    def __new__(cls):
+        return super().__new__(cls)
+"#,
+        );
+        pretty_assertions::assert_str_eq!(
+            r#"
+from typing import Self
+
+class C:
+    def __new__(cls) -> Self: ...
+"#
+            .trim(),
+            actual.trim(),
         );
     }
 }

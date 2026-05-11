@@ -281,16 +281,6 @@ x: str = ""
 );
 
 testcase!(
-    test_nonlocal_ref_before_def,
-    r#"
-def f(x: int) -> None:
-    def g():
-        nonlocal x
-        x = 1
-"#,
-);
-
-testcase!(
     test_global_not_found,
     r#"
 x: str = ""

@@ -134,10 +134,8 @@ fn collect_test_functions<'a>(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::FunctionDef(func) => {
-                if is_test_function(func, class_name) {
-                    out.push(func);
-                }
+            Stmt::FunctionDef(func) if is_test_function(func, class_name) => {
+                out.push(func);
             }
             Stmt::ClassDef(class_def) => {
                 collect_test_functions(&class_def.body, Some(&class_def.name.id), out);

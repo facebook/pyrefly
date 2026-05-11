@@ -1,0 +1,5 @@
+[project]
+name = "test"
+
+[tool.pyrefly]
+site-package-path = ["venv/lib/python3.13/site-packages"]

@@ -72,7 +72,7 @@ impl Command {
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
         match self {
             Command::Check(args) => args.run(config_configurer_wrapper, thread_count).await,
-            Command::Snippet(args) => args.run(config_configurer_wrapper, thread_count).await,
+            Command::Snippet(args) => args.run(thread_count).await,
             Command::BuckCheck(args) => Ok((args.run(thread_count)?, None)),
             Command::Lsp(args) => Ok((
                 args.run(

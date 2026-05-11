@@ -1029,15 +1029,13 @@ z: " T" = 1  # E: Expected a type form, got instance of `Literal[' T']`
 );
 
 testcase!(
-    test_no_backtracking,
+    test_backtracking,
     r#"
 from typing import assert_type
 def foo(x: tuple[list[int], list[int]] | tuple[list[str], list[str]]) -> None: ...
 def test(x: list[str]) -> None:
     y = ([], x)
-    # Because we pin down the `[]` first, we end up with a type error.
-    # If we had backtracking we wouldn't.
-    foo(y)  # E: Argument `tuple[list[int], list[str]]` is not assignable to parameter `x` with type `tuple[list[int], list[int]] | tuple[list[str], list[str]]`
+    foo(y)
 "#,
 );
 
@@ -1073,6 +1071,16 @@ assert_type(type(x5), type[str])
 class TD(TypedDict): ...
 x6: TD = {}
 assert_type(type(x6), type[dict])
+"#,
+);
+
+testcase!(
+    test_builtins_type_constructor_union,
+    r#"
+from typing import assert_type
+def f(x: int | str) -> None:
+    assert_type(type(x), type[int] | type[str])
+    assert_type(type(x), type[int | str])
 "#,
 );
 
@@ -1142,6 +1150,18 @@ def test(x: list[int], y: list[str]):
     assert_type([*x, "test"], list[int | str])
     assert_type([*x, *y], list[int | str])
     [*1]  # E: Expected an iterable
+"#,
+);
+
+testcase!(
+    test_unpack_map_in_list_literal,
+    r#"
+from typing import assert_type
+def test(cs: list[str], n: int):
+    assert_type(
+        ",".join([*("=" + c for c in cs), *map(str, range(n))]),
+        str,
+    )
 "#,
 );
 
@@ -1816,6 +1836,22 @@ testcase!(
 );
 
 testcase!(
+    test_crash_on_decorator_assign,
+    r#"
+from typing import TypeVar
+@T=TypeVar()  # E: Expected newline, found `=`
+"#,
+);
+
+testcase!(
+    test_crash_on_multi_target_named_tuple,
+    r#"
+from typing import NamedTuple
+a = b = NamedTuple("b", [("x", int)])
+"#,
+);
+
+testcase!(
     test_check_invalid_rhs,
     r#"
 def f(x): pass
@@ -1850,6 +1886,20 @@ async def bar():
 );
 
 testcase!(
+    test_unused_coroutine_after_await,
+    r#"
+from typing import Any, Coroutine
+async def inner() -> int:
+    return 1
+class Engine:
+    async def call_flow_fn(self) -> Coroutine[Any, Any, int]:
+        return inner()
+async def run(engine: Engine) -> None:
+    await engine.call_flow_fn()  # E: Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).
+"#,
+);
+
+testcase!(
     test_loop_forever,
     r#"
 # Used to loop forever, https://github.com/facebook/pyrefly/issues/519
@@ -1860,7 +1910,6 @@ while True:
     break
 else:
     exit(1)
-
 
 def func() -> int:
     return 1
@@ -1875,7 +1924,6 @@ class MyException:
     def __init__(self) -> None:
         self.x = ""
         self
-
 
 def f(x: MyException):
     x.__init__()
@@ -2335,5 +2383,27 @@ def f(x):
     y = True
     y &= x
     assert_type(y, Any)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3048
+testcase!(
+    test_enumerate_reversed,
+    r#"
+from collections.abc import Iterator, Sequence
+
+class Series: ...
+
+class DataFrame:
+    def __iter__(self) -> Iterator[Series]: ...
+    def __reversed__(self) -> Iterator[Series]: ...
+    def __len__(self) -> int: ...
+    def __getitem__(self, key: int | Sequence[int]) -> Series | DataFrame: ...
+
+def func(s: Series) -> None: ...
+
+def main(a: DataFrame) -> None:
+    for i, s in enumerate(reversed(a)):
+        func(s)
     "#,
 );

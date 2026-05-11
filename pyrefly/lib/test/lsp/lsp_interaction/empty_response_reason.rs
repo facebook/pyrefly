@@ -49,7 +49,6 @@ fn default_args() -> LspArgs {
         indexing_mode: IndexingMode::None,
         workspace_indexing_limit: 50,
         build_system_blocking: false,
-        enable_external_references: false,
     }
 }
 

@@ -23,7 +23,6 @@
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(const_type_name)]
-#![feature(if_let_guard)]
 
 use std::fmt::Display;
 use std::path::Path;
@@ -41,7 +40,7 @@ use serde::Serialize;
 
 pub mod handle;
 pub mod source_db;
-pub use source_db::SourceDatabase;
+use source_db::SourceDatabase;
 use starlark_map::small_map::SmallMap;
 mod query;
 use tracing::info;

@@ -78,7 +78,7 @@ impl AttributeContext {
     }
 }
 
-pub(crate) fn expr_matches_name(expr: &Expr, attr_name: &ruff_python_ast::name::Name) -> bool {
+fn expr_matches_name(expr: &Expr, attr_name: &ruff_python_ast::name::Name) -> bool {
     match expr {
         Expr::Name(name) => &name.id == attr_name,
         _ => false,

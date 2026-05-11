@@ -43,12 +43,14 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
+use pyrefly_util::interned_path::InternedPath;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use serde::Serialize;
 
 use crate::error::error::Error as TypeError;
 use crate::module::bundled::BundledStub;
+use crate::module::third_party::get_bundled_third_party;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
 use crate::report::pysa::call_graph::CallGraph;
@@ -133,7 +135,7 @@ pub struct PysaModuleDefinitions {
     pub module_name: ModuleName,
     pub source_path: ModulePathDetails,
     pub function_definitions: ModuleFunctionDefinitions<FunctionDefinition>,
-    pub class_definitions: HashMap<PysaLocation, ClassDefinition>,
+    pub class_definitions: HashMap<ClassId, ClassDefinition>,
     pub global_variables: HashMap<Name, GlobalVariable>,
 }
 
@@ -331,6 +333,27 @@ impl PysaReporter {
     }
 }
 
+/// Make relative paths in `ModulePathDetails` absolute using the current directory.
+/// Manifest paths from buck are relative to the project root (because pyrefly
+/// might run in RE). Pysa output needs absolute paths.
+fn absolutize_source_path(details: &ModulePathDetails) -> ModulePathDetails {
+    match details {
+        ModulePathDetails::FileSystem(p) if p.as_path().is_relative() => {
+            let absolute = std::env::current_dir()
+                .expect("current_dir() failed: cannot absolutize relative source path")
+                .join(p.as_path());
+            ModulePathDetails::FileSystem(InternedPath::new(absolute))
+        }
+        ModulePathDetails::Namespace(p) if p.as_path().is_relative() => {
+            let absolute = std::env::current_dir()
+                .expect("current_dir() failed: cannot absolutize relative source path")
+                .join(p.as_path());
+            ModulePathDetails::Namespace(InternedPath::new(absolute))
+        }
+        other => other.clone(),
+    }
+}
+
 pub fn export_module_definitions(
     context: &ModuleContext,
     captured_variables: &ModuleCapturedVariables<FunctionRef>,
@@ -348,7 +371,7 @@ pub fn export_module_definitions(
         format_version: 1,
         module_id: context.answers_context.module_id,
         module_name: context.answers_context.module_info.name(),
-        source_path: context.answers_context.module_info.path().details().clone(),
+        source_path: absolutize_source_path(context.answers_context.module_info.path().details()),
         function_definitions,
         class_definitions,
         global_variables: global_variables_exported,
@@ -361,7 +384,7 @@ pub fn export_module_type_of_expressions(context: &ModuleContext) -> PysaModuleT
         format_version: 1,
         module_id: context.answers_context.module_id,
         module_name: context.answers_context.module_info.name(),
-        source_path: context.answers_context.module_info.path().details().clone(),
+        source_path: absolutize_source_path(context.answers_context.module_info.path().details()),
         functions,
     }
 }
@@ -379,7 +402,7 @@ pub fn export_module_call_graphs(
         format_version: 1,
         module_id: context.answers_context.module_id,
         module_name: context.answers_context.module_info.name(),
-        source_path: context.answers_context.module_info.path().details().clone(),
+        source_path: absolutize_source_path(context.answers_context.module_info.path().details()),
         call_graphs,
     }
 }
@@ -450,7 +473,7 @@ fn build_module_mapping(
                     PysaProjectModule {
                         module_id,
                         module_name,
-                        source_path: module_path.details().clone(),
+                        source_path: absolutize_source_path(module_path.details()),
                         relative_source_path,
                         info_filename: info_filename.clone(),
                         is_test: transaction
@@ -481,7 +504,8 @@ fn write_bundle_stubs(bundle: &impl BundledStub, directory: &Path) -> anyhow::Re
         let relative_path = match module_path.details() {
             ModulePathDetails::BundledTypeshed(path) => &**path,
             ModulePathDetails::BundledTypeshedThirdParty(path) => &**path,
-            _ => panic!("unexpected module path for typeshed module"),
+            ModulePathDetails::BundledThirdParty(path) => &**path,
+            _ => panic!("unexpected module path for bundled module"),
         };
         let content = bundle.load(relative_path).unwrap();
         let target_path = directory.join(relative_path);
@@ -492,7 +516,7 @@ fn write_bundle_stubs(bundle: &impl BundledStub, directory: &Path) -> anyhow::Re
     Ok(())
 }
 
-// Dump all typeshed files, so we can parse them.
+// Dump all bundled stub files, so we can parse them.
 fn write_typeshed_files(results_directory: &Path) -> anyhow::Result<()> {
     let step = StepLogger::start("Exporting typeshed files", "Exported typeshed files");
 
@@ -504,6 +528,10 @@ fn write_typeshed_files(results_directory: &Path) -> anyhow::Result<()> {
             typeshed_third_party,
             &results_directory.join("typeshed_third_party"),
         )?;
+    }
+
+    if let Ok(bundled_third_party) = get_bundled_third_party() {
+        write_bundle_stubs(bundled_third_party, &results_directory.join("third_party"))?;
     }
 
     step.finish();

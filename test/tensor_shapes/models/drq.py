@@ -378,15 +378,15 @@ class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
         """Evaluate action: returns (q1, q2) from critic."""
         return self.critic(obs, action)
 
-    def update_critic(
+    def update_critic[B](
         self,
-        obs: Tensor,
-        action: Tensor,
-        reward: Tensor,
-        next_obs: Tensor,
-        not_done: Tensor,
-        obs_aug: Tensor,
-        next_obs_aug: Tensor,
+        obs: Tensor[B, C, 84, 84],
+        action: Tensor[B, ActDim],
+        reward: Tensor[B, 1],
+        next_obs: Tensor[B, C, 84, 84],
+        not_done: Tensor[B, 1],
+        obs_aug: Tensor[B, C, 84, 84],
+        next_obs_aug: Tensor[B, C, 84, 84],
     ) -> Tensor:
         """Update critic networks using clipped double-Q learning.
 
@@ -441,7 +441,9 @@ class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
         self.critic_optimizer.step()
         return critic_loss
 
-    def update_actor_and_alpha(self, obs: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def update_actor_and_alpha[B](
+        self, obs: Tensor[B, C, 84, 84]
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """Update actor and entropy temperature alpha.
 
         Original: drq.py DrQAgent.update_actor_and_alpha.
@@ -471,15 +473,15 @@ class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
 
         return actor_loss, alpha_loss, self.alpha
 
-    def update(
+    def update[B](
         self,
-        obs: Tensor,
-        action: Tensor,
-        reward: Tensor,
-        next_obs: Tensor,
-        not_done: Tensor,
-        obs_aug: Tensor,
-        next_obs_aug: Tensor,
+        obs: Tensor[B, C, 84, 84],
+        action: Tensor[B, ActDim],
+        reward: Tensor[B, 1],
+        next_obs: Tensor[B, C, 84, 84],
+        not_done: Tensor[B, 1],
+        obs_aug: Tensor[B, C, 84, 84],
+        next_obs_aug: Tensor[B, C, 84, 84],
         step: int,
     ) -> dict[str, Tensor]:
         """Full update step: critic, then optionally actor + alpha + target.

@@ -201,13 +201,18 @@ fn get_suppressed_errors_for_line(
         .into_iter()
         .filter(|error| {
             let range = error.display_range();
-            ignore.is_ignored_by_suppression_line(
-                suppression_line,
-                range.start.line_within_file(),
-                range.end.line_within_file(),
-                error.error_kind().to_name(),
-                &Tool::default_enabled(),
-            )
+            // Check both this kind's name and any parent kind's name,
+            // so that e.g. `ignore[bad-override]` shows suppressed
+            // `bad-override-mutable-attribute` errors on hover.
+            error.error_kind().suppression_names().any(|name| {
+                ignore.is_ignored_by_suppression_line(
+                    suppression_line,
+                    range.start.line_within_file(),
+                    range.end.line_within_file(),
+                    name,
+                    &Tool::default_enabled(),
+                )
+            })
         })
         .collect()
 }
@@ -265,15 +270,15 @@ fn position_is_in_docstring(
         }
         for stmt in body {
             match stmt {
-                Stmt::FunctionDef(func) => {
-                    if body_contains_docstring(func.body.as_slice(), position) {
-                        return true;
-                    }
+                Stmt::FunctionDef(func)
+                    if body_contains_docstring(func.body.as_slice(), position) =>
+                {
+                    return true;
                 }
-                Stmt::ClassDef(class_def) => {
-                    if body_contains_docstring(class_def.body.as_slice(), position) {
-                        return true;
-                    }
+                Stmt::ClassDef(class_def)
+                    if body_contains_docstring(class_def.body.as_slice(), position) =>
+                {
+                    return true;
                 }
                 _ => {}
             }
@@ -499,7 +504,8 @@ pub fn get_hover(
     // Check if hovering over `in` keyword in for loop or comprehension. These `in`s are different
     // from using `in` as a binary comparison operator and therefore needs some special handling.
     if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position)
-        && let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start())
+        && let Some(iterable_type) =
+            transaction.get_type_at_for_display(handle, iterable_range.start())
     {
         return Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -514,7 +520,7 @@ pub fn get_hover(
     }
 
     // Otherwise, fall through to the existing type hover logic
-    let mut type_ = transaction.get_type_at(handle, position)?;
+    let mut type_ = transaction.get_type_at_for_display(handle, position)?;
 
     // Helper function to check if we're hovering over a callee and get its range
     let find_callee_range_at_position = || -> Option<TextRange> {
@@ -683,11 +689,8 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_types::callable::Callable;
-    use pyrefly_types::callable::FuncFlags;
-    use pyrefly_types::callable::FuncId;
     use pyrefly_types::callable::FuncMetadata;
     use pyrefly_types::callable::Function;
-    use pyrefly_types::callable::FunctionKind;
     use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
@@ -699,16 +702,7 @@ mod tests {
             ModulePath::filesystem(PathBuf::from(format!("{module_name}.pyi"))),
             Arc::new(String::new()),
         );
-        let metadata = FuncMetadata {
-            kind: FunctionKind::Def(Arc::new(FuncId {
-                module,
-                cls: None,
-                name: Name::new(func_name),
-                def_index: None,
-                outer_funcs: None,
-            })),
-            flags: FuncFlags::default(),
-        };
+        let metadata = FuncMetadata::def(&module, None, Name::new(func_name));
         heap.mk_function(Function {
             signature: Callable::ellipsis(heap.mk_none()),
             metadata,

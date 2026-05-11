@@ -1,13 +1,7 @@
 @generated
 {
   "aliases_explicit.py": [],
-  "aliases_implicit.py": [
-    "Line 106: Expected 1 errors",
-    "Line 111: Expected 1 errors",
-    "Line 112: Expected 1 errors",
-    "Line 113: Expected 1 errors",
-    "Line 117: Expected 1 errors"
-  ],
+  "aliases_implicit.py": [],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [],
   "aliases_type_statement.py": [],
@@ -35,8 +29,6 @@
   "constructors_call_type.py": [],
   "constructors_callable.py": [
     "Line 186: Expected 1 errors",
-    "Line 197: Expected 1 errors",
-    "Line 167: Unexpected errors ['assert_type(Class7[int], Class7[str]) failed', \"Argument `Literal['']` is not assignable to parameter `x` with type `int`\"]",
     "Line 185: Unexpected errors ['assert_type(Class8[Unknown], Class8[str]) failed']"
   ],
   "constructors_consistency.py": [],
@@ -66,6 +58,14 @@
   "directives_assert_type.py": [],
   "directives_cast.py": [],
   "directives_deprecated.py": [],
+  "directives_disjoint_base.py": [
+    "Line 69: Expected 1 errors",
+    "Line 73: Expected 1 errors",
+    "Line 77: Expected 1 errors",
+    "Line 118: Expected 1 errors",
+    "Line 123: Expected 1 errors",
+    "Line 60: Unexpected errors ['Named tuples do not support multiple inheritance']"
+  ],
   "directives_no_type_check.py": [],
   "directives_reveal_type.py": [],
   "directives_type_checking.py": [],
@@ -84,9 +84,7 @@
     "Line 57: Unexpected errors ['assert_type(str, int | str) failed']"
   ],
   "generics_base_class.py": [],
-  "generics_basic.py": [
-    "Line 44: Unexpected errors ['Argument `bytes` is not assignable to parameter `y` with type `str` in function `concat`']"
-  ],
+  "generics_basic.py": [],
   "generics_defaults.py": [],
   "generics_defaults_referential.py": [],
   "generics_defaults_specialization.py": [],
@@ -115,13 +113,8 @@
   "generics_syntax_infer_variance.py": [],
   "generics_syntax_scoping.py": [],
   "generics_type_erasure.py": [],
-  "generics_typevartuple_args.py": [
-    "Line 76: Unexpected errors [\"Argument `tuple[Literal['1']]` is not assignable to parameter `*args` with type `tuple[int]` in function `func4`\"]"
-  ],
-  "generics_typevartuple_basic.py": [
-    "Line 86: Unexpected errors ['Argument `tuple[float]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`']",
-    "Line 90: Unexpected errors [\"Argument `tuple[Literal['0']]` is not assignable to parameter `arg2` with type `tuple[int]` in function `func2`\"]"
-  ],
+  "generics_typevartuple_args.py": [],
+  "generics_typevartuple_basic.py": [],
   "generics_typevartuple_callable.py": [],
   "generics_typevartuple_concat.py": [],
   "generics_typevartuple_overloads.py": [],

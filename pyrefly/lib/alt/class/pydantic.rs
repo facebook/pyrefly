@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
@@ -150,7 +149,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let params = vec![self.class_self_param(cls, false), root_param];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
+            metadata: FuncMetadata::method(cls, dunder::INIT),
         });
         ClassSynthesizedField::new(ty)
     }

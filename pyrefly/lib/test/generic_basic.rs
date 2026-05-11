@@ -359,6 +359,24 @@ def test(m: MyStr, s: str):
 "#,
 );
 
+testcase!(
+    test_constrained_typevar_any_does_not_pin_constraint,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+AnyStr = TypeVar("AnyStr", str, bytes)
+
+def concat(x: AnyStr, y: AnyStr) -> AnyStr:
+    return x + y
+
+def test(s: str, b: bytes, a: Any):
+    concat(s, a)
+    concat(a, b)
+    concat(a, s)
+    concat(a, a)
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/245
 testcase!(
     test_dict_update,
@@ -487,6 +505,17 @@ def f[T1, T2](x: T1, y: T2 | None = None) -> T1 | T2: ...
 assert_type(f(1), int)
 assert_type(f(1, "2"), int | str)
 assert_type(f(1, None), int)
+    "#,
+);
+
+testcase!(
+    test_typevar_or_none_from_call,
+    r#"
+from typing import assert_type
+class C: ...
+def unwrap[T](value: T | None) -> T: ...
+def get() -> C | None: ...
+assert_type(unwrap(get()), C)
     "#,
 );
 

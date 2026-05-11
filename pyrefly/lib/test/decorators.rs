@@ -278,7 +278,6 @@ class decorator:
     ) -> Callable[TParams, TReturn]:
         ...
 
-
 class C:
     @decorator(42)
     def f(self, x: int) -> int:
@@ -530,37 +529,6 @@ reveal_type(A.__ge__)  # E: revealed type: (self: A, other: object) -> bool
 );
 
 testcase!(
-    test_overload_with_docstring,
-    r#"
-from typing import overload, Any
-@overload
-def foo(a: int) -> int: ...
-@overload
-def foo(a: str) -> str:
-    """Docstring"""
-def foo(*args, **kwargs) -> Any:
-    pass
-
-    "#,
-);
-
-testcase!(
-    test_overload_with_docstring2,
-    r#"
-from typing import overload, Any
-@overload
-def foo(a: int) -> int: ...
-@overload
-def foo(a: str) -> str:
-    """Docstring"""
-    return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
-def foo(*args, **kwargs) -> Any:
-    pass
-
-    "#,
-);
-
-testcase!(
     test_abstract_method_skip_return,
     r#"
 from abc import abstractmethod
@@ -710,6 +678,34 @@ def compute2(x: int, y: int, z: int) -> int:
 
 r2 = compute2(1, 2, 3)
 assert_type(r2, int)
+    "#,
+);
+
+testcase!(
+    test_unannotated_decorator_preserves_signature,
+    r#"
+from typing import assert_type
+
+def make_decorator(target, decorator_func):
+    decorator_func.__name__ = target.__name__
+    return decorator_func
+
+def add_dispatch_support(target=None):
+    def decorator(dispatch_target):
+        def op_dispatch_handler(*args, **kwargs):
+            return dispatch_target(*args, **kwargs)
+        op_dispatch_handler = make_decorator(dispatch_target, op_dispatch_handler)
+        return op_dispatch_handler
+    if target is None:
+        return decorator
+    return decorator(target)
+
+@add_dispatch_support
+def matmul(a: int, b: int, name: str | None = None) -> int:
+    return a + b
+
+r = matmul(1, 2, name="test")
+assert_type(r, int)
     "#,
 );
 

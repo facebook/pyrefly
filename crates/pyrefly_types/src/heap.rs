@@ -332,11 +332,11 @@ impl TypeHeap {
         Type::callable_concatenate(params, param_spec, ret)
     }
 
-    /// Create a `Type::Type` wrapping an inner type (type form).
+    /// Create a `Type::Type` wrapping an inner type.
     ///
-    /// This is an alias for `mk_type` matching the `Type::type_form` helper.
-    pub fn mk_type_form(&self, inner: Type) -> Type {
-        Type::type_form(inner)
+    /// This is an alias for `mk_type` matching the `Type::type_of` helper.
+    pub fn mk_type_of(&self, inner: Type) -> Type {
+        Type::type_of(inner)
     }
 
     /// Create a `Type::Literal` from a Literal.

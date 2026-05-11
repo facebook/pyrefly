@@ -1,5 +1,6 @@
 {
   "name": "my.package.module",
+  "path": "test.py",
   "names": [
     "my.package.module.foo",
     "my.package.module.foo_unannotated",

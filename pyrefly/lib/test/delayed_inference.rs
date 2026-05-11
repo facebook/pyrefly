@@ -415,18 +415,17 @@ assert_type(z, dict[str, int])
 );
 
 testcase!(
-    bug = "Container contents should be promoted",
     test_redundant_empty_container_constructor_call,
     r#"
 from typing import assert_type
 
 x = list([])
 x.append(1)
-assert_type(x, list[int])  # E: assert_type(list[Literal[1]], list[int])
+assert_type(x, list[int])
 
 y = dict({})
 y['k'] = 3
-assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]], dict[str, int])
+assert_type(y, dict[str, int])
     "#,
 );
 
@@ -520,5 +519,24 @@ def parse(obj):
 
         data[item.string] = value
     return data
+    "#,
+);
+
+testcase!(
+    test_partial_inference_of_dict_through_overload,
+    r#"
+from typing import assert_type, overload, TypeVar
+
+T = TypeVar('T')
+d = {}
+
+@overload
+def f(x: dict[T, T], flag: str) -> None: ...
+@overload
+def f(x: dict[str, int], flag: int) -> None: ...
+def f(x, flag) -> None: ...
+
+f(d, 42)
+assert_type(d, dict[str, int])
     "#,
 );

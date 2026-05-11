@@ -337,7 +337,12 @@ impl<'a> BindingsBuilder<'a> {
                 //
                 // We ignore such names for first-usage-tracking purposes, since
                 // we are not going to analyze the code at all.
-                self.ensure_expr(illegal_target, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    illegal_target,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
                 // Make sure the RHS is properly bound, so that we can report errors there.
                 let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
                 if ensure_assigned && let Some(assigned) = &mut assigned {
@@ -430,7 +435,12 @@ impl<'a> BindingsBuilder<'a> {
             // Parser error recovery can synthesize empty identifiers. Skip creating a definition
             // binding, but still analyze any assigned value so we surface downstream errors.
             if ensure_assigned && let Some(assigned) = &mut assigned {
-                self.ensure_expr(assigned, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    assigned,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
             return;
         }
@@ -485,16 +495,34 @@ impl<'a> BindingsBuilder<'a> {
         }
         let identifier = ShortIdentifier::new(name);
         let mut current = self.declare_current_idx(Key::Definition(identifier));
+        // A receiver-constrained class assignment is a same-scope rebind of a
+        // name already bound to a class. The implicit class receiver acts
+        // like an annotation, so it suppresses type-alias inference and pins
+        // the assignment onto the normal `NameAssign` path even when the RHS
+        // looks alias-shaped. We require there to be no explicit annotation
+        // (annotated assignments already have their own receiver semantics)
+        // and that we are not in a class body (class-body assignments are
+        // out of scope for the first patch).
+        let receiver_idx = if direct_ann.is_none() && !self.scopes.in_class_body() {
+            self.scopes
+                .current_flow_style(&name.id)
+                .and_then(|s| s.canonical_class_receiver_idx())
+        } else {
+            None
+        };
         let has_type_alias_qualifier = direct_ann
             .is_some_and(|(e, _)| self.as_special_export(e) == Some(SpecialExport::TypeAlias));
-        let is_definitely_type_alias =
-            has_type_alias_qualifier || self.is_definitely_type_alias_rhs(value.as_ref());
+        let is_definitely_type_alias = receiver_idx.is_none()
+            && (has_type_alias_qualifier || self.is_definitely_type_alias_rhs(value.as_ref()));
         let has_typeform_annotation = direct_ann.is_some_and(|(e, _)| {
             self.as_special_export(e) == Some(SpecialExport::TypeForm)
                 || matches!(e, Expr::Subscript(x) if self.as_special_export(&x.value) == Some(SpecialExport::TypeForm))
         });
         // Track whether this name assignment participates in partial type inference.
-        let uses_first_use = !is_definitely_type_alias && self.infer_with_first_use();
+        // Receiver-constrained class assignments do not participate, since the
+        // receiver pins the visible type without needing first-use feedback.
+        let uses_first_use =
+            !is_definitely_type_alias && receiver_idx.is_none() && self.infer_with_first_use();
         let scope_idx = current.idx();
         let mut tparams = None;
         if is_definitely_type_alias {
@@ -504,13 +532,28 @@ impl<'a> BindingsBuilder<'a> {
                 tparams = Some(collector.lookup_keys().into_boxed_slice());
             }
         } else if has_typeform_annotation && value.is_string_literal_expr() {
-            self.ensure_type_with_usage(&mut value, &mut None, &mut Usage::StaticTypeInformation);
+            self.ensure_type_with_usage(
+                &mut value,
+                &mut None,
+                &mut Usage::StaticTypeInformation {
+                    is_annotation: false,
+                },
+            );
         } else {
             self.ensure_expr(&mut value, current.usage());
         }
         let style = if self.scopes.in_class_body() {
             FlowStyle::ClassField {
                 initial_value: Some((*value).clone()),
+            }
+        } else if let Some(base_idx) = receiver_idx {
+            // `pristine: false` because the visible binding is this
+            // `NameAssign`, not the original class definition. Sticky across
+            // both compatible and incompatible writes so future same-scope
+            // rebinds keep checking against the original receiver.
+            FlowStyle::ClassDef {
+                class_idx: base_idx,
+                pristine: false,
             }
         } else {
             self.scopes.register_variable(name);
@@ -562,6 +605,7 @@ impl<'a> BindingsBuilder<'a> {
                 is_in_function_scope: self.scopes.in_function_scope(),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
+                receiver_idx,
             }))
         };
         self.insert_binding_idx(def_idx, binding);

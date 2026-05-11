@@ -163,7 +163,7 @@ fn read_and_validate_file(path: &Path) -> anyhow::Result<(String, ModModule)> {
 /// Extracts error codes from an existing pyrefly ignore comment.
 /// Returns Some(Vec<String>) if the line contains a valid ignore comment, None otherwise.
 /// Uses string-aware parsing to avoid matching inside string literals.
-fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
+pub(crate) fn parse_ignore_comment(line: &str) -> Option<Vec<String>> {
     let comment_start = find_comment_start_in_line(line)?;
     let comment_part = &line[comment_start..];
     let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
@@ -222,7 +222,7 @@ fn get_indentation(line: &str) -> &str {
 
 /// Merges new error codes with existing ones in a suppression comment.
 /// Returns the updated comment string with merged and sorted error codes.
-fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String]) -> String {
+pub(crate) fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String]) -> String {
     let mut all_codes: SmallSet<String> = SmallSet::new();
     for code in existing_codes {
         all_codes.insert(code);
@@ -238,7 +238,7 @@ fn merge_error_codes(existing_codes: Vec<String>, new_codes: &[String]) -> Strin
 /// Replaces the ignore comment in a line with the merged version.
 /// Preserves the rest of the line content.
 /// Uses string-aware parsing to only replace in the comment portion.
-fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
+pub(crate) fn replace_ignore_comment(line: &str, merged_comment: &str) -> String {
     if let Some(comment_start) = find_comment_start_in_line(line) {
         let code_part = &line[..comment_start];
         let comment_part = &line[comment_start..];
@@ -622,6 +622,7 @@ mod tests {
     use pyrefly_python::sys_info::SysInfo;
     use pyrefly_util::arc_id::ArcId;
     use pyrefly_util::fs_anyhow;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use tempfile;
     use tempfile::TempDir;
 
@@ -633,7 +634,6 @@ mod tests {
     use crate::state::load::FileContents;
     use crate::state::require::Require;
     use crate::state::state::State;
-    use crate::test::util::TEST_THREAD_COUNT;
 
     fn get_path(tdir: &TempDir) -> PathBuf {
         tdir.path().join("test.py")
@@ -666,6 +666,23 @@ mod tests {
     }
 
     fn assert_remove_ignores(before: &str, after: &str, expected_removals: usize) {
+        let (errors, tdir) = get_errors(before);
+        let collected = errors.collect_errors();
+        let unused_errors = errors.collect_unused_ignore_errors(&collected);
+        let removals = suppress::remove_unused_ignores(unused_errors);
+        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
+        assert_eq!(after, got_file);
+        assert_eq!(removals, expected_removals);
+    }
+
+    /// Mimics the `suppress --remove-unused` code path, which delegates to
+    /// `check --remove-unused-ignores` internally. This collects unused ignore
+    /// errors without severity filtering and removes them.
+    fn assert_remove_ignores_via_suppress_command(
+        before: &str,
+        after: &str,
+        expected_removals: usize,
+    ) {
         let (errors, tdir) = get_errors(before);
         let collected = errors.collect_errors();
         let unused_errors = errors.collect_unused_ignore_errors(&collected);
@@ -1971,5 +1988,21 @@ x: int = \
     2
 "#,
         );
+    }
+
+    #[test]
+    fn test_suppress_remove_unused_without_config() {
+        // `suppress --remove-unused` should remove unused ignore comments even
+        // without explicit config, matching `check --remove-unused-ignores`.
+        let input = r#"
+def f() -> int:
+    # pyrefly: ignore [bad-return]
+    return 1
+"#;
+        let want = r#"
+def f() -> int:
+    return 1
+"#;
+        assert_remove_ignores_via_suppress_command(input, want, 1);
     }
 }

@@ -12,6 +12,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::Keyword;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use starlark_map::Hashed;
 
@@ -32,6 +33,7 @@ pub const STRICT_DEFAULT: bool = false;
 pub const FROZEN: Name = Name::new_static("frozen");
 pub const FROZEN_DEFAULT: bool = false;
 pub const EXTRA: Name = Name::new_static("extra");
+pub const FIELD_VALIDATOR: Name = Name::new_static("field_validator");
 
 // An abstraction to iterate over configuration values, whether `ConfigDict()` or a dict display
 // is used.
@@ -100,6 +102,48 @@ impl<'a> BindingsBuilder<'a> {
         }
 
         None
+    }
+
+    /// Scan a class body for `@field_validator(...)` decorators with `mode='before'` or
+    /// `mode='plain'`, and return the field names those validators target. When a before/plain
+    /// validator is present, the corresponding `__init__` parameter should accept `Any` because
+    /// the validator can transform arbitrary input into the declared type.
+    // TODO: `mode='wrap'` validators also receive raw input, but they additionally receive
+    // the inner validator as a callable. Supporting them requires more work.
+    pub fn extract_field_validator_fields(&self, body: &[Stmt]) -> Vec<Name> {
+        body.iter()
+            .filter_map(|stmt| stmt.as_function_def_stmt())
+            .flat_map(|func_def| &func_def.decorator_list)
+            .filter_map(|decorator| {
+                let call = decorator.expression.as_call_expr()?;
+                let is_field_validator = match &*call.func {
+                    Expr::Name(n) => n.id == FIELD_VALIDATOR,
+                    Expr::Attribute(a) => a.attr.id == FIELD_VALIDATOR,
+                    _ => false,
+                };
+                if !is_field_validator {
+                    return None;
+                }
+                // Check for `mode='before'` or `mode='plain'` keyword.
+                let has_before_or_plain_mode = call.arguments.keywords.iter().any(|kw| {
+                    kw.arg.as_ref().is_some_and(|a| a.as_str() == "mode")
+                        && matches!(
+                            &kw.value,
+                            Expr::StringLiteral(s)
+                                if matches!(s.value.to_str(), "before" | "plain")
+                        )
+                });
+                if !has_before_or_plain_mode {
+                    return None;
+                }
+                Some(&call.arguments.args)
+            })
+            .flatten()
+            .filter_map(|arg| {
+                arg.as_string_literal_expr()
+                    .map(|s| Name::new(s.value.to_str()))
+            })
+            .collect()
     }
 
     // The goal of this function is to extract pydantic metadata (https://docs.pydantic.dev/latest/concepts/models/) from expressions.

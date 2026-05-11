@@ -78,11 +78,11 @@ impl SpecialForm {
     pub fn to_type(self, heap: &TypeHeap) -> Type {
         match self {
             SpecialForm::LiteralString => {
-                heap.mk_type_form(heap.mk_literal_string(LitStyle::Explicit))
+                heap.mk_type_of(heap.mk_literal_string(LitStyle::Explicit))
             }
-            SpecialForm::Never => heap.mk_type_form(heap.mk_never_style(NeverStyle::Never)),
-            SpecialForm::NoReturn => heap.mk_type_form(heap.mk_never_style(NeverStyle::NoReturn)),
-            _ => heap.mk_type_form(heap.mk_special_form(self)),
+            SpecialForm::Never => heap.mk_type_of(heap.mk_never_style(NeverStyle::Never)),
+            SpecialForm::NoReturn => heap.mk_type_of(heap.mk_never_style(NeverStyle::NoReturn)),
+            _ => heap.mk_type_of(heap.mk_special_form(self)),
         }
     }
 

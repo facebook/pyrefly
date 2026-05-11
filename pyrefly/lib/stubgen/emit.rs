@@ -18,8 +18,16 @@ use crate::stubgen::extract::StubVariable;
 pub fn emit_stub(stub: &ModuleStub) -> String {
     let mut out = String::new();
 
+    if stub.uses_self {
+        out.push_str("from typing import Self\n");
+    }
+
     if stub.uses_incomplete {
-        out.push_str("from _typeshed import Incomplete\n\n");
+        out.push_str("from _typeshed import Incomplete\n");
+    }
+
+    if stub.uses_self || stub.uses_incomplete {
+        out.push('\n');
     }
 
     emit_items(&stub.items, &mut out, "");

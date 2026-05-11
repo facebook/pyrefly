@@ -1,5 +1,6 @@
 {
   "name": "test",
+  "path": "test.py",
   "names": [
     "test.MyClass.__init__",
     "test.MyClass.__bool__",
@@ -26,8 +27,8 @@
     {
       "kind": "function",
       "name": "test.MyClass.__bool__",
-      "n_typable": 1,
-      "n_typed": 1,
+      "n_typable": 0,
+      "n_typed": 0,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
@@ -38,8 +39,8 @@
     {
       "kind": "function",
       "name": "test.MyClass.__len__",
-      "n_typable": 1,
-      "n_typed": 1,
+      "n_typable": 0,
+      "n_typed": 0,
       "n_any": 0,
       "n_untyped": 0,
       "location": {
@@ -97,8 +98,8 @@
     }
   ],
   "type_ignores": [],
-  "n_typable": 3,
-  "n_typed": 3,
+  "n_typable": 1,
+  "n_typed": 1,
   "n_any": 0,
   "n_untyped": 0,
   "coverage": 100.0,

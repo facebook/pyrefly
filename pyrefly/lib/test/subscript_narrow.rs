@@ -193,6 +193,27 @@ class ErrorContext:
 );
 
 testcase!(
+    bug = "Subscript assignment narrows getter type to RHS even with asymmetric __setitem__/__getitem__ (#3299)",
+    test_subscript_assign_with_asymmetric_getitem_setitem,
+    r#"
+from typing import Any, Protocol
+
+class Series(Protocol):
+    def astype(self, dtype: Any) -> "Series": ...
+
+class DataFrame(Protocol):
+    def __setitem__(self, key: str, value: object) -> None: ...
+    def __getitem__(self, key: str) -> Series: ...
+
+def main(df: DataFrame) -> None:
+    df['a'] = '!'
+    # df['a'] should still have type Series, since __getitem__ returns Series
+    # and __setitem__ accepts `object` independently. But pyrefly narrows it to str.
+    df['a'].astype(int)  # E: Object of class `str` has no attribute `astype`
+"#,
+);
+
+testcase!(
     test_dict_get_literal_key_narrow,
     r#"
 from typing import assert_type, Literal

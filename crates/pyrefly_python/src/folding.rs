@@ -53,17 +53,13 @@ pub fn folding_ranges(
 
         fn visit_stmt(&mut self, stmt: &Stmt) {
             match stmt {
-                Stmt::FunctionDef(func) => {
-                    if !func.body.is_empty() {
-                        let range = range_without_decorators(func.range, &func.decorator_list);
-                        self.ranges.push((range, None));
-                    }
+                Stmt::FunctionDef(func) if !func.body.is_empty() => {
+                    let range = range_without_decorators(func.range, &func.decorator_list);
+                    self.ranges.push((range, None));
                 }
-                Stmt::ClassDef(class) => {
-                    if !class.body.is_empty() {
-                        let range = range_without_decorators(class.range, &class.decorator_list);
-                        self.ranges.push((range, None));
-                    }
+                Stmt::ClassDef(class) if !class.body.is_empty() => {
+                    let range = range_without_decorators(class.range, &class.decorator_list);
+                    self.ranges.push((range, None));
                 }
                 Stmt::If(if_stmt) => {
                     if !if_stmt.body.is_empty() {
@@ -75,20 +71,14 @@ pub fn folding_ranges(
                         }
                     }
                 }
-                Stmt::For(for_stmt) => {
-                    if !for_stmt.body.is_empty() {
-                        self.ranges.push((for_stmt.range, None));
-                    }
+                Stmt::For(for_stmt) if !for_stmt.body.is_empty() => {
+                    self.ranges.push((for_stmt.range, None));
                 }
-                Stmt::While(while_stmt) => {
-                    if !while_stmt.body.is_empty() {
-                        self.ranges.push((while_stmt.range, None));
-                    }
+                Stmt::While(while_stmt) if !while_stmt.body.is_empty() => {
+                    self.ranges.push((while_stmt.range, None));
                 }
-                Stmt::With(with_stmt) => {
-                    if !with_stmt.body.is_empty() {
-                        self.ranges.push((with_stmt.range, None));
-                    }
+                Stmt::With(with_stmt) if !with_stmt.body.is_empty() => {
+                    self.ranges.push((with_stmt.range, None));
                 }
                 Stmt::Match(match_stmt) => {
                     self.ranges.push((match_stmt.range, None));

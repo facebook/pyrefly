@@ -1401,8 +1401,8 @@ def test_mask_decoder():
     """Test MaskDecoder with pre-computed embeddings."""
     decoder = MaskDecoder(256, 8, 2048, 3, transformer_depth=2)
     image_emb: Tensor[1, 256, 16, 16] = torch.randn(1, 256, 16, 16)
-    image_pe: Tensor = torch.randn(1, 256, 16, 16)
-    sparse_prompt: Tensor = torch.randn(1, 2, 256)
+    image_pe: Tensor[1, 256, 16, 16] = torch.randn(1, 256, 16, 16)
+    sparse_prompt: Tensor[1, 2, 256] = torch.randn(1, 2, 256)
     dense_prompt: Tensor[1, 256, 16, 16] = torch.randn(1, 256, 16, 16)
     masks, iou_pred = decoder(image_emb, image_pe, sparse_prompt, dense_prompt, True)
 

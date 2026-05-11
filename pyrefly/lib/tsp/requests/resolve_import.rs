@@ -23,11 +23,11 @@ use tsp_types::protocol::ResolveImportParams;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
-use crate::tsp::server::TspServer;
+use crate::tsp::server::TspConnection;
 use crate::tsp::validation::invalid_params_error;
-use crate::tsp::validation::parse_file_uri;
+use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     /// Handle a `typeServer/resolveImport` request.
     ///
     /// Converts the TSP [`ResolveImportParams`] into pyrefly's internal
@@ -46,25 +46,26 @@ impl<T: TspInterface> TspServer<T> {
             return;
         }
 
-        // --- 2. Parse source URI ---
-        let source_url = match parse_file_uri(&params.source_uri) {
+        // --- 2. Parse and resolve source URI ---
+        let source_url = match parse_uri(&params.source_uri) {
             Ok(url) => url,
             Err(err) => {
                 self.send_err(id, err);
                 return;
             }
         };
-        let source_path = match source_url.to_file_path() {
-            Ok(p) => p,
-            Err(_) => {
-                self.send_err(id, invalid_params_error("sourceUri is not a file:// URI"));
+        let source_path = match self.inner().resolve_uri_to_path(&source_url) {
+            Some(p) => p,
+            None => {
+                // URI cannot be resolved to a filesystem path — return null.
+                self.send_ok::<Option<String>>(id, None);
                 return;
             }
         };
 
         // --- 3. Build source handle and resolve the module name ---
         let source_module_path = ModulePath::filesystem(source_path.clone());
-        let source_handle = self.inner.handle_from_module_path(source_module_path);
+        let source_handle = self.inner().handle_from_module_path(source_module_path);
 
         let module_name = match resolve_module_name(
             &params.module_descriptor.name_parts,
@@ -84,7 +85,7 @@ impl<T: TspInterface> TspServer<T> {
 
         // --- 4. Resolve the import via existing infrastructure ---
         let transaction = self
-            .inner
+            .inner()
             .non_committable_transaction(ide_transaction_manager);
         let result = transaction.import_handle(&source_handle, module_name, None);
 

@@ -19,3 +19,12 @@ class WithDecorators:
 
     def regular_method(self, a: int) -> str:
         return ""
+
+
+class RenamedReceiver:
+    def regular_method(_self, x: int) -> str:
+        return ""
+
+    @classmethod
+    def class_method(_cls, s: str) -> None:
+        pass

@@ -21,9 +21,6 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::Deprecation;
 use pyrefly_types::callable::FuncDefIndex;
-use pyrefly_types::callable::FuncFlags;
-use pyrefly_types::callable::FuncId;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::class::Class;
 use pyrefly_types::keywords::TypeMap;
@@ -111,20 +108,15 @@ impl UndecoratedFunction {
                 Name::default(),
                 TextRange::default(),
             )),
-            metadata: FuncMetadata {
-                kind: FunctionKind::Def(Arc::new(FuncId {
-                    module: Module::new(
-                        ModuleName::from_str("__undecorated_function_recursive__"),
-                        ModulePath::filesystem(PathBuf::default()),
-                        Arc::new("".to_owned()),
-                    ),
-                    cls: None,
-                    name: Name::default(),
-                    def_index: None,
-                    outer_funcs: None,
-                })),
-                flags: FuncFlags::default(),
-            },
+            metadata: FuncMetadata::def(
+                &Module::new(
+                    ModuleName::from_str("__undecorated_function_recursive__"),
+                    ModulePath::filesystem(PathBuf::default()),
+                    Arc::new("".to_owned()),
+                ),
+                None,
+                Name::default(),
+            ),
             decorators: Box::from([]),
             tparams: Arc::new(TParams::default()),
             params: Vec::new(),

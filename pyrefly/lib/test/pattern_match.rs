@@ -43,6 +43,60 @@ match None:
 );
 
 testcase!(
+    test_match_case_unreachable_for_disjoint_subject_type,
+    r#"
+from typing import Any
+
+def bad(x: list[int]) -> None:
+    match x:
+        case 1:  # E: Case pattern can never match subject of type `list[int]`
+            pass
+        case 2:  # E: Case pattern can never match subject of type `list[int]`
+            pass
+
+def bad_or(x: list[int]) -> None:
+    match x:
+        case 1 | 2:  # E: Case pattern can never match subject of type `list[int]`
+            pass
+
+class Obj:
+    field: list[int]
+
+def bad_facet(obj: Obj) -> None:
+    match obj.field:
+        case 1:  # E: Case pattern can never match subject of type `list[int]`
+            pass
+
+def bad_none(x: int) -> None:
+    match x:
+        case None:  # E: Case pattern can never match subject of type `int`
+            pass
+
+def ok(x: int) -> None:
+    match x:
+        case 1:
+            pass
+
+def ok_union(x: int | list[int]) -> None:
+    match x:
+        case 1:
+            pass
+
+def ok_any(x: Any) -> None:
+    match x:
+        case 1:
+            pass
+
+class SomeClass: ...
+
+def ok_class_pattern(x: int) -> None:
+    match x:
+        case SomeClass():
+            pass
+"#,
+);
+
+testcase!(
     test_pattern_dict_key_enum,
     r#"
 from enum import StrEnum

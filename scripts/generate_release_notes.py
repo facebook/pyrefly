@@ -678,6 +678,8 @@ def run_generate(
             for w in fix_warnings:
                 print(f"    - {w}")
 
+        if not release_notes.endswith("\n"):
+            release_notes += "\n"
         output_path.write_text(release_notes)
         print(f"\n  Release notes written to: {output_path}\n")
 

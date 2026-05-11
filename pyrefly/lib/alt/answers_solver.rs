@@ -27,8 +27,11 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::quantified::AnchorIndex;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedIdentity;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::PreInferenceVariance;
@@ -72,9 +75,14 @@ use crate::dispatch_anyidx;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
+use crate::error::error::ErrorQuickFix;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
+use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::CallContext;
+use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
@@ -1589,7 +1597,7 @@ impl ThreadState {
 
     /// Install a fresh trace sink for the current calculation, saving any
     /// existing sink for later restoration.
-    pub(crate) fn install_trace_sink(&self) {
+    fn install_trace_sink(&self) {
         let previous = self.trace_sink.borrow_mut().take();
         self.trace_sink_stack.borrow_mut().push(previous);
         *self.trace_sink.borrow_mut() = Some(TraceSideEffects::default());
@@ -1597,7 +1605,7 @@ impl ThreadState {
 
     /// Take the accumulated trace side effects, restoring any saved sink
     /// from an outer calculation.
-    pub(crate) fn take_trace_sink(&self) -> Option<TraceSideEffects> {
+    fn take_trace_sink(&self) -> Option<TraceSideEffects> {
         let result = self.trace_sink.borrow_mut().take();
         let restored = self.trace_sink_stack.borrow_mut().pop().flatten();
         *self.trace_sink.borrow_mut() = restored;
@@ -1762,19 +1770,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
         let mut dims = self.jaxtyping_dims.borrow_mut();
         dims.entry(name.clone())
-            .or_insert_with(|| match kind {
-                QuantifiedKind::TypeVar => Quantified::type_var(
-                    name,
-                    self.uniques.fresh(),
-                    None,
-                    Restriction::Unrestricted,
-                    PreInferenceVariance::Invariant,
-                ),
-                QuantifiedKind::TypeVarTuple => {
-                    Quantified::type_var_tuple(name, self.uniques.fresh(), None)
-                }
-                QuantifiedKind::ParamSpec => {
-                    unreachable!("jaxtyping dimensions cannot be ParamSpec")
+            .or_insert_with(|| {
+                // Jaxtyping dims have no real source location. Use a hash of the name
+                // as ordinal to distinguish different dims in the same module.
+                // The slot discriminates from other synthetic quantifieds at the same anchor.
+                let ordinal = {
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    name.hash(&mut h);
+                    h.finish() as u32
+                };
+                let identity = QuantifiedIdentity::new(
+                    self.module().name(),
+                    AnchorIndex::new(TextRange::default(), ordinal),
+                    QuantifiedOrigin::SyntheticCallableResidual,
+                );
+                match kind {
+                    QuantifiedKind::TypeVar => Quantified::type_var(
+                        name,
+                        identity,
+                        None,
+                        Restriction::Unrestricted,
+                        PreInferenceVariance::Invariant,
+                    ),
+                    QuantifiedKind::TypeVarTuple => {
+                        Quantified::type_var_tuple(name, identity, None)
+                    }
+                    QuantifiedKind::ParamSpec => {
+                        unreachable!("jaxtyping dimensions cannot be ParamSpec")
+                    }
                 }
             })
             .clone()
@@ -1824,7 +1847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .insert((self.module().name(), id), var);
     }
 
-    pub(crate) fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+    fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
@@ -1832,7 +1855,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .copied()
     }
 
-    pub(crate) fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
+    fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
         if let Some(var) = self.get_lambda_param_var(id) {
             var
         } else {
@@ -2114,7 +2137,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // mutates solver state (force_var) and must happen during computation,
             // not at batch commit.
             let answer = if let Some(var) = self.stack().get_iteration_placeholder(&current) {
-                self.finalize_recursive_answer::<K>(idx, var, raw_answer, &local_errors)
+                self.finalize_recursive_answer::<K>(var, raw_answer)
             } else {
                 raw_answer
             };
@@ -2271,7 +2294,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // solver, so a subsequent deep-force correctly resolves it. Reversing
         // the order would leave the placeholder Var unresolved during forcing.
         let answer = if let Some(var) = self.stack().get_iteration_placeholder(&current) {
-            self.finalize_recursive_answer::<K>(idx, var, raw_answer, &local_errors)
+            self.finalize_recursive_answer::<K>(var, raw_answer)
         } else {
             raw_answer
         };
@@ -2736,17 +2759,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///   placeholder used by some kinds of bindings that aren't Types) in this step.
     fn finalize_recursive_answer<K: Solve<Ans>>(
         &self,
-        idx: Idx<K>,
         var: Var,
         answer: Arc<K::Answer>,
-        errors: &ErrorCollector,
     ) -> Arc<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        let range = K::range_with(idx, self.bindings());
-        let final_answer = K::record_recursive(self, range, answer, var, errors);
+        let final_answer = K::record_recursive(self, answer, var);
         if var != Var::ZERO {
             self.solver().force_var(var);
         }
@@ -2977,15 +2997,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().recurse(var, self.recurser)
     }
 
-    pub fn record_recursive(
-        &self,
-        loc: TextRange,
-        ty: Type,
-        recursive: Var,
-        errors: &ErrorCollector,
-    ) -> Type {
-        self.solver()
-            .record_recursive::<Ans>(recursive, ty, self.type_order(), errors, loc)
+    pub fn record_recursive(&self, ty: Type, recursive: Var) -> Type {
+        self.solver().record_recursive(recursive, ty)
     }
 
     /// Check if `got` matches `want`, returning `want` if the check fails.
@@ -2998,6 +3011,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> TypeInfo {
         if self.check_type(got.ty(), want, loc, errors, tcc) {
+            got
+        } else {
+            got.with_ty(want.clone())
+        }
+    }
+
+    pub fn check_and_return_type_info_with_call_context(
+        &self,
+        got: TypeInfo,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> TypeInfo {
+        if self.check_type_with_call_context(got.ty(), want, loc, errors, tcc, call_context) {
             got
         } else {
             got.with_ty(want.clone())
@@ -3020,6 +3049,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn check_and_return_type_with_call_context(
+        &self,
+        got: Type,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> Type {
+        if self.check_type_with_call_context(&got, want, loc, errors, tcc, call_context) {
+            got
+        } else {
+            want.clone()
+        }
+    }
+
     /// Check if `got` matches `want`, returning `true` on success and `false` on failure.
     pub fn check_type(
         &self,
@@ -3029,13 +3074,73 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
-        match self.is_subset_eq_with_reason(got, want) {
+        let subset_result = match tcc().kind {
+            TypeCheckKind::CallArgument(..)
+            | TypeCheckKind::CallVarArgs(..)
+            | TypeCheckKind::CallKwArgs(..)
+            | TypeCheckKind::CallUnpackKwArg(..) => {
+                let mut call_context = CallContext::outside();
+                call_context.set_argument_side(ArgumentSide::Got);
+                self.solver().is_subset_eq_with_call_context(
+                    got,
+                    want,
+                    self.type_order(),
+                    &call_context,
+                )
+            }
+            _ => self.is_subset_eq_with_reason(got, want),
+        };
+        match subset_result {
             Ok(()) => true,
             Err(error) => {
-                self.solver().error(got, want, errors, loc, tcc, error);
+                self.report_type_error(got, want, errors, loc, tcc, error);
                 false
             }
         }
+    }
+
+    pub fn check_type_with_call_context(
+        &self,
+        got: &Type,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> bool {
+        match self.solver().is_subset_eq_with_call_context(
+            got,
+            want,
+            self.type_order(),
+            call_context,
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                self.report_type_error(got, want, errors, loc, tcc, error);
+                false
+            }
+        }
+    }
+
+    fn report_type_error(
+        &self,
+        got: &Type,
+        want: &Type,
+        errors: &ErrorCollector,
+        loc: TextRange,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        error: SubsetError,
+    ) {
+        let enum_member_suggestion = self.suggest_enum_member_for_value(got, want);
+        let note = enum_member_suggestion
+            .as_ref()
+            .map(|s| format!("Did you mean `{s}`?"));
+        let quick_fixes = enum_member_suggestion
+            .map(|replacement| ErrorQuickFix::ReplaceWithEnumMember { replacement })
+            .into_iter()
+            .collect();
+        self.solver()
+            .error(got, want, errors, loc, tcc, error, note, quick_fixes);
     }
 
     pub fn distribute_over_union(&self, ty: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {
@@ -3126,7 +3231,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ErrorCollector::new(self.module().dupe(), ErrorStyle::Never)
     }
 
-    /// Add an implicit-any error for a generic entity without explicit type arguments.
+    /// Add an `implicit-any-type-argument` error for a generic entity used
+    /// without explicit type arguments.
     pub fn add_implicit_any_error(
         errors: &ErrorCollector,
         range: TextRange,
@@ -3146,7 +3252,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         errors.add(
             range,
-            ErrorInfo::Kind(ErrorKind::ImplicitAny),
+            ErrorInfo::Kind(ErrorKind::ImplicitAnyTypeArgument),
             vec1![
                 msg,
                 "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),

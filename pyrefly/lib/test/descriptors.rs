@@ -381,7 +381,6 @@ from __future__ import annotations
 
 from typing import Callable
 
-
 class CachedMethod:
     def __init__(self, fn: Callable[[Constraint], int]) -> None:
         self._fn = fn
@@ -394,10 +393,8 @@ class CachedMethod:
 
     def clear_cache(self, obj: Constraint) -> None: ...
 
-
 def cache_on_self(fn: Callable[[Constraint], int]) -> CachedMethod:
     return CachedMethod(fn)
-
 
 class Constraint:
     @cache_on_self
@@ -650,6 +647,33 @@ from .decl_api import DeclarativeBase as DeclarativeBase
     env
 }
 
+fn stub_descriptor_env() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "pkg.styleable",
+        "pkg/styleable.pyi",
+        r#"
+class Descriptor:
+    def __get__(self, obj: object, owner: object) -> str: ...
+    def __set__(self, obj: object, value: str) -> None: ...
+
+class StyleableObject:
+    style: Descriptor
+    "#,
+    );
+    env.add_with_path(
+        "pkg.cell",
+        "pkg/cell.pyi",
+        r#"
+from .styleable import StyleableObject
+
+class Cell(StyleableObject): ...
+    "#,
+    );
+    env.add_with_path("pkg", "pkg/__init__.pyi", "");
+    env
+}
+
 testcase!(
     test_sqlalchemy_mapped_is_always_descriptor,
     sqlalchemy_mapped_env(),
@@ -661,6 +685,23 @@ class User(Base):
     name: Mapped[str]
     def __init__(self, name: str):
         self.name = name
+    "#,
+);
+
+testcase!(
+    test_stub_annotation_only_descriptor_has_descriptor_semantics,
+    stub_descriptor_env(),
+    r#"
+from typing import assert_type
+
+from pkg.cell import Cell
+from pkg.styleable import StyleableObject
+
+c = Cell()
+s = StyleableObject()
+
+assert_type(c.style, str)
+assert_type(s.style, str)
     "#,
 );
 
@@ -693,5 +734,141 @@ class B[T: A]:
     def f(self):
         for k in self.a.x:
             print(k)
+    "#,
+);
+
+testcase!(
+    test_property_constructor_non_callable_arg,
+    r#"
+from typing import Any, assert_type
+class C:
+    p = property(42)  # E: `Literal[42]` is not assignable to parameter `fget`
+def f(c: C):
+    assert_type(c.p, Any)
+    "#,
+);
+
+testcase!(
+    test_property_constructor_with_none_setter,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    foo = property(_get_foo, None)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = 42  # E: Attribute `foo` of class `C` is a read-only property and cannot be set
+    "#,
+);
+
+testcase!(
+    test_property_constructor_read_only,
+    r#"
+from typing import assert_type, reveal_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    foo = property(_get_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = 42  # E: Attribute `foo` of class `C` is a read-only property and cannot be set
+    reveal_type(C.foo)  # E: revealed type: (self: C) -> int
+    "#,
+);
+
+testcase!(
+    test_property_constructor_with_setter,
+    r#"
+from typing import assert_type, reveal_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: str) -> None:
+        pass
+    foo = property(_get_foo, _set_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = "42"
+    c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
+    reveal_type(C.foo)  # E: revealed type: (self: C, value: str)
+    "#,
+);
+
+testcase!(
+    test_property_constructor_with_deleter,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: int) -> None:
+        pass
+    def _del_foo(self) -> None:
+        pass
+    foo = property(_get_foo, _set_foo, _del_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = 1
+    del c.foo
+    "#,
+);
+
+testcase!(
+    test_property_constructor_keyword_args,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: str) -> None:
+        pass
+    foo = property(fget=_get_foo, fset=_set_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = "42"
+    c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
+    "#,
+);
+
+testcase!(
+    test_property_constructor_mixed_args,
+    r#"
+from typing import assert_type
+class C:
+    def _get_foo(self) -> int:
+        return 42
+    def _set_foo(self, value: str) -> None:
+        pass
+    foo = property(_get_foo, fset=_set_foo)
+def f(c: C):
+    assert_type(c.foo, int)
+    c.foo = "42"
+    c.foo = 42  # E: `Literal[42]` is not assignable to parameter `value` with type `str`
+    "#,
+);
+
+testcase!(
+    test_property_constructor_lambda,
+    r#"
+from typing import assert_type, Literal
+class C:
+    foo = property(lambda self: 42)
+def f(c: C):
+    assert_type(c.foo, Literal[42])
+    c.foo = 42  # E: Attribute `foo` of class `C` is a read-only property and cannot be set
+    "#,
+);
+
+testcase!(
+    test_property_constructor_nullable_getter,
+    r#"
+from typing import assert_type
+class C:
+    def _get_x(self) -> str | None:
+        return None
+    x = property(_get_x)
+def f(c: C):
+    assert_type(c.x, str | None)
     "#,
 );
