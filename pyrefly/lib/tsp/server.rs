@@ -51,7 +51,6 @@ use crate::tsp::validation::snapshot_outdated_error;
 
 struct ExtraConnectionHandle {
     close_tx: crossbeam_channel::Sender<()>,
-    response_sender: crossbeam_channel::Sender<Message>,
 }
 
 pub struct TspServer<T: TspInterface> {
@@ -81,18 +80,6 @@ impl<T: TspInterface> TspServer<T> {
         let notification = snapshot_changed_notification(old_snapshot, new_snapshot);
         if let Err(e) = main_sender.send(Message::Notification(notification.clone())) {
             warn!("Failed to send snapshotChanged notification: {e}");
-        }
-        let handles = self
-            .extra_connections
-            .lock()
-            .expect("extra_connections mutex poisoned");
-        for (name, handle) in handles.iter() {
-            if let Err(e) = handle
-                .response_sender
-                .send(Message::Notification(notification.clone()))
-            {
-                warn!("Failed to send snapshotChanged to extra connection {name}: {e}");
-            }
         }
     }
 }
@@ -383,13 +370,7 @@ impl<T: TspInterface> TspMainConnection<T> {
         let (close_tx, close_rx) = crossbeam_channel::bounded::<()>(1);
         let name_owned = name.to_owned();
 
-        extra_connections.insert(
-            name_owned.clone(),
-            ExtraConnectionHandle {
-                close_tx,
-                response_sender: extra_sender,
-            },
-        );
+        extra_connections.insert(name_owned.clone(), ExtraConnectionHandle { close_tx });
         drop(extra_connections);
 
         extra_conn.run(reader, close_rx, name_owned);
