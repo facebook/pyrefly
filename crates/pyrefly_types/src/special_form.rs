@@ -20,6 +20,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::name::Name;
 
 use crate::annotation::Qualifier;
+use crate::heap::TypeHeap;
 use crate::literal::LitStyle;
 use crate::types::NeverStyle;
 use crate::types::Type;
@@ -47,6 +48,7 @@ pub enum SpecialForm {
     Tuple,
     Type,
     TypeAlias,
+    TypeForm,
     TypeGuard,
     TypeIs,
     TypedDict,
@@ -73,12 +75,14 @@ impl SpecialForm {
         SpecialForm::from_str(name.as_str()).ok()
     }
 
-    pub fn to_type(self) -> Type {
+    pub fn to_type(self, heap: &TypeHeap) -> Type {
         match self {
-            SpecialForm::LiteralString => Type::type_form(Type::LiteralString(LitStyle::Explicit)),
-            SpecialForm::Never => Type::type_form(Type::Never(NeverStyle::Never)),
-            SpecialForm::NoReturn => Type::type_form(Type::Never(NeverStyle::NoReturn)),
-            _ => Type::type_form(Type::SpecialForm(self)),
+            SpecialForm::LiteralString => {
+                heap.mk_type_of(heap.mk_literal_string(LitStyle::Explicit))
+            }
+            SpecialForm::Never => heap.mk_type_of(heap.mk_never_style(NeverStyle::Never)),
+            SpecialForm::NoReturn => heap.mk_type_of(heap.mk_never_style(NeverStyle::NoReturn)),
+            _ => heap.mk_type_of(heap.mk_special_form(self)),
         }
     }
 
@@ -93,6 +97,15 @@ impl SpecialForm {
             | Self::TypedDict => false,
             _ => true,
         }
+    }
+
+    /// Is this special form a valid type expression on its own (without parameters)?
+    /// Used to reject bare forms like `Optional` from being assigned to `TypeForm`.
+    pub fn is_valid_bare_type_expression(self) -> bool {
+        matches!(
+            self,
+            Self::LiteralString | Self::Never | Self::NoReturn | Self::Type | Self::TypeForm
+        )
     }
 
     pub fn to_qualifier(self) -> Option<Qualifier> {
@@ -147,6 +160,10 @@ mod tests {
         assert_eq!(
             SpecialForm::from_str("Self").unwrap(),
             SpecialForm::SelfType
+        );
+        assert_eq!(
+            SpecialForm::from_str("TypeForm").unwrap(),
+            SpecialForm::TypeForm
         );
         assert!(SpecialForm::from_str("NotASpecial").is_err());
     }

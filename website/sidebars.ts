@@ -88,14 +88,21 @@ let docsSidebar = [
         ],
     },
     {
-        type: 'doc' as const,
-        id: 'error-suppressions',
-        label: 'Error Suppressions',
-    },
-    {
-        type: 'doc' as const,
-        id: 'error-kinds',
-        label: 'Error Kinds',
+        type: 'category' as const,
+        label: 'Errors',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'error-suppressions',
+                label: 'Error Suppressions',
+            },
+            {
+                type: 'doc' as const,
+                id: 'error-kinds',
+                label: 'Error Kinds',
+            },
+        ],
     },
     {
         type: 'doc' as const,
@@ -103,9 +110,86 @@ let docsSidebar = [
         label: 'Import Resolution',
     },
     {
-        type: 'doc' as const,
-        id: 'autotype',
-        label: 'Automating Type Annotations',
+        type: 'category' as const,
+        label: 'Tools',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'autotype',
+                label: 'Automating Type Annotations',
+            },
+            {
+                type: 'doc' as const,
+                id: 'report',
+                label: 'Measuring Type Coverage',
+            },
+            {
+                type: 'doc' as const,
+                id: 'stubgen',
+                label: 'Generating Stub Files',
+            },
+        ],
+    },
+    {
+        type: 'category' as const,
+        label: 'Tensor Shapes',
+        description:
+            'Static type checking of tensor shapes in PyTorch models',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes',
+                label: 'Overview',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-setup',
+                label: 'Getting Started',
+            },
+            {
+                type: 'category' as const,
+                label: 'Tutorials',
+                items: [
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-basics',
+                        label: '1. Your First Port',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-loops',
+                        label: '2. Loops and Stacking',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-architectures',
+                        label: '3. Complex Architectures',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-advanced',
+                        label: '4. Configs and Dynamic Patterns',
+                    },
+                ],
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-ai-porting',
+                label: 'Agent Skill',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-reference',
+                label: 'API Reference',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-contributing',
+                label: 'Contributing',
+            },
+        ],
     },
     {
         type: 'doc' as const,

@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+
 use dupe::Dupe;
 
 #[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq)]
@@ -17,6 +20,14 @@ impl Epoch {
 
     pub fn next(&mut self) {
         self.0 += 1;
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn from_u32(v: u32) -> Self {
+        Self(v)
     }
 }
 
@@ -35,11 +46,19 @@ pub struct Epochs {
     pub computed: Epoch,
 }
 
-impl Epochs {
-    pub fn new(now: Epoch) -> Self {
-        Self {
-            checked: now,
-            computed: now,
-        }
+#[derive(Debug)]
+pub struct AtomicEpoch(AtomicU32);
+
+impl AtomicEpoch {
+    pub fn new(epoch: Epoch) -> Self {
+        Self(AtomicU32::new(epoch.0))
+    }
+
+    pub fn load(&self) -> Epoch {
+        Epoch(self.0.load(Ordering::Acquire))
+    }
+
+    pub fn store(&self, epoch: Epoch) {
+        self.0.store(epoch.0, Ordering::Release);
     }
 }

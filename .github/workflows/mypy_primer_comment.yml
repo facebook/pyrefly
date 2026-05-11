@@ -49,8 +49,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const MAX_CHARACTERS = 50000
-            const MAX_CHARACTERS_PER_PROJECT = MAX_CHARACTERS / 3
+            const MAX_CHARACTERS = 100000
+            const MAX_CHARACTERS_PER_PROJECT = MAX_CHARACTERS / 4
 
             const fs = require('fs')
             let data = fs.readFileSync('fulldiff.txt', { encoding: 'utf8' })

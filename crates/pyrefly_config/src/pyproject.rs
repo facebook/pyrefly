@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context as _;
@@ -14,11 +15,19 @@ use serde::Serialize;
 
 use crate::config::ConfigFile;
 
+/// Known Python tool names whose presence in `[tool.*]` indicates
+/// this directory is a Python project root.
+const PYTHON_TOOL_NAMES: &[&str] = &["ruff", "mypy", "pyright"];
+
 /// Wrapper used to (de)serialize pyrefly configs from pyproject.toml files.
 #[derive(Debug, Serialize, Deserialize)]
 struct Tool {
     #[serde(default)]
     pyrefly: Option<ConfigFile>,
+    /// Catch-all for other `[tool.*]` sections. We check this for known
+    /// Python tool names (see `PYTHON_TOOL_NAMES`) to detect Python project roots.
+    #[serde(default, flatten)]
+    other_tools: HashMap<String, toml::Value>,
 }
 
 /// Wrapper used to (de)serialize pyrefly configs from pyproject.toml files.
@@ -28,16 +37,44 @@ pub struct PyProject {
     tool: Option<Tool>,
 }
 
+/// Recursively finds the maximum position among a table and all its nested sub-tables.
+/// This is needed because pyproject.toml files often have deeply nested tool sections
+/// like `[tool.ruff.lint.pydocstyle]`, and we need to find the position of the last
+/// nested section to insert `[tool.pyrefly]` after all of them.
+fn max_position_recursive(table: &toml_edit::Table) -> isize {
+    let own_pos = table.position().unwrap_or(0);
+    let child_max = table
+        .iter()
+        .filter_map(|(_, v)| v.as_table().map(max_position_recursive))
+        .max()
+        .unwrap_or(0);
+    own_pos.max(child_max)
+}
+
 impl PyProject {
     /// Wrap the given ConfigFile in a `PyProject { Tool { ... }}`
     pub fn new(cfg: ConfigFile) -> Self {
         Self {
-            tool: Some(Tool { pyrefly: Some(cfg) }),
+            tool: Some(Tool {
+                pyrefly: Some(cfg),
+                other_tools: HashMap::new(),
+            }),
         }
     }
 
     pub(crate) fn pyrefly(self) -> Option<ConfigFile> {
         self.tool.and_then(|t| t.pyrefly)
+    }
+
+    /// Whether this pyproject.toml has sections for Python tools like ruff,
+    /// mypy, or pyright. This is a strong signal that the directory is a Python
+    /// project root, even without an explicit `[tool.pyrefly]` section.
+    pub(crate) fn has_python_tools(&self) -> bool {
+        self.tool.as_ref().is_some_and(|t| {
+            PYTHON_TOOL_NAMES
+                .iter()
+                .any(|name| t.other_tools.contains_key(*name))
+        })
     }
 
     pub fn update(pyproject_path: &Path, config: ConfigFile) -> anyhow::Result<()> {
@@ -68,9 +105,11 @@ impl PyProject {
                         tool_table_mut.set_implicit(true);
                     }
                     tool_table_mut.remove("pyrefly");
+                    // Use recursive position finding to account for deeply nested
+                    // tool sections like [tool.ruff.lint.pydocstyle]
                     let max_tool_pos = tool_table_mut
                         .iter()
-                        .filter_map(|(_, v)| v.as_table().and_then(|t| t.position()))
+                        .filter_map(|(_, v)| v.as_table().map(max_position_recursive))
                         .max()
                         .unwrap_or(0);
                     tool_table_mut.insert("pyrefly", pyrefly_table.clone());
@@ -173,6 +212,8 @@ line-length = 88
 
     #[test]
     fn test_pyrefly_section_ordering() -> anyhow::Result<()> {
+        // This test verifies that [tool.pyrefly] is placed after ALL tool sections,
+        // including deeply nested ones like [tool.ruff.lint.pydocstyle].
         let tmp = tempfile::tempdir()?;
         let ordering_path = tmp.path().join("ordering_test.toml");
         let existing_content = r#"[project]
@@ -191,6 +232,12 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88
+
+[tool.ruff.lint]
+select = ["C4", "LOG"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [build-system]
 requires = ["setuptools"]
@@ -223,6 +270,12 @@ build-backend = "setuptools.build_meta"
             "\n",
             "[tool.ruff]\n",
             "line-length = 88\n",
+            "\n",
+            "[tool.ruff.lint]\n",
+            "select = [\"C4\", \"LOG\"]\n",
+            "\n",
+            "[tool.ruff.lint.pydocstyle]\n",
+            "convention = \"google\"\n",
             "\n",
             "[tool.pyrefly]\n",
             "project-includes = [\"ordering_test.py\"]\n",

@@ -10,7 +10,7 @@ from collections.abc import Callable
 from threading import Thread
 from types import TracebackType
 from typing import Any, Final, NoReturn, final, overload
-from typing_extensions import TypeVarTuple, Unpack, disjoint_base
+from typing_extensions import TypeVarTuple, Unpack, deprecated, disjoint_base
 
 _Ts = TypeVarTuple("_Ts")
 
@@ -98,9 +98,12 @@ if sys.version_info >= (3, 13):
         def acquire(self, blocking: bool = True, timeout: float = -1) -> bool: ...
         def release(self) -> None: ...
         def locked(self) -> bool: ...
-        def acquire_lock(self, blocking: bool = True, timeout: float = -1) -> bool: ...
-        def release_lock(self) -> None: ...
-        def locked_lock(self) -> bool: ...
+        @deprecated("Obsolete synonym. Use `acquire()` instead.")
+        def acquire_lock(self, blocking: bool = True, timeout: float = -1) -> bool: ...  # undocumented
+        @deprecated("Obsolete synonym. Use `release()` instead.")
+        def release_lock(self) -> None: ...  # undocumented
+        @deprecated("Obsolete synonym. Use `locked()` instead.")
+        def locked_lock(self) -> bool: ...  # undocumented
         def __enter__(self) -> bool: ...
         def __exit__(
             self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
@@ -153,6 +156,7 @@ else:
             Return whether the lock is in the locked state.
             """
             ...
+        @deprecated("Obsolete synonym. Use `acquire()` instead.")
         def acquire_lock(self, blocking: bool = True, timeout: float = -1) -> bool:
             """
             acquire(blocking=True, timeout=-1) -> bool
@@ -166,6 +170,7 @@ else:
             The blocking operation is interruptible.
             """
             ...
+        @deprecated("Obsolete synonym. Use `release()` instead.")
         def release_lock(self) -> None:
             """
             release()
@@ -176,6 +181,7 @@ else:
             but it needn't be locked by the same thread that unlocks it.
             """
             ...
+        @deprecated("Obsolete synonym. Use `locked()` instead.")
         def locked_lock(self) -> bool:
             """
             locked() -> bool
@@ -238,9 +244,8 @@ def start_new_thread(function: Callable[..., object], args: tuple[Any, ...], kwa
     printed unless the exception is SystemExit.
     """
     ...
-
-# Obsolete synonym for start_new_thread()
 @overload
+@deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
 def start_new(function: Callable[[Unpack[_Ts]], object], args: tuple[Unpack[_Ts]], /) -> int:
     """
     start_new_thread(function, args[, kwargs])
@@ -255,6 +260,7 @@ def start_new(function: Callable[[Unpack[_Ts]], object], args: tuple[Unpack[_Ts]
     """
     ...
 @overload
+@deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
 def start_new(function: Callable[..., object], args: tuple[Any, ...], kwargs: dict[str, Any], /) -> int:
     """
     start_new_thread(function, args[, kwargs])
@@ -295,6 +301,7 @@ def exit() -> NoReturn:
     thread to exit silently unless the exception is caught.
     """
     ...
+@deprecated("Obsolete synonym. Use `exit()` instead.")
 def exit_thread() -> NoReturn:
     """
     exit()
@@ -313,6 +320,7 @@ def allocate_lock() -> LockType:
     information about locks.
     """
     ...
+@deprecated("Obsolete synonym. Use `allocate_lock()` instead.")
 def allocate() -> LockType:
     """
     allocate_lock() -> lock object

@@ -117,7 +117,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value is of type `Literal['A']` but the field is annotated with `int` # E: Pydantic `lt` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(gt="A", lt="B") # E:  Pydantic `gt` value has type `Literal['A']`, which is not assignable to field type `int` # E: Pydantic `lt` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,
@@ -129,7 +129,7 @@ pydantic_testcase!(
 from pydantic import BaseModel, Field
 
 class Model(BaseModel):
-    x: int = Field(ge="B") # E: Pydantic `ge` value is of type `Literal['B']` but the field is annotated with `int`
+    x: int = Field(ge="B") # E: Pydantic `ge` value has type `Literal['B']`, which is not assignable to field type `int`
 
 Model(x=5)
 "#,
@@ -305,5 +305,98 @@ house = House(
     city="House City",
     zipcode="House Zipcode",
 )
+    "#,
+);
+
+pydantic_testcase!(
+    test_model_fields_with_bounded_typevar,
+    r#"
+from pydantic import BaseModel
+
+class MyModel(BaseModel):
+    field: int
+
+class A[T: BaseModel]:
+    def __init__(self, model_type: type[T]) -> None:
+        self._model_type = model_type
+
+    def print_model_fields(self) -> None:
+        for field in self._model_type.model_fields:
+            print(field)
+
+a = A(MyModel)
+a.print_model_fields()
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator,
+    r#"
+from pydantic import BaseModel
+from pydantic import field_validator
+
+class MyBaseModel(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not v:
+            raise ValueError("Name cannot be empty")
+        return v
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator_mode_before,
+    r#"
+from pydantic import BaseModel, field_validator
+
+class C(BaseModel):
+    x: str
+    @field_validator('x', mode='before')
+    @classmethod
+    def validate_x(cls, x):
+        return str(x)
+
+C(x=0)
+C(x="hello")
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator_mode_before_inherited,
+    r#"
+from pydantic import BaseModel, field_validator
+
+class Parent(BaseModel):
+    x: str
+    @field_validator('x', mode='before')
+    @classmethod
+    def validate_x(cls, x):
+        return str(x)
+
+class Child(Parent):
+    pass
+
+Child(x=0)
+Child(x="hello")
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator_mode_plain,
+    r#"
+from pydantic import BaseModel, field_validator
+
+class P(BaseModel):
+    x: int
+    @field_validator('x', mode='plain')
+    @classmethod
+    def validate_x(cls, x) -> int:
+        return int(x)
+
+P(x="99")
+P(x=42)
     "#,
 );

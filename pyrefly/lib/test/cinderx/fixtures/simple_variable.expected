@@ -1,0 +1,3 @@
+  6:0-1: builtins.int
+  6:3-6: typing.Type[builtins.int]
+  6:9-11: Literal[42] -> builtins.int

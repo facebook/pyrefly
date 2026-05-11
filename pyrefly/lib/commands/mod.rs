@@ -20,6 +20,10 @@ pub mod lsp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod report;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod stubgen;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod suppress;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tsp;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod util;

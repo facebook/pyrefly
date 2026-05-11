@@ -105,6 +105,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: pyrefly-extension
+      - name: set jemalloc page size for ARM64 Linux
+        if: ${{ matrix.arch == 'arm64' && matrix.platform == 'linux' || matrix.arch == 'arm64' && matrix.platform == 'alpine' }}
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> ${{ matrix.github_env }}
+      - name: set jemalloc page size for ARM64 macOS
+        if: ${{ matrix.arch == 'arm64' && matrix.platform == 'darwin' }}
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> ${{ matrix.github_env }}
       - name: build pyrefly binary (cross-compile)
         if: ${{ matrix.rust_target != '' }}
         uses: houseabsolute/actions-rust-cross@v1

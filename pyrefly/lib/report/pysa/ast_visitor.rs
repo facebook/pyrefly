@@ -28,7 +28,6 @@ use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
 use crate::report::pysa::function::should_export_decorated_function;
-use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
 
 pub enum Scope {
@@ -42,7 +41,6 @@ pub enum Scope {
         decorated_function: DecoratedFunction,
     },
     ExportedClass {
-        #[allow(dead_code)]
         class_id: ClassId,
         #[allow(dead_code)]
         class_name: Name,
@@ -81,7 +79,6 @@ pub enum ExportFunctionDecorators {
     InDecoratedFunction,
     InParentScope,
     InDecoratedTarget,
-    #[allow(dead_code)]
     Ignore,
 }
 
@@ -89,14 +86,12 @@ pub enum ExportClassDecorators {
     #[allow(dead_code)]
     InDecoratedClassTopLevel,
     InParentScope,
-    #[allow(dead_code)]
     Ignore,
 }
 
 pub enum ExportDefaultArguments {
     InFunction,
     InParentScope,
-    #[allow(dead_code)]
     Ignore,
 }
 
@@ -311,22 +306,22 @@ fn visit_statement<V: AstScopedVisitor>(
         Stmt::FunctionDef(function_def) => {
             let key = KeyDecoratedFunction(ShortIdentifier::new(&function_def.name));
             let function_scope = if let Some(idx) = module_context
+                .answers_context
                 .bindings
                 .key_to_idx_hashed_opt(Hashed::new(&key))
             {
                 let decorated_function = DecoratedFunction::from_bindings_answers(
                     idx,
-                    &module_context.bindings,
-                    &module_context.answers,
+                    &module_context.answers_context.bindings,
+                    &module_context.answers_context.answers,
                 );
-                if should_export_decorated_function(&decorated_function, module_context) {
+                if should_export_decorated_function(
+                    &decorated_function,
+                    &module_context.answers_context,
+                ) {
                     Scope::ExportedFunction {
                         function_id: FunctionId::Function {
-                            location: PysaLocation::new(
-                                module_context
-                                    .module_info
-                                    .display_range(function_def.identifier()),
-                            ),
+                            func_def_index: decorated_function.undecorated.def_index,
                         },
                         location: function_def.identifier().range(),
                         function_name: function_def.name.id().clone(),
@@ -429,10 +424,12 @@ fn visit_statement<V: AstScopedVisitor>(
         Stmt::ClassDef(class_def) => {
             let key = KeyClass(ShortIdentifier::new(&class_def.name));
             let class_scope = if let Some(idx) = module_context
+                .answers_context
                 .bindings
                 .key_to_idx_hashed_opt(Hashed::new(&key))
             {
                 let class = module_context
+                    .answers_context
                     .answers
                     .get_idx(idx)
                     .unwrap()
@@ -537,11 +534,11 @@ pub fn visit_module_ast<V: AstScopedVisitor>(
     let mut scopes = Scopes {
         stack: vec![Scope::TopLevel],
     };
-    visitor.enter_toplevel_scope(&module_context.ast, &scopes);
+    visitor.enter_toplevel_scope(&module_context.answers_context.ast, &scopes);
     visitor.on_scope_update(&scopes);
-    for stmt in &module_context.ast.body {
+    for stmt in &module_context.answers_context.ast.body {
         visit_statement(stmt, visitor, &mut scopes, module_context);
     }
-    visitor.exit_toplevel_scope(&module_context.ast, &scopes);
+    visitor.exit_toplevel_scope(&module_context.answers_context.ast, &scopes);
     scopes
 }

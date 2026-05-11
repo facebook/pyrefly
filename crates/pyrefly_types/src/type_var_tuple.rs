@@ -20,6 +20,7 @@ use ruff_python_ast::Identifier;
 
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
+use crate::heap::TypeHeap;
 use crate::types::Type;
 
 /// Used to represent TypeVarTuple calls. Each TypeVarTuple is unique, so use the ArcId to separate them.
@@ -65,8 +66,8 @@ impl TypeVarTuple {
         self.0.default.as_ref()
     }
 
-    pub fn to_type(&self) -> Type {
-        Type::TypeVarTuple(self.dupe())
+    pub fn to_type(&self, heap: &TypeHeap) -> Type {
+        heap.mk_type_var_tuple(self.dupe())
     }
 
     pub fn type_eq_inner(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {

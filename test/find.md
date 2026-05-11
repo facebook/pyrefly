@@ -4,6 +4,7 @@
 
 ```scrut
 $ mkdir -p $TMPDIR/inner/foo && mkdir -p $TMPDIR/inner/baz && \
+> touch $TMPDIR/inner/pyrefly.toml && \
 > echo "x: str = 12" > $TMPDIR/inner/foo/bar.py && \
 > echo "import foo.bar; y: int = foo.bar.x" > $TMPDIR/inner/baz/quux.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/inner/baz/quux.py --output-format=min-text
@@ -14,9 +15,10 @@ $ mkdir -p $TMPDIR/inner/foo && mkdir -p $TMPDIR/inner/baz && \
 ## We can do our own globbing
 
 ```scrut
-$ echo "x: str = 12" > $TMPDIR/glob1.py && \
-> echo "x: str = 12" > $TMPDIR/glob2.py && \
-> $PYREFLY check --python-version 3.13.0 "$TMPDIR/glob*.py" --output-format=min-text
+$ mkdir $TMPDIR/globbing && touch $TMPDIR/globbing/pyrefly.toml && \
+> echo "x: str = 12" > $TMPDIR/globbing/glob1.py && \
+> echo "x: str = 12" > $TMPDIR/globbing/glob2.py && \
+> $PYREFLY check --python-version 3.13.0 "$TMPDIR/globbing/glob*.py" --output-format=min-text
 */glob*.py:1:* (glob)
 */glob*.py:1:* (glob)
 [1]
@@ -25,8 +27,11 @@ $ echo "x: str = 12" > $TMPDIR/glob1.py && \
 ## --search-path takes precedence over default typeshed
 
 ```scrut
-$ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files false 2>&1 | grep -v "overrides"
+$ PYREFLY_STDLIB_SEARCH_PATH=$TYPESHED_ROOT/typeshed/stdlib $PYREFLY check --python-version 3.13.0 $TYPESHED_ROOT/typeshed/stdlib/builtins.pyi --search-path $TYPESHED_ROOT/typeshed/stdlib --output-format=min-text --use-ignore-files=false --permissive-ignores=true 2>&1 | grep -v "overrides"
  INFO * errors* (glob)
+No `pyrefly.toml` found — using preset `basic`.
+Run `pyrefly init` to continue setting up Pyrefly.
+Docs: * (glob)
 [0]
 ```
 
@@ -40,8 +45,11 @@ $ mkdir $TMPDIR/ignores && echo "*" > $TMPDIR/ignores/.gitignore && \
 > touch $TMPDIR/ignores/pyrefly.toml && \
 > $PYREFLY check --python-version 3.13.0 -c $TMPDIR/ignores/pyrefly.toml --output-format=min-text
  INFO Checking project configured at * (glob)
-Pattern * is matched by `project-excludes` or ignore file. (glob)
+ WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
 `project-excludes`: [*], ignore files [*/.gitignore, */.ignore, */.git/info/exclude] (glob)
+ WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
+`project-excludes`: * (glob)
+No Python files matched patterns `*` (glob)
 [1]
 ```
 
@@ -77,15 +85,18 @@ $ mkdir $TMPDIR/relative_ignore && \
 
 ```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_project/src/foo/bar.py && echo "from foo.bar import x" > $TMPDIR/src_project/src/foo/baz.py && cd $TMPDIR/src_project && $PYREFLY check
- INFO Checking current directory with default configuration
+ INFO Checking current directory with auto configuration
  INFO 0 errors
+No `pyrefly.toml` found — using preset `basic`.
+Run `pyrefly init` to continue setting up Pyrefly.
+Docs: * (glob)
 [0]
 ```
 
 ## Relative --project-excludes
 
 ```scrut {output_stream: stderr}
-$ mkdir $TMPDIR/foo && touch $TMPDIR/foo/bar.py && echo "x: str = 0" > $TMPDIR/foo/problem.py && cd $TMPDIR/foo && $PYREFLY check "*.py" --project-excludes=problem.py
+$ mkdir $TMPDIR/foo && touch $TMPDIR/foo/pyrefly.toml && touch $TMPDIR/foo/bar.py && echo "x: str = 0" > $TMPDIR/foo/problem.py && cd $TMPDIR/foo && $PYREFLY check "*.py" --project-excludes=problem.py
  INFO 0 errors
 [0]
 ```
@@ -104,6 +115,7 @@ $ mkdir $TMPDIR/test-stubs && touch $TMPDIR/test-stubs/utils.pyi && touch $TMPDI
 
 ```scrut
 $ mkdir $TMPDIR/pyi-order && mkdir $TMPDIR/pyi-order/pyi && \
+> touch $TMPDIR/pyi-order/pyrefly.toml && \
 > echo "x: int = 1" > $TMPDIR/pyi-order/pyi/lib.pyi && \
 > mkdir $TMPDIR/pyi-order/py && echo "x: str = '1'" > $TMPDIR/pyi-order/py/lib.py && \
 > echo "from typing_extensions import reveal_type; from lib import x; reveal_type(x)" > $TMPDIR/pyi-order/test.py && \

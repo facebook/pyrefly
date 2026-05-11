@@ -7,9 +7,9 @@
 
 use lsp_types::CodeActionOrCommand;
 
-use crate::test::lsp::lsp_interaction::object_model::InitializeSettings;
-use crate::test::lsp::lsp_interaction::object_model::LspInteraction;
-use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+use crate::object_model::InitializeSettings;
+use crate::object_model::LspInteraction;
+use crate::util::get_test_files_root;
 
 #[test]
 fn test_notebook_code_action_import() {
@@ -53,7 +53,8 @@ fn test_notebook_code_action_import() {
         })
         .unwrap();
 
-    // Code actions for later cells will still insert imports to the first cell
+    // Code actions for later cells insert imports into the current cell, not the first cell
+    let cell2_uri = interaction.cell_uri("notebook.ipynb", "cell2");
     interaction
         .code_action_cell("notebook.ipynb", "cell2", 0, 0, 0, 10)
         .expect_response_with(|response| {
@@ -68,7 +69,7 @@ fn test_notebook_code_action_import() {
                     .edit
                     .as_ref()
                     .and_then(|edit| edit.changes.as_ref())
-                    .and_then(|changes| changes.get(&cell1_uri))
+                    .and_then(|changes| changes.get(&cell2_uri))
                 else {
                     return false;
                 };
@@ -80,6 +81,5 @@ fn test_notebook_code_action_import() {
             })
         })
         .unwrap();
-
     interaction.shutdown().unwrap();
 }

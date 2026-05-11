@@ -13,10 +13,10 @@ use ruff_python_ast::name::Name;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::report::pysa::class::get_all_classes;
 use crate::report::pysa::class::get_class_mro;
-use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::function::get_all_decorated_functions;
 
-fn is_unittest_module(context: &ModuleContext) -> bool {
+fn is_unittest_module(context: &ModuleAnswersContext) -> bool {
     get_all_classes(context).any(|class| match &*get_class_mro(&class, context) {
         ClassMro::Resolved(mro) => mro
             .iter()
@@ -25,7 +25,7 @@ fn is_unittest_module(context: &ModuleContext) -> bool {
     })
 }
 
-fn is_pytest_module(context: &ModuleContext) -> bool {
+fn is_pytest_module(context: &ModuleAnswersContext) -> bool {
     fn has_pytest_prefix(name: &Name) -> bool {
         name == "pytest" || name.starts_with("pytest.")
     }
@@ -42,7 +42,7 @@ fn is_pytest_module(context: &ModuleContext) -> bool {
             _ => false,
         })
     }
-    fn has_test_function(context: &ModuleContext) -> bool {
+    fn has_test_function(context: &ModuleAnswersContext) -> bool {
         get_all_decorated_functions(context).any(|function| {
             function
                 .metadata()
@@ -61,6 +61,6 @@ fn is_pytest_module(context: &ModuleContext) -> bool {
 /// We currently use the following heuristics:
 /// - If a class inherits from `unittest.TestCase`, we assume this is a test file.
 /// - If `pytest` is imported and at least one function starts with `test_`, we assume this is a test file.
-pub fn is_test_module(context: &ModuleContext) -> bool {
+pub fn is_test_module(context: &ModuleAnswersContext) -> bool {
     is_unittest_module(context) || is_pytest_module(context)
 }

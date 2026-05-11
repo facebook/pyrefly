@@ -1,0 +1,51 @@
+name: Label PR size
+
+on: [pull_request_target]
+
+permissions: {}
+
+jobs:
+  labeler:
+    permissions:
+      pull-requests: write
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    name: Label the PR size
+    steps:
+      - name: Remove existing size labels
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        continue-on-error: true
+        with:
+          script: |
+            const sizeLabels = ['size/xs', 'size/s', 'size/m', 'size/l', 'size/xl'];
+            for (const label of sizeLabels) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  name: label,
+                });
+              } catch (e) {
+                // Label may not exist on the PR; ignore errors
+              }
+            }
+      - uses: codelytv/pr-size-labeler@4ec67706cd878fbc1c8db0a5dcd28b6bb412e85a # v1
+        with:
+          xs_label: 'size/xs'
+          xs_max_size: '25'
+          s_label: 'size/s'
+          s_max_size: '75'
+          m_label: 'size/m'
+          m_max_size: '150'
+          l_label: 'size/l'
+          l_max_size: '300'
+          xl_label: 'size/xl'
+          fail_if_xl: 'false'
+          files_to_ignore: |
+            ^test/
+            ^website/
+            ^pyrefly/lib/test/
+          ignore_line_deletions: 'true'
+          ignore_file_deletions: 'true'

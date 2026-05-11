@@ -501,9 +501,152 @@
             "key": "dataclasses.dataclass"
           }
         }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "calls.py"
+          },
+          "spans": [
+            {
+              "length": 9,
+              "start": 35
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "calls.dataclass"
+          }
+        }
       }
     ],
     "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "calls.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 11,
+                "start": 5
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "dataclasses.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "dataclasses"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 52
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "True"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 77
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "print"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 5,
+                "start": 92
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "print"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 9,
+                "start": 24
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "dataclasses.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "dataclasses.dataclass"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 9,
+                "start": 35
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "calls.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "calls.dataclass"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 9,
+                "start": 35
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "dataclasses.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "dataclasses.dataclass"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
   },
   {
     "facts": [
@@ -563,6 +706,16 @@
               "target": {
                 "id": 0,
                 "key": "dataclasses.dataclass"
+              }
+            },
+            {
+              "source": {
+                "length": 9,
+                "start": 35
+              },
+              "target": {
+                "id": 0,
+                "key": "calls.dataclass"
               }
             },
             {
@@ -669,6 +822,22 @@
         "id": 0,
         "key": {
           "id": 0,
+          "key": "dataclasses"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "dataclasses"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
           "key": "dataclasses.dataclass"
         },
         "value": {
@@ -708,6 +877,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
   }
 ]

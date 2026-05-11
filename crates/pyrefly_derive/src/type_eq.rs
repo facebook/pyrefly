@@ -28,9 +28,13 @@ pub(crate) fn derive_type_eq(input: proc_macro::TokenStream) -> proc_macro::Toke
 fn generics(
     generics: &Generics,
 ) -> syn::Result<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
+    let mut lifetimes = Vec::new();
     let mut ts = Vec::new();
     for param in &generics.params {
         match param {
+            GenericParam::Lifetime(l) => {
+                lifetimes.push(&l.lifetime);
+            }
             GenericParam::Type(t) if t.bounds.is_empty() => {
                 ts.push(&t.ident);
             }
@@ -42,8 +46,9 @@ fn generics(
             }
         }
     }
-    let before = quote_spanned! { generics.span() => < #(#ts: crate::equality::TypeEq),* > };
-    let after = quote_spanned! { generics.span() => < #(#ts),* > };
+    let before =
+        quote_spanned! { generics.span() => < #(#lifetimes,)* #(#ts: crate::equality::TypeEq),* > };
+    let after = quote_spanned! { generics.span() => < #(#lifetimes,)* #(#ts),* > };
     Ok((before, after))
 }
 

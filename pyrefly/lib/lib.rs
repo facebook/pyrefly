@@ -25,22 +25,31 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(box_patterns)]
 #![feature(closure_lifetime_binder)]
-#![feature(if_let_guard)]
 
 pub mod alt;
 mod binding;
 #[cfg(not(target_arch = "wasm32"))]
-mod commands;
+#[doc(hidden)]
+pub mod commands;
 mod compat;
 mod error;
 mod export;
-mod lsp;
-mod module;
+#[doc(hidden)]
+pub mod lsp;
+#[doc(hidden)]
+pub mod module;
 pub mod playground;
 pub mod query;
 mod report;
+// Re-export the generated Cap'n Proto module at crate root, because the generated
+// code references types via `crate::pysa_report_capnp::...`.
+#[allow(clippy::all)]
+pub(crate) use report::pysa::pysa_report_capnp;
 mod solver;
-mod state;
+#[doc(hidden)]
+pub mod state;
+#[cfg(not(target_arch = "wasm32"))]
+mod stubgen;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tsp;
@@ -60,10 +69,19 @@ pub mod library {
             pub mod library {
                 pub use crate::commands::all::Command;
                 pub use crate::commands::check::CheckArgs;
+                pub use crate::commands::check::CheckResult;
                 pub use crate::commands::check::FullCheckArgs;
+                pub use crate::commands::config_finder::ConfigConfigurer;
+                pub use crate::commands::config_finder::ConfigConfigurerWrapper;
                 pub use crate::commands::config_finder::default_config_finder;
                 pub use crate::commands::config_finder::default_config_finder_with_overrides;
+                pub use crate::commands::files::UpsellDecision;
                 pub use crate::commands::util;
+                pub use crate::error::legacy::LegacyError;
+                pub use crate::lsp::non_wasm::external_provider::ExternalProvider;
+                pub use crate::lsp::non_wasm::external_provider::NoExternalProvider;
+                pub use crate::lsp::non_wasm::module_helpers::PathRemapper;
+                pub use crate::lsp::non_wasm::module_helpers::ThriftRemapper;
             }
         }
     }

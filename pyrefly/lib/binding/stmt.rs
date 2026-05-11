@@ -7,7 +7,6 @@
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
-use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -26,6 +25,7 @@ use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtExpr;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::StmtReturn;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
@@ -35,32 +35,35 @@ use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingExpect;
+use crate::binding::binding::BindingTypeAlias;
+use crate::binding::binding::ExhaustiveBinding;
+use crate::binding::binding::ExhaustivenessKind;
 use crate::binding::binding::ExprOrBinding;
+use crate::binding::binding::ImportBinding;
+use crate::binding::binding::ImportFallback;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
+use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
+use crate::binding::binding::TypeAliasBinding;
+use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
-use crate::export::exports::Export;
-use crate::export::exports::ExportLocation;
-use crate::export::exports::Exports;
 use crate::export::special::SpecialExport;
-use crate::state::loader::FindError;
-use crate::state::loader::FindingOrError;
 use crate::types::alias::resolve_typeshed_alias;
 use crate::types::special_form::SpecialForm;
-use crate::types::types::Type;
+use crate::types::types::AnyStyle;
 
 /// Checks if an iterable expression is guaranteed to be non-empty and thus
 /// the for-loop body will definitely execute at least once.
@@ -115,7 +118,9 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
-        self.insert_binding(Key::Anon(test_range), Binding::Expr(None, test));
+        let test_clone = test.clone();
+        self.insert_binding(Key::Anon(test_range), Binding::Expr(None, Box::new(test)));
+        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test_clone));
         if let Some(mut msg_expr) = msg {
             let mut base = self.scopes.clone_current_flow();
             // Negate the narrowing of the test expression when typechecking
@@ -129,7 +134,7 @@ impl<'a> BindingsBuilder<'a> {
             let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
             self.ensure_expr(&mut msg_expr, msg.usage());
             let idx = self.insert_binding(
-                KeyExpect(msg_expr.range()),
+                KeyExpect::TypeCheckExpr(msg_expr.range()),
                 BindingExpect::TypeCheckExpr(msg_expr),
             );
             self.insert_binding_current(msg, Binding::UsageLink(LinkedKey::Expect(idx)));
@@ -146,16 +151,16 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn bind_unimportable_names(&mut self, x: &StmtImportFrom, as_error: bool) {
-        let any = if as_error {
-            Type::any_error()
+        let style = if as_error {
+            AnyStyle::Error
         } else {
-            Type::any_explicit()
+            AnyStyle::Implicit
         };
         for x in &x.names {
             if &x.name != "*" {
                 let asname = x.asname.as_ref().unwrap_or(&x.name);
                 // We pass None as imported_from, since we are really faking up a local error definition
-                self.bind_definition(asname, Binding::Type(any.clone()), FlowStyle::Other);
+                self.bind_definition(asname, Binding::Any(style), FlowStyle::Other);
             }
         }
     }
@@ -170,15 +175,43 @@ impl<'a> BindingsBuilder<'a> {
         name: &ExprName,
         make_binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
     ) {
+        if Ast::is_synthesized_empty_name(name) {
+            return;
+        }
         let assigned = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
         let binding = make_binding(ann);
         self.insert_binding_current(assigned, binding);
     }
 
+    /// Handle multi-target assignments like `a = b = NamedTuple("X", ...)`.
+    ///
+    /// Synthesizes the class once and binds each target to the result, avoiding
+    /// the conflict that would occur if `bind_targets_with_value` called
+    /// `ensure_expr` (which triggers inline NamedTuple synthesis at the same
+    /// `Key::Anon` range).
+    fn bind_multi_target_named_tuple(
+        &mut self,
+        targets: &mut [Expr],
+        call: &mut ExprCall,
+        kind: SpecialExport,
+    ) {
+        let Some(rhs_idx) = self.bind_inline_functional_named_tuple(call, kind) else {
+            return;
+        };
+        for target in targets.iter_mut() {
+            let range = target.range();
+            self.bind_target_no_expr(target, &|ann| {
+                Binding::MultiTargetAssign(ann, rhs_idx, range)
+            });
+        }
+    }
+
     fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall) {
         // Type var declarations are static types only; skip them for first-usage type inference.
-        let static_type_usage = &mut Usage::StaticTypeInformation;
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
         self.ensure_expr(&mut call.func, static_type_usage);
         let mut iargs = call.arguments.args.iter_mut();
         if let Some(expr) = iargs.next() {
@@ -199,17 +232,19 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
         self.bind_legacy_type_var_or_typing_alias(name, |ann| {
-            Binding::TypeVar(
+            Binding::TypeVar(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
-            )
+            )))
         })
     }
 
     fn ensure_type_var_tuple_and_param_spec_args(&mut self, call: &mut ExprCall) {
         // Type var declarations are static types only; skip them for first-usage type inference.
-        let static_type_usage = &mut Usage::StaticTypeInformation;
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
         self.ensure_expr(&mut call.func, static_type_usage);
         for arg in call.arguments.args.iter_mut() {
             self.ensure_expr(arg, static_type_usage);
@@ -228,28 +263,34 @@ impl<'a> BindingsBuilder<'a> {
     fn assign_param_spec(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
         self.bind_legacy_type_var_or_typing_alias(name, |ann| {
-            Binding::ParamSpec(
+            Binding::ParamSpec(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
-            )
+            )))
         })
     }
 
     fn assign_type_var_tuple(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
         self.bind_legacy_type_var_or_typing_alias(name, |ann| {
-            Binding::TypeVarTuple(
+            Binding::TypeVarTuple(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
-            )
+            )))
         })
     }
 
-    fn ensure_type_alias_type_args(&mut self, call: &mut ExprCall) {
+    fn ensure_type_alias_type_args(
+        &mut self,
+        call: &mut ExprCall,
+        tparams_builder: &mut Option<LegacyTParamCollector>,
+    ) {
         // Type var declarations are static types only; skip them for first-usage type inference.
-        let static_type_usage = &mut Usage::StaticTypeInformation;
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
         self.ensure_expr(&mut call.func, static_type_usage);
         let mut iargs = call.arguments.args.iter_mut();
         // The first argument is the name
@@ -258,7 +299,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         // The second argument is the type
         if let Some(expr) = iargs.next() {
-            self.ensure_type(expr, &mut None);
+            self.ensure_type_with_usage(expr, tparams_builder, &mut Usage::TypeAliasRhs);
         }
         // There shouldn't be any other positional arguments
         for arg in iargs {
@@ -272,21 +313,156 @@ impl<'a> BindingsBuilder<'a> {
                 for type_param in type_params.elts.iter_mut() {
                     self.ensure_type(type_param, &mut None);
                 }
+            } else if let Some(id) = &kw.arg
+                && id.id == "value"
+            {
+                self.ensure_type_with_usage(
+                    &mut kw.value,
+                    tparams_builder,
+                    &mut Usage::TypeAliasRhs,
+                );
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
         }
     }
 
+    fn typealiastype_from_call(&self, name: &Name, x: &ExprCall) -> (Option<Expr>, Vec<Expr>) {
+        let mut arg_name = false;
+        let mut value = None;
+        let mut type_params = None;
+        let check_name_arg = |arg: &Expr| {
+            if let Expr::StringLiteral(lit) = arg {
+                if lit.value.to_str() != name.as_str() {
+                    self.error(
+                        x.range,
+                        ErrorKind::InvalidTypeAlias,
+                        format!(
+                            "TypeAliasType must be assigned to a variable named `{}`",
+                            lit.value.to_str()
+                        ),
+                    );
+                }
+            } else {
+                self.error(
+                    arg.range(),
+                    ErrorKind::InvalidTypeAlias,
+                    "Expected first argument of `TypeAliasType` to be a string literal".to_owned(),
+                );
+            }
+        };
+        if let Some(arg) = x.arguments.args.first() {
+            check_name_arg(arg);
+            arg_name = true;
+        }
+        if let Some(arg) = x.arguments.args.get(1) {
+            value = Some(arg.clone());
+        }
+        if let Some(arg) = x.arguments.args.get(2) {
+            self.error(
+                arg.range(),
+                ErrorKind::InvalidTypeAlias,
+                "Unexpected positional argument to `TypeAliasType`".to_owned(),
+            );
+        }
+        for kw in &x.arguments.keywords {
+            match &kw.arg {
+                Some(id) => match id.id.as_str() {
+                    "name" => {
+                        if arg_name {
+                            self.error(
+                                kw.range,
+                                ErrorKind::InvalidTypeAlias,
+                                "Multiple values for argument `name`".to_owned(),
+                            );
+                        } else {
+                            check_name_arg(&kw.value);
+                            arg_name = true;
+                        }
+                    }
+                    "value" => {
+                        if value.is_some() {
+                            self.error(
+                                kw.range,
+                                ErrorKind::InvalidTypeAlias,
+                                "Multiple values for argument `value`".to_owned(),
+                            );
+                        } else {
+                            value = Some(kw.value.clone());
+                        }
+                    }
+                    "type_params" => {
+                        if let Expr::Tuple(tuple) = &kw.value {
+                            type_params = Some(tuple.elts.clone());
+                        } else {
+                            self.error(
+                                kw.range,
+                                ErrorKind::InvalidTypeAlias,
+                                "Value for argument `type_params` must be a tuple literal"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                    _ => {
+                        self.error(
+                            kw.range,
+                            ErrorKind::InvalidTypeAlias,
+                            format!("Unexpected keyword argument `{}` to `TypeAliasType`", id.id),
+                        );
+                    }
+                },
+                _ => {
+                    self.error(
+                        kw.range,
+                        ErrorKind::InvalidTypeAlias,
+                        "Cannot pass unpacked keyword arguments to `TypeAliasType`".to_owned(),
+                    );
+                }
+            }
+        }
+        if !arg_name {
+            self.error(
+                x.range,
+                ErrorKind::InvalidTypeAlias,
+                "Missing `name` argument".to_owned(),
+            );
+        }
+        if let Some(value) = value {
+            (Some(value), type_params.unwrap_or_default())
+        } else {
+            self.error(
+                x.range,
+                ErrorKind::InvalidTypeAlias,
+                "Missing `value` argument".to_owned(),
+            );
+            (None, type_params.unwrap_or_default())
+        }
+    }
+
     fn assign_type_alias_type(&mut self, name: &ExprName, call: &mut ExprCall) {
-        self.ensure_type_alias_type_args(call);
-        self.bind_legacy_type_var_or_typing_alias(name, |ann| {
-            Binding::TypeAliasType(
-                ann,
-                Ast::expr_name_identifier(name.clone()),
-                Box::new(call.clone()),
-            )
-        })
+        let mut collector = Some(LegacyTParamCollector::new(false));
+        self.ensure_type_alias_type_args(call, &mut collector);
+        let assigned = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
+        let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
+        let (value, type_params) = self.typealiastype_from_call(&name.id, call);
+        let key_type_alias = KeyTypeAlias(self.type_alias_index());
+        let binding_type_alias = BindingTypeAlias::TypeAliasType {
+            name: name.id.clone(),
+            range: name.range,
+            annotation: ann,
+            expr: value.map(Box::new),
+        };
+        let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
+        let binding = Binding::TypeAlias(Box::new(TypeAliasBinding {
+            name: name.id.clone(),
+            tparams: TypeAliasParams::TypeAliasType {
+                declared_params: type_params,
+                legacy_params: collector.unwrap().lookup_keys().into_boxed_slice(),
+            },
+            key_type_alias: idx_type_alias,
+            range: call.range(),
+        }));
+        self.insert_binding_current(assigned, binding);
     }
 
     /// Bind the annotation in an `AnnAssign`
@@ -300,9 +476,9 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_type(annotation, &mut None);
         let ann_val = if let Some(special) = SpecialForm::new(&name.id, annotation) {
             // Special case `_: SpecialForm` declarations (this mainly affects some names declared in `typing.pyi`)
-            BindingAnnotation::Type(
+            BindingAnnotation::SpecialForm(
                 AnnotationTarget::Assign(name.id.clone(), AnnAssignHasValue::Yes),
-                special.to_type(),
+                special,
             )
         } else {
             BindingAnnotation::AnnotateExpr(
@@ -328,7 +504,7 @@ impl<'a> BindingsBuilder<'a> {
         if self.sys_info.version().at_least(3, 14) && self.scopes.in_finally() {
             self.error(
                 x.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                ErrorKind::InvalidSyntax,
                 "`return` in a `finally` block will silence exceptions".to_owned(),
             );
         }
@@ -339,24 +515,16 @@ impl<'a> BindingsBuilder<'a> {
                 .record_or_reject_return(ret, x, self.scopes.is_definitely_unreachable())
         {
             match oops_top_level.value {
-                Some(v) => self.insert_binding_current(ret, Binding::Expr(None, *v)),
-                None => self.insert_binding_current(ret, Binding::Type(Type::None)),
+                Some(v) => self.insert_binding_current(ret, Binding::Expr(None, v)),
+                None => self.insert_binding_current(ret, Binding::None),
             };
             self.error(
                 oops_top_level.range,
-                ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                ErrorKind::InvalidSyntax,
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
         self.scopes.mark_flow_termination(false);
-    }
-
-    fn find_error(&self, error: &FindError, range: TextRange) {
-        let Some(kind) = error.kind() else {
-            return;
-        };
-        let (ctx, msg) = error.display();
-        self.error_multiline(range, ErrorInfo::new(kind, ctx.as_deref()), msg);
     }
 
     /// Evaluate the statements and update the bindings.
@@ -384,7 +552,10 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.ensure_expr(target, delete_idx.usage());
                     }
-                    self.insert_binding_current(delete_idx, Binding::Delete(target.clone()));
+                    self.insert_binding_current(
+                        delete_idx,
+                        Binding::Delete(Box::new(target.clone())),
+                    );
                 }
             }
             Stmt::Assign(ref x)
@@ -397,7 +568,13 @@ impl<'a> BindingsBuilder<'a> {
                 //
                 // For example, we treat `typing.List` as if it were an import of `builtins.list`.
                 self.bind_legacy_type_var_or_typing_alias(name, |_| {
-                    Binding::Import(module, forward, None)
+                    Binding::Import(Box::new(ImportBinding {
+                        module,
+                        name: forward,
+                        original_name_range: None,
+                        check_deprecated: None,
+                        fallback: None,
+                    }))
                 })
             }
             Stmt::Assign(mut x) => {
@@ -457,12 +634,20 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
+                                    self.check_functional_definition_name(
+                                        &name.id,
+                                        arg_name,
+                                        ErrorKind::NameMismatch,
+                                    );
+                                    let adjacent_defaults =
+                                        self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_typing_named_tuple_def(
-                                        name,
+                                        Ast::expr_name_identifier(name.clone()),
                                         parent,
                                         &mut call.func,
-                                        arg_name,
                                         members,
+                                        true,
+                                        adjacent_defaults,
                                     );
                                     return;
                                 }
@@ -471,13 +656,21 @@ impl<'a> BindingsBuilder<'a> {
                                 if let Some((arg_name, members)) =
                                     call.arguments.args.split_first_mut()
                                 {
+                                    self.check_functional_definition_name(
+                                        &name.id,
+                                        arg_name,
+                                        ErrorKind::NameMismatch,
+                                    );
+                                    let adjacent_defaults =
+                                        self.adjacent_namedtuple_defaults.take();
                                     self.synthesize_collections_named_tuple_def(
-                                        name,
+                                        Ast::expr_name_identifier(name.clone()),
                                         parent,
                                         &mut call.func,
-                                        arg_name,
                                         members,
                                         &mut call.arguments.keywords,
+                                        true,
+                                        adjacent_defaults,
                                     );
                                     return;
                                 }
@@ -487,6 +680,7 @@ impl<'a> BindingsBuilder<'a> {
                                     self.synthesize_typing_new_type(
                                         name,
                                         parent,
+                                        &mut call.func,
                                         new_type_name,
                                         base,
                                     );
@@ -501,12 +695,52 @@ impl<'a> BindingsBuilder<'a> {
                         x.value,
                         None,
                     );
+                } else if let Expr::Call(call) = &mut *x.value
+                    && matches!(call.arguments.args.first(), Some(Expr::StringLiteral(_)))
+                    && let Some(
+                        special @ (SpecialExport::TypingNamedTuple
+                        | SpecialExport::CollectionsNamedTuple),
+                    ) = self.as_special_export(&call.func)
+                {
+                    self.bind_multi_target_named_tuple(&mut x.targets, call, special);
                 } else {
                     self.bind_targets_with_value(&mut x.targets, &mut x.value);
                 }
             }
             Stmt::AnnAssign(mut x) => match *x.target {
                 Expr::Name(name) => {
+                    // Handle annotated legacy TypeVar creation T: TypeVar = TypeVar("T")
+                    if let Some(ref mut value) = x.value
+                        && let Expr::Call(call) = value.as_mut()
+                        && let Some(special) = self.as_special_export(&call.func)
+                    {
+                        match special {
+                            SpecialExport::TypeVar
+                            | SpecialExport::ParamSpec
+                            | SpecialExport::TypeVarTuple => {
+                                let ident = Ast::expr_name_identifier(name.clone());
+                                self.bind_annotation(
+                                    &ident,
+                                    &mut x.annotation,
+                                    AnnAssignHasValue::Yes,
+                                );
+                                match special {
+                                    SpecialExport::TypeVar => {
+                                        self.assign_type_var(&name, call);
+                                    }
+                                    SpecialExport::ParamSpec => {
+                                        self.assign_param_spec(&name, call);
+                                    }
+                                    SpecialExport::TypeVarTuple => {
+                                        self.assign_type_var_tuple(&name, call);
+                                    }
+                                    _ => unreachable!("filtered by outer match"),
+                                }
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
                     let name = Ast::expr_name_identifier(name);
                     // We have to handle the value carefully because the annotation, class field, and
                     // binding do not all treat `...` exactly the same:
@@ -542,7 +776,7 @@ impl<'a> BindingsBuilder<'a> {
                             &name,
                             Binding::AnnotatedType(
                                 ann_idx,
-                                Box::new(Binding::Type(Type::any_implicit())),
+                                Box::new(Binding::Any(AnyStyle::Implicit)),
                             ),
                             if self.scopes.in_class_body() {
                                 FlowStyle::ClassField {
@@ -562,7 +796,7 @@ impl<'a> BindingsBuilder<'a> {
                     // check that in that case the annotations match.
                     if let Some(ann) = canonical_ann_idx {
                         self.insert_binding(
-                            KeyExpect(name.range),
+                            KeyExpect::Redefinition(name.range),
                             BindingExpect::Redefinition {
                                 new: ann_idx,
                                 existing: ann,
@@ -588,22 +822,21 @@ impl<'a> BindingsBuilder<'a> {
                                 ExprOrBinding::Expr(v.clone())
                             })
                         }
-                        _ => ExprOrBinding::Binding(Binding::Type(Type::any_implicit())),
+                        _ => ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
                     };
                     if !self
                         .scopes
                         .record_self_attr_assign(&attr, value.clone(), Some(ann_key))
                     {
                         self.error(
-                             x.range,
-                             ErrorInfo::Kind(ErrorKind::BadAssignment),
-                             format!(
-                                "Type cannot be declared in assignment to non-self attribute `{}.{}`",
+                            x.range,
+                            ErrorKind::BadAssignment,
+                            format!(
+                                "Cannot annotate non-self attribute `{}.{}`",
                                 self.module_info.display(&attr.value),
                                 attr_name,
                             ),
-
-                         );
+                        );
                     }
                 }
                 mut target => {
@@ -612,7 +845,7 @@ impl<'a> BindingsBuilder<'a> {
                         // but Mypy and Pyright both error here, so let's do the same.
                         self.error(
                             x.annotation.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                            ErrorKind::InvalidSyntax,
                             "Subscripts should not be annotated".to_owned(),
                         );
                     }
@@ -629,7 +862,7 @@ impl<'a> BindingsBuilder<'a> {
                         ),
                         None => {
                             self.bind_target_no_expr(&mut target, &|_| {
-                                Binding::Type(Type::any_error())
+                                Binding::Any(AnyStyle::Error)
                             });
                         }
                     }
@@ -644,14 +877,14 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr_name(name, assigned.usage());
                         self.ensure_expr(&mut x.value, assigned.usage());
                         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
-                        let binding = Binding::AugAssign(ann, x.clone());
+                        let binding = Binding::AugAssign(ann, Box::new(x.clone()));
                         self.insert_binding_current(assigned, binding);
                     }
                     Expr::Attribute(attr) => {
                         let mut x_cloned = x.clone();
                         self.bind_attr_assign(attr.clone(), &mut x.value, move |expr, ann| {
-                            x_cloned.value = Box::new(expr.clone());
-                            ExprOrBinding::Binding(Binding::AugAssign(ann, x_cloned))
+                            *x_cloned.value = expr.clone();
+                            ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
                         });
                     }
                     Expr::Subscript(subscr) => {
@@ -660,8 +893,8 @@ impl<'a> BindingsBuilder<'a> {
                             subscr.clone(),
                             &mut x.value,
                             move |expr, ann| {
-                                x_cloned.value = Box::new(expr.clone());
-                                ExprOrBinding::Binding(Binding::AugAssign(ann, x_cloned))
+                                *x_cloned.value = expr.clone();
+                                ExprOrBinding::Binding(Binding::AugAssign(ann, Box::new(x_cloned)))
                             },
                         );
                     }
@@ -672,10 +905,20 @@ impl<'a> BindingsBuilder<'a> {
                         //
                         // We don't track first-usage in this context, since we won't analyze the usage anyway.
                         let mut e = illegal_target.clone();
-                        self.ensure_expr(&mut e, &mut Usage::StaticTypeInformation);
+                        self.ensure_expr(
+                            &mut e,
+                            &mut Usage::StaticTypeInformation {
+                                is_annotation: false,
+                            },
+                        );
                         // Even though the assignment target is invalid, we still need to analyze the RHS so errors
                         // (like invalid walrus targets) are reported.
-                        self.ensure_expr(&mut x.value, &mut Usage::StaticTypeInformation);
+                        self.ensure_expr(
+                            &mut x.value,
+                            &mut Usage::StaticTypeInformation {
+                                is_annotation: false,
+                            },
+                        );
                     }
                 }
             }
@@ -683,7 +926,7 @@ impl<'a> BindingsBuilder<'a> {
                 if !self.scopes.in_module_or_class_top_level() {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`type` statement is not allowed in this context".to_owned(),
                     );
                 }
@@ -693,14 +936,23 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(params) = &mut x.type_params {
                         self.type_params(params);
                     }
-                    self.ensure_type(&mut x.value, &mut None);
+                    self.ensure_type_with_usage(&mut x.value, &mut None, &mut Usage::TypeAliasRhs);
                     // Pop the type alias scope before binding the definition
                     self.scopes.pop();
-                    let binding = Binding::ScopedTypeAlias(
-                        name.id.clone(),
-                        x.type_params.map(|x| *x),
-                        x.value,
-                    );
+                    let range = x.value.range();
+                    let key_type_alias = KeyTypeAlias(self.type_alias_index());
+                    let binding_type_alias = BindingTypeAlias::Scoped {
+                        name: name.id.clone(),
+                        range: name.range,
+                        expr: x.value,
+                    };
+                    let idx_type_alias = self.insert_binding(key_type_alias, binding_type_alias);
+                    let binding = Binding::TypeAlias(Box::new(TypeAliasBinding {
+                        name: name.id.clone(),
+                        tparams: TypeAliasParams::Scoped(x.type_params.map(|x| *x)),
+                        key_type_alias: idx_type_alias,
+                        range,
+                    }));
                     self.bind_definition(
                         &Ast::expr_name_identifier(name),
                         binding,
@@ -709,7 +961,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "Invalid assignment target".to_owned(),
                     );
                 }
@@ -718,7 +970,7 @@ impl<'a> BindingsBuilder<'a> {
                 if x.is_async && !self.scopes.is_in_async_def() {
                     self.error(
                         x.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`async for` can only be used inside an async function".to_owned(),
                     );
                 }
@@ -730,7 +982,11 @@ impl<'a> BindingsBuilder<'a> {
                 // (must be done before x.iter is moved)
                 let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
-                    Binding::IterableValue(ann, expr.clone(), IsAsync::new(x.is_async))
+                    Binding::IterableValueLoop(
+                        ann,
+                        Box::new(expr.clone()),
+                        IsAsync::new(x.is_async),
+                    )
                 });
                 // Note that we set up the loop *after* the header is fully bound, because the
                 // loop iterator is only evaluated once before the loop begins. But the loop header
@@ -753,6 +1009,9 @@ impl<'a> BindingsBuilder<'a> {
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
                 self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                // The while condition always evaluates at least once, so walrus
+                // targets are guaranteed to be assigned after the loop.
+                self.scopes.propagate_new_flow_entries_to_loop_base();
                 let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.bind_narrow_ops(
@@ -760,7 +1019,10 @@ impl<'a> BindingsBuilder<'a> {
                     NarrowUseLocation::Span(x.range),
                     &Usage::Narrowing(None),
                 );
-                self.insert_binding(KeyExpect(x.test.range()), BindingExpect::Bool(*x.test));
+                self.insert_binding(
+                    KeyExpect::Bool(x.test.range()),
+                    BindingExpect::Bool(*x.test),
+                );
                 self.stmts(x.body, parent);
                 // For while True: loops, the loop body definitely runs at least once
                 self.teardown_loop(
@@ -772,10 +1034,15 @@ impl<'a> BindingsBuilder<'a> {
                     is_while_true,
                 );
             }
-            Stmt::If(x) => {
+            Stmt::If(mut x) => {
                 let is_definitely_unreachable = self.scopes.is_definitely_unreachable();
                 let mut exhaustive = false;
-                self.start_fork(x.range);
+                let if_range = x.range;
+                // Process the first `if` test before forking so that walrus-defined names
+                // are in the base flow and visible after the if-statement. This mirrors the
+                // fix for ternary expressions in expr.rs (Expr::If handling).
+                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                self.start_fork(if_range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
                 //     pass
@@ -785,6 +1052,7 @@ impl<'a> BindingsBuilder<'a> {
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
+                let mut is_first_branch = true;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -806,10 +1074,28 @@ impl<'a> BindingsBuilder<'a> {
                             result
                         }
                     };
-                    self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                    // The first `if` test was already processed before the fork (above).
+                    // Only process elif/else tests here, inside the branch.
+                    if !is_first_branch {
+                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                        // Lift walrus-defined names from the elif condition into the
+                        // fork's base flow. The elif condition always executes when
+                        // control reaches past the preceding branch, so any walrus
+                        // bindings must be visible after the if/elif block.
+                        if test.is_some() {
+                            self.scopes.propagate_new_flow_entries_to_fork_base();
+                        }
+                    }
+                    is_first_branch = false;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
+                        // However, we still need to check for `yield`/`yield from` in the skipped
+                        // body, because Python determines generator status syntactically at compile
+                        // time, regardless of reachability.
+                        if Ast::body_contains_yield(&body) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
                         self.abandon_branch();
                         continue;
                     } else {
@@ -818,7 +1104,7 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
-                            KeyExpect(test_expr.range()),
+                            KeyExpect::Bool(test_expr.range()),
                             BindingExpect::Bool(test_expr),
                         );
                     }
@@ -835,10 +1121,25 @@ impl<'a> BindingsBuilder<'a> {
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }
                 }
+                // Create Exhaustive binding for type-based exhaustiveness checking.
+                // This is done BEFORE finish_*_fork() so the binding exists in the right scope.
+                // Only do this when there's no else clause (not syntactically exhaustive).
+                let exhaustive_key = if !exhaustive {
+                    let narrow_entries = self.build_narrow_entries(&negated_prev_ops);
+                    Some(self.insert_binding(
+                        Key::Exhaustive(ExhaustivenessKind::IfElif, if_range),
+                        Binding::Exhaustive(Box::new(ExhaustiveBinding {
+                            kind: ExhaustivenessKind::IfElif,
+                            narrow_entries,
+                        })),
+                    ))
+                } else {
+                    None
+                };
                 if exhaustive {
                     self.finish_exhaustive_fork();
                 } else {
-                    self.finish_non_exhaustive_fork(&negated_prev_ops);
+                    self.finish_non_exhaustive_fork(&negated_prev_ops, exhaustive_key);
                 }
                 // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
                 // to reduce false positive unreachable errors, since some code paths can still be hit at runtime
@@ -850,7 +1151,7 @@ impl<'a> BindingsBuilder<'a> {
                 if x.is_async && !self.scopes.is_in_async_def() {
                     self.error(
                         x.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`async with` can only be used inside an async function".to_owned(),
                     );
                 }
@@ -860,8 +1161,10 @@ impl<'a> BindingsBuilder<'a> {
                     let expr_range = item.context_expr.range();
                     let mut context = self.declare_current_idx(Key::ContextExpr(expr_range));
                     self.ensure_expr(&mut item.context_expr, context.usage());
-                    let context_idx = self
-                        .insert_binding_current(context, Binding::Expr(None, item.context_expr));
+                    let context_idx = self.insert_binding_current(
+                        context,
+                        Binding::Expr(None, Box::new(item.context_expr)),
+                    );
                     if let Some(mut opts) = item.optional_vars {
                         let make_binding =
                             |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
@@ -891,7 +1194,7 @@ impl<'a> BindingsBuilder<'a> {
                         RaisedException::WithoutCause(*exc)
                     };
                     let idx = self.insert_binding(
-                        KeyExpect(x.range),
+                        KeyExpect::CheckRaisedException(x.range),
                         BindingExpect::CheckRaisedException(raised),
                     );
                     self.insert_binding_current(
@@ -946,7 +1249,7 @@ impl<'a> BindingsBuilder<'a> {
                             self.bind_current_as(
                                 name,
                                 handler,
-                                Binding::Type(Type::any_error()),
+                                Binding::Any(AnyStyle::Error),
                                 FlowStyle::Other,
                             );
                         }
@@ -979,9 +1282,6 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    if let Some(error) = self.lookup.get(m).error() {
-                        self.find_error(&error, x.range);
-                    }
                     match x.asname {
                         Some(asname) => {
                             // `import X as X` is an explicit re-export per Python typing spec.
@@ -993,7 +1293,12 @@ impl<'a> BindingsBuilder<'a> {
                             }
                             self.bind_definition(
                                 &asname,
-                                Binding::Module(m, m.components(), None),
+                                Binding::Module(Box::new((
+                                    m,
+                                    m.components().into_boxed_slice(),
+                                    None,
+                                    Some(x.range),
+                                ))),
                                 FlowStyle::ImportAs(m),
                             );
                         }
@@ -1001,8 +1306,13 @@ impl<'a> BindingsBuilder<'a> {
                             let first = m.first_component();
                             let module_key = self.scopes.existing_module_import_at(&first);
                             let key = self.insert_binding(
-                                Key::Import(first.clone(), x.name.range),
-                                Binding::Module(m, vec![first.clone()], module_key),
+                                Key::Import(Box::new((first.clone(), x.name.range))),
+                                Binding::Module(Box::new((
+                                    m,
+                                    Box::new([first.clone()]),
+                                    module_key,
+                                    Some(x.range),
+                                ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
                             // since that's the name that gets bound and used in code
@@ -1022,22 +1332,11 @@ impl<'a> BindingsBuilder<'a> {
                     x.level,
                     x.module.as_ref().map(|x| &x.id),
                 ) {
-                    match self.lookup.get(m) {
-                        FindingOrError::Finding(module_exports) => {
-                            if let Some(error) = module_exports.error {
-                                self.find_error(&error, x.range);
-                            }
-                            self.bind_module_exports(x, m, module_exports.finding);
-                        }
-                        FindingOrError::Error(error) => {
-                            self.find_error(&error, x.range);
-                            self.bind_unimportable_names(&x, error.kind().is_some());
-                        }
-                    }
+                    self.bind_module_exports(x, m);
                 } else {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::MissingImport),
+                        ErrorKind::MissingImport,
                         format!(
                             "Could not resolve relative import `{}`",
                             ".".repeat(x.level as usize)
@@ -1080,7 +1379,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     unreachable!("args.len() can only be 1 or 2")
                 };
-                self.insert_binding(Key::StmtExpr(expr_range), Binding::Type(Type::None));
+                self.insert_binding(Key::StmtExpr(expr_range), Binding::None);
                 self.assert(call_range, test, msg);
             }
             Stmt::Expr(mut x) => {
@@ -1092,13 +1391,9 @@ impl<'a> BindingsBuilder<'a> {
                     None
                 };
                 let key = self
-                    .insert_binding_current(current, Binding::StmtExpr(*x.value, special_export));
+                    .insert_binding_current(current, Binding::StmtExpr(x.value, special_export));
                 // Track this StmtExpr as the trailing statement for type-based termination
                 self.scopes.set_last_stmt_expr(Some(key));
-                // TODO(stroxler): PytestNoReturn may now be redundant given type-based termination
-                if special_export == Some(SpecialExport::PytestNoReturn) {
-                    self.scopes.mark_flow_termination(false);
-                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {
@@ -1109,7 +1404,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`break` in a `finally` block will silence exceptions".to_owned(),
                     );
                 }
@@ -1123,7 +1418,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`continue` in a `finally` block will silence exceptions".to_owned(),
                     );
                 }
@@ -1135,7 +1430,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::Unsupported),
+                        ErrorKind::Unsupported,
                         "IPython escapes are not supported".to_owned(),
                     )
                 }
@@ -1143,21 +1438,49 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn bind_module_exports(&mut self, x: StmtImportFrom, m: ModuleName, module_exports: Exports) {
-        let exported = module_exports.exports(self.lookup);
+    fn bind_module_exports(&mut self, x: StmtImportFrom, m: ModuleName) {
+        let module_range = x.range;
+        // Single solve-time module-existence check per `from X import …`
+        // statement. Surfaces a `MissingImport` (or other find-error)
+        // diagnostic for `X` without firing bind-time `module_exists`,
+        // and covers all shapes uniformly: named imports, wildcards
+        // (where the bind-time `get_wildcard` may have silently returned
+        // `None` because `X` doesn't exist), and parse-failed forms with
+        // no names. Nothing consumes the resulting module type — the
+        // binding exists only so its solver emits the diagnostic.
+        self.insert_binding(
+            Key::Import(Box::new((m.first_component(), module_range))),
+            Binding::Module(Box::new((
+                m,
+                m.components().into_boxed_slice(),
+                None,
+                Some(module_range),
+            ))),
+        );
         for x in x.names {
             if &x.name == "*" {
-                for name in module_exports.wildcard(self.lookup).iter_hashed() {
-                    let key = Key::Import(name.into_key().clone(), x.range);
-                    let val = if exported.contains_key_hashed(name) {
-                        Binding::Import(m, name.into_key().clone(), None)
+                let Some(wildcards) = self.lookup.get_wildcard(m) else {
+                    continue;
+                };
+                for name in wildcards.iter_hashed() {
+                    let key = Key::Import(Box::new((name.into_key().clone(), x.range)));
+                    let val = if self.lookup.export_exists(m, &name) {
+                        Binding::Import(Box::new(ImportBinding {
+                            module: m,
+                            name: name.into_key().clone(),
+                            original_name_range: None,
+                            check_deprecated: None,
+                            fallback: None,
+                        }))
                     } else {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                            format!("Could not import `{name}` from `{m}`"),
-                        );
-                        Binding::Type(Type::any_error())
+                        if !self.scopes.is_unreachable_from_static_test() {
+                            self.error(
+                                x.range,
+                                ErrorKind::MissingModuleAttribute,
+                                format!("Could not import `{name}` from `{m}`"),
+                            );
+                        }
+                        Binding::Any(AnyStyle::Error)
                     };
                     let key = self.insert_binding(key, val);
                     // Register the imported name from wildcard imports
@@ -1182,55 +1505,24 @@ impl<'a> BindingsBuilder<'a> {
                     None
                 };
                 let asname = x.asname.unwrap_or_else(|| x.name.clone());
-                // A `from x import y` statement is ambiguous; if `x` is a package with
-                // an `__init__.py` file, then it might import the name `y` from the
-                // module `x` defined by the `__init__.py` file, or it might import a
-                // submodule `x.y` of the package `x`.
-                //
-                // If both are present, generally we prefer the name defined in `x`,
-                // but there is an exception: if we are already looking at the
-                // `__init__` module of `x`, we always prefer the submodule.
-                let val = if (self.module_info.name() != m) && exported.contains_key(&x.name.id) {
-                    if let Some(ExportLocation::ThisModule(Export {
-                        deprecation: Some(deprecation),
-                        ..
-                    })) = exported.get(&x.name.id)
-                    {
-                        let msg =
-                            deprecation.as_error_message(format!("`{}` is deprecated", x.name));
-                        self.error_multiline(x.range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
-                    }
-                    Binding::Import(m, x.name.id.clone(), original_name_range)
-                } else {
-                    // Try submodule lookup first, then fall back to __getattr__
-                    let x_as_module_name = m.append(&x.name.id);
-                    let (finding, error) = match self.lookup.get(x_as_module_name) {
-                        FindingOrError::Finding(finding) => (true, finding.error),
-                        FindingOrError::Error(error) => (false, Some(error)),
-                    };
-                    let is_not_found = error.is_some_and(|e| matches!(e, FindError::NotFound(..)));
-                    if finding {
-                        Binding::Module(x_as_module_name, x_as_module_name.components(), None)
-                    } else if exported.contains_key(&dunder::GETATTR) {
-                        // Module has __getattr__, which means any attribute can be accessed.
-                        // See: https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs
-                        Binding::ImportViaGetattr(m, x.name.id.clone())
-                    } else if is_not_found {
-                        self.error(
-                            x.range,
-                            ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
-                            format!("Could not import `{}` from `{m}`", x.name.id),
-                        );
-                        Binding::Type(Type::any_error())
-                    } else {
-                        Binding::Type(Type::any_explicit())
-                    }
-                };
+                let val = Binding::Import(Box::new(ImportBinding {
+                    module: m,
+                    name: x.name.id.clone(),
+                    original_name_range,
+                    check_deprecated: Some(x.range),
+                    fallback: Some(ImportFallback {
+                        stmt_range: x.range,
+                        is_unreachable: self.scopes.is_unreachable_from_static_test(),
+                    }),
+                }));
                 // __future__ imports have side effects even if not explicitly used,
                 // so we skip the unused import check for them.
                 // See: https://typing.python.org/en/latest/spec/distributing.html#import-conventions
                 if m == ModuleName::future() {
                     self.scopes.register_future_import(&asname);
+                    if x.name.id.as_str() == "annotations" {
+                        self.scopes.set_has_future_annotations();
+                    }
                 } else if is_reexport {
                     self.scopes.register_reexport_import(&asname);
                 } else {

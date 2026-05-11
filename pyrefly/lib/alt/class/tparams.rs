@@ -59,7 +59,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect::<SmallSet<_>>();
         let legacy_map = legacy_tparams
             .iter()
-            .map(|p| (p.quantified.clone(), p))
+            .map(|p| (p.clone(), p))
             .collect::<SmallMap<_, _>>();
         let lookup_tparam = |t: &Type| {
             let (q, kind) = match t {
@@ -150,7 +150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        // Convert our set of `TParam`s into a `TParams` object, which will also perform
+        // Convert our set of `Quantified`s into a `TParams` object, which will also perform
         // some additional validation that isn't specific to classes.
         self.validated_tparams(
             name.range,

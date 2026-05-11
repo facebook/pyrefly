@@ -18,6 +18,10 @@ def not_implemented_raise(unused_param: int) -> None:
     raise NotImplementedError()
 
 
+def not_implemented_raise2(unused_param: int) -> None:
+    raise NotImplementedError
+
+
 def not_implemented_return(unused_param: int) -> int:
     return NotImplemented
 

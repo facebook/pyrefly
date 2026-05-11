@@ -7,7 +7,7 @@
         "workspace"
     ],
     "author": "Facebook",
-    "license": "Apache2",
+    "license": "MIT",
     "version": "0.0.1",
     "repository": {
         "type": "git",
@@ -36,6 +36,12 @@
         "onLanguage:python",
         "onNotebook:jupyter-notebook"
     ],
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": false,
+            "description": "Pyrefly can be configured to execute binaries. A malicious actor could exploit this to run arbitrary code on your machine."
+        }
+    },
     "contributes": {
         "languages": [
             {
@@ -64,6 +70,16 @@
                 "title": "Unfold All Docstrings",
                 "category": "pyrefly",
                 "command": "pyrefly.unfoldAllDocstrings"
+            },
+            {
+                "title": "Run File",
+                "category": "pyrefly",
+                "command": "pyrefly.runMain"
+            },
+            {
+                "title": "Run Test",
+                "category": "pyrefly",
+                "command": "pyrefly.runTest"
             }
         ],
         "semanticTokenScopes": [
@@ -88,7 +104,8 @@
                 "pyrefly.lspPath": {
                     "type": "string",
                     "default": "",
-                    "description": "The path to the binary used for the lsp"
+                    "description": "The path to the binary used for the lsp",
+                    "scope": "machine-overridable"
                 },
                 "pyrefly.lspArguments": {
                     "type": "array",
@@ -98,15 +115,38 @@
                     "default": [
                         "lsp"
                     ],
-                    "description": "Additional arguments that should be passed to the binary at pyrefly.lspPath"
+                    "description": "Additional arguments that should be passed to the binary at pyrefly.lspPath",
+                    "scope": "machine-overridable"
                 },
                 "python.pyrefly.disableLanguageServices": {
                     "type": "boolean",
                     "default": false,
-                    "description": "If true, pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.displayTypeErrors`"
+                    "description": "If true, Pyrefly will not provide other IDE services like completions, hover, definition, etc. To control type errors, see `python.pyrefly.typeCheckingMode` and `python.pyrefly.disableTypeErrors`.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.disableTypeErrors": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, Pyrefly will not provide diagnostics for files in this workspace.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.typeCheckingMode": {
+                    "type": "string",
+                    "markdownDescription": "[Preset](https://pyrefly.org/en/docs/configuration/#preset) to use for files not covered by a `pyrefly.toml`. The default `auto` migrates a nearby mypy/pyright config when present, otherwise uses `basic`.",
+                    "default": "auto",
+                    "enum": [
+                        "auto",
+                        "off",
+                        "basic",
+                        "legacy",
+                        "default",
+                        "strict"
+                    ],
+                    "scope": "resource"
                 },
                 "python.pyrefly.displayTypeErrors": {
                     "type": "string",
+                    "deprecationMessage": "Replaced by python.pyrefly.typeCheckingMode and python.pyrefly.disableTypeErrors. This setting still works for backwards compatibility but new configurations should use the replacements.",
                     "description": "If 'default', Pyrefly will only provide type check squiggles in the IDE if your file is covered by a Pyrefly configuration. If 'force-off', Pyrefly will never provide type check squiggles in the IDE. If 'force-on', Pyrefly will always provide type check squiggles in the IDE. If 'error-missing-imports', Pyrefly will only show errors for missing imports and missing sources (missing-import, missing-source, and missing-source-for-stubs).",
                     "default": "default",
                     "enum": [
@@ -114,7 +154,8 @@
                         "force-on",
                         "force-off",
                         "error-missing-imports"
-                    ]
+                    ],
+                    "scope": "resource"
                 },
                 "pyrefly.trace.server": {
                     "type": "string",
@@ -129,6 +170,7 @@
                     "type": "object",
                     "default": {},
                     "description": "Disable specific language services. Set individual services to true to disable them.",
+                    "scope": "resource",
                     "properties": {
                         "hover": {
                             "type": "boolean",
@@ -206,6 +248,50 @@
                     "default": true,
                     "description": "Controls whether hover tooltips include 'Go to definition' and 'Go to type definition' navigation links.",
                     "scope": "resource"
+                },
+                "python.analysis.completeFunctionParens": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically insert parentheses when completing a function or method.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.syncNotebooks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true, Pyrefly will sync notebook documents with the language server. Set to false to disable notebook support."
+                },
+                "python.pyrefly.runnableCodeLens": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable Pyrefly's Run/Test CodeLens actions for Python files.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.streamDiagnostics": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes.",
+                    "scope": "resource"
+                },
+                "python.pyrefly.diagnosticMode": {
+                    "type": "string",
+                    "default": "openFilesOnly",
+                    "description": "Controls the scope of Pyrefly's diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files that are currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace.",
+                    "enum": [
+                        "openFilesOnly",
+                        "workspace"
+                    ],
+                    "scope": "resource"
+                },
+                "pyrefly.commentFoldingRanges": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Controls whether comment section folding ranges are included in the editor. When true, comments following the pattern '# Section Name ----' (with 4+ trailing dashes) create collapsible regions, similar to R's code section convention."
+                },
+                "python.pyrefly.configPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to a pyrefly.toml or pyproject.toml configuration file. When set, the LSP will use this config for all files in your workspace instead of the default Pyrefly config-finding logic. Prefer to use default logic wherever possible.",
+                    "scope": "resource"
                 }
             }
         }
@@ -232,11 +318,11 @@
         "typescript": "^4.4.3"
     },
     "dependencies": {
+        "@vscode/python-environments": "^1.0.0",
         "@vscode/python-extension": "^1.0.5",
+        "serialize-javascript": "^7.0.5",
+        "underscore": "^1.13.8",
         "vsce": "^2.15.0",
         "vscode-languageclient": "9.0.1"
-    },
-    "extensionDependencies": [
-        "ms-python.python"
-    ]
+    }
 }

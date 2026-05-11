@@ -5,17 +5,31 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::symbol_kind::SymbolKind;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::helpers::is_docstring_stmt;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_expr;
+use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use vec1::Vec1;
 
-pub(super) fn split_selection<'a>(
+use crate::ModuleInfo;
+use crate::state::lsp::FindDefinitionItemWithDocstring;
+use crate::state::lsp::FindPreference;
+use crate::state::lsp::Transaction;
+
+pub(crate) fn split_selection<'a>(
     selection_text: &'a str,
     selection_range: TextRange,
 ) -> Option<(&'a str, &'a str, &'a str, TextRange)> {
@@ -43,13 +57,13 @@ pub(super) fn split_selection<'a>(
     ))
 }
 
-pub(super) fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
+pub(crate) fn is_exact_expression(ast: &ModModule, selection: TextRange) -> bool {
     Ast::locate_node(ast, selection.start())
         .into_iter()
         .any(|node| node.as_expr_ref().is_some() && node.range() == selection)
 }
 
-pub(super) fn line_indent_and_start(
+pub(crate) fn line_indent_and_start(
     source: &str,
     position: TextSize,
 ) -> Option<(String, TextSize)> {
@@ -69,7 +83,22 @@ pub(super) fn line_indent_and_start(
     Some((indent, insert_position))
 }
 
-pub(super) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
+pub(crate) fn find_enclosing_statement_range(
+    ast: &ModModule,
+    selection: TextRange,
+) -> Option<TextRange> {
+    let covering_nodes = Ast::locate_node(ast, selection.start());
+    for node in covering_nodes {
+        if let Some(stmt) = node.as_stmt_ref()
+            && stmt.range().contains_range(selection)
+        {
+            return Some(stmt.range());
+        }
+    }
+    None
+}
+
+pub(crate) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
     if let Some(param) = parameters.posonlyargs.first() {
         return Some(param.name().id.to_string());
     }
@@ -79,14 +108,14 @@ pub(super) fn first_parameter_name(parameters: &Parameters) -> Option<String> {
         .map(|param| param.name().id.to_string())
 }
 
-pub(super) fn function_has_decorator(function_def: &StmtFunctionDef, decorator: &str) -> bool {
+pub(crate) fn function_has_decorator(function_def: &StmtFunctionDef, decorator: &str) -> bool {
     function_def
         .decorator_list
         .iter()
         .any(|d| decorator_matches_name(&d.expression, decorator))
 }
 
-pub(super) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
+pub(crate) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
     match decorator {
         Expr::Name(identifier) => identifier.id.as_str() == expected,
         Expr::Attribute(attribute) => attribute.attr.as_str() == expected,
@@ -97,7 +126,7 @@ pub(super) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
 
 /// Given a selection range, returns the first non-whitespace position within it.
 /// If the selection is empty, returns the start position.
-pub(super) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
+pub(crate) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     if selection.is_empty() {
         return selection.start();
     }
@@ -117,9 +146,38 @@ pub(super) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     }
 }
 
+pub(crate) fn expr_needs_parens(expr: &Expr) -> bool {
+    !matches!(
+        expr,
+        Expr::Name(_)
+            | Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+            | Expr::Subscript(_)
+            | Expr::Attribute(_)
+            | Expr::Call(_)
+            | Expr::List(_)
+            | Expr::Dict(_)
+            | Expr::Set(_)
+            | Expr::Tuple(_)
+            | Expr::FString(_)
+    )
+}
+
+pub(crate) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
+    if expr_needs_parens(expr) {
+        format!("({text})")
+    } else {
+        text.to_owned()
+    }
+}
+
 /// Extracts the name from a statement that defines a named symbol.
 /// Returns `None` for statements that don't define a single named symbol.
-pub(super) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
+pub(crate) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
     match stmt {
         Stmt::FunctionDef(func_def) => Some(func_def.name.id.to_string()),
         Stmt::ClassDef(class_def) => Some(class_def.name.id.to_string()),
@@ -142,4 +200,314 @@ pub(super) fn member_name_from_stmt(stmt: &Stmt) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Checks if an expression creates a new scope where variable semantics differ.
+/// These include lambdas and comprehensions, where inlining could change behavior.
+pub(crate) fn is_disallowed_scope_expr(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Lambda(_)
+            | Expr::ListComp(_)
+            | Expr::SetComp(_)
+            | Expr::DictComp(_)
+            | Expr::Generator(_)
+    )
+}
+
+/// Checks if a reference position is inside a disallowed scope expression.
+pub(crate) fn reference_in_disallowed_scope(ast: &ModModule, reference: TextRange) -> bool {
+    Ast::locate_node(ast, reference.start())
+        .into_iter()
+        .any(|node| {
+            matches!(
+                node,
+                AnyNodeRef::ExprLambda(_)
+                    | AnyNodeRef::ExprListComp(_)
+                    | AnyNodeRef::ExprSetComp(_)
+                    | AnyNodeRef::ExprDictComp(_)
+                    | AnyNodeRef::ExprGenerator(_)
+            )
+        })
+}
+
+/// Collects references to a named identifier in statements or expressions.
+///
+/// This utility consolidates the common pattern of:
+/// 1. Finding Load-context references to a name
+/// 2. Detecting Store-context references (which invalidate inline operations)
+/// 3. Skipping nested function/class definitions (different scope)
+/// 4. Rejecting if references appear in disallowed expressions (lambdas, comprehensions)
+///
+/// The collector becomes "invalid" if:
+/// - A Store-context reference to the name is found
+/// - A Load-context reference appears inside a lambda or comprehension
+pub(crate) struct NameRefCollector {
+    pub name: String,
+    pub load_refs: Vec<TextRange>,
+    pub invalid: bool,
+}
+
+impl NameRefCollector {
+    /// Creates a new collector for the given identifier name.
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            load_refs: Vec::new(),
+            invalid: false,
+        }
+    }
+
+    /// Collects references from statements, skipping nested function/class definitions.
+    pub fn visit_stmts(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            if self.invalid {
+                return;
+            }
+            self.visit_stmt(stmt);
+        }
+    }
+}
+
+impl Visitor<'_> for NameRefCollector {
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        if self.invalid {
+            return;
+        }
+        // Skip nested function and class definitions to avoid capturing
+        // references in different scopes.
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        if self.invalid {
+            return;
+        }
+        // Disallow references inside lambdas and comprehensions where
+        // inlining could change semantics.
+        if is_disallowed_scope_expr(expr) {
+            self.invalid = true;
+            return;
+        }
+        if let Expr::Name(name) = expr
+            && name.id.as_str() == self.name
+        {
+            match name.ctx {
+                ExprContext::Store => {
+                    self.invalid = true;
+                    return;
+                }
+                ExprContext::Load => {
+                    self.load_refs.push(name.range());
+                }
+                _ => {}
+            }
+        }
+        walk_expr(self, expr);
+    }
+}
+
+/// Generates a unique name by appending `_N` suffixes until the name is not in use.
+/// The `exists` predicate should return true if a name is already taken.
+pub(crate) fn unique_name(base: &str, exists: impl Fn(&str) -> bool) -> String {
+    if !exists(base) {
+        return base.to_owned();
+    }
+    let mut counter = 1;
+    loop {
+        let candidate = format!("{base}_{counter}");
+        if !exists(&candidate) {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
+/// Finds the innermost function definition that contains the given range.
+pub(crate) fn find_enclosing_function(
+    ast: &ModModule,
+    range: TextRange,
+) -> Option<&StmtFunctionDef> {
+    let covering_nodes = Ast::locate_node(ast, range.start());
+    for node in covering_nodes {
+        if let Some(function_def) = node.as_stmt_function_def()
+            && function_def.range().contains_range(range)
+        {
+            return Some(function_def);
+        }
+    }
+    None
+}
+
+/// Returns true if a visitor should recurse into this statement for intra-function analysis.
+/// Returns false for nested function and class definitions, which create new scopes.
+pub(crate) fn is_local_scope_stmt(stmt: &Stmt) -> bool {
+    !matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_))
+}
+
+/// Core information about a method within a class.
+/// Contains the common fields needed by various refactoring operations.
+#[derive(Clone, Debug)]
+pub(crate) struct MethodInfo {
+    /// Name of the class containing the method.
+    pub class_name: String,
+    /// Name of the receiver parameter (typically `self` or `cls`).
+    pub receiver_name: String,
+}
+
+/// Extracts the text at the given range from a source string.
+/// Returns `None` if the range extends beyond the source bounds.
+pub(crate) fn code_at_range<'a>(source: &'a str, range: TextRange) -> Option<&'a str> {
+    let start = range.start().to_usize();
+    let end = range.end().to_usize();
+    if end <= source.len() {
+        Some(&source[start..end])
+    } else {
+        None
+    }
+}
+
+/// Returns true if the function has a @staticmethod or @classmethod decorator.
+pub(crate) fn is_static_or_class_method(function_def: &StmtFunctionDef) -> bool {
+    function_has_decorator(function_def, "staticmethod")
+        || function_has_decorator(function_def, "classmethod")
+}
+
+/// Reindent every non-blank line in `text` from `from_indent` to `to_indent`.
+pub(crate) fn reindent_block(text: &str, from_indent: &str, to_indent: &str) -> String {
+    let mut result = String::new();
+    for line in text.split_inclusive('\n') {
+        let (line_body, line_end) = match line.strip_suffix('\n') {
+            Some(body) => (body, "\n"),
+            None => (line, ""),
+        };
+        if line_body.trim().is_empty() {
+            result.push_str(line_body);
+            result.push_str(line_end);
+            continue;
+        }
+        if !from_indent.is_empty() && line_body.starts_with(from_indent) {
+            result.push_str(to_indent);
+            result.push_str(&line_body[from_indent.len()..]);
+        } else if from_indent.is_empty() {
+            result.push_str(to_indent);
+            result.push_str(line_body);
+        } else {
+            let trimmed = line_body.trim_start_matches([' ', '\t']);
+            result.push_str(to_indent);
+            result.push_str(trimmed);
+        }
+        result.push_str(line_end);
+    }
+    result
+}
+
+/// Prepares text for insertion at a given position, adding a newline prefix if needed.
+pub(crate) fn prepare_insertion_text(
+    source: &str,
+    position: TextSize,
+    member_text: &str,
+) -> String {
+    let mut text = String::new();
+    let idx = position.to_usize().min(source.len());
+    if idx > 0 && source.as_bytes().get(idx - 1) != Some(&b'\n') {
+        text.push('\n');
+    }
+    text.push_str(member_text);
+    text
+}
+
+/// Returns the byte position of the end of the line containing the given position.
+pub(crate) fn line_end_position(source: &str, position: TextSize) -> TextSize {
+    let idx = position.to_usize().min(source.len());
+    if let Some(offset) = source[idx..].find('\n') {
+        TextSize::try_from(idx + offset + 1).unwrap_or(position)
+    } else {
+        TextSize::try_from(source.len()).unwrap_or(position)
+    }
+}
+
+/// Validates that a selection is non-empty and contains non-whitespace content.
+/// Returns the selection text if valid, `None` otherwise.
+pub(crate) fn validate_non_empty_selection<'a>(
+    selection: TextRange,
+    selection_text: &'a str,
+) -> Option<&'a str> {
+    if selection.is_empty() || selection_text.trim().is_empty() {
+        None
+    } else {
+        Some(selection_text)
+    }
+}
+
+/// Returns true if the statement is a member definition (function, class, or assignment).
+pub(crate) fn is_member_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::FunctionDef(_) | Stmt::ClassDef(_) | Stmt::Assign(_) | Stmt::AnnAssign(_)
+    )
+}
+
+/// Computes the full-line removal range for a statement (leading indent through trailing newline).
+pub(crate) fn statement_removal_range(source: &str, stmt: &Stmt) -> Option<TextRange> {
+    statement_removal_range_from_range(source, stmt.range())
+}
+
+/// Computes the full-line removal range for a text range (leading indent through trailing newline).
+pub(crate) fn statement_removal_range_from_range(
+    source: &str,
+    range: TextRange,
+) -> Option<TextRange> {
+    let (_, line_start) = line_indent_and_start(source, range.start())?;
+    let line_end = line_end_position(source, range.end());
+    Some(TextRange::new(line_start, line_end))
+}
+
+/// Returns true if removing the statement at `removed_range` would leave the body
+/// with only docstrings, requiring a `pass` placeholder.
+pub(crate) fn needs_pass_after_removal(body: &[Stmt], removed_range: TextRange) -> bool {
+    let mut non_docstring = body.iter().filter(|stmt| !is_docstring_stmt(stmt));
+    let only_stmt = non_docstring.next();
+    non_docstring.next().is_none() && only_stmt.is_some_and(|stmt| stmt.range() == removed_range)
+}
+
+/// Extracts the text at `range` from `source` and reindents from `from_indent` to `to_indent`.
+/// Ensures the result ends with a newline.
+pub(crate) fn reindent_statement(
+    source: &str,
+    range: TextRange,
+    from_indent: &str,
+    to_indent: &str,
+) -> String {
+    let start = range.start().to_usize().min(source.len());
+    let end = range.end().to_usize().min(source.len());
+    let raw = if start < end { &source[start..end] } else { "" };
+    let mut text = reindent_block(raw, from_indent, to_indent);
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// Resolves the definition at `position` to the single matching local definition
+/// (same module as `module_info`) whose symbol kind passes `kind_filter`.
+/// Returns `None` if no matching definition exists.
+pub(crate) fn find_local_definition(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+    module_info: &ModuleInfo,
+    kind_filter: impl Fn(Option<SymbolKind>) -> bool,
+) -> Option<FindDefinitionItemWithDocstring> {
+    transaction
+        .find_definition(handle, position, FindPreference::default())
+        .map(Vec1::into_vec)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|def| {
+            def.module.path() == module_info.path() && kind_filter(def.metadata.symbol_kind())
+        })
 }

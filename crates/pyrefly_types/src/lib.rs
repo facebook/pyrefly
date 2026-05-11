@@ -19,19 +19,21 @@
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
 #![feature(box_patterns)]
-#![feature(if_let_guard)]
 
 pub mod alias;
 pub mod annotation;
 pub mod callable;
 pub mod class;
+pub mod dimension;
 pub mod display;
 pub mod equality;
 pub mod facet;
 pub mod globals;
+pub mod heap;
 pub mod keywords;
 pub mod lit_int;
 pub mod literal;
+pub mod meta_shape_dsl;
 pub mod module;
 pub mod param_spec;
 pub mod quantified;
@@ -39,7 +41,10 @@ pub mod read_only;
 pub mod simplify;
 pub mod special_form;
 pub mod stdlib;
+pub mod tensor;
+pub mod tensor_ops_registry;
 pub mod tuple;
+pub mod type_alias;
 pub mod type_info;
 pub mod type_output;
 pub mod type_var;

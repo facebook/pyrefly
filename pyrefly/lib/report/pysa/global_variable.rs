@@ -7,14 +7,10 @@
 
 use std::collections::HashMap;
 
-use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::types::Type;
-use pyrefly_util::thread_pool::ThreadPool;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelIterator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::Stmt;
@@ -24,17 +20,13 @@ use serde::Serialize;
 use starlark_map::Hashed;
 
 use crate::binding::binding::Key;
+use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
 use crate::report::pysa::location::PysaLocation;
 use crate::report::pysa::module::ModuleId;
-use crate::report::pysa::module::ModuleIds;
-use crate::report::pysa::module::ModuleKey;
-use crate::report::pysa::slow_fun_monitor::slow_fun_monitor_scope;
-use crate::report::pysa::step_logger::StepLogger;
 use crate::report::pysa::types::PysaType;
 use crate::report::pysa::types::is_bound_method_like;
 use crate::report::pysa::types::preprocess_type;
-use crate::state::state::Transaction;
 
 /// Represents information about a global variable, collected in a pre-analysis step.
 /// See `GlobalVariable` for the type exported to Pysa. This only store memory-efficient information.
@@ -62,8 +54,6 @@ pub struct GlobalVariableRef {
 #[derive(Debug, Clone)]
 pub struct ModuleGlobalVariables(HashMap<ShortIdentifier, GlobalVariableBase>);
 
-pub struct WholeProgramGlobalVariables(dashmap::ReadOnlyView<ModuleId, ModuleGlobalVariables>);
-
 impl ModuleGlobalVariables {
     fn new() -> Self {
         Self(HashMap::new())
@@ -72,15 +62,9 @@ impl ModuleGlobalVariables {
     pub fn get(&self, short_identifier: ShortIdentifier) -> Option<&GlobalVariableBase> {
         self.0.get(&short_identifier)
     }
-}
 
-impl WholeProgramGlobalVariables {
-    pub fn new() -> Self {
-        WholeProgramGlobalVariables(dashmap::DashMap::new().into_read_only())
-    }
-
-    pub fn get_for_module(&self, module_id: ModuleId) -> Option<&ModuleGlobalVariables> {
-        self.0.get(&module_id)
+    pub fn contains(&self, name: &Name) -> bool {
+        self.0.values().any(|global| global.name == *name)
     }
 }
 
@@ -95,7 +79,10 @@ impl GlobalVariable {
                 .type_
                 .as_ref()
                 .map(|type_| PysaType::from_type(type_, context)),
-            location: PysaLocation::new(context.module_info.display_range(identifier.range())),
+            location: PysaLocation::from_text_range(
+                identifier.range(),
+                &context.answers_context.module_info,
+            ),
         }
     }
 }
@@ -103,7 +90,7 @@ impl GlobalVariable {
 fn visit_assign_target(
     target: &Expr,
     global_variables: &mut ModuleGlobalVariables,
-    context: &ModuleContext,
+    context: &ModuleAnswersContext,
 ) {
     Ast::expr_lvalue(target, &mut |global: &ExprName| {
         let short_identifier = ShortIdentifier::expr_name(global);
@@ -132,7 +119,7 @@ fn visit_assign_target(
 fn visit_statement(
     stmt: &Stmt,
     global_variables: &mut ModuleGlobalVariables,
-    context: &ModuleContext,
+    context: &ModuleAnswersContext,
 ) {
     match stmt {
         Stmt::Assign(assign) => {
@@ -201,54 +188,28 @@ fn visit_statement(
 fn visit_statements<'a>(
     statements: impl Iterator<Item = &'a Stmt>,
     global_variables: &mut ModuleGlobalVariables,
-    context: &ModuleContext,
+    context: &ModuleAnswersContext,
 ) {
     for stmt in statements {
         visit_statement(stmt, global_variables, context);
     }
 }
 
-pub fn collect_global_variables(
-    handles: &Vec<Handle>,
-    transaction: &Transaction,
-    module_ids: &ModuleIds,
-) -> WholeProgramGlobalVariables {
-    let step = StepLogger::start("Indexing global variables", "Indexed global variables");
-
-    let global_variables = dashmap::DashMap::new();
-
-    ThreadPool::new().install(|| {
-        slow_fun_monitor_scope(|slow_function_monitor| {
-            handles.par_iter().for_each(|handle| {
-                let module_id = module_ids.get(ModuleKey::from_handle(handle)).unwrap();
-                let context =
-                    ModuleContext::create(handle.clone(), transaction, module_ids).unwrap();
-                let globals_for_module = slow_function_monitor.monitor_function(
-                    move || {
-                        let mut global_variables = ModuleGlobalVariables::new();
-                        visit_statements(context.ast.body.iter(), &mut global_variables, &context);
-                        global_variables
-                    },
-                    format!("Indexing global variables for {}", handle.module().as_str(),),
-                    /* max_time_in_seconds */ 4,
-                );
-                global_variables.insert(module_id, globals_for_module);
-            });
-        })
-    });
-
-    step.finish();
-    WholeProgramGlobalVariables(global_variables.into_read_only())
+/// Collect global variables for a single module.
+pub fn collect_global_variables_for_module(
+    context: &ModuleAnswersContext,
+) -> ModuleGlobalVariables {
+    let mut global_variables = ModuleGlobalVariables::new();
+    visit_statements(context.ast.body.iter(), &mut global_variables, context);
+    global_variables
 }
 
 pub fn export_global_variables(
-    global_variables: &WholeProgramGlobalVariables,
+    module_global_variables: &ModuleGlobalVariables,
     context: &ModuleContext,
 ) -> HashMap<Name, GlobalVariable> {
-    let globals_for_module = global_variables.0.get(&context.module_id).unwrap();
-
     let mut global_variables = HashMap::new();
-    for (short_identifier, global) in &globals_for_module.0 {
+    for (short_identifier, global) in &module_global_variables.0 {
         let new_global = GlobalVariable::from_base(*short_identifier, global, context);
         global_variables
             .entry(global.name.clone())

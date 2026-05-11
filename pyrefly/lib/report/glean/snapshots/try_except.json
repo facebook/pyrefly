@@ -20,10 +20,6 @@
     "predicate": "python.ImportStarLocation.4"
   },
   {
-    "facts": [],
-    "predicate": "python.XRefsViaNameByTarget.4"
-  },
-  {
     "facts": [
       {
         "id": 0,
@@ -282,7 +278,74 @@
             "id": 0,
             "key": "try_except.py"
           },
-          "xrefs": []
+          "spans": [
+            {
+              "length": 9,
+              "start": 21
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "Exception"
+          }
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "try_except.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 9,
+                "start": 21
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "builtins.pyi"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "Exception"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "try_except.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 9,
+                "start": 21
+              },
+              "target": {
+                "id": 0,
+                "key": "Exception"
+              }
+            }
+          ]
         }
       }
     ],
@@ -365,6 +428,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "b7943ae76a8e6adb45598859f7c7b073"
+    "schema_id": "8f24e877367cad77ea2a10942e644b42"
   }
 ]

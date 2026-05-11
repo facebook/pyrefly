@@ -1,6 +1,6 @@
 ---
-title: Experimental Pydantic Support
-description: Pyrefly experimental support for Pydantic.
+title: Pydantic Support
+description: Pyrefly support for Pydantic.
 ---
 
 {/*
@@ -10,11 +10,11 @@ description: Pyrefly experimental support for Pydantic.
  * LICENSE file in the root directory of this source tree.
  */}
 
-# Experimental Pydantic Support
+# Pydantic Support
 
-Pyrefly includes **experimental support** for [Pydantic](https://pydantic.dev/), a popular Python library for data validation and parsing. This feature aims to provide improved static type checking and IDE integration for Pydantic models.
+Pyrefly includes **built-in support** for [Pydantic](https://pydantic.dev/), a popular Python library for data validation and parsing. This feature provides static type checking and IDE integration for Pydantic models.
 
-> **Note:** This support is experimental and actively evolving. The design may change based on feedback and development. Please note that we are supporting Pydantic v2 and above, which means that deprecated v1 features are not included.
+> **Note:** Pyrefly's Pydantic support continues to evolve based on feedback and development. Please note that we support Pydantic v2 and above, which means that deprecated Pydantic v1 features are not included.
 
 ### Feedback
 
@@ -31,6 +31,8 @@ Pydantic is a Python library designed for data validation and parsing using Pyth
 ## How Pyrefly Supports Pydantic
 
 - Understands Pydantic constructs like `BaseModel`, `Field`, `ConfigDict`, and model-level config options.
+- Recognizes `pydantic_settings.BaseSettings` for environment-driven configuration.
+- Supports `@pydantic.dataclasses.dataclass`.
 - Performs static analysis that mirrors Pydantic's runtime validation logic, minimizing false positives in your IDE.
 - Provides immediate feedback (e.g. red squiggles or type errors) when the code would fail under Pydantic's actual behavior.
 - Does **not** require a plugin or manual config — support is builtin and automatic.
@@ -98,7 +100,7 @@ Just:
 Pyrefly will recognize Pydantic constructs like `BaseModel`, `Field`, and `model_config`, and provide appropriate type checking automatically. You can follow [this link](https://github.com/migeed-z/pyrefly-pydantic-demo) to try it out on some small examples.
 
 ---
-## Supported Features with Examples
+## Some Supported Features with Examples
 
 The following examples showcase which Pydantic features are currently supported by Pyrefly. Pyrefly does not cover all Pydantic features, but these features should provide good coverage of the most common Pydantic use cases. You can request additional Pydantic features to be supported by opening a GitHub issue.
 
@@ -204,4 +206,26 @@ class Model(BaseModel, validate_by_name=True, validate_by_alias=True):
 # both `x` and `y` are valid aliases
 Model(x=0)
 Model(y=0)
+```
+
+---
+
+## Features Not Yet Supported
+
+These are some Pydantic features that are **not yet supported**:
+
+### Alias Generators
+
+Pyrefly does not yet recognize `alias_generator` (or `AliasGenerator`) configured via `ConfigDict`. Fields will be type-checked using their original names rather than the generated aliases.
+
+```python
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+
+class Voice(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel)
+    first_name: str
+
+# Not yet supported: pyrefly reports a missing-argument error for `first_name`
+Voice(firstName="Alice")
 ```
