@@ -1724,6 +1724,9 @@ impl<'a> Transaction<'a> {
                 );
                 defs
             }
+            Type::ClassType(class) if class.has_qname("functools", "_lru_cache_wrapper") => {
+                vec![]
+            }
             Type::ClassType(_) => self
                 .find_attribute_definition_for_base_type(handle, preference, ty, &dunder::CALL)
                 .map(Vec1::into_vec)

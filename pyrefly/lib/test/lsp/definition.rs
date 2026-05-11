@@ -2779,6 +2779,33 @@ Definition Result:
 }
 
 #[test]
+fn goto_def_cached_function_call_goes_to_function() {
+    let code = r#"
+from functools import cache
+
+@cache
+def add(a: int, b: int) -> int:
+    return a + b
+
+add(1, 2)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | add(1, 2)
+      ^
+Definition Result:
+5 | def add(a: int, b: int) -> int:
+        ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn goto_def_class_name_without_call_goes_to_class() {
     let code = r#"
 class Baz:
