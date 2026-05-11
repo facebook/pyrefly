@@ -2336,15 +2336,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
                 ),
                 Type::Quantified(ref q) if q.is_type_var() && q.restriction().is_restricted() => {
-                    self.call_method_or_error(
-                        &base,
-                        &dunder::GETITEM,
-                        range,
-                        &[CallArg::expr(slice)],
-                        &[],
-                        errors,
-                        Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
-                    )
+                    match q.restriction() {
+                        Restriction::Bound(bound) => {
+                            self.subscript_infer_for_type(bound, slice, range, errors)
+                        }
+                        Restriction::Constraints(constraints) => {
+                            self.unions(constraints.map(|constraint| {
+                                self.subscript_infer_for_type(constraint, slice, range, errors)
+                            }))
+                        }
+                        Restriction::Unrestricted => {
+                            unreachable!("restricted TypeVar cannot be unrestricted")
+                        }
+                    }
                 }
                 Type::TypedDict(typed_dict) => {
                     let key_ty = self.expr_infer(slice, errors);

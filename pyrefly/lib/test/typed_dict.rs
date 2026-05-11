@@ -2536,3 +2536,38 @@ def f(x: str) -> TD[int] | TD[str]:
     return TD(value=x)
     "#,
 );
+
+testcase!(
+    test_constrained_type_var_typed_dict_index,
+    r#"
+from typing import Generic, TypedDict, TypeVar, assert_type
+
+class DeviceInfo(TypedDict):
+    name: str
+    address: str
+    rssi: int
+
+class ExtendedDeviceInfo(TypedDict):
+    name: str
+    address: str
+    rssi: int
+    manufacturer: str
+
+NAME = "name"
+ADDRESS = "address"
+
+T = TypeVar("T", DeviceInfo, ExtendedDeviceInfo)
+
+class DeviceIndex(Generic[T]):
+    def __init__(self) -> None:
+        self.by_name: dict[str, list[T]] = {}
+
+    def add(self, device: T) -> None:
+        name = device[NAME]
+        assert_type(name, str)
+        self.by_name.setdefault(name, []).append(device)
+
+    def lookup(self, device: T) -> str:
+        return device[ADDRESS]
+"#,
+);
