@@ -20,7 +20,7 @@
 - [FAQ](pyrefly-faq): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
 - [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
 - [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
-- [Report](report): Measure type coverage in your Python codebase with the Pyrefly report command.
+- [Report](report): Measure type coverage in your Python codebase with the Pyrefly coverage report command.
 - [Stub Generation](stubgen): Generate .pyi stub files from Python source files with Pyrefly stubgen.
 - [Tensor Shapes](tensor-shapes): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
 - [Agent Skill for Tensor Shape Porting](tensor-shapes-ai-porting): How to use the port-model agent skill to automatically add tensor shape annotations to PyTorch models.
