@@ -27,6 +27,14 @@ use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::external_provider::NoExternalProvider;
 
+/// Subcommands of `pyrefly coverage`.
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Clone, Subcommand)]
+pub enum CoverageCommand {
+    /// Generate a machine-readable type-coverage report from pyrefly type checking results.
+    Report(ReportArgs),
+}
+
 /// Subcommands to run Pyrefly with.
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Clone, Subcommand)]
@@ -54,7 +62,14 @@ pub enum Command {
     Tsp(TspArgs),
     /// Automatically add type annotations to a file or directory.
     Infer(InferArgs),
-    /// Generate reports from pyrefly type checking results.
+    /// Type coverage commands.
+    Coverage {
+        /// Coverage subcommand to run.
+        #[command(subcommand)]
+        command: CoverageCommand,
+    },
+    /// Deprecated alias for `pyrefly coverage report`. Use `pyrefly coverage report` instead.
+    #[command(hide = true)]
     Report(ReportArgs),
     /// Suppress type errors by adding ignore comments, or remove unused ignores.
     Suppress(SuppressArgs),
@@ -96,7 +111,15 @@ impl Command {
             )),
             Command::Infer(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
             Command::DumpConfig(args) => Ok((args.run(config_configurer_wrapper)?, None)),
-            Command::Report(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
+            Command::Coverage {
+                command: CoverageCommand::Report(args),
+            } => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
+            Command::Report(args) => {
+                eprintln!(
+                    "warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead"
+                );
+                Ok((args.run(config_configurer_wrapper, thread_count)?, None))
+            }
             Command::Suppress(args) => {
                 Ok((args.run(config_configurer_wrapper, thread_count)?, None))
             }

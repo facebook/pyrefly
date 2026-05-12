@@ -35,7 +35,6 @@ use crate::alt::class::class_field::ClassAttribute;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::types::class::ClassType;
 
 pub fn is_nn_module_dict(cls: &ClassType) -> bool {
@@ -250,7 +249,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.error(
                         errors,
                         slice.range(),
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "ModuleDict key `{}` not found in TypedDict `{}`",
                             field_name,

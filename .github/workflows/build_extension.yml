@@ -2,6 +2,16 @@ name: build_extension
 on:
   workflow_dispatch:
   workflow_call:
+    outputs:
+      pyrefly_version:
+        description: 'The semver version from version.bzl (e.g. 1.2.0 or 1.2.0-dev.4)'
+        value: ${{ jobs.get_version.outputs.pyrefly_version }}
+      marketplace_version:
+        description: 'The M.m.p version published to VS Code Marketplace and Open VSX'
+        value: ${{ jobs.get_version.outputs.marketplace_version }}
+      prerelease_flag:
+        description: '"--pre-release" if dev version, empty string otherwise'
+        value: ${{ jobs.get_version.outputs.prerelease_flag }}
   push:
     paths:
       - '**/*'
@@ -13,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       pyrefly_version: ${{ steps.pyrefly-version.outputs.PYREFLY_VERSION }}
+      marketplace_version: ${{ steps.pyrefly-version.outputs.MARKETPLACE_VERSION }}
+      prerelease_flag: ${{ steps.pyrefly-version.outputs.PRERELEASE_FLAG }}
     steps:
       - name: Checkout repo (to see version.bzl in next step)
         uses: actions/checkout@v6
@@ -21,9 +33,19 @@ jobs:
       - name: Get version
         id: pyrefly-version
         run: |
-          # setting to variable is necessary so sed failures will be red
+          # Read version.bzl's canonical semver; derive the PyPI / marketplace
+          # forms via scripts/version_helpers.py (unit-tested).
+          set -euo pipefail
           VERSION=$(sed -n -e 's/^VERSION = "\(.*\)"/\1/p' version.bzl)
+          MARKETPLACE_VERSION=$(python3 scripts/version_helpers.py to-marketplace "$VERSION")
+          if python3 scripts/version_helpers.py is-prerelease "$VERSION" >/dev/null; then
+            PRERELEASE_FLAG="--pre-release"
+          else
+            PRERELEASE_FLAG=""
+          fi
           echo "PYREFLY_VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "MARKETPLACE_VERSION=$MARKETPLACE_VERSION" >> $GITHUB_OUTPUT
+          echo "PRERELEASE_FLAG=$PRERELEASE_FLAG" >> $GITHUB_OUTPUT
   build_extension:
     needs: get_version
     if: ${{ success() }}
@@ -130,7 +152,7 @@ jobs:
         run: echo "platform=${{ matrix.platform }}-${{ matrix.arch }}" >> ${{ matrix.github_env }}
       - run: npm ci
         working-directory: lsp/
-      - run: npx vsce package --target ${{ env.platform }} ${{needs.get_version.outputs.pyrefly_version}}
+      - run: npx vsce package --target ${{ env.platform }} ${{needs.get_version.outputs.marketplace_version}}
         working-directory: lsp/
       - uses: actions/upload-artifact@v6
         with:

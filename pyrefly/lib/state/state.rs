@@ -69,7 +69,6 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
-use vec1::vec1;
 use web_time::Instant;
 
 use crate::alt::answers::AnswerEntry;
@@ -106,7 +105,6 @@ use crate::config::error_kind::ErrorKind;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::ExportOrigin;
@@ -1673,7 +1671,7 @@ impl<'a> Transaction<'a> {
         kind: ErrorKind,
     ) {
         let load = module_data.state.get_load().unwrap();
-        load.errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
+        load.errors.error_builder(range, kind, msg).emit();
     }
 
     fn lookup<'b>(&'b self, module_data: &'b ArcId<ModuleDataMut>) -> TransactionHandle<'b> {

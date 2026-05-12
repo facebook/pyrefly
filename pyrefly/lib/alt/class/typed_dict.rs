@@ -33,7 +33,6 @@ use crate::alt::unwrap::HintRef;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
@@ -99,7 +98,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 check_errors,
                                 key.range(),
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                ErrorKind::BadTypedDictKey,
                                 format!("Cannot update read-only field `{key_name}`"),
                             );
                         }
@@ -124,22 +123,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         None => {
-                            let mut msg = vec1![format!(
-                                "Key `{}` is not defined in TypedDict `{}`",
-                                key_name,
-                                typed_dict.name()
-                            )];
+                            let mut builder = check_errors.error_builder(
+                                key.range(),
+                                ErrorKind::BadTypedDictKey,
+                                format!(
+                                    "Key `{}` is not defined in TypedDict `{}`",
+                                    key_name,
+                                    typed_dict.name()
+                                ),
+                            );
                             if let Some(suggestion) = best_suggestion(
                                 &key_name,
                                 fields.keys().map(|candidate| (candidate, 0usize)),
                             ) {
-                                msg.push(format!("Did you mean `{suggestion}`?"));
+                                builder =
+                                    builder.with_detail(format!("Did you mean `{suggestion}`?"));
                             }
-                            check_errors.add(
-                                key.range(),
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                                msg,
-                            );
+                            builder.emit();
                         }
                     }
                     keys.insert(key_name);
@@ -147,7 +147,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         check_errors,
                         key.range(),
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "Expected string literal key, got `{}`",
                             self.for_display(key_type)
@@ -176,16 +176,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             &|| TypeCheckContext::of_kind(TypeCheckKind::TypedDictUnpacking)
                         };
-                    self.solver().error(
-                        &item_ty,
-                        &partial_td_ty,
-                        check_errors,
-                        range,
-                        tcc,
-                        subset_error,
-                        None,
-                        Vec::new(),
-                    );
+                    self.solver()
+                        .error_builder(
+                            &item_ty,
+                            &partial_td_ty,
+                            check_errors,
+                            range,
+                            tcc,
+                            subset_error,
+                        )
+                        .emit();
                 }
             }
         });
@@ -196,7 +196,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         check_errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "Missing required key `{}` for TypedDict `{}`",
                             key,
@@ -935,7 +935,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                ErrorKind::BadClassDefinition,
                 "TypedDict members must be declared in the form `field: Annotation` with no assignment".to_owned(),
             );
         }
@@ -952,7 +952,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    ErrorKind::InvalidAnnotation,
                     format!("`{q}` may not be used for TypedDict members",),
                 );
             }
@@ -972,7 +972,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "Cannot extend closed TypedDict `{}` with extra item `{}`",
                             base.name(),
@@ -986,7 +986,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // The field type needs to be assignable to the extra_items type.
                         if !self.is_subset_eq(field_ty, &ty) {
                             self.error(
-                                errors, range, ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                errors, range, ErrorKind::BadTypedDictKey,
                             format!(
                                 "`{}` is not assignable to `extra_items` type `{}` of TypedDict `{}`",
                                 self.for_display(field_ty.clone()), self.for_display(ty), base.name()));
@@ -999,14 +999,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                ErrorKind::BadTypedDictKey,
                                 format!("Cannot add required field `{}` to TypedDict `{}` with non-read-only `extra_items`", name, base.name()),
                             );
                         } else if !self.is_consistent(field_ty, &ty) {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                ErrorKind::BadTypedDictKey,
                                 format!(
                                     "`{}` is not consistent with `extra_items` type `{}` of TypedDict `{}`",
                                     self.for_display(field_ty.clone()), self.for_display(ty), base.name()),

@@ -679,6 +679,20 @@ pub fn tsp_loop(
     })
 }
 
+/// Generate TSP-specific server capabilities.
+pub fn tsp_capabilities(
+    indexing_mode: IndexingMode,
+    initialization_params: &InitializeParams,
+) -> ServerCapabilitiesWithTypeHierarchy {
+    let mut result = capabilities(indexing_mode, initialization_params);
+    result.set_experimental(serde_json::json!({
+        "typeServerMultiConnection": {
+            "supportedTransports": ["ipc"]
+        }
+    }));
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use tsp_types::ConnectionRequestParams;
@@ -774,18 +788,4 @@ mod tests {
         assert!(IpcTransportNames::from_connection_request(&ipc_params(&["reader", ""])).is_err());
         assert!(IpcTransportNames::from_connection_request(&ipc_params(&["a", "b", "c"])).is_err());
     }
-}
-
-/// Generate TSP-specific server capabilities.
-pub fn tsp_capabilities(
-    indexing_mode: IndexingMode,
-    initialization_params: &InitializeParams,
-) -> ServerCapabilitiesWithTypeHierarchy {
-    let mut result = capabilities(indexing_mode, initialization_params);
-    result.set_experimental(serde_json::json!({
-        "typeServerMultiConnection": {
-            "supportedTransports": ["ipc"]
-        }
-    }));
-    result
 }

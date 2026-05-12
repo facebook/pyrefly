@@ -32,7 +32,6 @@ use ruff_text_size::TextRange;
 use starlark_map::ordered_map::OrderedMap;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -43,7 +42,6 @@ use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
@@ -563,15 +561,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .last()
             .is_some_and(|x| self.is_param_spec_kwargs(x, q, arg_errors));
         if !args_ok || !kwargs_ok {
-            self.error(
+            self.error_with_context(
                 call_errors,
                 arguments_range,
-                ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
+                ErrorKind::InvalidParamSpec,
                 format!(
                     "Expected *-unpacked {}.args and **-unpacked {}.kwargs",
                     q.name(),
                     q.name()
                 ),
+                context,
             );
             None
         } else {
@@ -615,15 +614,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let type_owner = Owner::new();
 
         let error = |errors, range, kind, msg: String| {
-            self.error(
+            self.error_with_context(
                 errors,
                 range,
-                ErrorInfo::new(kind, context),
+                kind,
                 format!(
                     "{}{}",
                     msg,
                     function_suffix(callable_name, self.module().name())
                 ),
+                context,
             )
         };
 
@@ -1551,11 +1551,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::Any(_) | Type::Ellipsis => HashMap::new(),
                     _ => {
                         // This could well be our error, but not really sure
-                        self.error(
+                        self.error_with_context(
                             call_errors,
                             arguments_range,
-                            ErrorInfo::new(ErrorKind::InvalidParamSpec, context),
+                            ErrorKind::InvalidParamSpec,
                             format!("Unexpected ParamSpec type: `{}`", self.for_display(p)),
+                            context,
                         );
                         HashMap::new()
                     }
@@ -1727,11 +1728,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match meta_shape_func.evaluate(bound_args, &ret_type) {
             Some(Ok(ty)) => ty,
             Some(Err(shape_error)) => {
-                errors.add(
-                    range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
-                    vec1![format!("{}", shape_error)],
-                );
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::InvalidArgument,
+                        format!("{}", shape_error),
+                    )
+                    .emit();
                 ret_type
             }
             None => ret_type,

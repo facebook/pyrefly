@@ -34,6 +34,7 @@ use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
@@ -47,11 +48,11 @@ use ruff_text_size::TextSize;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::vec1;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
@@ -93,7 +94,6 @@ use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
@@ -369,6 +369,17 @@ impl Bindings {
         Some(&self.0.metadata.get_class_checked(idx)?.fields)
     }
 
+    /// Per-module class index for a class definition statement (`ClassDefIndex`),
+    /// used for `KeyClassField` / `ClassFields` lookups.
+    pub fn class_def_index(&self, class_def: &StmtClassDef) -> Option<ClassDefIndex> {
+        let key = KeyClass(ShortIdentifier::new(&class_def.name));
+        let idx = self.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        match self.get(idx) {
+            BindingClass::ClassDef(c) => Some(c.def_index),
+            BindingClass::FunctionalClassDef(d, ..) => Some(*d),
+        }
+    }
+
     pub fn unused_parameters(&self) -> &[UnusedParameter] {
         &self.0.unused_parameters
     }
@@ -639,11 +650,10 @@ impl Bindings {
         let semantic_errors = builder.semantic_syntax_errors.into_inner();
         for error in semantic_errors {
             if Self::should_emit_semantic_syntax_error(&error) {
-                builder.errors.add(
-                    error.range,
-                    ErrorInfo::Kind(ErrorKind::InvalidSyntax),
-                    vec1![error.to_string()],
-                );
+                builder
+                    .errors
+                    .error_builder(error.range, ErrorKind::InvalidSyntax, error.to_string())
+                    .emit();
             }
         }
 

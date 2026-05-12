@@ -46,7 +46,6 @@ use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
@@ -196,7 +195,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         error_kind: ErrorKind,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> CallTarget {
-        self.error(errors, range, ErrorInfo::new(error_kind, context), msg);
+        self.error_with_context(errors, range, error_kind, msg, context);
         CallTarget::Any(AnyStyle::Error)
     }
 
@@ -536,14 +535,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // We manually construct an error using the message from the context but a
                     // Deprecated error kind so that the error is shown at the Deprecated severity
                     // (default: WARN) rather than the severity of the context's error kind.
-                    let mut msg = deprecation.as_error_message(format!(
+                    let header = format!(
                         "`{}` is deprecated",
                         m.kind.format(self.module().name())
-                    ));
-                    if let Some(ctx) = context {
-                        msg.insert(0, ctx().format());
+                    );
+                    let detail = deprecation.as_error_detail();
+                    let mut builder = if let Some(ctx) = context {
+                        errors
+                            .error_builder(range, ErrorKind::Deprecated, ctx().format())
+                            .with_detail(header)
+                    } else {
+                        errors.error_builder(range, ErrorKind::Deprecated, header)
+                    };
+                    if let Some(detail) = detail {
+                        builder = builder.with_detail(detail);
                     }
-                    errors.add(range, ErrorInfo::Kind(ErrorKind::Deprecated), msg);
+                    builder.emit();
                 }
                 *target
             }
@@ -714,12 +721,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         for e in specialization_errors {
             let kind = e.error_kind();
-            self.error(
-                errors,
-                range,
-                ErrorInfo::new(kind, context),
-                e.to_error_msg(self),
-            );
+            self.error_with_context(errors, range, kind, e.to_error_msg(self), context);
         }
     }
 
@@ -848,6 +850,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // member lookup by value. A custom enum __new__ is used for member creation
             // during class definition and should not be re-applied at call sites.
             if class_metadata.is_enum() {
+                let ty = if constructor_kind == ConstructorKind::TypeOfSelf {
+                    self.heap.mk_self_type(cls)
+                } else {
+                    ret
+                };
                 let specialization_errors = self
                     .solver()
                     .finish_quantified_with_type_order(
@@ -857,7 +864,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                     .err();
                 return ConstructedInstance {
-                    ty: ret,
+                    ty,
                     matched_hint,
                     errors,
                     specialization_errors,
@@ -923,7 +930,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.record_resolved_trace(arguments_range, new_method);
                     recorded_trace = true;
                 }
-                if self.is_compatible_constructor_return(&ret, cls.class_object()) {
+                if constructor_kind == ConstructorKind::TypeOfSelf {
+                    // Pyright, mypy, and ty all infer `Self` for `type[Self]` construction
+                    // regardless of the resolved `__new__` return annotation.
+                    // TODO: flag incompatible `__new__` return annotations at the method definition.
+                } else if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
                 } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
                     // Got something other than an instance of the class under construction.
@@ -1219,7 +1230,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::UnnecessaryTypeConversion),
+                    ErrorKind::UnnecessaryTypeConversion,
                     format!(
                         "Unnecessary `{}()` call; argument is already of type `{}`",
                         cls.name(),
@@ -1249,11 +1260,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && self.should_error_for_abstract_call(&call_target)
         {
             let method_name = meta.kind.format(self.module().name());
-            self.error(
+            self.error_with_context(
                 errors,
                 arguments_range,
-                ErrorInfo::new(ErrorKind::AbstractMethodCall, context),
+                ErrorKind::AbstractMethodCall,
                 format!("Cannot call abstract method `{method_name}`"),
+                context,
             );
         }
         // Does this call target correspond to a function whose keyword arguments we should save?
@@ -1273,23 +1285,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let res = match call_target {
             CallTarget::Class(cls, constructor_kind, as_quantified_bound) => {
                 if cls.has_qname("typing", "Any") {
-                    return self.error(
+                    return self.error_with_context(
                         errors,
                         arguments_range,
-                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                        ErrorKind::BadInstantiation,
                         format!("`{}` cannot be instantiated", cls.name()),
+                        context,
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls.class_object());
                 if metadata.is_protocol() && constructor_kind == ConstructorKind::BareClassName {
-                    self.error(
+                    self.error_with_context(
                         errors,
                         arguments_range,
-                        ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                        ErrorKind::BadInstantiation,
                         format!(
                             "Cannot instantiate `{}` because it is a protocol",
                             cls.name()
                         ),
+                        context,
                     );
                 } else {
                     let abstract_members = self.get_abstract_members_for_class(cls.class_object());
@@ -1298,10 +1312,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if constructor_kind == ConstructorKind::BareClassName
                         && !unimplemented_abstract_methods.is_empty()
                     {
-                        self.error(
+                        self.error_with_context(
                             errors,
                             arguments_range,
-                            ErrorInfo::new(ErrorKind::BadInstantiation, context),
+                            ErrorKind::BadInstantiation,
                             format!(
                                 "Cannot instantiate `{}` because the following members are abstract: {}",
                                 cls.name(),
@@ -1311,6 +1325,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     .collect::<Vec<_>>()
                                     .join(", ")
                             ),
+                            context,
                         );
                     }
                 }
@@ -1871,7 +1886,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.error(
                         errors,
                         x.func.range(),
-                        ErrorInfo::Kind(ErrorKind::NotCallable),
+                        ErrorKind::NotCallable,
                         "`NotImplemented` is not callable. Did you mean `NotImplementedError`?".to_owned(),
                     );
                 }

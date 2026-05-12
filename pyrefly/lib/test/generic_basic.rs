@@ -274,11 +274,11 @@ _Ts = TypeVarTuple("_Ts")
 
 class partial(Generic[_P1, _P2, _T, _R_co, *_Ts]):
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ...
+    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, Any, object, *tuple[()]]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ...
+    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ... # E: Overload return type `partial[Concatenate[*tuple[Unknown, ...], _P2], Ellipsis, Any, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ...
+    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, object, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
     def __new__(cls, __func, *args, **kwargs):
         return super().__new__(cls)
     def __call__(self, *args: _P2.args, **kwargs: _P2.kwargs) -> _R_co: ...

@@ -93,6 +93,7 @@ use crate::report::pysa::module::ModuleId;
 use crate::report::pysa::module_index::GRAPHQL_DECORATORS;
 use crate::report::pysa::module_index::GraphQLDecoratorRef;
 use crate::report::pysa::types::ScalarTypeProperties;
+use crate::report::pysa::types::has_superclass;
 use crate::report::pysa::types::string_for_type;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
@@ -1477,6 +1478,22 @@ impl DirectCall {
     }
 }
 
+/// Cheap heuristic to check if a type loosely matches a class.
+/// Returns true if the class is the same as, or a subclass of, the class within the type.
+fn loosely_matches_class(ty: &Type, class: &Class, context: &ModuleContext) -> bool {
+    match ty {
+        Type::ClassType(class_type) => {
+            !class_type.is_builtin("object")
+                && has_superclass(class, class_type.class_object(), context)
+        }
+        Type::Union(union) => union
+            .members
+            .iter()
+            .any(|member| loosely_matches_class(member, class, context)),
+        _ => false,
+    }
+}
+
 struct CallGraphVisitor<'a> {
     call_graphs: &'a mut CallGraphs<ExpressionIdentifier, FunctionRef>,
     module_context: &'a ModuleContext<'a>,
@@ -2807,6 +2824,68 @@ impl<'a> CallGraphVisitor<'a> {
         }
     }
 
+    /// Heuristic: if a higher-order parameter is an instance of a callable class
+    /// (i.e., has `__call__`), we only want to keep it as a higher-order parameter
+    /// if the callee might actually call it. If the callee has a parameter annotated
+    /// with the callable class type, it likely just passes it through without calling.
+    fn filter_implicit_dunder_calls(
+        &self,
+        mut higher_order_parameters: HashMap<u32, HigherOrderParameter<FunctionRef>>,
+        callee: &Expr,
+        outer_call_targets: &[PysaCallTarget<FunctionRef>],
+    ) -> HashMap<u32, HigherOrderParameter<FunctionRef>> {
+        // Only filter when there's exactly one outer callee target.
+        if outer_call_targets.len() != 1 {
+            return higher_order_parameters;
+        }
+
+        // Get the callee's type to access its parameter annotations.
+        let callee_type = self
+            .module_answers_context
+            .answers
+            .get_type_trace(callee.range());
+        let callee_type = match callee_type.as_ref() {
+            Some(ty) => ty,
+            None => return higher_order_parameters,
+        };
+
+        // Extract parameter types from the callee's callable signature.
+        // Only filter when there's exactly one signature (no overloads).
+        let signatures = callee_type.callable_signatures();
+        let params = match signatures.as_slice() {
+            [sig] => match &sig.params {
+                Params::List(param_list) => param_list.items(),
+                _ => return higher_order_parameters,
+            },
+            _ => return higher_order_parameters,
+        };
+
+        higher_order_parameters.retain(|_index, hop| {
+            hop.call_targets.retain(|target| {
+                if !target.implicit_dunder_call {
+                    return true;
+                }
+                let receiver_class = match &target.receiver_class {
+                    Some(class_ref) => class_ref,
+                    None => return true,
+                };
+                // Check if ANY parameter of the outer callee is annotated with
+                // a type that loosely matches the callable class.
+                let callee_has_matching_param = params.iter().any(|param| {
+                    loosely_matches_class(
+                        param.as_type(),
+                        &receiver_class.class,
+                        self.module_context,
+                    )
+                });
+                !callee_has_matching_param
+            });
+            !hop.call_targets.is_empty()
+        });
+
+        higher_order_parameters
+    }
+
     fn resolve_higher_order_parameters(
         &self,
         call_arguments: Option<&ruff_python_ast::Arguments>,
@@ -2814,7 +2893,6 @@ impl<'a> CallGraphVisitor<'a> {
         if call_arguments.is_none() {
             return HashMap::new();
         }
-        // TODO: Filter the results with `filter_implicit_dunder_calls`
         call_arguments
             .unwrap()
             .arguments_source_order()
@@ -2926,6 +3004,14 @@ impl<'a> CallGraphVisitor<'a> {
             }
             _ => ResolveCallCallees::Unexpected,
         };
+        let higher_order_parameters = higher_order_parameters.map(|params| {
+            let outer_call_targets = match &callees {
+                ResolveCallCallees::Identifier(c) => &c.if_called.call_targets,
+                ResolveCallCallees::AttributeAccess(c) => &c.if_called.call_targets,
+                ResolveCallCallees::Unexpected => return params,
+            };
+            self.filter_implicit_dunder_calls(params, callee, outer_call_targets)
+        });
         ResolveCallResult {
             callees,
             higher_order_parameters,
@@ -3310,7 +3396,7 @@ impl<'a> CallGraphVisitor<'a> {
                     Origin {
                         kind: OriginKind::SubscriptSetItem,
                         location: self.pysa_location(TextRange::new(
-                            subscript.value.start(),
+                            subscript_range.start(),
                             assign.range().end(),
                         )),
                     },
@@ -3324,7 +3410,7 @@ impl<'a> CallGraphVisitor<'a> {
                         tail: Box::new(OriginKind::AugmentedAssignStatement),
                     },
                     location: self.pysa_location(TextRange::new(
-                        subscript.value.start(),
+                        subscript_range.start(),
                         assign.range().end(),
                     )),
                 },
@@ -3334,7 +3420,7 @@ impl<'a> CallGraphVisitor<'a> {
                 Origin {
                     kind: OriginKind::SubscriptSetItem,
                     location: self.pysa_location(TextRange::new(
-                        subscript.value.start(),
+                        subscript_range.start(),
                         assign.range().end(),
                     )),
                 },
@@ -3347,7 +3433,7 @@ impl<'a> CallGraphVisitor<'a> {
                         tail: Box::new(OriginKind::ForAssign),
                     },
                     location: self.pysa_location(TextRange::new(
-                        subscript.value.start(),
+                        subscript_range.start(),
                         stmt_for.iter.end(),
                     )),
                 },

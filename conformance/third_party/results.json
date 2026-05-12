@@ -1,9 +1,9 @@
 {
   "total": 140,
-  "pass": 130,
-  "fail": 10,
-  "pass_rate": 0.93,
-  "differences": 28,
+  "pass": 132,
+  "fail": 8,
+  "pass_rate": 0.94,
+  "differences": 25,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -68,7 +68,9 @@
     "generics_paramspec_specialization.py",
     "generics_self_advanced.py",
     "generics_self_attributes.py",
+    "generics_self_basic.py",
     "generics_self_protocols.py",
+    "generics_self_usage.py",
     "generics_syntax_compatibility.py",
     "generics_syntax_declarations.py",
     "generics_syntax_infer_variance.py",
@@ -144,8 +146,6 @@
     "directives_disjoint_base.py": 6,
     "exceptions_context_managers.py": 2,
     "generics_scoping.py": 4,
-    "generics_self_basic.py": 2,
-    "generics_self_usage.py": 1,
     "typeforms_typeform.py": 2
   },
   "comment": "@generated"

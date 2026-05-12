@@ -1376,12 +1376,10 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
-    use vec1::Vec1;
-    use vec1::vec1;
 
     use super::*;
 
-    fn sample_error(msg: Vec1<String>) -> Error {
+    fn sample_error(msg: String) -> Error {
         let module = Module::new(
             ModuleName::from_str("sample"),
             ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
@@ -1391,14 +1389,14 @@ mod tests {
             module,
             TextRange::new(TextSize::from(0), TextSize::from(1)),
             msg,
+            Vec::new(),
             ErrorKind::BadAssignment,
         )
     }
 
     #[test]
     fn github_actions_command_includes_full_path_and_metadata() {
-        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]))
-            .expect("should emit command");
+        let cmd = github_actions_command(&sample_error("bad".into())).expect("should emit command");
         assert!(cmd.starts_with("::error "), "{cmd}");
         assert!(
             cmd.contains("file=/repo/foo.py"),
@@ -1413,9 +1411,9 @@ mod tests {
 
     #[test]
     fn github_actions_command_respects_severity_mapping() {
-        let warning = sample_error(vec1!["bad".into()]).with_severity(Severity::Warn);
-        let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
-        let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
+        let warning = sample_error("bad".into()).with_severity(Severity::Warn);
+        let notice = sample_error("bad".into()).with_severity(Severity::Info);
+        let ignored = sample_error("bad".into()).with_severity(Severity::Ignore);
         assert!(
             github_actions_command(&warning)
                 .unwrap()
@@ -1442,7 +1440,7 @@ mod tests {
 
     #[test]
     fn github_output_format_writes_commands() {
-        let errors = vec![sample_error(vec1!["bad".into()])];
+        let errors = vec![sample_error("bad".into())];
         let mut buf = Vec::new();
         write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();

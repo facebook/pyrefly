@@ -23,7 +23,6 @@ use pyrefly_util::prelude::VecExt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::OverloadTrace;
@@ -37,7 +36,6 @@ use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
@@ -373,7 +371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if matched {
             // If the selected overload is deprecated, we log a deprecation error.
             if let Some(deprecation) = &closest_overload.func.1.metadata.flags.deprecation {
-                let msg = deprecation.as_error_message(format!(
+                let header = format!(
                     "Call to deprecated overload `{}`",
                     closest_overload
                         .func
@@ -381,12 +379,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .metadata
                         .kind
                         .format(self.module().name())
-                ));
-                errors.add(
-                    arguments_range,
-                    ErrorInfo::new(ErrorKind::Deprecated, context),
-                    msg,
                 );
+                let detail = deprecation.as_error_detail();
+                let mut error_builder =
+                    errors.error_builder(arguments_range, ErrorKind::Deprecated, header);
+                if let Some(detail) = detail {
+                    error_builder = error_builder.with_detail(detail);
+                }
+                error_builder.with_context(context).emit();
             }
             errors.extend(closest_overload.call_errors);
             if let Ok(specialization_errors) =
@@ -425,14 +425,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             let args_display = format!("({})", arg_type_strs.join(", "));
 
-            let mut msg = vec1![
-                format!(
-                    "No matching overload found for function `{}` called with arguments: {}",
-                    metadata.kind.format(self.module().name()),
-                    args_display
-                ),
-                "Possible overloads:".to_owned(),
-            ];
+            let header = format!(
+                "No matching overload found for function `{}` called with arguments: {}",
+                metadata.kind.format(self.module().name()),
+                args_display
+            );
+            let mut details = vec!["Possible overloads:".to_owned()];
             for overload in &overloads {
                 let suffix = if overload.1.signature == closest_overload.func.1.signature {
                     " [closest match]"
@@ -451,16 +449,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let signature = self
                     .solver()
                     .for_display(self.heap.mk_callable_from(signature));
-                msg.push(format!("{signature}{suffix}"));
+                details.push(format!("{signature}{suffix}"));
             }
             // We intentionally discard closest_overload.call_errors. When no overload matches,
             // there's a high likelihood that the "closest" one by our heuristic isn't the right
             // one, in which case the call errors are just noise.
-            errors.add(
-                arguments_range,
-                ErrorInfo::new(ErrorKind::NoMatchingOverload, context),
-                msg,
-            );
+            errors
+                .error_builder(arguments_range, ErrorKind::NoMatchingOverload, header)
+                .with_details(details)
+                .with_context(context)
+                .emit();
             (
                 self.heap.mk_any_error(),
                 closest_overload.func.1.signature.clone(),

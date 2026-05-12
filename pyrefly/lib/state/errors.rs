@@ -26,7 +26,6 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::vec1;
 
 use crate::config::config::ConfigFile;
 use crate::error::baseline::BaselineProcessor;
@@ -357,7 +356,8 @@ impl Errors {
                         unused_errors.push(Error::new(
                             module.dupe(),
                             range,
-                            vec1!["Unused pyre-fixme comment".to_owned()],
+                            "Unused pyre-fixme comment".to_owned(),
+                            Vec::new(),
                             ErrorKind::UnusedIgnore,
                         ));
                         continue;
@@ -410,7 +410,8 @@ impl Errors {
                     unused_errors.push(Error::new(
                         module.dupe(),
                         range,
-                        vec1![msg],
+                        msg,
+                        Vec::new(),
                         ErrorKind::UnusedIgnore,
                     ));
                 }

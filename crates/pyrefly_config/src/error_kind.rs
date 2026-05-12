@@ -322,6 +322,8 @@ pub enum ErrorKind {
     /// This occurs when a return/yield follows a statement that always exits,
     /// such as return, raise, break, or continue.
     Unreachable,
+    /// A match case whose pattern can never match the subject type.
+    UnreachableMatchCase,
     /// `__all__` is defined but cannot be statically analyzed.
     UnresolvableDunderAll,
     /// Protocols decorated with `@runtime_checkable` can be used in `isinstance` checks
@@ -441,6 +443,7 @@ impl ErrorKind {
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
+            ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
             ErrorKind::UntypedImport => Severity::Warn,
             ErrorKind::UnusedIgnore => Severity::Ignore,

@@ -21,7 +21,6 @@ use crate::alt::callable::CallArg;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -162,7 +161,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadIndex),
+                ErrorKind::BadIndex,
                 format!(
                     "Index {idx} out of range for tuple with {} elements",
                     elts.len()
@@ -448,7 +447,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::BadIndex),
+                        ErrorKind::BadIndex,
                         format!(
                             "Index `{idx}` out of range for string with {} elements",
                             chars.len()
@@ -488,7 +487,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            ErrorKind::BadIndex,
                             format!(
                                 "Index `{idx}` out of range for bytes with {} elements",
                                 bytes.len()

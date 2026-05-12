@@ -195,19 +195,34 @@ class C:
 );
 
 testcase!(
-    bug = "conformance: Should error when returning concrete class instead of Self",
     test_self_return_concrete_class,
     r#"
 from typing import Self
 
 class Shape:
     def method(self) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self@Shape`
 
     @classmethod
     def cls_method(cls) -> Self:
-        return Shape()  # should error: returns Shape, not Self
+        return Shape()  # E: Returned type `Shape` is not assignable to declared return type `Self@Shape`
 "#,
+);
+
+testcase!(
+    test_self_return_final_concrete_class,
+    r#"
+from typing import Self, final
+
+@final
+class Shape:
+    def method(self) -> Self:
+        return Shape()
+
+    @classmethod
+    def cls_method(cls) -> Self:
+        return Shape()
+    "#,
 );
 
 testcase!(
@@ -395,7 +410,6 @@ class C:
 );
 
 testcase!(
-    bug = "Enum members should be assignable to Self",
     test_self_in_enum_classmethod,
     r#"
 from typing import Self
@@ -406,31 +420,29 @@ class E(Enum):
 
     @classmethod
     def f(cls) -> Self:
-        return cls.A  # E: Returned type `Literal[E.A]` is not assignable to declared return type `Self@E`
+        return cls.A
 "#,
 );
 
 // Passing a concrete class to `cls.__new__` is incorrect when `cls` could be a subclass.
 testcase!(
-    bug = "Should error: concrete type[C] is not assignable to type[Self@C]",
     test_cls_new_with_concrete_class,
     r#"
 class C:
     @classmethod
     def create(cls) -> C:
-        return cls.__new__(C)
+        return cls.__new__(C)  # E: Argument `type[C]` is not assignable to parameter `cls` with type `type[Self@C]` in function `object.__new__`
 "#,
 );
 
 // Self is pinned when `[self]` is inferred, so `append(other: C)` fails against `Self@C`.
 testcase!(
-    bug = "Should error: C is not assignable to Self@C in list.append",
     test_self_in_container_pinning,
     r#"
 class C:
     def foo(self, other: C) -> list:
         xs = [self]
-        xs.append(other)
+        xs.append(other)  # E: Argument `C` is not assignable to parameter `object` with type `Self@C` in function `list.append`
         return xs
 "#,
 );
@@ -602,6 +614,7 @@ def test(c: MyClass) -> None:
 // Regression test for a previously unhandled crash when computing intersection
 // of SelfType and ClassType (after removing SelfType <: ClassType)
 testcase!(
+    bug = "Should not error",
     test_classmethod_self_return_with_issubclass_narrowing,
     r#"
 from typing import Self, assert_type
@@ -611,7 +624,7 @@ class Parent:
     def decode(cls, data: dict) -> Self:
         if issubclass(cls, Child):
             # This narrowing creates an intersection of a Self type with a concrete type
-            return cls(data, legacy=True)
+            return cls(data, legacy=True) # E: Returned type `Child` is not assignable to declared return type `Self@Parent`
         return cls(data)
 
     def __init__(self, data: dict) -> None:
@@ -631,6 +644,7 @@ assert_type(Child.decode({}), Child)
 // `ClassType(Child) & SelfType(Parent[int])` when the upcast back to `Parent`
 // preserves the same inherited instantiation.
 testcase!(
+    bug = "After `issubclass(cls, Child)` narrowing, `cls()` of type `Child` should be assignable to `Self@Parent` since `Child` is a subclass of `Parent`",
     test_classmethod_self_return_with_generic_issubclass_narrowing,
     r#"
 from typing import Self, assert_type
@@ -639,7 +653,7 @@ class Parent[T]:
     @classmethod
     def decode(cls) -> Self:
         if issubclass(cls, Child):
-            return cls()
+            return cls()  # E: Returned type `Child` is not assignable to declared return type `Self@Parent`
         return cls()
 
     def __init__(self) -> None:
@@ -708,16 +722,15 @@ class Base:
 );
 
 testcase!(
-    bug = "Should raise error in the overloads when returning concrete class instead of Self",
     test_overload_returning_self,
     r#"
 from typing import Self, overload
 
 class C:
     @overload
-    def clone(self, x: int) -> C: ...
+    def clone(self, x: int) -> C: ... # E: Overload return type `C` is not assignable to implementation return type `Self@C`
     @overload
-    def clone(self, x: str) -> C: ...
+    def clone(self, x: str) -> C: ... # E: Overload return type `C` is not assignable to implementation return type `Self@C`
     def clone(self, x) -> Self: ...
     "#,
 );

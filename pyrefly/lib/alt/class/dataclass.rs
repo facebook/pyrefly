@@ -17,7 +17,6 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -39,7 +38,6 @@ use crate::binding::pydantic::LT;
 use crate::binding::pydantic::STRICT;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::types::callable::Callable;
@@ -72,7 +70,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if let Some(class_fields) = self.get_class_fields(cls) {
-            for name in class_fields.names() {
+            for name in class_fields.class_body_fields() {
                 if class_fields.is_field_annotated(name) {
                     all_fields.insert(name.clone());
                 }
@@ -177,7 +175,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     cls.range(),
-                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    ErrorKind::BadClassDefinition,
                     "Cannot specify both `slots=True` and `__slots__`".to_owned(),
                 );
             } else {
@@ -236,14 +234,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
 
                 let cls = descriptor_cls.name();
-                errors.add(
-                    range,
-                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
-                    vec1![
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::BadClassDefinition,
                         format!("Cannot set field `{name}` to non-data descriptor `{cls}`"),
-                        format!("Hint: add a `__set__` method to make `{cls}` a data descriptor"),
-                    ],
-                );
+                    )
+                    .with_detail(format!(
+                        "Hint: add a `__set__` method to make `{cls}` a data descriptor"
+                    ))
+                    .emit();
             }
         }
     }
@@ -296,14 +296,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Check if the __get__ return type is assignable to the __set__ value type.
                     if !self.is_subset_eq(&get_ty, &set_ty) {
                         let cls = descriptor_cls.name();
-                        errors.add(
-                            range,
-                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
-                            vec1![
+                        errors
+                            .error_builder(
+                                range,
+                                ErrorKind::BadClassDefinition,
                                 format!("Cannot set field `{name}` to data descriptor `{cls}` with inconsistent types"),
-                                format!("Return type `{get_ty}` of `{cls}.__get__` is not assignable to value type `{set_ty}` of `{cls}.__set__`"),
-                            ],
-                        );
+                            )
+                            .with_detail(format!(
+                                "Return type `{get_ty}` of `{cls}.__get__` is not assignable to value type `{set_ty}` of `{cls}.__set__`"
+                            ))
+                            .emit();
                     }
                 }
             }
@@ -473,7 +475,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         cls.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                        ErrorKind::InvalidInheritance,
                         format!(
                             "Cannot inherit {} dataclass `{}` from {} dataclass `{}`",
                             current_status,
@@ -869,7 +871,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                            ErrorKind::BadClassDefinition,
                             format!(
                                 "Dataclass field `{name}` without a default may not follow dataclass field with a default"
                             ),

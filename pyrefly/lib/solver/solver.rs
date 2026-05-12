@@ -48,17 +48,15 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrSubsetError;
 use crate::config::error_kind::ErrorKind;
+use crate::error::collector::ErrorBuilder;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::error::error::ErrorQuickFix;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
@@ -3008,51 +3006,35 @@ impl Solver {
     }
 
     /// Generate an error message that `got <: want` failed.
-    pub fn error(
+    /// Returns a builder so the caller can chain additional decorations before emitting.
+    pub fn error_builder<'a>(
         &self,
         got: &Type,
         want: &Type,
-        errors: &ErrorCollector,
+        errors: &'a ErrorCollector,
         loc: TextRange,
         tcc: &dyn Fn() -> TypeCheckContext,
         subset_error: SubsetError,
-        note: Option<String>,
-        quick_fixes: Vec<ErrorQuickFix>,
-    ) {
+    ) -> ErrorBuilder<'a> {
+        if !errors.is_active() {
+            // Optimization: return early to avoid evaluating `tcc`.
+            return errors.error_builder(loc, ErrorKind::InternalError, String::new());
+        }
         let tcc = tcc();
         let msg = tcc.kind.format_error(
             &self.for_display(got.clone()),
             &self.for_display(want.clone()),
             errors.module().name(),
         );
-        let mut msg_lines = vec1![msg];
-        if let Some(subset_error_msg) = subset_error.to_error_msg() {
-            msg_lines.push(subset_error_msg);
+        let mut builder = errors.error_builder(loc, tcc.kind.as_error_kind(), msg);
+        builder = builder.with_context(tcc.context.map(|ctx| || ctx));
+        for (range, label) in tcc.annotations {
+            builder = builder.with_annotation(range, label);
         }
-        if let Some(note) = note {
-            msg_lines.push(note);
+        if let Some(detail) = subset_error.to_error_msg() {
+            builder = builder.with_detail(detail);
         }
-        let extra_annotations = tcc.annotations;
-        match tcc.context {
-            Some(ctx) => {
-                errors.add_with_annotations_and_quick_fixes(
-                    loc,
-                    ErrorInfo::Context(&|| ctx.clone()),
-                    msg_lines,
-                    extra_annotations,
-                    quick_fixes,
-                );
-            }
-            None => {
-                errors.add_with_annotations_and_quick_fixes(
-                    loc,
-                    ErrorInfo::Kind(tcc.kind.as_error_kind()),
-                    msg_lines,
-                    extra_annotations,
-                    quick_fixes,
-                );
-            }
-        }
+        builder
     }
 
     /// Union a list of types together. In the process may cause some variables to be forced.

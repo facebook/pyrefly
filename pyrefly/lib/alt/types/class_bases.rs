@@ -29,7 +29,6 @@ use crate::binding::base_class::BaseClassExpr;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
 use crate::types::class::Class;
 use crate::types::tuple::Tuple;
@@ -164,7 +163,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             t => self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                ErrorKind::UnsupportedOperation,
                 format!(
                     "`{}` is not a subscriptable type on base class list",
                     self.for_display(t)
@@ -378,7 +377,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorKind::InvalidArgument,
                         "Second argument to NewType cannot be an unbound generic".to_owned(),
                     );
                 }

@@ -20,7 +20,6 @@ use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -31,7 +30,6 @@ use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::types::callable::FunctionKind;
@@ -64,7 +62,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::AssertType),
+                    ErrorKind::AssertType,
                     format!(
                         "assert_type({}, {}) failed",
                         self.for_display(a.clone()),
@@ -77,7 +75,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadArgumentCount),
+                ErrorKind::BadArgumentCount,
                 format!(
                     "assert_type needs 2 positional arguments, got {}",
                     args.len()
@@ -88,12 +86,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for keyword in keywords {
             unexpected_keyword(
                 &|msg| {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::UnexpectedKeyword),
-                        msg,
-                    );
+                    self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
                 },
                 "assert_type",
                 keyword,
@@ -119,7 +112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::RevealType),
+                ErrorKind::RevealType,
                 format!("revealed type: {type_info}"),
             );
             ret
@@ -127,7 +120,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadArgumentCount),
+                ErrorKind::BadArgumentCount,
                 format!(
                     "reveal_type needs 1 positional argument, got {}",
                     args.len()
@@ -138,12 +131,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for keyword in keywords {
             unexpected_keyword(
                 &|msg| {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorInfo::Kind(ErrorKind::UnexpectedKeyword),
-                        msg,
-                    );
+                    self.error(errors, range, ErrorKind::UnexpectedKeyword, msg);
                 },
                 "reveal_type",
                 keyword,
@@ -165,7 +153,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::UnexpectedKeyword),
+                ErrorKind::UnexpectedKeyword,
                 "`TypeForm` does not accept keyword arguments".to_owned(),
             );
         }
@@ -173,7 +161,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadArgumentCount),
+                ErrorKind::BadArgumentCount,
                 format!(
                     "`TypeForm` expected 1 positional argument, got {}",
                     args.len()
@@ -222,7 +210,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            ErrorKind::InvalidArgument,
                             "`typing.cast` got multiple values for argument `typ`".to_owned(),
                         );
                     }
@@ -233,7 +221,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            ErrorKind::InvalidArgument,
                             "`typing.cast` got multiple values for argument `val`".to_owned(),
                         );
                     }
@@ -248,7 +236,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadArgumentCount),
+                ErrorKind::BadArgumentCount,
                 format!("`typing.cast` expected 2 arguments, got {}", extra + 2),
             );
         }
@@ -258,7 +246,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    ErrorKind::BadArgumentType,
                     "First argument to `typing.cast` must be a type".to_owned(),
                 ),
             }
@@ -266,7 +254,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::MissingArgument),
+                ErrorKind::MissingArgument,
                 "`typing.cast` missing required argument `typ`".to_owned(),
             )
         };
@@ -274,7 +262,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::MissingArgument),
+                ErrorKind::MissingArgument,
                 "`typing.cast` missing required argument `val`".to_owned(),
             );
         }
@@ -284,7 +272,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::RedundantCast),
+                    ErrorKind::RedundantCast,
                     format!(
                         "Redundant cast: `{}` is the same type as `{}`",
                         val_type.deterministic_printing(),
@@ -334,7 +322,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(error_kind),
+                        error_kind,
                         "Expected class object, got `Any`".to_owned(),
                     );
                 }
@@ -344,7 +332,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(error_kind),
+                        error_kind,
                         format!(
                             "NewType `{}` not allowed in {}",
                             class_info_cls.name(),
@@ -357,7 +345,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(error_kind),
+                        error_kind,
                         format!(
                             "TypedDict `{}` not allowed as second argument to {}",
                             class_info_cls.name(),
@@ -371,7 +359,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(error_kind),
+                            error_kind,
                             format!("Protocol `{}` is not decorated with @runtime_checkable and cannot be used with {}", class_info_cls.name(), func_display()),
                         );
                     } else {
@@ -383,7 +371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(error_kind),
+                                error_kind,
                                 format!("Protocol `{}` has non-method members and cannot be used with issubclass()", class_info_cls.name()),
                             );
                         }
@@ -430,17 +418,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                             }
                             if all_members_present && !unsafe_overlap_errors.is_empty() {
-                                let mut full_msg = vec1![format!(
-                                    "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
-                                    class_info_cls.name(),
-                                    self.for_display(object_type.clone())
-                                )];
-                                full_msg.extend(unsafe_overlap_errors);
-                                errors.add(
+                                errors.error_builder(
                                     range,
-                                    ErrorInfo::Kind(ErrorKind::UnsafeOverlap),
-                                    full_msg,
-                                );
+                                    ErrorKind::UnsafeOverlap,
+                                    format!(
+                                        "Runtime checkable protocol `{}` has an unsafe overlap with type `{}`",
+                                        class_info_cls.name(),
+                                        self.for_display(object_type.clone())
+                                    ),
+                                ).with_details(unsafe_overlap_errors).emit();
                             }
                         }
                     }
@@ -454,7 +440,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(error_kind),
+                    error_kind,
                     format!(
                         "Expected class object, got parameterized generic type: `{}`",
                         self.for_display(class_info_ty)
@@ -465,7 +451,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(error_kind),
+                        error_kind,
                         format!("Expected class object, got special form `{}`", special_form),
                     );
                 }
@@ -473,7 +459,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(error_kind),
+                    error_kind,
                     format!(
                         "Expected class object, got `{}`",
                         self.for_display(class_info_ty)

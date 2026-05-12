@@ -29,7 +29,6 @@ use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::EnumMetadata;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
@@ -417,7 +416,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             if direct_annotation.is_some() {
                 self.error(
-                    errors, range,ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    errors, range,ErrorKind::InvalidAnnotation,
                     format!("Enum member `{name}` may not be annotated directly. Instead, annotate the `_value_` attribute."),
                 );
             }
@@ -495,7 +494,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if !self.is_subset_eq(value, annotation) {
             self.error(
-                errors, range, ErrorInfo::Kind(ErrorKind::BadAssignment),
+                errors, range, ErrorKind::BadAssignment,
                 format!(
                     "Enum member `{member}` has type `{}`, must match the `_value_` attribute annotation of `{}`",
                     self.for_display(value.clone()),

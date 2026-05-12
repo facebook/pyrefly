@@ -1540,6 +1540,23 @@ def valid_generator():
 
 The default severity of this diagnostic is `warn`.
 
+## unreachable-match-case
+
+Default severity: **warn**
+
+This warning is raised when a `case` pattern in a `match` statement can never match
+the subject because the subject's type is disjoint from the pattern's type.
+
+```python
+def example(x: list[int]) -> None:
+    match x:
+        case 1:  # Case pattern can never match subject of type `list[int]` [unreachable-match-case]
+            pass
+```
+
+This check currently covers value patterns (literals, `None`) and class patterns
+on attributes, but does not flag top-level class patterns like `case SomeClass()`.
+
 ## unresolvable-dunder-all
 
 Default severity: **warn**

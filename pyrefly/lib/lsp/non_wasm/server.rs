@@ -209,7 +209,6 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
@@ -256,8 +255,6 @@ use vec1::Vec1;
 
 use crate::ModuleInfo;
 use crate::alt::types::class_metadata::ClassMro;
-use crate::binding::binding::BindingClass;
-use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
@@ -5898,12 +5895,7 @@ impl Server {
         let ast = transaction.as_ref().get_ast(handle)?;
         let class_def = find_class_at_position_in_ast(&ast, definition.definition_range.start())?;
         let bindings = transaction.as_ref().get_bindings(handle)?;
-        let key = KeyClass(ShortIdentifier::new(&class_def.name));
-        let class_idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let def_index = match bindings.get(class_idx) {
-            BindingClass::ClassDef(class_binding) => class_binding.def_index,
-            BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
-        };
+        let def_index = bindings.class_def_index(class_def)?;
         Some(TypeHierarchyTarget {
             def_index,
             module_path: definition.module.path().dupe(),
@@ -5964,13 +5956,8 @@ impl Server {
             let mut class_defs = Vec::new();
             collect_class_defs(ast.body.as_slice(), &mut class_defs);
             for class_def in class_defs {
-                let key = KeyClass(ShortIdentifier::new(&class_def.name));
-                let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+                let Some(class_def_index) = bindings.class_def_index(class_def) else {
                     continue;
-                };
-                let class_def_index = match bindings.get(class_idx) {
-                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
-                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
                 };
                 if class_def_index == target.def_index && module_info.path() == &target.module_path
                 {
