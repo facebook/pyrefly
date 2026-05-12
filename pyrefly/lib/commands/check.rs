@@ -730,7 +730,7 @@ impl Timings {
 /// URL referenced from the unconfigured-config upsell. Kept as a module-level
 /// constant so the wording can stay short and tests can pin the exact string
 /// the user sees.
-const UPSELL_DOCS_URL: &str = "https://pyrefly.org/en/docs/installation/";
+const UPSELL_DOCS_URL: &str = "https://pyrefly.org/getting-started-cli";
 
 /// Resolve an `UpsellDecision` into the concrete reason (or `None` for
 /// "stay silent"). The `Determine` case walks handles with a

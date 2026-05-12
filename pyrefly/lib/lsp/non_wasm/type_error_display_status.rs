@@ -143,7 +143,7 @@ impl lsp_types::request::Request for TypeErrorDisplayStatusRequest {
 
 /// URL referenced from the V2 tooltip / docs link. Module-level so the
 /// derivation logic and tests share the exact string the user sees.
-const STATUS_BAR_DOCS_URL: &str = "https://pyrefly.org/en/docs/IDE/";
+const STATUS_BAR_DOCS_URL: &str = "https://pyrefly.org/getting-started";
 
 /// Silent V2 response — plain `Pyrefly` (no parenthetical), no
 /// tooltip. Used for fallback cases where there is nothing useful to

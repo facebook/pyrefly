@@ -302,11 +302,18 @@ const config: Config = {
                   component: '@site/src/pages/landingPage.tsx',
                   exact: true,
                 });
-                // Short vanity URL surfaced from the VS Code extension's
-                // status-bar tooltip and the CLI upsell. Points users at
-                // the install/onboarding docs.
+                // Short vanity URLs surfaced from the VS Code extension's
+                // status-bar tooltip (`/getting-started`) and the CLI
+                // upsell (`/getting-started-cli`). Both land users on the
+                // install/onboarding docs; they're separate paths so we
+                // can tell which surface drove the click.
                 addRoute({
                   path: '/getting-started',
+                  component: '@site/src/pages/redirect-getting-started.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/getting-started-cli',
                   component: '@site/src/pages/redirect-getting-started.tsx',
                   exact: true,
                 });
