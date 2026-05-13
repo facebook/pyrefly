@@ -718,7 +718,7 @@ Completion Results:
         report.trim(),
     );
 }
-// TODO(kylei): ruff's ast gives us names = [] for `from foo import <>`
+// no completion results suggested when cursor is placed right after import, for eg. "from foo import|"
 #[test]
 fn from_import_empty_test() {
     let foo_code = r#"
@@ -744,6 +744,61 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+// show completion result for both single_trailing_whitespace after import and multiple_trailing_whitespace after import
+// for eg. "from foo import |" and "from foo import       |"
+#[test]
+fn from_import_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    let main_code = r#"
+from foo import 
+#               ^
+from foo import       
+#                    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let trimmed = report.trim();
+    assert!(
+        trimmed.contains("- (Variable) imperial_guard"),
+        "Expected trailing whitespace to keep import completions, got {trimmed:?}"
+    );
+    assert_eq!(
+        trimmed.matches("Completion Results:").count(),
+        2,
+        "Expected both cursor positions to produce completion results, got {trimmed:?}"
+    );
+}
+// show completion result in case of relative_imports for both single and multiple trailing whitespace present after import
+#[test]
+fn from_import_relative_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    let main_code = r#"
+from .foo import 
+#                ^
+from .foo import       
+#                     ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let trimmed = report.trim();
+    assert!(
+        trimmed.contains("- (Variable) imperial_guard"),
+        "Expected relative trailing whitespace to keep import completions, got {trimmed:?}"
+    );
+    assert_eq!(
+        trimmed.matches("Completion Results:").count(),
+        2,
+        "Expected both relative cursor positions to produce completion results, got {trimmed:?}"
     );
 }
 

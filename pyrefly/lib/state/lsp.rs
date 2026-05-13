@@ -878,24 +878,28 @@ impl<'a> Transaction<'a> {
     ) -> Option<IdentifierWithContext> {
         let mod_module = self.get_ast(handle)?;
         let covering_nodes: Vec<AnyNodeRef<'_>> = Ast::locate_node(&mod_module, position);
-
-        if let Some(identifier) = Self::identifier_from_covering_nodes(&covering_nodes) {
-            return Some(identifier);
-        }
-
         let module = self.get_module_info(handle)?;
         let source = module.lined_buffer().contents();
 
-        if let Some(identifier) = Self::empty_imported_name_from_covering_nodes(
+        Self::identifier_from_covering_nodes_with_fallback(
             &mod_module,
             &covering_nodes,
             source,
             position,
-        ) {
+        )
+    }
+
+    pub(crate) fn identifier_from_covering_nodes_with_fallback(
+        mod_module: &ModModule,
+        covering_nodes: &[AnyNodeRef],
+        source: &str,
+        position: TextSize,
+    ) -> Option<IdentifierWithContext> {
+        if let Some(identifier) = Self::identifier_from_covering_nodes(covering_nodes) {
             return Some(identifier);
         }
 
-        None
+        Self::empty_imported_name_from_covering_nodes(mod_module, covering_nodes, source, position)
     }
 
     pub(crate) fn identifier_from_covering_nodes(

@@ -830,7 +830,6 @@ impl Transaction<'_> {
             Self::add_literal_completions_from_type(&subject_type, completions, in_string_literal);
         }
     }
-    
 
     fn add_imported_name_completions(
         &self,
@@ -891,7 +890,6 @@ impl Transaction<'_> {
             }
         }
     }
-
 
     fn add_attribute_completions_for_type(
         &self,
@@ -974,12 +972,26 @@ impl Transaction<'_> {
         let covering_nodes = ast
             .as_ref()
             .map(|module| Ast::locate_node(module.as_ref(), position));
-        // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
-        // If the user might be typing the `import` keyword, add that as an autocomplete option.
-        match covering_nodes
-            .as_deref()
-            .and_then(Self::identifier_from_covering_nodes)
+        let identifier_context = if let (Some(mod_module), Some(module_info)) =
+            (ast.as_ref(), self.get_module_info(handle))
         {
+            let source = module_info.lined_buffer().contents();
+            covering_nodes.as_deref().and_then(|nodes| {
+                Self::identifier_from_covering_nodes_with_fallback(
+                    mod_module.as_ref(),
+                    nodes,
+                    source,
+                    position,
+                )
+            })
+        } else {
+            covering_nodes
+                .as_deref()
+                .and_then(Self::identifier_from_covering_nodes)
+        };
+        match identifier_context {
+            // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
+            // If the user might be typing the `import` keyword, add that as an autocomplete option.
             Some(IdentifierWithContext {
                 identifier: _,
                 context:
