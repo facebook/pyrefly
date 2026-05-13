@@ -1905,17 +1905,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )),
                 }
             }
-            AttributeBase1::SelfType(cls) => match self.get_self_attribute(cls, attr_name) {
-                Some(attr) => acc.found_class_attribute(attr, base),
-                None => {
-                    let metadata = self.get_metadata_for_class(cls.class_object());
-                    if metadata.has_base_any() {
-                        acc.found_type(self.heap.mk_any_implicit(), base)
+            AttributeBase1::SelfType(cls) => {
+                let metadata = self.get_metadata_for_class(cls.class_object());
+                let attr_lookup_result =
+                    if metadata.is_enum() && matches!(attr_name.as_str(), "value" | "_value_") {
+                        self.get_enum_or_instance_attribute(cls, &metadata, attr_name)
                     } else {
+                        self.get_self_attribute(cls, attr_name)
+                    };
+                match attr_lookup_result {
+                    Some(attr) => acc.found_class_attribute(attr, base),
+                    None if metadata.has_base_any() => {
+                        acc.found_type(self.heap.mk_any_implicit(), base)
+                    }
+                    None => {
                         acc.not_found(NotFoundOn::ClassInstance(cls.class_object().dupe(), base))
                     }
                 }
-            },
+            }
             AttributeBase1::Intersect(bases, fallback) => {
                 // Try each base and collect successful lookups, filtering out
                 // GenericAlias lookups when the found attribute is inherited from

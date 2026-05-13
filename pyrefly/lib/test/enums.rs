@@ -987,12 +987,33 @@ assert_type(Foo.X.value, Literal["x"])
 # str, Enum mixin: specific literal correctly gives literal type
 assert_type(Bar.Y.value, Literal["y"])
 
-# Generic instance access should give the mixed-in type
+# Generic instance access should give the union of member values.
 def test(foo: Foo, bar: Bar) -> None:
-    assert_type(foo.value, str)
-    assert_type(bar.value, str)
+    assert_type(foo.value, Literal["x"])
+    assert_type(bar.value, Literal["y"])
     take_literal(Foo.X.value)
     take_literal(Bar.Y.value)
+    "#,
+);
+
+testcase!(
+    test_str_enum_value_typed_dict,
+    r#"
+from enum import Enum
+from typing import Literal, TypedDict
+
+class Biscuits(str, Enum):
+    DIGESTIVES = "digestives"
+    CUSTARD_CREMES = "custard_cremes"
+
+class Params(TypedDict):
+    biscuit_type: Literal["digestives", "custard_cremes"]
+
+def fun2(params: Params) -> None:
+    pass
+
+def fun(biscuit_type: Biscuits) -> None:
+    fun2(params={"biscuit_type": biscuit_type.value})
     "#,
 );
 
