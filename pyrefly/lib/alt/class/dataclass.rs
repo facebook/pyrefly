@@ -185,6 +185,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
         }
+        if dataclass.kws.frozen {
+            // Only emit BadClassDefinition when no ancestor is already frozen.
+            // If an ancestor is frozen its synthesized `@final __setattr__`/`__delattr__`
+            // will trigger BadOverride, which gives a richer message naming the parent.
+            let has_frozen_ancestor = self
+                .get_mro_for_class(cls)
+                .ancestors_no_object()
+                .iter()
+                .any(|ancestor| {
+                    self.get_metadata_for_class(ancestor.class_object())
+                        .dataclass_metadata()
+                        .is_some_and(|dm| dm.kws.frozen)
+                });
+            if !has_frozen_ancestor && let Some(class_fields) = self.get_class_fields(cls) {
+                if let Some(range) = class_fields.field_decl_range(&dunder::SETATTR) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadClassDefinition,
+                        "Cannot override `__setattr__` in a frozen dataclass".to_owned(),
+                    );
+                }
+                if let Some(range) = class_fields.field_decl_range(&dunder::DELATTR) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadClassDefinition,
+                        "Cannot override `__delattr__` in a frozen dataclass".to_owned(),
+                    );
+                }
+            }
+            fields.insert(dunder::SETATTR, self.get_frozen_setattr(cls));
+            fields.insert(dunder::DELATTR, self.get_frozen_delattr(cls));
+        }
         // See rules for `__hash__` creation under "unsafe_hash":
         // https://docs.python.org/3/library/dataclasses.html#module-contents
         if dataclass.kws.unsafe_hash || (dataclass.kws.eq && dataclass.kws.frozen) {
@@ -1014,6 +1048,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret),
             metadata: FuncMetadata::method(cls, dunder::HASH),
+        }))
+    }
+
+    fn get_frozen_setattr(&self, cls: &Class) -> ClassSynthesizedField {
+        // Match typeshed's `object.__setattr__(self, name: str, value: Any, /) -> None`
+        // — all parameters are positional-only.
+        let params = vec![
+            self.class_self_param(cls, true),
+            Param::PosOnly(
+                Some(Name::new_static("name")),
+                self.heap.mk_class_type(self.stdlib.str().clone()),
+                Required::Required,
+            ),
+            Param::PosOnly(
+                Some(Name::new_static("value")),
+                self.heap.mk_any_implicit(),
+                Required::Required,
+            ),
+        ];
+        let mut metadata = FuncMetadata::def(self.module(), Some(cls), dunder::SETATTR);
+        metadata.flags.has_final_decoration = true;
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
+            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
+            metadata,
+        }))
+    }
+
+    fn get_frozen_delattr(&self, cls: &Class) -> ClassSynthesizedField {
+        // Match typeshed's `object.__delattr__(self, name: str, /) -> None`
+        // — all parameters are positional-only.
+        let params = vec![
+            self.class_self_param(cls, true),
+            Param::PosOnly(
+                Some(Name::new_static("name")),
+                self.heap.mk_class_type(self.stdlib.str().clone()),
+                Required::Required,
+            ),
+        ];
+        let mut metadata = FuncMetadata::def(self.module(), Some(cls), dunder::DELATTR);
+        metadata.flags.has_final_decoration = true;
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
+            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
+            metadata,
         }))
     }
 }

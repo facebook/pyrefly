@@ -44,24 +44,41 @@ pub fn sorted_multi_line_string_ranges(
 ) -> Vec<(LineNumber, LineNumber)> {
     let mut ranges = Vec::new();
     ast.visit(&mut |expr: &Expr| {
-        let text_range = match expr {
-            Expr::FString(x) => Some(x.range),
-            Expr::TString(x) => Some(x.range),
-            Expr::StringLiteral(x) => Some(x.range),
-            Expr::BytesLiteral(x) => Some(x.range),
-            _ => None,
-        };
-        if let Some(range) = text_range {
-            let display = module.display_range(range);
-            let start = display.start.line_within_file();
-            let end = display.end.line_within_file();
-            if start != end {
-                ranges.push((start, end));
-            }
-        }
+        collect_string_ranges(expr, module, &mut ranges);
     });
     ranges.sort();
     ranges
+}
+
+/// Recursively collects multi-line string ranges from an expression and all
+/// of its sub-expressions. The `Visit<Expr> for Stmt` implementation only
+/// visits top-level expressions in statements, so nested strings (e.g., an
+/// f-string inside a function call's arguments) would be missed without
+/// explicit recursion here.
+fn collect_string_ranges(expr: &Expr, module: &Module, ranges: &mut Vec<(LineNumber, LineNumber)>) {
+    let text_range = match expr {
+        Expr::FString(x) => Some(x.range),
+        Expr::TString(x) => Some(x.range),
+        Expr::StringLiteral(x) => Some(x.range),
+        Expr::BytesLiteral(x) => Some(x.range),
+        _ => None,
+    };
+    if let Some(range) = text_range {
+        let display = module.display_range(range);
+        let start = display.start.line_within_file();
+        let end = display.end.line_within_file();
+        if start != end {
+            // Multi-line string found. Record its range but skip recursing
+            // into its children — for nested f-strings we want errors to
+            // remap to the outermost string's start line, and the outer
+            // range already covers the inner one.
+            ranges.push((start, end));
+            return;
+        }
+    }
+    expr.recurse(&mut |child: &Expr| {
+        collect_string_ranges(child, module, ranges);
+    });
 }
 
 /// Finds contiguous backslash continuation blocks in the source lines.

@@ -2005,4 +2005,48 @@ def f() -> int:
 "#;
         assert_remove_ignores_via_suppress_command(input, want, 1);
     }
+
+    #[test]
+    fn test_suppress_multiline_fstring_attribute_access() {
+        // Regression test: when a missing-attribute error occurs on an
+        // interpolation inside a multi-line f-string, the suppression must
+        // be placed above the f-string, NOT inside the string literal.
+        let input = r#"
+def foo(x: tuple) -> None:
+    print(f"""value: {x.bad_attr} and {x.other_bad_attr}""")
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo(x: tuple) -> None:
+    # pyrefly: ignore [missing-attribute]
+    print(f"""value: {x.bad_attr} and {x.other_bad_attr}""")
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_multiline_fstring_attr_on_separate_lines() {
+        // Regression test: when errors are on separate lines inside a
+        // multi-line f-string, all suppressions go above the f-string
+        // opening line, not inside the string body.
+        let input = r#"
+def foo(x: tuple) -> None:
+    print(f"""
+        first: {x.bad_attr}
+        second: {x.other_bad_attr}
+    """)
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo(x: tuple) -> None:
+    # pyrefly: ignore [missing-attribute]
+    print(f"""
+        first: {x.bad_attr}
+        second: {x.other_bad_attr}
+    """)
+"#,
+        );
+    }
 }

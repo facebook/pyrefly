@@ -782,6 +782,21 @@ assert_type(g(0, [""]), int | str)
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2130
+testcase!(
+    test_generic_return_type_with_union_of_scoped_type_params,
+    r#"
+from typing import reveal_type, assert_type
+
+class A[T]:
+    def __init__(self, x: T): ...
+    def f[T2](self, other: T2):
+        return A[T | T2](other)
+
+assert_type(A(0).f(""), A[int | str])
+"#,
+);
+
 testcase!(
     test_any_absorption,
     r#"

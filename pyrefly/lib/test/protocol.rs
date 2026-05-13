@@ -974,6 +974,23 @@ def to_foo() -> Foo[MySeries]:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1202
+testcase!(
+    test_assert_type_structurally_identical_protocols,
+    r#"
+from typing import Protocol, assert_type
+
+class F1(Protocol):
+    a: int
+
+class F2(Protocol):
+    a: int
+
+def f(f2: F2):
+    assert_type(f2, F1)
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/2925
 testcase!(
     test_protocol_ambiguous_member,

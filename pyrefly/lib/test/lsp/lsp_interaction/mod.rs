@@ -6,7 +6,6 @@
  */
 
 #![feature(box_patterns)]
-#![feature(closure_lifetime_binder)]
 
 mod init;
 
