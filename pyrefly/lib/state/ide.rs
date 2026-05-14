@@ -301,11 +301,7 @@ pub fn import_regular_import_edit(
     handle_to_import_from: Handle,
     alias: Option<&str>,
 ) -> (TextSize, String, String) {
-    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
-        first_stmt.range().start()
-    } else {
-        ast.range.end()
-    };
+    let position = fallback_import_insertion_point(ast);
     let module_name_to_import = handle_to_import_from.module();
     let (import_text, completion_label) = match alias {
         Some(alias) => (
@@ -354,13 +350,7 @@ pub(crate) fn insert_import_edit_with_forced_import_format(
     }
 
     let insert_position = find_import_block_insertion_point(ast, module_name_to_import.as_str())
-        .unwrap_or_else(|| {
-            if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
-                first_stmt.range().start()
-            } else {
-                ast.range.end()
-            }
-        });
+        .unwrap_or_else(|| fallback_import_insertion_point(ast));
     let insert_text = format!(
         "from {} import {}\n",
         module_name_to_import.as_str(),
@@ -372,6 +362,26 @@ pub(crate) fn insert_import_edit_with_forced_import_format(
         display_text,
         module_name: module_name_to_import.to_string(),
     }
+}
+
+fn fallback_import_insertion_point(ast: &ModModule) -> TextSize {
+    ast.body
+        .iter()
+        .skip_while(|stmt| is_docstring_stmt(stmt))
+        .skip_while(|stmt| is_future_import_stmt(stmt))
+        .next()
+        .map_or(ast.range.end(), |stmt| stmt.range().start())
+}
+
+fn is_future_import_stmt(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::ImportFrom(import_from)
+            if import_from
+                .module
+                .as_ref()
+                .is_some_and(|module| module.as_str() == "__future__")
+    )
 }
 
 fn find_import_merge_edit(

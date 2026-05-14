@@ -793,6 +793,27 @@ my_module
 }
 
 #[test]
+fn insertion_test_module_import_after_future_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("my_module", "my_export = 3\n"),
+            ("b", "from __future__ import annotations\nmy_module\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains(
+            r#"## After:
+from __future__ import annotations
+import my_module
+my_module
+# ^"#
+        ),
+        "{report}",
+    );
+}
+
+#[test]
 fn insertion_test_common_alias_module_import() {
     let code = r#"
 np
@@ -1019,6 +1040,27 @@ x: int = "hello"  # pyrefly: ignore [bad-assignment, bad-return]
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn insertion_test_named_import_after_future_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("a", "my_export = 3\n"),
+            ("b", "from __future__ import annotations\nmy_export\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains(
+            r#"## After:
+from __future__ import annotations
+from a import my_export
+my_export
+# ^"#
+        ),
+        "{report}",
     );
 }
 
