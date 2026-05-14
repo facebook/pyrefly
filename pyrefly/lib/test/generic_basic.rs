@@ -758,6 +758,19 @@ assert_type(b, A[int])
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3387
+testcase!(
+    test_future_annotations_forward_ref_in_generic_constructor,
+    r#"
+from __future__ import annotations
+
+class Foo[T]: ...
+
+class Bar:
+    foo = Foo[Bar]()
+"#,
+);
+
 testcase!(
     test_typevar_type,
     r#"

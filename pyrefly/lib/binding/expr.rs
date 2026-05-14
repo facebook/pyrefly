@@ -693,6 +693,22 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
                     }
+                } else if self.scopes.has_future_annotations()
+                    && let Expr::Name(name) = &**value
+                    && matches!(
+                        self.scopes.flow_style_for_name(&name.id),
+                        Some(FlowStyle::ClassDef { .. })
+                    )
+                {
+                    self.ensure_expr(&mut *value, usage);
+                    self.ensure_type_impl(
+                        &mut *slice,
+                        &mut None,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
                 } else {
                     self.ensure_expr(&mut *value, usage);
                     self.ensure_expr(&mut *slice, usage);
