@@ -29,6 +29,7 @@ use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Union;
+use pyrefly_util::gas::Gas;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Keyword;
@@ -848,7 +849,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let key = Key::BoundName(ShortIdentifier::expr_name(name));
         let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
         let mut idx = idx;
-        for _ in 0..20 {
+        let mut gas = Gas::new(100);
+        while !gas.stop() {
             match self.bindings().get(idx) {
                 Binding::Forward(forward)
                 | Binding::PromoteForward(forward)
