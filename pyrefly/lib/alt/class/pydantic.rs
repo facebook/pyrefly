@@ -202,6 +202,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .unwrap_or_else(|| {
                     self.pydantic_model_validate_dict_type(cls, dataclass, &mut seen)
                 }),
+            self.heap.mk_class_type(self.stdlib.object().clone()),
             self.heap.mk_class_type(self.stdlib.dict(
                 self.heap.mk_class_type(self.stdlib.str().clone()),
                 self.heap.mk_any_explicit(),

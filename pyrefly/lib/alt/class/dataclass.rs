@@ -147,7 +147,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             fields.insert(dunder::INIT, init_method);
         }
-        if metadata.is_pydantic_model() {
+        if metadata.is_pydantic_model()
+            && !self
+                .get_class_fields(cls)
+                .is_some_and(|fields| fields.contains(&Name::new_static("model_validate")))
+        {
             let root_model_type = self
                 .get_pydantic_root_model_type_via_mro(cls, &metadata)
                 .map(|(ty, _)| ty);

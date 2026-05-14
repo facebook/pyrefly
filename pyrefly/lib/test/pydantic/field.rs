@@ -172,6 +172,46 @@ Inventory.model_validate(bad)
 );
 
 pydantic_testcase!(
+    test_model_validate_from_attributes_accepts_object,
+    r#"
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    x: int
+
+def validate(obj: object) -> Model:
+    return Model.model_validate(obj, from_attributes=True)
+"#,
+);
+
+pydantic_testcase!(
+    test_custom_model_validate_is_not_overwritten,
+    r#"
+from typing import Self
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    x: int
+
+    @classmethod
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        return cls(x=0)
+
+def validate(obj: object) -> int:
+    return Model.model_validate(obj).x
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
