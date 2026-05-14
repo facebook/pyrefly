@@ -1144,6 +1144,18 @@ impl<'a> BindingsBuilder<'a> {
         self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
     }
 
+    pub fn class_object_is_generic(&self, idx: Idx<Key>) -> bool {
+        let Some(Binding::ClassDef(class_idx, _)) = self.idx_to_binding(idx) else {
+            return false;
+        };
+        match self.idx_to_binding(*class_idx) {
+            Some(BindingClass::ClassDef(class)) => {
+                class.def.type_params.is_some() || class.tparams_require_binding
+            }
+            Some(BindingClass::FunctionalClassDef(..)) | None => false,
+        }
+    }
+
     fn as_special_export_inner(
         &self,
         e: &Expr,
