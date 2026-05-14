@@ -24,7 +24,6 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::types::Union;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
@@ -213,6 +212,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::None,
         );
         let params = vec![
+            Param::PosOnly(
+                Some(Name::new_static("cls")),
+                self.heap
+                    .mk_type_of(self.heap.mk_self_type(self.as_class_type_unchecked(cls))),
+                Required::Required,
+            ),
             Param::Pos(Name::new_static("obj"), obj_ty, Required::Required),
             Param::KwOnly(
                 Name::new_static("strict"),
@@ -240,9 +245,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Required::Optional(None),
             ),
         ];
-        ClassSynthesizedField::new_classvar(self.heap.mk_function(Function {
-            signature: Callable::list(ParamList::new(params), self.instantiate(cls)),
-            metadata: FuncMetadata::method(cls, Name::new_static("model_validate")),
+        let mut metadata = FuncMetadata::method(cls, Name::new_static("model_validate"));
+        metadata.flags.is_classmethod = true;
+        ClassSynthesizedField::new(self.heap.mk_function(Function {
+            signature: Callable::list(
+                ParamList::new(params),
+                self.heap.mk_self_type(self.as_class_type_unchecked(cls)),
+            ),
+            metadata,
         }))
     }
 

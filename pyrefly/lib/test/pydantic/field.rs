@@ -212,6 +212,43 @@ def validate(obj: object) -> int:
 );
 
 pydantic_testcase!(
+    test_super_model_validate_returns_self,
+    r#"
+from typing import Self
+from pydantic import BaseModel
+
+class Parent(BaseModel):
+    x: int
+
+class Child(Parent):
+    y: int
+
+    @classmethod
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        return super().model_validate(
+            obj,
+            strict=strict,
+            from_attributes=from_attributes,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
+
+def validate(obj: object) -> int:
+    return Child.model_validate(obj, from_attributes=True).y
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
