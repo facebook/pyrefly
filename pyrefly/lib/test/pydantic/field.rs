@@ -165,6 +165,26 @@ class Bar(Foo):
 );
 
 pydantic_testcase!(
+    test_model_validate_nested_field_range,
+    r#"
+from pydantic import BaseModel, Field
+
+class Item(BaseModel):
+    sku: str
+    quantity: int = Field(ge=1)
+
+class Inventory(BaseModel):
+    items: list[Item]
+
+Inventory.model_validate({"items": [{"sku": "A-100", "quantity": 5}]})
+Inventory.model_validate({"items": [{"sku": "B-200", "quantity": -3}]})  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
+
+bad = {"items": [{"sku": "B-200", "quantity": -3}]}  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
+Inventory.model_validate(bad)
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
