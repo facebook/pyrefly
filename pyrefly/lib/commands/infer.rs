@@ -28,6 +28,7 @@ use crate::commands::check::Handles;
 use crate::commands::check::{self};
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
+use crate::commands::files::UpsellDecision;
 use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
@@ -393,8 +394,12 @@ impl InferArgs {
             get_project_config_for_current_dir(ConfigOverrideArgs::default(), None)?.0;
         let config_finder = ConfigFinder::new_constant(current_dir_config);
         let state = holder.as_ref();
-        let (_, errors, _) =
-            check_args.run_once(files_to_check, config_finder, ThreadCount::AllThreads)?;
+        let (_, errors, _) = check_args.run_once(
+            files_to_check,
+            config_finder,
+            UpsellDecision::Skip,
+            ThreadCount::AllThreads,
+        )?;
         for error in errors {
             if error.error_kind() != ErrorKind::UnknownName {
                 continue;
