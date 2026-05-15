@@ -23,9 +23,9 @@ By running as many type-checkers as possible over your test suite, you ensure th
 
 ## The Polars story
 
-Polars is a modern dataframe library which, since its launch in 2020, has been taking the data science world by storm. As a heavy user of the library, I was very interested in making its developer experience even better. If Polars' types are accurate, then as user I get better auto-complete, documentation, and [protection from certain classes of bugs](https://pyrefly.org/blog/surprising-errors/). What would it take to add Pyrefly to Polars' continuous integration jobs?
+Polars is a modern dataframe library which, since its launch in 2020, has been taking the data science world by storm. As a heavy user of the library, I was very interested in making its developer experience even better. If Polars' types are accurate, then as a user I get better auto-complete, documentation, and [protection from certain classes of bugs](https://pyrefly.org/blog/surprising-errors/). What would it take to add Pyrefly to Polars' continuous integration jobs?
 
-I started investigating this, and quickly ran into some roadblocks. Pyrefly is generally stricter than mypy, so it required rewriting parts of the codebase or adding more explicit type annotations when instantiating variables. Finally, I encountered some bugs in Pyrefly ([v1 is on the horizon](https://github.com/facebook/pyrefly/issues/1879), but it's not quite there yet). Was it really worth it, would any users care, and would there be a better use of my time?
+I started investigating this, and quickly ran into some roadblocks. Pyrefly is generally stricter than mypy, so it required rewriting parts of the codebase or adding more explicit type annotations when instantiating variables. Finally, I encountered some bugs in Pyrefly, and encouragingly enough, fixes for the vast majority of them were shipped with the highly anticipated [v1 release](https://pyrefly.org/blog/v1.0/). Was it really worth it, would any users care, and would there be a better use of my time?
 
 To illustrate this point, let's look at the function `DataType.__eq__`. In Python, any method `__eq__` is expected to return `bool`, and if it doesn't, then we need to explicitly tell type-checkers to ignore the type error. This function in Polars can also return different types depending on the inputs, thus requiring [overloads](https://typing.python.org/en/latest/spec/overload.html). To get this function to satisfy all of mypy, Pyrefly, and ty, we need to write:
 ```py
@@ -58,7 +58,7 @@ def test_dtype_time_units() -> None:
 ```
 What's pleasing to see is that all of mypy, Pyright, ty, Pyrefly, and Zuban type-check this fine without reporting any errors! So even though the type-checkers disagree a bit on how the implementation should be written, they all agree about the effects on the public API. And that's what your users care about!
 
-Getting Pyrefly to run on the whole Polars test suite was relatively painless, you can check out the [PR](https://github.com/pola-rs/polars/pull/27459) to verify this. To ease Polars' own internal development, we've also been exploring using Pyrefly on their source code, though that is a [larger effort](https://github.com/pola-rs/polars/issues/27049).
+Getting Pyrefly to run on the whole Polars test suite was relatively painless, you can check out the [PR](https://github.com/pola-rs/polars/pull/27459) to verify this. To ease Polars' own internal development, we've also been exploring using Pyrefly on their source code, though that is a [larger effort](https://github.com/pola-rs/polars/issues/27049) and is being tackled incrementally.
 
 ## What about my source code? Why are there so many type checkers anyway?
 
@@ -67,7 +67,7 @@ The [typing spec](https://typing.python.org/en/latest/spec/) outlines a standard
 - Some choose to be as strict as possible, emitting false-positives if necessary, but doing as much as possible to guard you from potential bugs.
 - Others are more lenient and allow you to add type information to your codebase more gradually.
 
-When it comes to type-checking your source code, it's good to ask yourself where on the strict vs lenient spectrum you want to be. I'm not involved in Pyrefly development myself, but have been told by their devs that in their design decisions, they tend to skew towards being strict. So, if you want to improve your own development experience and value strictness, Pyrefly is a great choice! You can help it reach v1 by trying it out on your projects and then [reporting any issues](https://github.com/facebook/pyrefly/issues) you encounter.
+When it comes to type-checking your source code, it's good to ask yourself where on the strict vs lenient spectrum you want to be, and how much of a lag you're willing to tolerate from your developer tooling. Pyrefly is [fast](https://pyrefly.org/blog/speed-and-memory-comparison/), strict (though [this can be configured](https://pyrefly.org/en/docs/configuration/#configuration-options)), and [conformant](https://pyrefly.org/blog/typing-conformance-comparison/), making it an excellent choice for large and important codebases. If you try it out on your projects and run into any issues, [please report them](https://github.com/facebook/pyrefly/issues) so that both you and all its other users can benefit from fixes!
 
 ## The bottom line
 
