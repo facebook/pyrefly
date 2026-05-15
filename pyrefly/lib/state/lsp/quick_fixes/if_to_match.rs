@@ -43,7 +43,7 @@ pub(crate) fn if_to_match_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: "Convert if/elif chain to match".to_owned(),
         edits: vec![(module_info.dupe(), replace_range, replacement)],
-        kind: CodeActionKind::REFACTOR_REWRITE,
+        kind: CodeActionKind::RefactorRewrite,
     }])
 }
 
@@ -146,8 +146,8 @@ fn case_subject_and_pattern(source: &str, test: &Expr) -> Option<(String, String
     if let Expr::Compare(compare) = test
         && compare.ops.as_ref() == [CmpOp::Eq]
     {
-        let subject = expr_text(source, &compare.left);
-        let pattern = value_pattern(source, compare.comparators.first()?)?;
+        let subject = expr_text(source, compare.first_operand());
+        let pattern = value_pattern(source, compare.comparators().first()?)?;
         return Some((subject, pattern));
     }
     if let Expr::Call(call) = test
@@ -157,8 +157,8 @@ fn case_subject_and_pattern(source: &str, test: &Expr) -> Option<(String, String
         && call.arguments.keywords.is_empty()
     {
         let subject = expr_text(source, &call.arguments.args[0]);
-        let class_name = class_pattern_name(source, &call.arguments.args[1])?;
-        return Some((subject, format!("{class_name}()")));
+        let class_pattern = class_pattern(source, &call.arguments.args[1])?;
+        return Some((subject, class_pattern));
     }
     None
 }
@@ -175,9 +175,22 @@ fn value_pattern(source: &str, value: &Expr) -> Option<String> {
     }
 }
 
-fn class_pattern_name(source: &str, value: &Expr) -> Option<String> {
+fn class_pattern(source: &str, value: &Expr) -> Option<String> {
     match value {
-        Expr::Name(_) | Expr::Attribute(_) => Some(expr_text(source, value)),
+        Expr::Name(_) | Expr::Attribute(_) => Some(format!("{}()", expr_text(source, value))),
+        Expr::Tuple(tuple) if !tuple.elts.is_empty() => {
+            let patterns: Option<Vec<String>> = tuple
+                .elts
+                .iter()
+                .map(|elt| match elt {
+                    Expr::Name(_) | Expr::Attribute(_) => {
+                        Some(format!("{}()", expr_text(source, elt)))
+                    }
+                    _ => None,
+                })
+                .collect();
+            Some(patterns?.join(" | "))
+        }
         _ => None,
     }
 }
