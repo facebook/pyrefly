@@ -18,7 +18,6 @@ use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::NNModuleType;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
-use pyrefly_types::types::Union;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
@@ -1191,7 +1190,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     arg.range(),
-                    ErrorInfo::Kind(ErrorKind::BadArgumentCount),
+                    ErrorKind::BadArgumentCount,
                     format!(
                         "Expected {}, got {}",
                         count(
