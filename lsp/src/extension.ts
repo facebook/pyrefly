@@ -258,10 +258,7 @@ export async function activate(context: ExtensionContext) {
   await triggerMsPythonRefreshLanguageServersIfInstalled();
 
   vscode.workspace.onDidChangeConfiguration(async e => {
-    if (
-      pythonExtension &&
-      e.affectsConfiguration(`python.pyrefly.disableLanguageServices`)
-    ) {
+    if (e.affectsConfiguration(`python.pyrefly.disableLanguageServices`)) {
       // TODO(kylei): remove this hack once ms-python has this behavior
       await triggerMsPythonRefreshLanguageServersIfInstalled();
     }
