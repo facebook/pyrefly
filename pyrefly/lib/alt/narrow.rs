@@ -1920,6 +1920,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if remaining_ty.is_never() || remaining_ty.is_any() {
             return;
         }
+        if include_open_builtins
+            && !self.open_builtin_match_has_reachable_case(
+                &subject_info,
+                op,
+                *narrow_range,
+                &ignore_errors,
+            )
+        {
+            return;
+        }
         let subject_display = self.for_display(subject_info.into_ty());
         let remaining_display = self.for_display(remaining_ty.clone());
         let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
@@ -1935,6 +1945,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             builder = builder.with_detail(format!("Missing cases: {}", missing_cases));
         }
         builder.emit();
+    }
+
+    fn open_builtin_match_has_reachable_case(
+        &self,
+        subject_info: &TypeInfo,
+        fall_through_op: &NarrowOp,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        let case_can_match = |case_op: NarrowOp| {
+            Self::is_match_case_reachability_op(&case_op)
+                && !self
+                    .narrow(subject_info, &case_op, range, errors)
+                    .ty()
+                    .is_never()
+        };
+        match fall_through_op {
+            // Match fall-through is the conjunction of every previous case's
+            // negation. Negate each top-level term to recover the corresponding
+            // positive case narrow.
+            NarrowOp::And(ops) => ops.iter().any(|op| case_can_match(op.negate())),
+            op => case_can_match(op.negate()),
+        }
     }
 
     pub fn check_match_case_reachability(
