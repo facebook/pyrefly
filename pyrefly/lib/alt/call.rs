@@ -1140,16 +1140,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn callable_signature_for_partial_target(&self, ty: Type) -> Option<Callable> {
         match self.as_call_target(ty) {
-            CallTargetLookup::Ok(box CallTarget::Callable(TargetWithTParams(None, callable))) => {
-                Some(callable)
-            }
-            CallTargetLookup::Ok(box CallTarget::Function(TargetWithTParams(None, function))) => {
-                Some(function.signature)
-            }
-            CallTargetLookup::Ok(box CallTarget::BoundMethod(
-                _,
-                TargetWithTParams(None, function),
-            )) => Some(function.signature.strip_self_param()),
+            CallTargetLookup::Ok(target) => match *target {
+                CallTarget::Callable(TargetWithTParams(None, callable)) => Some(callable),
+                CallTarget::Function(TargetWithTParams(None, function)) => Some(function.signature),
+                CallTarget::BoundMethod(_, TargetWithTParams(None, function)) => {
+                    Some(function.signature.strip_self_param())
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
