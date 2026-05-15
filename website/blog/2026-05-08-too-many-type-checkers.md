@@ -7,7 +7,7 @@ tags: [typechecking, news]
 hide_table_of_contents: false
 ---
 
-Mypy, Pyright, Pyrefly, Zuban, ty, and possibly more that will come in the future...how are library maintainers expected to cope?
+Mypy, Pyrefly, Pyright, ty, Zuban, and possibly more that will come in the future...how are library maintainers expected to cope?
 
 **TL;DR**: Prioritise running as many type-checkers as possible on your test suite. Run at least one on your source code.
 
@@ -56,13 +56,13 @@ def test_dtype_time_units() -> None:
         assert pl.Datetime(time_unit) == pl.Datetime
         assert pl.Duration(time_unit) == pl.Duration
 ```
-What's pleasing to see is that all of mypy, Pyright, ty, Pyrefly, and Zuban type-check this fine without reporting any errors! So even though the type-checkers disagree a bit on how the implementation should be written, they all agree about the effects on the public API. And that's what your users care about!
+What's pleasing to see is that mypy, Pyrefly, Pyright, ty, Zuban all type-check this fine without reporting any errors! So even though the type-checkers disagree a bit on how the implementation should be written, they all agree about the effects on the public API. And that's what your users care about!
 
 Getting Pyrefly to run on the whole Polars test suite was relatively painless, you can check out the [PR](https://github.com/pola-rs/polars/pull/27459) to verify this. To ease Polars' own internal development, we've also been exploring using Pyrefly on their source code, though that is a [larger effort](https://github.com/pola-rs/polars/issues/27049) and is being tackled incrementally.
 
 ## What about my source code? Why are there so many type checkers anyway?
 
-The [typing spec](https://typing.python.org/en/latest/spec/) outlines a standard set of rules that type checkers are expected to adhere to. There are aspects of it that are a bit hazy however, such as in cases where users under-specify typing information. In those cases, different type checkers make different design decisions:
+The [typing spec](https://typing.python.org/en/latest/spec/) outlines a standard set of rules that type checkers are expected to adhere to. There are aspects of it that are a bit hazy, however, such as in cases where users under-specify typing information. In those cases, different type checkers make different design decisions:
 
 - Some choose to be as strict as possible, emitting false-positives if necessary, but doing as much as possible to guard you from potential bugs.
 - Others are more lenient and allow you to add type information to your codebase more gradually.
@@ -71,5 +71,5 @@ When it comes to type-checking your source code, it's good to ask yourself where
 
 ## The bottom line
 
-There's 5 Python type-checkers which get attention these days: mypy, Pyright, Pyrefly, ty, and Zuban. Library maintainers may rightfully feel like running all 5 of them over their source code is too much maintenance effort and requires polluting their code with too many type-ignore comments. We have made the case that such effort would be better spent by running multiple type-checkers over their tests instead, as that will test how well the library can be type-checked when users interact with it.
+There are 5 Python type-checkers which get attention these days: mypy, Pyrefly, Pyright, ty, Zuban. Library maintainers may rightfully feel like running all 5 of them over their source code is too much maintenance effort and requires polluting their code with too many type-ignore comments. We have made the case that such effort would be better spent by running multiple type-checkers over their tests instead, as that will test how well the library can be type-checked when users interact with it.
 
