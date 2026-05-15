@@ -14,13 +14,13 @@
  * - `lsp/src/extension-web.ts` spins up this Worker.
  * - This worker speaks LSP over `postMessage` using the browser JSON-RPC transport from
  *   `vscode-languageserver-protocol/browser`.
- * - Typechecking is powered by the Pyrefly WASM playground (`pyrefly_wasm`), which exposes a
- *   small, editor-oriented API (diagnostics, hover, completion, etc).
- * - We keep an in-memory map of workspace file contents (`files`). On open/change we update the
- *   WASM state, then publish diagnostics back to the client.
+ * - Typechecking is powered by the Pyrefly WASM (`pyrefly_wasm`), which exposes a small,
+ *   editor-oriented API (diagnostics, hover, completion, etc).
+ * - We keep an in-memory map of opened file contents (`files`). On open/change/close we update
+ *   the WASM state, then publish diagnostics back to the client.
  *
  * Limitations:
- * - Only files we have contents for (indexed or opened) can participate in cross-file features.
+ * - Only opened files can participate in cross-file features.
  * - No subprocesses / interpreter probing in the browser sandbox.
  */
 
@@ -411,18 +411,6 @@ connection.onRequest('shutdown', () => {
   return null;
 });
 
-connection.onRequest(
-  'pyrefly/setWorkspaceFiles',
-  async (params: {files: Record<string, string>}) => {
-    files.clear();
-    for (const [filename, content] of Object.entries(params.files)) {
-      files.set(filename, content);
-    }
-    await rebuildAll();
-    return null;
-  },
-);
-
 connection.onNotification(
   'textDocument/didOpen',
   async (openParams: DidOpenTextDocumentParams) => {
@@ -473,13 +461,14 @@ connection.onNotification(
       return;
     }
     const filename = uriToFilename(closeParams.textDocument.uri);
-    const content = files.get(filename);
-    if (!content) {
+    if (!files.delete(filename)) {
       return;
     }
-    // Intentionally keep `files` content even after close so we can continue to produce
-    // workspace-wide diagnostics and cross-file results for imports.
-    state.updateSingleFile(filename, content);
+    state.updateSandboxFiles(Object.fromEntries(files), true);
+    connection.sendNotification('textDocument/publishDiagnostics', {
+      uri: closeParams.textDocument.uri,
+      diagnostics: [],
+    });
     await publishDiagnostics(state);
   },
 );
