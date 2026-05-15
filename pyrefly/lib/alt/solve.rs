@@ -6257,7 +6257,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.error(
                         errors,
                         x.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        ErrorKind::InvalidAnnotation,
                         format!("{problem} cannot be used in annotations"),
                     );
                 }
