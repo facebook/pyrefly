@@ -251,7 +251,7 @@ impl TypeFormContext {
                 | TypeFormContext::TypeArgument
                 | TypeFormContext::TypeArgumentCallableReturn
                 | TypeFormContext::TypeArgumentForType
-            )
+        )
     }
 
     fn reports_implicit_alias_syntax_at_use_site(self) -> bool {
@@ -742,36 +742,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.name_assign_type_form_for_idx(idx, &self.error_swallower())
             .as_ref()
             .cloned()
-    }
-
-    fn annotation_name_resolves_to_import(&self, name: &ruff_python_ast::ExprName) -> bool {
-        let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        let Some(mut idx) = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key)) else {
-            return false;
-        };
-        let mut visited = SmallSet::new();
-        loop {
-            if !visited.insert(idx) {
-                unreachable!("cycle in binding chain while checking annotation import origin");
-            }
-            match self.bindings().get(idx) {
-                Binding::Forward(next)
-                | Binding::PromoteForward(next)
-                | Binding::ForwardToFirstUse(next)
-                | Binding::Phi(JoinStyle::NarrowOf(next), _) => idx = *next,
-                Binding::Import(_) => return true,
-                Binding::PossibleLegacyTParam(key, _) => {
-                    match (self.bindings().get(*key), &*self.get_idx(*key)) {
-                        (
-                            BindingLegacyTypeParam::ParamKeyed(next),
-                            LegacyTypeParameterLookup::NotParameter(_),
-                        ) => idx = *next,
-                        _ => return false,
-                    }
-                }
-                _ => return false,
-            }
-        }
     }
 
     pub fn name_assign_type_form_for_export(
@@ -2364,7 +2334,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn solve_expectation(
         &self,
         binding: &BindingExpect,
-        range: TextRange,
+        _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<EmptyAnswer> {
         match binding {
@@ -2563,35 +2533,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             BindingExpect::ImplicitAliasCheck {
-                name,
-                expr,
-                problem,
+                name: _,
+                expr: _,
+                problem: _,
             } => {
-                // A call expression is exempt if its result is a type-like
-                // value (TypeVar, class metatype) or its callable is a class
-                // constructor. Non-call expressions are never exempt.
-                let is_exempt = if let Expr::Call(call) = expr.as_ref() {
-                    let swallower = self.error_swallower();
-                    let result_ty = self.expr_infer(expr, &swallower);
-                    (matches!(
-                        &result_ty,
-                        Type::TypeVar(_) | Type::ParamSpec(_) | Type::TypeVarTuple(_)
-                    ) || matches!(&result_ty, Type::Type(f) if matches!(&**f, Type::ClassType(_))))
-                        || {
-                            let callable_ty = self.expr_infer(&call.func, &swallower);
-                            matches!(&callable_ty, Type::ClassDef(_))
-                        }
-                } else {
-                    false
-                };
-                if !is_exempt {
-                    self.error(
-                        errors,
-                        range,
-                        ErrorKind::InvalidAnnotation,
-                        format!("`{name}` is not a valid type alias: {problem} cannot be used in annotations"),
-                    );
-                }
+                // Handled by `expr_untype`, which can classify both local and
+                // imported implicit aliases using solved definition-site info.
             }
         }
         Arc::new(EmptyAnswer)
@@ -6191,7 +6138,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if type_form_context.reports_implicit_alias_syntax_at_use_site()
             && let Expr::Name(name) = x
-            && !self.annotation_name_resolves_to_import(name)
             && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) =
                 self.annotation_name_assign_type_form(name)
         {
@@ -6199,7 +6145,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
                 x.range(),
                 ErrorKind::InvalidAnnotation,
-                format!("{problem} cannot be used in annotations"),
+                format!(
+                    "`{}` is not a valid type alias: {problem} cannot be used in annotations",
+                    name.id
+                ),
             );
         }
         let result = match x {
@@ -6248,19 +6197,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             _ => {
                 let inferred_ty = self.expr_infer(x, errors);
-                if type_form_context.reports_implicit_alias_syntax_at_use_site()
-                    && let Expr::Name(name) = x
-                    && self.annotation_name_resolves_to_import(name)
-                    && let Some(NameAssignTypeForm::InvalidImplicitAlias(problem)) =
-                        self.annotation_name_assign_type_form(name)
-                {
-                    return self.error(
-                        errors,
-                        x.range(),
-                        ErrorKind::InvalidAnnotation,
-                        format!("{problem} cannot be used in annotations"),
-                    );
-                }
                 // Check if this is a scoped type alias in base class context
                 // We do this check here instead of `validate_type_form` because it
                 // substitutes type aliases with the aliased type
