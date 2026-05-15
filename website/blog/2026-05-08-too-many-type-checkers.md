@@ -67,7 +67,7 @@ The [typing spec](https://typing.python.org/en/latest/spec/) outlines a standard
 - Some choose to be as strict as possible, emitting false-positives if necessary, but doing as much as possible to guard you from potential bugs.
 - Others are more lenient and allow you to add type information to your codebase more gradually.
 
-When it comes to type-checking your source code, it's good to ask yourself where on the strict vs lenient spectrum you want to be. Pyrefly is not only , strict (though [this can be configured](https://pyrefly.org/en/docs/configuration/#configuration-options)), but also [fast](https://pyrefly.org/blog/speed-and-memory-comparison/) and [conformant](https://pyrefly.org/blog/typing-conformance-comparison/), making it an excellent choice. If you try it out on your projects and run into any issues, [please report them](https://github.com/facebook/pyrefly/issues) so that both you and all its other users can benefit from fixes!
+When it comes to type-checking your source code, it's good to ask yourself where on the strict vs lenient spectrum you want to be. Pyrefly is not only strict (though [this can be configured](https://pyrefly.org/en/docs/configuration/#configuration-options)), but also [fast](https://pyrefly.org/blog/speed-and-memory-comparison/) and [conformant](https://pyrefly.org/blog/typing-conformance-comparison/), making it an excellent choice. If you try it out on your projects and run into any issues, [please report them](https://github.com/facebook/pyrefly/issues) so that both you and all its other users can benefit from fixes!
 
 ## The bottom line
 
