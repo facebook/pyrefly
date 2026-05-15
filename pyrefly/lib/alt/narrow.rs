@@ -432,39 +432,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let force_allow_negative = matches!(source, NarrowSource::Pattern);
-        let mut res = Vec::new();
-        for (right, allows_negative_narrow) in self.expr_as_class_info(right_expr, errors) {
-            res.push(self.distribute_over_union(left, |l| {
-                let allows_negative_narrow = allows_negative_narrow || force_allow_negative;
+        let class_infos = self.expr_as_class_info(right_expr, errors);
+        // Subtract each class info from each union member of `left` in turn,
+        // rather than computing per-target results and intersecting them.
+        // Intersecting `subtract(L, A)` with `subtract(L, B)` reintroduces
+        // any union member that overlaps with both A and B (e.g. `Iterable[Any]`
+        // overlaps with both `str` and `bytes`), so `isinstance(x, (str, bytes))`
+        // would leave the negative branch unchanged. Sequential per-element
+        // subtraction avoids that.
+        self.distribute_over_union(left, |l| {
+            let mut result = l.clone();
+            for (right, allows_negative_narrow) in &class_infos {
+                let allows_negative_narrow = *allows_negative_narrow || force_allow_negative;
                 if !allows_negative_narrow {
-                    return l.clone();
+                    continue;
                 }
-                if let Some((tparams, right)) = self.unwrap_isinstance_target(l, &right) {
+                if let Some((tparams, right)) = self.unwrap_isinstance_target(&result, right) {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
                     // For constrained TypeVars, subtract from the concrete constraints
                     // so that e.g. isinstance(x, (int, float)) with T(int, str, float)
                     // narrows the else branch to str instead of leaving it as T.
-                    let result = if let Type::Quantified(q) = l
+                    result = if let Type::Quantified(q) = &result
                         && let Restriction::Constraints(_) = q.restriction()
                     {
                         let concrete = q.bound_type(self.stdlib, self.heap);
                         self.subtract(&concrete, &right)
                     } else {
-                        self.subtract(l, &right)
+                        self.subtract(&result, &right)
                     };
                     // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
                     // * If `left` is an invalid specialization, the error has already been reported at its definition site.
                     // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
                     let _specialization_errors = self.solver().finish_quantified(vs, false);
-                    result
-                } else {
-                    l.clone()
                 }
-            }));
-        }
-        self.intersects(&res)
+            }
+            result
+        })
     }
 
     /// Narrow `type(X) != Y`. We can only do negative narrowing if Y is final,

@@ -966,6 +966,23 @@ def f(x: str | int | None):
 );
 
 testcase!(
+    test_isinstance_tuple_negative_with_overlap,
+    r#"
+from typing import Any, Iterable, assert_type
+
+# `Iterable[Any]` overlaps with both `str` and `bytes` (both are iterable).
+# In the negative branch of `isinstance(a, (str, bytes))` we should still
+# remove the `str` and `bytes` alternatives from the remaining union.
+# Regression test for facebook/pyrefly#3412.
+def f(a: float | str | bytes | Iterable[Any]) -> None:
+    if isinstance(a, (str, bytes)):
+        pass
+    else:
+        assert_type(a, float | Iterable[Any])
+    "#,
+);
+
+testcase!(
     test_isinstance_unbounded_tuple,
     r#"
 from typing import assert_type
