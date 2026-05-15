@@ -2674,6 +2674,72 @@ def f(x):
 }
 
 #[test]
+fn if_to_match_isinstance_tuple_chain() {
+    let code = r#"
+class A: pass
+class B: pass
+class C: pass
+
+def f(x):
+    if isinstance(x, (A, B)):
+        return 1
+    elif isinstance(x, C):
+        return 2
+"#;
+    let selection = find_nth_range(code, "if isinstance", 1);
+    let updated =
+        apply_first_if_to_match_action(code, selection).expect("expected if-to-match action");
+    let expected = r#"
+class A: pass
+class B: pass
+class C: pass
+
+def f(x):
+    match x:
+        case A() | B():
+            return 1
+        case C():
+            return 2
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn if_to_match_enum_member_chain() {
+    let code = r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+def f(color: Color):
+    if color == Color.RED:
+        return 1
+    elif color == Color.BLUE:
+        return 2
+"#;
+    let selection = find_nth_range(code, "if color", 1);
+    let updated =
+        apply_first_if_to_match_action(code, selection).expect("expected if-to-match action");
+    let expected = r#"
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+def f(color: Color):
+    match color:
+        case Color.RED:
+            return 1
+        case Color.BLUE:
+            return 2
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
 fn if_to_match_preserves_branch_comments() {
     let code = r#"
 x = "a"
