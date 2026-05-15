@@ -392,8 +392,12 @@ impl InferArgs {
             get_project_config_for_current_dir(ConfigOverrideArgs::default(), None)?.0;
         let config_finder = ConfigFinder::new_constant(current_dir_config);
         let state = holder.as_ref();
-        let (_, errors, _) =
-            check_args.run_once(files_to_check, config_finder, UpsellDecision::Skip, thread_count)?;
+        let (_, errors, _) = check_args.run_once(
+            files_to_check,
+            config_finder,
+            UpsellDecision::Skip,
+            thread_count,
+        )?;
         for error in errors {
             if error.error_kind() != ErrorKind::UnknownName {
                 continue;

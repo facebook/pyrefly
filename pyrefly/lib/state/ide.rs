@@ -382,8 +382,7 @@ fn fallback_import_insertion_point(ast: &ModModule) -> TextSize {
     ast.body
         .iter()
         .skip_while(|stmt| is_docstring_stmt(stmt))
-        .skip_while(|stmt| is_future_import_stmt(stmt))
-        .next()
+        .find(|stmt| !is_future_import_stmt(stmt))
         .map_or(ast.range.end(), |stmt| stmt.range().start())
 }
 
@@ -406,10 +405,9 @@ fn find_import_merge_edit(
     for stmt in import_block_stmts(ast) {
         if let Stmt::ImportFrom(import_from) = stmt
             && import_from_module_matches(import_from, module_name)
+            && let Some(range) = merge_range_for_import(import_from, export_name)
         {
-            if let Some(range) = merge_range_for_import(import_from, export_name) {
-                return Some((range, format!(", {}", export_name)));
-            }
+            return Some((range, format!(", {}", export_name)));
         }
     }
     None
