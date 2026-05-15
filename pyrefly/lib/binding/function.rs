@@ -632,19 +632,18 @@ impl<'a> BindingsBuilder<'a> {
             });
         let placeholder_body_kind = match body_no_docstring {
             // raise NotImplementedError(...)
-            [
-                Stmt::Raise(StmtRaise {
-                    exc: Some(box (Expr::Call(ExprCall { box func, .. }) | func)),
-                    ..
-                }),
-            ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError) => {
+            [Stmt::Raise(StmtRaise { exc: Some(exc), .. })]
+                if self.as_special_export(match &**exc {
+                    Expr::Call(ExprCall { func, .. }) => func,
+                    other => other,
+                }) == Some(SpecialExport::NotImplementedError) =>
+            {
                 Some(PlaceholderBodyKind::RaiseNotImplementedError)
             }
             // return NotImplemented
             [
                 Stmt::Return(StmtReturn {
-                    value: Some(box val),
-                    ..
+                    value: Some(val), ..
                 }),
             ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => {
                 Some(PlaceholderBodyKind::ReturnNotImplemented)

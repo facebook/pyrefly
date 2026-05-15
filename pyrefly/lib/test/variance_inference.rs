@@ -679,6 +679,20 @@ def foo(x: A[int]) -> A[int | str]:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1343
+testcase!(
+    test_covariant_typevar_in_contravariant_position,
+    r#"
+from typing import Protocol, TypeVar
+
+T_co = TypeVar("T_co", covariant=True)
+
+class Box(Protocol[T_co]):
+    def get(self) -> T_co: ...
+    def set(self, value: T_co) -> None: ...  # E: `T_co` is covariant but is used in contravariant position
+"#,
+);
+
 testcase!(
     bug = "The reported error is correct but is on the wrong line",
     test_variance_error_in_overload,

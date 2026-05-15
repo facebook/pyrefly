@@ -10,6 +10,23 @@ exports[`Home page renders external site correctly 1`] = `
       Pyrefly is a fast type checker and language server for Python with powerful IDE features
     </div>
     <div>
+      <div>
+        <div>
+          <span>
+            🎉 Pyrefly v1.0 is now available!
+          </span>
+          <div>
+            <button>
+              Read the blog
+            </button>
+          </div>
+        </div>
+        <button
+          aria-label="Dismiss banner"
+        >
+          ✕
+        </button>
+      </div>
       <section
         id="header-section"
       >
@@ -410,6 +427,23 @@ exports[`Home page renders internal site correctly 1`] = `
       Pyrefly is a fast type checker and language server for Python with powerful IDE features
     </div>
     <div>
+      <div>
+        <div>
+          <span>
+            🎉 Pyrefly v1.0 is now available!
+          </span>
+          <div>
+            <button>
+              Read the blog
+            </button>
+          </div>
+        </div>
+        <button
+          aria-label="Dismiss banner"
+        >
+          ✕
+        </button>
+      </div>
       <section
         id="header-section"
       >

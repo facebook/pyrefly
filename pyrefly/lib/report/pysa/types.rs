@@ -18,7 +18,6 @@ use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Type;
-use pyrefly_types::types::Union;
 use serde::Serialize;
 
 use crate::report::pysa::ModuleContext;
@@ -166,12 +165,8 @@ fn strip_self_type(heap: &TypeHeap, mut ty: Type) -> Type {
 
 fn strip_optional(type_: &Type) -> Option<&Type> {
     match type_ {
-        Type::Union(box Union {
-            members: elements, ..
-        }) if elements.len() == 2 && elements[0].is_none() => Some(&elements[1]),
-        Type::Union(box Union {
-            members: elements, ..
-        }) if elements.len() == 2 && elements[1].is_none() => Some(&elements[0]),
+        Type::Union(u) if u.members.len() == 2 && u.members[0].is_none() => Some(&u.members[1]),
+        Type::Union(u) if u.members.len() == 2 && u.members[1].is_none() => Some(&u.members[0]),
         _ => None,
     }
 }
@@ -249,7 +244,7 @@ fn is_scalar_type(get: &Type, want: &Class, context: &ModuleContext) -> bool {
     }
     match get {
         Type::ClassType(class_type) => has_superclass(class_type.class_object(), want, context),
-        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+        Type::TypeAlias(data) if let TypeAliasData::Value(alias) = &**data => {
             is_scalar_type(&alias.as_type(), want, context)
         }
         _ => false,
@@ -287,24 +282,28 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
         Type::ClassDef(class) => {
             ClassNamesFromType::from_class(class, context).prepend_modifier(TypeModifier::Type)
         }
-        Type::Type(box Type::ClassType(class_type)) => {
+        Type::Type(inner) if let Type::ClassType(class_type) = &**inner => {
             ClassNamesFromType::from_class(class_type.class_object(), context)
                 .prepend_modifier(TypeModifier::Type)
         }
-        Type::Type(box Type::Union(box Union {
-            members: elements, ..
-        })) if !elements.is_empty() => elements
-            .iter()
-            .map(|inner| match inner {
-                Type::ClassType(class_type) => {
-                    ClassNamesFromType::from_class(class_type.class_object(), context)
-                        .prepend_modifier(TypeModifier::Type)
-                }
-                _ => ClassNamesFromType::not_a_class(),
-            })
-            .reduce(|acc, next| acc.join_with(next))
-            .expect("expected at least one element in union")
-            .sort_and_dedup(),
+        Type::Type(inner)
+            if let Type::Union(inner_union) = &**inner
+                && !inner_union.members.is_empty() =>
+        {
+            inner_union
+                .members
+                .iter()
+                .map(|inner| match inner {
+                    Type::ClassType(class_type) => {
+                        ClassNamesFromType::from_class(class_type.class_object(), context)
+                            .prepend_modifier(TypeModifier::Type)
+                    }
+                    _ => ClassNamesFromType::not_a_class(),
+                })
+                .reduce(|acc, next| acc.join_with(next))
+                .expect("expected at least one element in union")
+                .sort_and_dedup()
+        }
         Type::Tuple(_) => {
             ClassNamesFromType::from_class(context.answers_context.stdlib.tuple_object(), context)
         }
@@ -314,15 +313,14 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
         Type::TypedDict(TypedDict::Anonymous(_)) => {
             ClassNamesFromType::from_class(context.answers_context.stdlib.dict_object(), context)
         }
-        Type::Union(box Union {
-            members: elements, ..
-        }) if !elements.is_empty() => elements
+        Type::Union(u) if !u.members.is_empty() => u
+            .members
             .iter()
             .map(|inner| get_classes_of_type(inner, context))
             .reduce(|acc, next| acc.join_with(next))
             .unwrap()
             .sort_and_dedup(),
-        Type::TypeAlias(box TypeAliasData::Value(alias)) => {
+        Type::TypeAlias(data) if let TypeAliasData::Value(alias) = &**data => {
             get_classes_of_type(&alias.as_type(), context)
         }
         _ => ClassNamesFromType::not_a_class(),
@@ -516,11 +514,9 @@ pub fn is_callable_like(ty: &Type) -> bool {
         Type::Callable(_) => true,
         Type::BoundMethod(_) => true,
         Type::Overload(_) => true,
-        Type::Union(box Union {
-            members: elements, ..
-        }) => {
-            elements.iter().any(is_callable_like)
-                && elements
+        Type::Union(u) => {
+            u.members.iter().any(is_callable_like)
+                && u.members
                     .iter()
                     .all(|ty| ty.is_none() || ty.is_any() || is_callable_like(ty))
         }
@@ -532,11 +528,9 @@ pub fn is_bound_method_like(ty: &Type) -> bool {
     match ty {
         Type::BoundMethod(_) => true,
         Type::Overload(_) => true,
-        Type::Union(box Union {
-            members: elements, ..
-        }) => {
-            elements.iter().any(is_bound_method_like)
-                && elements
+        Type::Union(u) => {
+            u.members.iter().any(is_bound_method_like)
+                && u.members
                     .iter()
                     .all(|ty| ty.is_none() || ty.is_any() || is_bound_method_like(ty))
         }

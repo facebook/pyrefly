@@ -31,7 +31,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
@@ -1238,12 +1237,17 @@ impl<'a> Transaction<'a> {
         match ty {
             Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
-            Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
-            Type::TypeAlias(box TypeAliasData::Value(alias)) => {
-                Self::callable_from_type(solver, alias.as_type())
+            Type::Union(u) => Self::callable_from_types(solver, u.members),
+            Type::TypeAlias(data) if matches!(*data, TypeAliasData::Value(_)) => {
+                // Repeated match because pattern guards cannot move out of bindings.
+                if let TypeAliasData::Value(alias) = *data {
+                    Self::callable_from_type(solver, alias.as_type())
+                } else {
+                    unreachable!("guarded by matches! above")
+                }
             }
-            Type::Type(box inner) => Self::callable_from_type(solver, inner),
-            Type::Quantified(box quantified) => match quantified.restriction {
+            Type::Type(inner) => Self::callable_from_type(solver, *inner),
+            Type::Quantified(quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
                 Restriction::Constraints(options) => Self::callable_from_types(solver, options),
                 Restriction::Unrestricted => None,
@@ -1777,8 +1781,20 @@ impl<'a> Transaction<'a> {
                 let completions = |ty| solver.completions(ty, Some(name), false);
 
                 match base_type {
-                    Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => {
-                        tys.into_iter()
+                    Type::Union(u) => u
+                        .members
+                        .into_iter()
+                        .filter_map(|ty_| {
+                            self.find_definition_for_base_type(
+                                handle,
+                                preference,
+                                completions(ty_),
+                                name,
+                            )
+                        })
+                        .collect(),
+                    Type::Intersect(i) => {
+                        i.0.into_iter()
                             .filter_map(|ty_| {
                                 self.find_definition_for_base_type(
                                     handle,

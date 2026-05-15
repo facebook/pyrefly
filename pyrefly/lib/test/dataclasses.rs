@@ -1864,13 +1864,65 @@ class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all ot
 
 // https://github.com/facebook/pyrefly/issues/2920
 testcase!(
-    bug = "Should reject overriding __setattr__ and __delattr__ in frozen dataclass",
     test_frozen_dataclass_override_setattr_delattr,
     r#"
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Immutable:
+    value: int
+
+    def __setattr__(self, name: str, val: object) -> None: ...  # E: Cannot override `__setattr__` in a frozen dataclass
+    def __delattr__(self, name: str) -> None: ...  # E: Cannot override `__delattr__` in a frozen dataclass
+"#,
+);
+
+// Subclass of a frozen dataclass: only `BadOverride` fires (it carries the
+// richer "declared as final in parent class `Base`" message). Our
+// `Cannot override __setattr__/__delattr__ in a frozen dataclass`
+// diagnostic is suppressed here because it is scoped to the class that is
+// itself decorated with `@dataclass(frozen=True)`.
+testcase!(
+    test_frozen_dataclass_subclass_override_setattr,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Base:
+    value: int
+
+class Child(Base):
+    def __setattr__(self, name: str, val: object) -> None: ...  # E: `__setattr__` is declared as final in parent class `Base`
+    def __delattr__(self, name: str) -> None: ...  # E: `__delattr__` is declared as final in parent class `Base`
+"#,
+);
+
+// Doubly-frozen: child is also `@dataclass(frozen=True)`. The parent already
+// synthesizes `@final __setattr__`/`__delattr__`, so only `BadOverride` fires.
+testcase!(
+    test_frozen_dataclass_doubly_frozen_override_setattr,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class FrozenBase:
+    value: int
+
+@dataclass(frozen=True)
+class FrozenChild(FrozenBase):
+    def __setattr__(self, name: str, val: object) -> None: ...  # E: `__setattr__` is declared as final in parent class `FrozenBase`
+    def __delattr__(self, name: str) -> None: ...  # E: `__delattr__` is declared as final in parent class `FrozenBase`
+"#,
+);
+
+// Non-frozen dataclass should allow overriding __setattr__ and __delattr__
+testcase!(
+    test_non_frozen_dataclass_override_setattr_ok,
+    r#"
+from dataclasses import dataclass
+
+@dataclass
+class Mutable:
     value: int
 
     def __setattr__(self, name: str, val: object) -> None: ...

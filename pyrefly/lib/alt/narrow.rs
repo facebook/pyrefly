@@ -38,7 +38,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -53,13 +52,11 @@ use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowSource;
 use crate::binding::narrow::NarrowingSubject;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
 use crate::types::callable::FunctionKind;
 use crate::types::class::ClassType;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
-use crate::types::literal::Literal;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
 use crate::types::type_var::Restriction;
@@ -270,15 +267,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Narrow a type by removing values identity-equal to `right` (`is not` semantics).
     fn narrow_is_not(&self, ty: &Type, right: &Type) -> Type {
         self.distribute_over_union(ty, |t| match (t, right) {
-            (
-                _,
-                Type::None
-                | Type::Ellipsis
-                | Type::Literal(box Literal {
-                    value: Lit::Bool(_) | Lit::Enum(_),
-                    ..
-                }),
-            ) if self.literal_equal(t, right) => self.heap.mk_never(),
+            (_, Type::None | Type::Ellipsis) if self.literal_equal(t, right) => {
+                self.heap.mk_never()
+            }
+            (_, Type::Literal(f))
+                if matches!(f.value, Lit::Bool(_) | Lit::Enum(_))
+                    && self.literal_equal(t, right) =>
+            {
+                self.heap.mk_never()
+            }
             (Type::ClassType(cls), Type::Literal(lit))
                 if cls.is_builtin("bool")
                     && let Lit::Bool(b) = &lit.value =>
@@ -376,7 +373,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// precise narrowing. Otherwise falls back to standard class object unwrapping.
     fn unwrap_isinstance_target(&self, left: &Type, right: &Type) -> Option<(TParams, Type)> {
         let right_is_tuple = match right {
-            Type::Type(box Type::Tuple(_)) => true,
+            Type::Type(f) if matches!(&**f, Type::Tuple(_)) => true,
             Type::ClassDef(cls) => cls.is_builtin("tuple"),
             _ => false,
         };
@@ -523,7 +520,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 _ => {
                     let t = me.expr_infer(e, errors);
-                    if let Type::Type(box Type::ClassType(cls)) = &t {
+                    if let Type::Type(f) = &t
+                        && let Type::ClassType(cls) = &**f
+                    {
                         // If `C` is not final, `type[C]` may be a subclass of `C`,
                         // making negative narrowing unsafe.
                         let allows_negative_narrow = me.is_final(cls.class_object());
@@ -673,16 +672,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // otherwise the narrowed forms make weird unions when used with control flow
         self.distribute_over_union(ty, |ty| match ty {
             Type::Tuple(Tuple::Concrete(elts)) if elts.len() >= len => self.heap.mk_never(),
-            Type::Tuple(Tuple::Unpacked(box (prefix, _, suffix)))
-                if prefix.len() + suffix.len() >= len =>
-            {
-                self.heap.mk_never()
-            }
+            Type::Tuple(Tuple::Unpacked(f)) if f.0.len() + f.2.len() >= len => self.heap.mk_never(),
             Type::ClassType(class) if let Some(tuple) = self.as_tuple(class) => match tuple {
                 Tuple::Concrete(elts) if elts.len() >= len => self.heap.mk_never(),
-                Tuple::Unpacked(box (prefix, _, suffix)) if prefix.len() + suffix.len() >= len => {
-                    self.heap.mk_never()
-                }
+                Tuple::Unpacked(f) if f.0.len() + f.2.len() >= len => self.heap.mk_never(),
                 _ => ty.clone(),
             },
             _ => ty.clone(),
@@ -705,12 +698,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 range,
             );
             match right {
-                Type::None
-                | Type::Ellipsis
-                | Type::Literal(box Literal {
-                    value: Lit::Bool(_) | Lit::Enum(_),
-                    ..
-                }) => {
+                Type::None | Type::Ellipsis => {
+                    if self.is_subset_eq(right, &facet_ty) {
+                        t.clone()
+                    } else {
+                        self.heap.mk_never()
+                    }
+                }
+                Type::Literal(f) if matches!(f.value, Lit::Bool(_) | Lit::Enum(_)) => {
                     if self.is_subset_eq(right, &facet_ty) {
                         t.clone()
                     } else {
@@ -737,22 +732,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &FacetChain::new(Vec1::new(facet.clone())),
                 range,
             );
-            match (&facet_ty, right) {
-                (
-                    Type::None
-                    | Type::Ellipsis
-                    | Type::Literal(box Literal {
-                        value: Lit::Bool(_) | Lit::Enum(_),
-                        ..
-                    }),
-                    Type::None
-                    | Type::Ellipsis
-                    | Type::Literal(box Literal {
-                        value: Lit::Bool(_) | Lit::Enum(_),
-                        ..
-                    }),
-                ) if self.literal_equal(right, &facet_ty) => self.heap.mk_never(),
-                _ => t.clone(),
+            let is_identity_literal = |ty: &Type| {
+                matches!(ty, Type::None | Type::Ellipsis)
+                    || matches!(ty, Type::Literal(f) if matches!(f.value, Lit::Bool(_) | Lit::Enum(_)))
+            };
+            if is_identity_literal(&facet_ty)
+                && is_identity_literal(right)
+                && self.literal_equal(right, &facet_ty)
+            {
+                self.heap.mk_never()
+            } else {
+                t.clone()
             }
         })
     }
@@ -845,15 +835,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         match tuple {
             Tuple::Concrete(elts) if elts.len() != len => self.heap.mk_never(),
-            Tuple::Unpacked(box (prefix, _, suffix)) if prefix.len() + suffix.len() > len => {
-                self.heap.mk_never()
+            Tuple::Unpacked(f) if f.0.len() + f.2.len() > len => self.heap.mk_never(),
+            Tuple::Unpacked(f) if f.0.len() + f.2.len() == len => {
+                let (prefix, _, suffix) = &**f;
+                self.heap
+                    .mk_concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect())
             }
-            Tuple::Unpacked(box (prefix, _, suffix)) if prefix.len() + suffix.len() == len => self
-                .heap
-                .mk_concrete_tuple(prefix.iter().cloned().chain(suffix.clone()).collect()),
-            Tuple::Unpacked(box (prefix, Type::Tuple(Tuple::Unbounded(middle)), suffix))
-                if prefix.len() + suffix.len() < len =>
+            Tuple::Unpacked(f)
+                if let Type::Tuple(Tuple::Unbounded(middle)) = &f.1
+                    && f.0.len() + f.2.len() < len =>
             {
+                let (prefix, _, suffix) = &**f;
                 let middle_elements = vec![(**middle).clone(); len - prefix.len() - suffix.len()];
                 self.heap.mk_concrete_tuple(
                     prefix
@@ -864,7 +856,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .collect(),
                 )
             }
-            Tuple::Unpacked(box (prefix, middle_var @ Type::Var(_), suffix)) => {
+            Tuple::Unpacked(f) if let Type::Var(_) = &f.1 => {
+                let (prefix, middle_var, suffix) = &**f;
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
                 let new_tuple =
                     Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
@@ -886,7 +879,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         match tuple {
             Tuple::Concrete(elts) if elts.len() == len => self.heap.mk_never(),
-            Tuple::Unpacked(box (prefix, middle_var @ Type::Var(_), suffix)) => {
+            Tuple::Unpacked(f) if let Type::Var(_) = &f.1 => {
+                let (prefix, middle_var, suffix) = &**f;
                 let forced_middle = self.force_for_narrowing(middle_var, range, errors);
                 let new_tuple =
                     Tuple::Unpacked(Box::new((prefix.clone(), forced_middle, suffix.clone())));
@@ -907,11 +901,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::Placeholder => ty.clone(),
             AtomicNarrowOp::LenEq(v) => {
                 let right = self.expr_infer(v, errors);
-                let Type::Literal(box Literal {
-                    value: Lit::Int(lit),
-                    ..
-                }) = &right
-                else {
+                let Type::Literal(f) = &right else {
+                    return ty.clone();
+                };
+                let Lit::Int(lit) = &f.value else {
                     return ty.clone();
                 };
                 let Some(len) = lit.as_i64().and_then(|i| i.to_usize()) else {
@@ -930,11 +923,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::LenNotEq(v) => {
                 let right = self.expr_infer(v, errors);
-                let Type::Literal(box Literal {
-                    value: Lit::Int(lit),
-                    ..
-                }) = &right
-                else {
+                let Type::Literal(f) = &right else {
+                    return ty.clone();
+                };
+                let Lit::Int(lit) = &f.value else {
                     return ty.clone();
                 };
                 let Some(len) = lit.as_i64().and_then(|i| i.to_usize()) else {
@@ -953,11 +945,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::LenGt(v) => {
                 let right = self.expr_infer(v, errors);
-                let Type::Literal(box Literal {
-                    value: Lit::Int(lit),
-                    ..
-                }) = &right
-                else {
+                let Type::Literal(f) = &right else {
+                    return ty.clone();
+                };
+                let Lit::Int(lit) = &f.value else {
                     return ty.clone();
                 };
                 let Some(len) = lit.as_i64().and_then(|i| i.to_usize()) else {
@@ -967,11 +958,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::LenGte(v) => {
                 let right = self.expr_infer(v, errors);
-                let Type::Literal(box Literal {
-                    value: Lit::Int(lit),
-                    ..
-                }) = &right
-                else {
+                let Type::Literal(f) = &right else {
+                    return ty.clone();
+                };
+                let Lit::Int(lit) = &f.value else {
                     return ty.clone();
                 };
                 let Some(len) = lit.as_i64().and_then(|i| i.to_usize()) else {
@@ -984,11 +974,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::LenLt(v) => {
                 let right = self.expr_infer(v, errors);
-                let Type::Literal(box Literal {
-                    value: Lit::Int(lit),
-                    ..
-                }) = &right
-                else {
+                let Type::Literal(f) = &right else {
+                    return ty.clone();
+                };
+                let Lit::Int(lit) = &f.value else {
                     return ty.clone();
                 };
                 let Some(len) = lit.as_i64().and_then(|i| i.to_usize()) else {
@@ -1001,11 +990,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::LenLte(v) => {
                 let right = self.expr_infer(v, errors);
-                let Type::Literal(box Literal {
-                    value: Lit::Int(lit),
-                    ..
-                }) = &right
-                else {
+                let Type::Literal(f) = &right else {
+                    return ty.clone();
+                };
+                let Lit::Int(lit) = &f.value else {
                     return ty.clone();
                 };
                 let Some(len) = lit.as_i64().and_then(|i| i.to_usize()) else {
@@ -1057,7 +1045,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 literal_types.push(Type::type_of(self.promote_silently(&cls)));
                             }
                             // Already-wrapped type[X] expressions pass through.
-                            Type::Type(box Type::ClassType(_)) => {
+                            Type::Type(ref f) if matches!(&**f, Type::ClassType(_)) => {
                                 literal_types.push(expr_ty);
                             }
                             _ => {
@@ -1120,7 +1108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Type::ClassDef(cls) => {
                                 literal_types.push(Type::type_of(self.promote_silently(&cls)));
                             }
-                            Type::Type(box Type::ClassType(_)) => {
+                            Type::Type(ref f) if matches!(&**f, Type::ClassType(_)) => {
                                 literal_types.push(expr_ty);
                             }
                             _ => {
@@ -1918,18 +1906,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let subject_display = self.for_display(subject_info.into_ty());
         let remaining_display = self.for_display(remaining_ty.clone());
         let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
-        let mut msg = vec1![format!(
-            "Match on `{}` is not exhaustive",
-            ctx.display(&subject_display)
-        )];
-        if let Some(missing_cases) = self.format_missing_cases(&remaining_ty) {
-            msg.push(format!("Missing cases: {}", missing_cases));
-        }
-        errors.add(
+        let mut builder = errors.error_builder(
             *subject_range,
-            ErrorInfo::Kind(ErrorKind::NonExhaustiveMatch),
-            msg,
+            ErrorKind::NonExhaustiveMatch,
+            format!(
+                "Match on `{}` is not exhaustive",
+                ctx.display(&subject_display)
+            ),
         );
+        if let Some(missing_cases) = self.format_missing_cases(&remaining_ty) {
+            builder = builder.with_detail(format!("Missing cases: {}", missing_cases));
+        }
+        builder.emit();
     }
 
     pub fn check_match_case_reachability(
@@ -1947,7 +1935,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
         if subject_ty.is_any()
-            || subject_ty.is_never()
             || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))
         {
             return;
@@ -1974,6 +1961,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     *narrow_range,
                     &ignore_errors,
                 );
+                // No sub-facet check needed: the narrowed type already represents
+                // the facet's type directly, so `is_never()` below is sufficient.
                 (
                     self.get_facet_chain_type(&narrowed, &resolved_chain, *case_range),
                     false,
@@ -1988,42 +1977,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.error(
             errors,
             *case_range,
-            ErrorInfo::Kind(ErrorKind::Unreachable),
+            ErrorKind::UnreachableMatchCase,
             format!("Case pattern can never match subject of type `{subject_display}`"),
         );
     }
 
+    /// Check whether we can reliably determine reachability for this op.
+    ///
+    /// Returns `true` only when we understand all sub-ops AND at least one
+    /// constrains a value or class tightly enough to produce `Never`
+    /// (a "trigger", e.g. `Eq`, `Is`, or `IsInstance`).
+    ///
+    /// Structural ops like `IsSequence`/`LenEq` are checkable but aren't
+    /// triggers on their own.
     fn is_match_case_reachability_op(op: &NarrowOp) -> bool {
-        let (can_check, has_trigger) = Self::classify_match_case_reachability_op(op);
-        can_check && has_trigger
-    }
-
-    fn classify_match_case_reachability_op(op: &NarrowOp) -> (bool, bool) {
-        match op {
-            NarrowOp::Atomic(_, AtomicNarrowOp::Eq(_) | AtomicNarrowOp::Is(_)) => (true, true),
-            NarrowOp::Atomic(Some(_), AtomicNarrowOp::IsInstance(_, NarrowSource::Pattern)) => {
-                (true, true)
-            }
-            NarrowOp::Atomic(
-                _,
-                AtomicNarrowOp::IsSequence
-                | AtomicNarrowOp::IsMapping
-                | AtomicNarrowOp::LenEq(_)
-                | AtomicNarrowOp::LenGte(_),
-            ) => (true, false),
-            NarrowOp::And(ops) | NarrowOp::Or(ops) => {
-                let mut has_trigger = false;
-                for op in ops {
-                    let (can_check, op_has_trigger) = Self::classify_match_case_reachability_op(op);
-                    if !can_check {
-                        return (false, false);
-                    }
-                    has_trigger |= op_has_trigger;
+        // Classifies as (can_check, has_trigger). The two dimensions can't be
+        // collapsed into a single bool because And/Or need to distinguish
+        // "structural but checkable" from "unknown and uncheckable" in sub-ops.
+        fn classify(op: &NarrowOp) -> (bool, bool) {
+            match op {
+                NarrowOp::Atomic(_, AtomicNarrowOp::Eq(_) | AtomicNarrowOp::Is(_)) => (true, true),
+                NarrowOp::Atomic(_, AtomicNarrowOp::IsInstance(_, NarrowSource::Pattern)) => {
+                    (true, true)
                 }
-                (true, has_trigger)
+                NarrowOp::Atomic(
+                    _,
+                    AtomicNarrowOp::IsSequence
+                    | AtomicNarrowOp::IsMapping
+                    | AtomicNarrowOp::LenEq(_)
+                    | AtomicNarrowOp::LenGte(_),
+                ) => (true, false),
+                NarrowOp::And(ops) | NarrowOp::Or(ops) => {
+                    let mut has_trigger = false;
+                    for op in ops {
+                        let (can_check, op_has_trigger) = classify(op);
+                        if !can_check {
+                            return (false, false);
+                        }
+                        has_trigger |= op_has_trigger;
+                    }
+                    (true, has_trigger)
+                }
+                _ => (false, false),
             }
-            _ => (false, false),
         }
+        let (can_check, has_trigger) = classify(op);
+        can_check && has_trigger
     }
 
     fn has_never_match_trigger_facet(

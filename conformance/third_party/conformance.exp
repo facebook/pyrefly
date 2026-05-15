@@ -6505,6 +6505,28 @@
   "generics_self_basic.py": [
     {
       "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 20,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 33,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 33
+    },
+    {
+      "code": -2,
       "column": 26,
       "concise_description": "`Self` may not be subscripted",
       "description": "`Self` may not be subscripted",
@@ -6583,6 +6605,17 @@
       "severity": "error",
       "stop_column": 37,
       "stop_line": 82
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "line": 87,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 87
     },
     {
       "code": -2,

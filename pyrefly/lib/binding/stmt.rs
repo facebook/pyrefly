@@ -22,7 +22,6 @@ use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
-use ruff_python_ast::StmtExpr;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
@@ -1355,23 +1354,20 @@ impl<'a> BindingsBuilder<'a> {
                     self.declare_mutable_capture(&name, MutableCaptureKind::Nonlocal);
                 }
             }
-            Stmt::Expr(StmtExpr {
-                range: expr_range,
-                value:
-                    box Expr::Call(ExprCall {
-                        range: call_range,
-                        func: box Expr::Name(name),
-                        arguments:
-                            Arguments {
-                                range: _,
-                                keywords: _,
-                                args,
-                                ..
-                            },
-                        ..
-                    }),
-                ..
-            }) if name.id.as_str() == "prod_assert" && (args.len() == 1 || args.len() == 2) => {
+            Stmt::Expr(stmt_expr)
+                if matches!(&*stmt_expr.value,
+                    Expr::Call(ExprCall { func, arguments: Arguments { args, .. }, .. })
+                    if matches!(&**func, Expr::Name(name) if name.id.as_str() == "prod_assert")
+                    && (args.len() == 1 || args.len() == 2)
+                ) =>
+            {
+                // Destructure in body; the guard already verified the shape.
+                let expr_range = stmt_expr.range;
+                let Expr::Call(call) = *stmt_expr.value else {
+                    unreachable!("guarded by matches! above")
+                };
+                let call_range = call.range;
+                let args = call.arguments.args;
                 let (test, msg) = if args.len() == 1 {
                     (args[0].clone(), None)
                 } else if args.len() == 2 {

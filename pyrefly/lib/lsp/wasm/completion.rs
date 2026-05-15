@@ -24,7 +24,6 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::types::Union;
 use pyrefly_util::thread_pool::ThreadPool;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprContext;
@@ -241,8 +240,8 @@ impl Transaction<'_> {
                     ..Default::default()
                 }));
             }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
+            Type::Union(u) => {
+                for member in &u.members {
                     Self::add_literal_completions_from_type(member, completions, in_string_literal);
                 }
             }
@@ -277,8 +276,8 @@ impl Transaction<'_> {
                     }));
                 }
             }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
+            Type::Union(u) => {
+                for member in &u.members {
                     Self::add_literal_completions_from_type_dedup(
                         member,
                         completions,

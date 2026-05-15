@@ -32,7 +32,6 @@ use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::TParams;
-use pyrefly_types::types::Union;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::ResultExt;
 use pyrefly_util::visit::Visit;
@@ -46,7 +45,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -68,7 +66,6 @@ use crate::binding::binding::MethodThatSetsAttr;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::signature_diff::render_signature_diff;
@@ -642,12 +639,12 @@ impl ClassField {
         self.instantiate_helper(&mut |ty| {
             ty.subst_self_type_mut(&self_type);
             match ty {
-                Type::Function(_)
-                | Type::Overload(_)
-                | Type::Forall(box Forall {
-                    body: Forallable::Function(_),
-                    ..
-                }) => ty.subst_mut_fn(&mut |q| mp.get(q).map(|ty| (*ty).clone())),
+                Type::Function(_) | Type::Overload(_) => {
+                    ty.subst_mut_fn(&mut |q| mp.get(q).map(|ty| (*ty).clone()))
+                }
+                Type::Forall(f) if matches!(f.body, Forallable::Function(_)) => {
+                    ty.subst_mut_fn(&mut |q| mp.get(q).map(|ty| (*ty).clone()))
+                }
                 _ => {
                     let mut qs: SmallSet<&Quantified> = SmallSet::new();
                     ty.collect_quantifieds(&mut qs);
@@ -1333,20 +1330,29 @@ fn make_bound_method_helper(
         !matches!(metadata.kind, FunctionKind::CallbackProtocol(_)) && should_bind(metadata)
     };
     let func = match attr {
-        Type::Forall(box Forall {
-            tparams,
-            body: Forallable::Function(func),
-        }) if should_bind2(&func.metadata) => BoundMethodType::Forall(Forall {
-            tparams,
-            body: func,
-        }),
+        Type::Forall(f)
+            if let Forallable::Function(func) = &f.body
+                && should_bind2(&func.metadata) =>
+        {
+            // Repeated match because pattern guards cannot move out of bindings.
+            let Forall {
+                tparams,
+                body: Forallable::Function(func),
+            } = *f
+            else {
+                unreachable!("guarded by if let above")
+            };
+            BoundMethodType::Forall(Forall {
+                tparams,
+                body: func,
+            })
+        }
         Type::Function(func) if should_bind2(&func.metadata) => BoundMethodType::Function(*func),
         Type::Overload(overload) if should_bind2(&overload.metadata) => {
             BoundMethodType::Overload(overload)
         }
-        Type::Union(box Union {
-            members: ref ts, ..
-        }) => {
+        Type::Union(ref f) => {
+            let ts = &f.members;
             let mut bound_methods = Vec::with_capacity(ts.len());
             for t in ts {
                 match make_bound_method_helper(heap, obj.clone(), t.clone(), should_bind) {
@@ -1570,7 +1576,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        ErrorKind::InvalidAnnotation,
                         "Final attribute declared in class body must be initialized with a value or in `__init__`".to_owned(),
                     );
                 }
@@ -1607,7 +1613,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::UnannotatedProtocolMember),
+                        ErrorKind::UnannotatedProtocolMember,
                         format!(
                             "Protocol member `{}` must have an explicit type annotation",
                             name,
@@ -1822,7 +1828,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                ErrorKind::InvalidAnnotation,
                 "`Final` may not be nested inside `ClassVar`".to_owned(),
             );
         }
@@ -2015,7 +2021,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::ProtocolImplicitlyDefinedAttribute),
+                        ErrorKind::ProtocolImplicitlyDefinedAttribute,
                         "Protocol variables must be explicitly declared in the class body"
                             .to_owned(),
                     );
@@ -2023,7 +2029,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::ImplicitlyDefinedAttribute,),
+                        ErrorKind::ImplicitlyDefinedAttribute,
                         format!("Attribute `{}` is implicitly defined by assignment in method `{method_name}`, which is not a constructor", &name),
                     );
                 }
@@ -2048,7 +2054,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                ErrorKind::BadClassDefinition,
                 format!("NamedTuple field name may not start with an underscore: `{name}`"),
             );
         }
@@ -2061,17 +2067,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && !allowed_slots.contains::<Name>(name)
         {
             let class_name = class.name();
-            self.error(
+            self.error_with_context(
                 errors,
                 range,
-                ErrorInfo::new(
-                    ErrorKind::MissingAttribute,
-                    None::<&dyn Fn() -> ErrorContext>,
-                ),
+                ErrorKind::MissingAttribute,
                 format!(
                     "Object of class `{class_name}` has no attribute `{name}` \
                      (not declared in `__slots__`)"
                 ),
+                None,
             );
         }
 
@@ -2102,18 +2106,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // We interpret `self.foo = None` to mean the type of foo is None or some unknown type.
             (None, Expr::NoneLiteral(_)) => {
-                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::ImplicitAnyAttribute), "This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.".to_owned());
+                self.error(errors, x.range(), ErrorKind::ImplicitAnyAttribute, "This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.".to_owned());
                 self.union(self.heap.mk_none(), self.heap.mk_any_implicit())
             }
             // We interpret `self.foo = ()` to mean the type of foo is an arbitrary-length tuple,
             // since an empty tuple base attr almost always means to hold a tuple of something in
-            // derived classes. We exclude `__match_args__` because its value is semantically
-            // significant: `__match_args__ = ()` means "no positional match arguments" and
-            // should have type `tuple[()]`, not `tuple[Any, ...]`.
+            // derived classes. We also exclude `__match_args__` and `__slots__` because their values
+            // are semantically significant.
             (None, Expr::Tuple(ExprTuple { elts, .. }))
-                if elts.is_empty() && *name != dunder::MATCH_ARGS =>
+                if elts.is_empty() && *name != dunder::MATCH_ARGS && *name != dunder::SLOTS =>
             {
-                self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::ImplicitAnyAttribute), "This expression is implicitly inferred to be `tuple[Any, ...]`. Please provide an explicit type annotation.".to_owned());
+                self.error(errors, x.range(), ErrorKind::ImplicitAnyAttribute, "This expression is implicitly inferred to be `tuple[Any, ...]`. Please provide an explicit type annotation.".to_owned());
                 self.heap.mk_unbounded_tuple(self.heap.mk_any_implicit())
             }
             (None, _) => self.expr_infer(x, errors),
@@ -2542,7 +2545,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                        ErrorKind::InvalidAnnotation,
                         format!("`{q}` may not be used for NamedTuple members",),
                     );
                 }
@@ -2557,7 +2560,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    ErrorKind::InvalidAnnotation,
                     format!("`{q}` may only be used for TypedDict members"),
                 );
             }
@@ -2662,7 +2665,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    ErrorKind::InvalidTypeVar,
                     format!(
                         "Attribute `{}` cannot depend on type variable `{}`, which is not in the scope of class `{}`",
                         name,
@@ -2727,10 +2730,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 forall(Forallable::Function((**func).clone()), &quantified, None)
                     .map_or(ty, |forall| self.heap.mk_forall(forall))
             }
-            Type::Forall(box Forall { tparams, body }) => {
-                forall(body.clone(), &quantified, Some(tparams))
-                    .map_or(ty, |forall| self.heap.mk_forall(forall))
-            }
+            Type::Forall(f) => forall(f.body.clone(), &quantified, Some(&f.tparams))
+                .map_or(ty, |forall| self.heap.mk_forall(forall)),
             Type::Overload(overload) => self.heap.mk_overload(Overload {
                 signatures: overload.signatures.clone().mapped(|sig| match &sig {
                     OverloadType::Function(func) => {
@@ -2817,9 +2818,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 //
                 // Both of these are heuristics that aren't guaranteed to be correct, but the dunder heuristic has usability benefits
                 // and the ClassVar heuristic aligns us with existing type checkers.
-                if let Type::Callable(box callable) = ty {
+                if let Type::Callable(callable) = ty {
                     ty = self.heap.mk_function(Function {
-                        signature: callable,
+                        signature: *callable,
                         metadata: FuncMetadata::def(self.module(), None, field_name.clone()),
                     })
                 }
@@ -3099,7 +3100,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    ErrorKind::BadTypedDictKey,
                     format!(
                         "TypedDict field `{field_name}` in `{}` cannot be marked read-only; parent TypedDict `{}` defines it as mutable",
                         child_cls.name(),
@@ -3112,7 +3113,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    ErrorKind::BadTypedDictKey,
                     format!(
                         "TypedDict field `{field_name}` in `{}` must remain required because parent TypedDict `{}` defines it as required",
                         child_cls.name(),
@@ -3125,7 +3126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                    ErrorKind::BadTypedDictKey,
                     format!(
                         "TypedDict field `{field_name}` in `{}` cannot be made required; parent TypedDict `{}` defines it as non-required",
                         child_cls.name(),
@@ -3138,7 +3139,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                ErrorKind::BadTypedDictKey,
                 format!(
                     "TypedDict field `{field_name}` in `{}` cannot be made non-required; parent TypedDict `{}` defines it as required",
                     child_cls.name(),
@@ -3276,7 +3277,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadOverride),
+                    ErrorKind::BadOverride,
                     format!("Cannot override named tuple element `{field_name}`"),
                 );
             }
@@ -3294,7 +3295,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadOverride),
+                    ErrorKind::BadOverride,
                     format!(
                         "`{}` is declared as final in parent class `{}`",
                         field_name,
@@ -3310,7 +3311,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::BadOverride),
+                            ErrorKind::BadOverride,
                             format!(
                                 "Instance variable `{}.{}` overrides ClassVar of the same name in parent class `{}`",
                                 cls.name(),
@@ -3323,7 +3324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::BadOverride),
+                            ErrorKind::BadOverride,
                             format!(
                                 "ClassVar `{}.{}` overrides instance variable of the same name in parent class `{}`",
                                 cls.name(),
@@ -3446,39 +3447,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut |got, want| self.is_subset_eq_with_reason(got, want),
             );
             let error = match attr_check {
-                Err(
-                    box (AttrSubsetError::Covariant {
-                        subset_error: SubsetError::PosParamName(child, parent),
-                        ref got,
-                        ref want,
-                        ..
-                    }
-                    | AttrSubsetError::Invariant {
-                        subset_error: SubsetError::PosParamName(child, parent),
-                        ref got,
-                        ref want,
-                        ..
-                    }
-                    | AttrSubsetError::Contravariant {
-                        subset_error: SubsetError::PosParamName(child, parent),
-                        ref got,
-                        ref want,
-                        ..
-                    }),
-                ) if {
-                    // Only use PosParamName when both signatures have the same
-                    // number of parameters. When the counts differ, the name
-                    // mismatch is an artifact of comparing misaligned parameter
-                    // lists (e.g., a lambda whose `self` wasn't stripped by
-                    // method binding). In that case, fall through to BadOverride
-                    // so we get the signature diff.
-                    let got_sigs = got.callable_signatures();
-                    let want_sigs = want.callable_signatures();
-                    got_sigs.len() == 1
-                        && want_sigs.len() == 1
-                        && got_sigs[0].arg_counts().positional.max
-                            == want_sigs[0].arg_counts().positional.max
-                } =>
+                Err(ref e)
+                    if let (Some((child, parent)), Some(got), Some(want)) = (
+                        match &**e {
+                            AttrSubsetError::Covariant {
+                                subset_error: SubsetError::PosParamName(c, p),
+                                ..
+                            }
+                            | AttrSubsetError::Invariant {
+                                subset_error: SubsetError::PosParamName(c, p),
+                                ..
+                            }
+                            | AttrSubsetError::Contravariant {
+                                subset_error: SubsetError::PosParamName(c, p),
+                                ..
+                            } => Some((c, p)),
+                            _ => None,
+                        },
+                        match &**e {
+                            AttrSubsetError::Covariant { got, .. }
+                            | AttrSubsetError::Invariant { got, .. }
+                            | AttrSubsetError::Contravariant { got, .. } => Some(got),
+                            _ => None,
+                        },
+                        match &**e {
+                            AttrSubsetError::Covariant { want, .. }
+                            | AttrSubsetError::Invariant { want, .. }
+                            | AttrSubsetError::Contravariant { want, .. } => Some(want),
+                            _ => None,
+                        },
+                    ) && {
+                        // Only use PosParamName when both signatures have the same
+                        // number of parameters. When the counts differ, the name
+                        // mismatch is an artifact of comparing misaligned parameter
+                        // lists (e.g., a lambda whose `self` wasn't stripped by
+                        // method binding). In that case, fall through to BadOverride
+                        // so we get the signature diff.
+                        let got_sigs = got.callable_signatures();
+                        let want_sigs = want.callable_signatures();
+                        got_sigs.len() == 1
+                            && want_sigs.len() == 1
+                            && got_sigs[0].arg_counts().positional.max
+                                == want_sigs[0].arg_counts().positional.max
+                    } =>
                 {
                     Some(OverrideError {
                         kind: ErrorKind::BadOverrideParamName,
@@ -3551,24 +3562,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 diff_lines: extra_lines,
             }) = error
             {
-                let mut msg = vec1![
-                    format!(
-                        "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
-                        cls.name(),
-                        field_name,
-                        parent.name()
-                    ),
-                    message,
-                ];
-                msg.extend(extra_lines);
-                errors.add(range, ErrorInfo::Kind(kind), msg);
+                let mut builder = errors
+                    .error_builder(
+                        range,
+                        kind,
+                        format!(
+                            "Class member `{}.{}` overrides parent class `{}` in an inconsistent manner",
+                            cls.name(),
+                            field_name,
+                            parent.name()
+                        ),
+                    )
+                    .with_detail(message);
+                for line in extra_lines {
+                    builder = builder.with_detail(line);
+                }
+                builder.emit();
             }
         }
         if is_explicit_override && !parent_attr_found && !parent_has_any {
             self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadOverride),
+                    ErrorKind::BadOverride,
                     format!(
                         "Class member `{}.{}` is marked as an override, but no parent class has a matching attribute",
                         cls.name(),
@@ -3587,7 +3603,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::MissingOverrideDecorator),
+                ErrorKind::MissingOverrideDecorator,
                 format!(
                     "Class member `{}.{}` overrides a member in a parent class but is missing an `@override` decorator",
                     cls.name(),
@@ -3681,24 +3697,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // intersection is produced (or `Never` if the types are disjoint), then there was
                 // no common base type, so the inheritance is inconsistent.
                 if matches!(intersect, Type::Intersect(_) | Type::Never(_)) {
-                    let mut error_msg = vec1![
-                        format!(
-                            "Field `{field_name}` has inconsistent types inherited from multiple base classes"
-                        ),
-                        "Inherited types include:".to_owned()
-                    ];
+                    let mut builder = errors
+                        .error_builder(
+                            cls.range(),
+                            ErrorKind::InconsistentInheritance,
+                            format!(
+                                "Field `{field_name}` has inconsistent types inherited from multiple base classes"
+                            ),
+                        )
+                        .with_detail("Inherited types include:".to_owned());
                     for info in inherited_field_infos_by_ancestor.iter() {
-                        error_msg.push(format!(
+                        builder = builder.with_detail(format!(
                             "  `{}` from `{}`",
                             self.for_display(info.ty.clone()),
                             info.class.name()
                         ));
                     }
-                    errors.add(
-                        cls.range(),
-                        ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
-                        error_msg,
-                    );
+                    builder.emit();
                 } else {
                     for info in inherited_field_infos_by_ancestor {
                         // Read-write fields should check that parent field's type
@@ -3711,7 +3726,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 cls.range(),
-                                ErrorInfo::Kind(ErrorKind::InconsistentInheritance),
+                                ErrorKind::InconsistentInheritance,
                                 format!(
                                     "Field `{field_name}` is declared `{}` in ancestor `{}`, which is not assignable to the type `{}` implied by multiple inheritance",
                                     info.ty,
@@ -4343,11 +4358,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, attr_name) {
             let field = field.value;
             if field.is_final() {
-                let msg = vec1![
-                    format!("Cannot set field `{attr_name}`"),
-                    ReadOnlyReason::Final(IsFinalVariableInitialized::No).error_message()
-                ];
-                errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::ReadOnly,
+                        format!("Cannot set field `{attr_name}`"),
+                    )
+                    .with_detail(
+                        ReadOnlyReason::Final(IsFinalVariableInitialized::No).error_message(),
+                    )
+                    .emit();
             }
         }
     }
@@ -4368,11 +4388,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         match class_attr {
             ClassAttribute::NoAccess(e) => {
-                self.error(
+                self.error_with_context(
                     errors,
                     range,
-                    ErrorInfo::new(ErrorKind::NoAccess, context),
+                    ErrorKind::NoAccess,
                     e.to_error_msg(attr_name),
+                    context,
                 );
                 *should_narrow = false;
             }
@@ -4407,11 +4428,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         narrowed_types,
                     );
                 } else if should_raise_error {
-                    let msg = vec1![
-                        format!("Cannot set field `{attr_name}`"),
-                        reason.error_message()
-                    ];
-                    errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+                    errors
+                        .error_builder(
+                            range,
+                            ErrorKind::ReadOnly,
+                            format!("Cannot set field `{attr_name}`"),
+                        )
+                        .with_detail(reason.error_message())
+                        .emit();
                     *should_narrow = false;
                 }
             }
@@ -4459,11 +4483,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     *should_narrow = false;
                 } else {
                     let e = NoAccessReason::SettingReadOnlyProperty(cls);
-                    self.error(
+                    self.error_with_context(
                         errors,
                         range,
-                        ErrorInfo::new(ErrorKind::ReadOnly, context),
+                        ErrorKind::ReadOnly,
                         e.to_error_msg(attr_name),
+                        context,
                     );
                     *should_narrow = false;
                 }
@@ -4487,11 +4512,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let e = NoAccessReason::SettingReadOnlyDescriptor(
                             class_type.class_object().dupe(),
                         );
-                        self.error(
+                        self.error_with_context(
                             errors,
                             range,
-                            ErrorInfo::new(ErrorKind::ReadOnly, context),
+                            ErrorKind::ReadOnly,
                             e.to_error_msg(attr_name),
+                            context,
                         );
                     }
                     DescriptorBase::ClassDef(_) => {
@@ -4526,19 +4552,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         match class_attr {
             ClassAttribute::NoAccess(reason) => {
-                self.error(
+                self.error_with_context(
                     errors,
                     range,
-                    ErrorInfo::new(ErrorKind::NoAccess, context),
+                    ErrorKind::NoAccess,
                     reason.to_error_msg(attr_name),
+                    context,
                 );
             }
             ClassAttribute::ReadOnly(_, reason) => {
-                let msg = vec1![
-                    format!("Cannot delete field `{attr_name}`"),
-                    reason.error_message()
-                ];
-                errors.add(range, ErrorInfo::Kind(ErrorKind::ReadOnly), msg);
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::ReadOnly,
+                        format!("Cannot delete field `{attr_name}`"),
+                    )
+                    .with_detail(reason.error_message())
+                    .emit();
             }
             ClassAttribute::ReadWrite(..)
             | ClassAttribute::Property(..)
@@ -4560,10 +4590,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .mk_class_type(self.as_class_type_unchecked(child_cls));
         let filter_type = |ty: Type| -> Option<Type> {
             match ty {
-                Type::BoundMethod(box BoundMethod {
-                    obj,
-                    func: BoundMethodType::Overload(overload),
-                }) => {
+                Type::BoundMethod(bm) if matches!(bm.func, BoundMethodType::Overload(_)) => {
+                    // Repeated match because pattern guards cannot move out of bindings.
+                    let BoundMethod {
+                        obj,
+                        func: BoundMethodType::Overload(overload),
+                    } = *bm
+                    else {
+                        unreachable!("guarded by matches! above")
+                    };
                     let self_param = |sig: &OverloadType| match sig {
                         OverloadType::Function(f) => f.signature.get_first_param(),
                         OverloadType::Forall(forall) => forall.body.signature.get_first_param(),
@@ -4834,11 +4869,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(
                 self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
                     .unwrap_or_else(|e| {
-                        self.error(
+                        self.error_with_context(
                             errors,
                             x.range,
-                            ErrorInfo::new(ErrorKind::NoAccess, None),
+                            ErrorKind::NoAccess,
                             e.to_error_msg(&dunder::GET),
+                            None,
                         )
                     }),
             )
@@ -4861,11 +4897,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(
                 self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
                     .unwrap_or_else(|e| {
-                        self.error(
+                        self.error_with_context(
                             errors,
                             x.range,
-                            ErrorInfo::new(ErrorKind::NoAccess, None),
+                            ErrorKind::NoAccess,
                             e.to_error_msg(&dunder::SET),
+                            None,
                         )
                     }),
             )

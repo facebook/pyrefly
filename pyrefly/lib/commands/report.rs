@@ -20,6 +20,7 @@ use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::PropertyRole;
@@ -64,6 +65,8 @@ use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::export::exports::ExportLocation;
+use crate::module::finder::DirEntryCache;
+use crate::module::finder::find_import_filtered;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -583,6 +586,16 @@ impl ReportArgs {
         }
     }
 
+    /// Classify an annotation slot from resolver output. Bare qualifiers
+    /// (e.g. `Final`) have unresolved annotation types but still count as typed.
+    fn classify_annotation_rank(has_annotation: bool, resolved_is_known: Option<bool>) -> SlotRank {
+        match resolved_is_known {
+            Some(is_known) => SlotRank::classify(true, is_known),
+            None if has_annotation => SlotRank::Typed,
+            None => SlotRank::Untyped,
+        }
+    }
+
     /// Returns true if the name is public: does not start with `_`, or is a dunder (`__x__`).
     /// Matches typestats `is_public_name`.
     fn is_public_name(name: &str) -> bool {
@@ -839,12 +852,12 @@ impl ReportArgs {
                         }
                         _ => None,
                     };
-                    let is_type_known = annotation_text.is_some()
-                        && answers
-                            .get_idx(*annot_idx)
-                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
-                            .unwrap_or(false);
-                    let slots = SlotRank::classify(annotation_text.is_some(), is_type_known).into();
+                    let resolved_ty = answers
+                        .get_idx(*annot_idx)
+                        .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known));
+                    let slots =
+                        Self::classify_annotation_rank(annotation_text.is_some(), resolved_ty)
+                            .into();
                     variables.push(Variable {
                         name: qualified_name,
                         annotation: annotation_text,
@@ -1038,15 +1051,13 @@ impl ReportArgs {
                 }
                 _ => None,
             });
-            let is_type_known = annotation_text.is_some()
-                && annotation_idx
-                    .and_then(|idx| {
-                        answers
-                            .get_idx(idx)
-                            .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
-                    })
-                    .unwrap_or(false);
-            let slots = SlotRank::classify(annotation_text.is_some(), is_type_known).into();
+            let resolved_ty = annotation_idx.and_then(|idx| {
+                answers
+                    .get_idx(idx)
+                    .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
+            });
+            let slots =
+                Self::classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
 
             attrs.push(Variable {
                 name: qualified_name,
@@ -1155,10 +1166,14 @@ impl ReportArgs {
                     None
                 };
 
-                let is_return_type_known = return_annotation.is_some()
-                    && answers
+                let resolved_return_ty = return_annotation.as_ref().and_then(|_| {
+                    answers
                         .get_type_at(return_idx)
-                        .is_some_and(|t| Self::is_type_known(&t));
+                        .map(|t| Self::is_type_known(&t))
+                });
+                let is_return_type_known =
+                    Self::classify_annotation_rank(return_annotation.is_some(), resolved_return_ty)
+                        == SlotRank::Typed;
 
                 let mut parameters = Vec::new();
                 let implicit_receiver =
@@ -1201,9 +1216,7 @@ impl ReportArgs {
                         .as_ref()
                         .map(|ann| module.code_at(ann.range()).to_owned());
 
-                    let is_param_type_known = if is_self {
-                        true
-                    } else if param.annotation.is_some() {
+                    let resolved_param_ty = if param.annotation.is_some() {
                         let annot_key =
                             KeyAnnotation::Annotation(ShortIdentifier::new(&param.name));
                         // Use fallible lookup to handle @no_type_check functions gracefully.
@@ -1213,10 +1226,14 @@ impl ReportArgs {
                             .key_to_idx_hashed_opt(Hashed::new(&annot_key))
                             .and_then(|annot_idx| answers.get_idx(annot_idx))
                             .and_then(|awt| awt.annotation.ty.as_ref().map(Self::is_type_known))
-                            .unwrap_or(false)
                     } else {
-                        false
+                        None
                     };
+                    let is_param_type_known = is_self
+                        || Self::classify_annotation_rank(
+                            param_annotation.is_some(),
+                            resolved_param_ty,
+                        ) == SlotRank::Typed;
 
                     // Implicit dunder params are always excluded, even when annotated.
                     let is_implicit_param = !is_self
@@ -1865,24 +1882,54 @@ impl ReportArgs {
             SmallSet::new()
         };
 
-        // When prefer_stubs is true, build a mapping from .pyi paths to their
-        // corresponding .py handles.
-        let pyi_to_py: HashMap<PathBuf, &Handle> = if prefer_stubs {
+        // Map each .pyi to its corresponding .py: first co-located,
+        // then by module-name lookup in site-package-path.
+        let pyi_to_py: HashMap<PathBuf, Handle> = if prefer_stubs {
             let py_by_path: HashMap<PathBuf, &Handle> = handles
                 .iter()
                 .filter(|h| !h.path().is_interface())
                 .map(|h| (h.path().as_path().to_path_buf(), h))
                 .collect();
-            handles
+            let mut map: HashMap<PathBuf, Handle> = handles
                 .iter()
                 .filter(|h| h.path().is_interface())
                 .filter_map(|h| {
                     let py_path = h.path().as_path().with_extension("py");
                     py_by_path
                         .get(&py_path)
-                        .map(|&py_h| (h.path().as_path().to_path_buf(), py_h))
+                        .map(|&py_h| (h.path().as_path().to_path_buf(), py_h.clone()))
                 })
-                .collect()
+                .collect();
+            // Fall back to site-package-path for stubs-only packages.
+            let mut external_handles = Vec::new();
+            for h in handles.iter().filter(|h| h.path().is_interface()) {
+                let pyi_path = h.path().as_path().to_path_buf();
+                if map.contains_key(&pyi_path) {
+                    continue;
+                }
+                let config = holder
+                    .as_ref()
+                    .config_finder()
+                    .python_file(h.module_kind(), h.path());
+                if let Some(py_module_path) = find_import_filtered(
+                    &config,
+                    h.module(),
+                    None,
+                    Some(ModuleStyle::Executable),
+                    &DirEntryCache::new(true),
+                    None,
+                )
+                .finding()
+                {
+                    let py_handle = config.handle_from_module_path(py_module_path);
+                    external_handles.push(py_handle.clone());
+                    map.insert(pyi_path, py_handle);
+                }
+            }
+            if !external_handles.is_empty() {
+                transaction.run(&external_handles, Require::Everything, None);
+            }
+            map
         } else {
             HashMap::new()
         };
@@ -2307,6 +2354,37 @@ mod tests {
         compare_snapshot("partial_stub.expected.json", &report);
     }
 
+    /// Stubs-only packages: .py discovered via site-package-path, merged like co-located stubs.
+    #[test]
+    fn test_report_external_stub_merge() {
+        use pyrefly_config::config::ConfigFile;
+
+        let site_dir = tempfile::TempDir::new().unwrap();
+        let py_code = load_test_file("partial_stub.py");
+        std::fs::write(site_dir.path().join("test.py"), &py_code).unwrap();
+
+        let mut config = ConfigFile::default();
+        config.python_environment.site_package_path = Some(vec![site_dir.path().to_path_buf()]);
+        config.interpreters.skip_interpreter_query = true;
+        config.configure();
+
+        let py_module_path = find_import_filtered(
+            &config,
+            ModuleName::from_str("test"),
+            None,
+            Some(ModuleStyle::Executable),
+            &DirEntryCache::new(true),
+            None,
+        )
+        .finding()
+        .expect("should discover test.py in site-packages");
+        assert_eq!(py_module_path.as_path(), site_dir.path().join("test.py"));
+
+        // the merge should produce the same report as the co-located case
+        let report = build_stub_module_report("partial_stub.pyi", "partial_stub.py");
+        compare_snapshot("partial_stub.expected.json", &report);
+    }
+
     /// When both test.py and test.pyi exist, the .py file is shadowed.
     #[test]
     fn test_pyi_shadows_py_in_report() {
@@ -2668,6 +2746,54 @@ mod tests {
     fn test_report_partial_any() {
         let report = build_module_report_for_test("partial_any.py");
         compare_snapshot("partial_any.expected.json", &report);
+    }
+
+    /// Bare `Final` should be typed, not `Any`
+    #[test]
+    fn test_report_bare_final() {
+        let report = build_module_report_for_test("bare_final.py");
+        let attr_slots = |name: &str| {
+            report
+                .symbol_reports
+                .iter()
+                .find_map(|s| match s {
+                    SymbolReport::Attr { name: n, slots, .. } if n == name => Some(*slots),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no attr symbol named {name}"))
+        };
+
+        for name in [
+            "test.golden",
+            "test.golden_ratio",
+            "test.pi",
+            "test.name",
+            "test.Constants.rate",
+            "test.Constants.count",
+        ] {
+            let slots = attr_slots(name);
+            assert_eq!(slots.n_typable, 1, "{name} should have 1 typable slot");
+            assert_eq!(slots.n_typed, 1, "{name} should be typed");
+            assert_eq!(slots.n_any, 0, "{name} should not be any");
+        }
+    }
+
+    #[test]
+    fn test_report_bare_list_annotations() {
+        let report = build_module_report_for_test("bare_list_annotations.py");
+        let function_slots = report
+            .symbol_reports
+            .iter()
+            .find_map(|s| match s {
+                SymbolReport::Function { name, slots, .. } if name == "test.f" => Some(*slots),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no function symbol named test.f"));
+
+        assert_eq!(function_slots.n_typable, 2);
+        assert_eq!(function_slots.n_typed, 2);
+        assert_eq!(function_slots.n_any, 0);
+        assert_eq!(function_slots.n_untyped, 0);
     }
 
     #[test]

@@ -22,7 +22,6 @@
 #![deny(clippy::inefficient_to_string)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
-#![feature(const_type_name)]
 
 use std::fmt::Display;
 use std::path::Path;

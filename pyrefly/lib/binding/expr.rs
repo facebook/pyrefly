@@ -1092,7 +1092,7 @@ impl<'a> BindingsBuilder<'a> {
             {
                 // Only go inside the first argument to Annotated, the rest are non-type metadata.
                 self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
-                // We can't bind a mut box in the guard (sadly), so force unwrapping it here
+                // We can't destructure a mutable Box in the guard, so force unwrapping it here
                 let tup = slice.as_tuple_expr_mut().unwrap();
                 self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
                 for e in tup.elts[1..].iter_mut() {

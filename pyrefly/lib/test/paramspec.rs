@@ -823,6 +823,41 @@ call_with_retry(compute, 3, 1, "hello")
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3054
+testcase!(
+    test_paramspec_forwarding_with_overloaded_callable,
+    r#"
+from typing import ParamSpec, overload, Callable, Any
+
+P = ParamSpec("P")
+
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    /,
+) -> None: ...
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    callable: Callable[P, Any],
+    /,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> None: ...
+def assert_raises(*args: Any, **kwargs: Any) -> None:
+    pass
+
+@overload
+def compute(x: int, y: int) -> int: ...
+@overload
+def compute(x: str, y: str) -> str: ...
+def compute(x: int | str, y: int | str) -> int | str:
+    return x
+
+assert_raises(ValueError, compute, "hello", "world")
+"#,
+);
+
 testcase!(
     test_paramspec_forwarding_prefix_param_keyword,
     r#"

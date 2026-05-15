@@ -106,6 +106,56 @@ for topic, token in items:
 );
 
 testcase!(
+    test_loop_assigned_heterogeneous_inner_dict,
+    r#"
+import datetime
+
+def bin_tasks(dates: list[datetime.date]) -> None:
+    bins = {}
+    for d in dates:
+        bins[d] = {"start": d, "tasks": []}
+
+    for val in bins.values():
+        for task in val["tasks"]:
+            print(task)
+"#,
+);
+
+testcase!(
+    test_loop_assigned_inner_dict_does_not_freeze_first_shape,
+    r#"
+from typing import assert_type
+
+d = {}
+d[0] = {"x": 1}
+d[1] = {"y": 1}
+
+assert_type(d[0], dict[str, int])
+assert_type(d[1], dict[str, int])
+"#,
+);
+
+testcase!(
+    test_loop_assigned_inner_dict_union_hint_with_partial_var,
+    r#"
+from typing import reveal_type
+
+def f(flag: bool) -> None:
+    bins = {}
+    if flag:
+        bins = {"a": {"xs": [1]}}
+
+    bins["b"] = {"xs": []}
+
+    # The concrete branch keeps the inner literal on the regular dict path rather than
+    # the lone-bare-partial anonymous TypedDict path, but the empty list is not pinned
+    # through this mixed flow hint.
+    reveal_type(bins["b"])  # E: revealed type: dict[str, list[Unknown]]
+    reveal_type(bins["b"]["xs"])  # E: revealed type: list[Unknown]
+"#,
+);
+
+testcase!(
     test_large_dict_literal_mixed_none,
     r#"
 # Regression test: dict literals with many entries of mixed str | None values

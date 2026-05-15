@@ -12,7 +12,6 @@ use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitStyle;
-use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tensor::TensorType;
@@ -29,7 +28,6 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -41,7 +39,6 @@ use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::types::literal::Lit;
@@ -98,9 +95,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check if at least one operand is a symbolic dimension type or literal int
         let is_dim_operand = |ty: &Type| match ty {
             Type::Dim(_) | Type::Size(_) => true,
-            Type::Literal(box Literal {
-                value: Lit::Int(_), ..
-            }) => true,
+            Type::Literal(f) if matches!(f.value, Lit::Int(_)) => true,
             Type::QuantifiedValue(q) => {
                 matches!(q.kind, QuantifiedKind::TypeVar)
             }
@@ -117,9 +112,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Dim wraps a dimension type (could be SizeExpr, Quantified, etc.)
                     Some((**inner_ty).clone())
                 }
-                Type::Literal(box Literal {
-                    value: Lit::Int(n), ..
-                }) => {
+                Type::Literal(f) if let Lit::Int(n) = &f.value => {
                     // Convert literal to SizeExpr
                     n.as_i64()
                         .map(|val| self.heap.mk_size(SizeExpr::Literal(val)))
@@ -156,17 +149,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Otherwise (e.g., Dim-bounded type parameters), return unwrapped dimension type.
         if matches!(lhs, Type::Dim(_)) || matches!(rhs, Type::Dim(_)) {
             Some(self.heap.mk_dim(result_ty))
-        } else if matches!(
-            lhs,
-            Type::Literal(box Literal {
-                value: Lit::Int(_), ..
-            })
-        ) && matches!(
-            rhs,
-            Type::Literal(box Literal {
-                value: Lit::Int(_), ..
-            })
-        ) {
+        } else if matches!(lhs, Type::Literal(f) if matches!(f.value, Lit::Int(_)))
+            && matches!(rhs, Type::Literal(f) if matches!(f.value, Lit::Int(_)))
+        {
             // Both operands are Literal[int], so convert SizeExpr::Literal back to Literal[int]
             if let Type::Size(SizeExpr::Literal(n)) = &result_ty {
                 Some(Lit::Int(LitInt::new(*n)).to_implicit_type())
@@ -228,11 +213,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|(dunder, _, _)| format!("`{dunder}`"))
                 .collect::<Vec<_>>()
                 .join(" or ");
-            self.error(
+            self.error_with_context(
                 errors,
                 range,
-                ErrorInfo::Context(&context),
+                ErrorKind::UnsupportedOperation,
                 format!("Cannot find {dunders}"),
+                Some(&context),
             )
         }
     }
@@ -255,19 +241,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap
                     .mk_unpacked_tuple(Vec::new(), self.heap.mk_tuple(l.clone()), r.clone())
             }
-            (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Concrete(r)) => {
+            (Tuple::Unpacked(l), Tuple::Concrete(r)) => {
+                let (l_prefix, l_middle, l_suffix) = &**l;
                 let mut new_suffix = l_suffix.clone();
                 new_suffix.extend(r.clone());
                 self.heap
                     .mk_unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
             }
-            (Tuple::Concrete(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
+            (Tuple::Concrete(l), Tuple::Unpacked(r)) => {
+                let (r_prefix, r_middle, r_suffix) = &**r;
                 let mut new_prefix = l.clone();
                 new_prefix.extend(r_prefix.clone());
                 self.heap
                     .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
             }
-            (Tuple::Unbounded(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
+            (Tuple::Unbounded(l), Tuple::Unpacked(r)) => {
+                let (r_prefix, r_middle, r_suffix) = &**r;
                 let mut middle = r_prefix.clone();
                 middle.push((**l).clone());
                 middle.push(
@@ -280,7 +269,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     r_suffix.clone(),
                 )
             }
-            (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Unbounded(r)) => {
+            (Tuple::Unpacked(l), Tuple::Unbounded(r)) => {
+                let (l_prefix, l_middle, l_suffix) = &**l;
                 let mut middle = l_suffix.clone();
                 middle.push((**r).clone());
                 middle.push(
@@ -293,10 +283,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Vec::new(),
                 )
             }
-            (
-                Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)),
-                Tuple::Unpacked(box (r_prefix, r_middle, r_suffix)),
-            ) => {
+            (Tuple::Unpacked(l), Tuple::Unpacked(r)) => {
+                let (l_prefix, l_middle, l_suffix) = &**l;
+                let (r_prefix, r_middle, r_suffix) = &**r;
                 let mut middle = l_suffix.clone();
                 middle.extend(r_prefix.clone());
                 middle.push(
@@ -318,18 +307,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn try_tuple_repeat(&self, lhs: &Type, rhs: &Type) -> Option<Type> {
         let (elements, repeats) = match (lhs, rhs) {
-            (
-                Type::Tuple(Tuple::Concrete(elts)),
-                Type::Literal(box Literal {
-                    value: Lit::Int(n), ..
-                }),
-            ) => (elts, n.as_i64()?),
-            (
-                Type::Literal(box Literal {
-                    value: Lit::Int(n), ..
-                }),
-                Type::Tuple(Tuple::Concrete(elts)),
-            ) => (elts, n.as_i64()?),
+            (Type::Tuple(Tuple::Concrete(elts)), Type::Literal(f))
+                if let Lit::Int(n) = &f.value =>
+            {
+                (elts, n.as_i64()?)
+            }
+            (Type::Literal(f), Type::Tuple(Tuple::Concrete(elts)))
+                if let Lit::Int(n) = &f.value =>
+            {
+                (elts, n.as_i64()?)
+            }
             _ => return None,
         };
         if repeats <= 0 {
@@ -396,7 +383,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 x.range,
-                ErrorInfo::Kind(ErrorKind::DivisionByZero),
+                ErrorKind::DivisionByZero,
                 format!(
                     "Cannot divide by zero: `{}` with a literal zero divisor",
                     x.op.as_str()
@@ -409,13 +396,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check if a type is exactly `Literal[0]` (either implicit or explicit).
     fn is_literal_zero(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Literal(box Literal {
-                value: Lit::Int(n),
-                ..
-            }) if *n == LitInt::new(0)
-        )
+        matches!(ty, Type::Literal(f) if f.value == Lit::Int(LitInt::new(0)))
     }
 
     fn binop_types(&self, x: &ExprBinOp, lhs: &Type, rhs: &Type, errors: &ErrorCollector) -> Type {
@@ -510,9 +491,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // if the exponent is a positive int, return int
                         // if the exponent is a negative int, return float
                         // if the exponent is unknown, call the `__pow__` method like normal
-                        Type::Literal(box Literal {
-                            value: Lit::Int(n), ..
-                        }) => {
+                        Type::Literal(f) if let Lit::Int(n) = &f.value => {
                             if *n == LitInt::new(0) {
                                 LitInt::new(1).to_implicit_type()
                             } else if *n < LitInt::new(0) {
@@ -600,7 +579,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 x.range,
-                ErrorInfo::Kind(ErrorKind::DivisionByZero),
+                ErrorKind::DivisionByZero,
                 format!(
                     "Cannot divide by zero: `{}=` with a literal zero divisor",
                     x.op.as_str()
@@ -869,7 +848,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => self.error(
                     errors,
                     x.range,
-                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                    ErrorKind::UnsupportedOperation,
                     context().format(),
                 ),
             }
@@ -928,7 +907,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::UnnecessaryComparison),
+                ErrorKind::UnnecessaryComparison,
                 format!(
                     "Identity comparison `{} {} {}` is always {}",
                     left_str,
@@ -939,23 +918,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         };
         let emit_instance_is_class_warning = |instance_str: &str, class_str: &str, is_op: bool| {
-            errors.add(
-                range,
-                ErrorInfo::Kind(ErrorKind::UnnecessaryComparison),
-                vec1![
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::UnnecessaryComparison,
                     format!(
                         "Identity comparison between an instance of `{}` and class `{}` is always {}",
                         instance_str,
                         class_str,
                         if is_op { "False" } else { "True" }
                     ),
-                    format!(
-                        "Did you mean to do `{}isinstance(..., {})`?",
-                        if is_op { "" } else { "not " },
-                        class_str,
-                    )
-                ],
-            );
+                )
+                .with_detail(format!(
+                    "Did you mean to do `{}isinstance(..., {})`?",
+                    if is_op { "" } else { "not " },
+                    class_str,
+                ))
+                .emit();
         };
 
         match (left, right) {
@@ -1028,7 +1007,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                    ErrorKind::UnsupportedOperation,
                     format!("Cannot broadcast tensor shapes: {}", err),
                 );
                 Type::any_error()

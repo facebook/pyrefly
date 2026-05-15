@@ -578,6 +578,9 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
+            // Reachability is checked before the guard is bound (below). This is
+            // intentional: if the pattern itself can never match the subject type,
+            // the case is unreachable regardless of any guard condition.
             if let Some(narrowing_subject) = match_subject.as_single()
                 && let Some((op, range)) = new_narrow_ops.0.get(narrowing_subject.name())
             {

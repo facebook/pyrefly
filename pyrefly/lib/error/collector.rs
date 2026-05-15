@@ -16,13 +16,10 @@ use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
-use vec1::Vec1;
-use vec1::vec1;
 
 use crate::config::error::ErrorConfig;
 use crate::config::error_kind::Severity;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::error::error::Error;
 use crate::error::error::ErrorQuickFix;
 use crate::error::style::ErrorStyle;
@@ -128,8 +125,12 @@ impl ErrorCollector {
         }
     }
 
+    pub fn is_active(&self) -> bool {
+        self.style != ErrorStyle::Never
+    }
+
     pub fn extend(&self, other: ErrorCollector) {
-        if self.style != ErrorStyle::Never {
+        if self.is_active() {
             self.errors.lock().extend(other.errors.into_inner());
         }
     }
@@ -143,7 +144,7 @@ impl ErrorCollector {
     ) -> ErrorBuilder<'_> {
         ErrorBuilder {
             collector: self,
-            active: self.style != ErrorStyle::Never,
+            active: self.is_active(),
             range,
             kind,
             header,
@@ -152,41 +153,6 @@ impl ErrorCollector {
             annotations: Vec::new(),
             quick_fixes: Vec::new(),
         }
-    }
-
-    pub fn add(&self, range: TextRange, info: ErrorInfo, msg: Vec1<String>) {
-        self.add_with_annotations_and_quick_fixes(range, info, msg, Vec::new(), Vec::new());
-    }
-
-    pub fn add_with_annotations_and_quick_fixes(
-        &self,
-        range: TextRange,
-        info: ErrorInfo,
-        mut msg: Vec1<String>,
-        annotations: Vec<(TextRange, String)>,
-        quick_fixes: Vec<ErrorQuickFix>,
-    ) {
-        if self.style == ErrorStyle::Never {
-            return;
-        }
-        let (kind, ctx_annotations) = match info {
-            ErrorInfo::Context(ctx) => {
-                let ctx = ctx();
-                let kind = ctx.as_error_kind();
-                let ctx_annotations = ctx.annotations();
-                msg.insert(0, ctx.format());
-                (kind, ctx_annotations)
-            }
-            ErrorInfo::Kind(kind) => (kind, Vec::new()),
-        };
-        let mut err = Error::new(self.module_info.dupe(), range, msg, kind);
-        for (range, label) in ctx_annotations.into_iter().chain(annotations) {
-            err = err.with_annotation(range, label);
-        }
-        for quick_fix in quick_fixes {
-            err = err.with_quick_fix(quick_fix);
-        }
-        self.errors.lock().push(err);
     }
 
     pub fn internal_error(&self, range: TextRange, header: String) {
@@ -329,6 +295,14 @@ impl ErrorBuilder<'_> {
         self
     }
 
+    /// Convenience method to append multiple detail lines.
+    pub fn with_details(mut self, details: Vec<String>) -> Self {
+        if self.active {
+            self.details.extend(details);
+        }
+        self
+    }
+
     /// Add a secondary labeled span.
     pub fn with_annotation(mut self, range: TextRange, label: String) -> Self {
         if self.active {
@@ -371,14 +345,13 @@ impl ErrorBuilder<'_> {
             ctx_annotations.extend(annotations);
             annotations = ctx_annotations;
         }
-        let msg = if details.is_empty() {
-            vec1![header]
-        } else {
-            let mut v = vec1![header];
-            v.extend(details);
-            v
-        };
-        let mut err = Error::new(self.collector.module_info.dupe(), self.range, msg, kind);
+        let mut err = Error::new(
+            self.collector.module_info.dupe(),
+            self.range,
+            header,
+            details,
+            kind,
+        );
         for (range, label) in annotations {
             err = err.with_annotation(range, label);
         }
@@ -402,7 +375,6 @@ mod tests {
     use pyrefly_util::prelude::SliceExt;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextSize;
-    use vec1::vec1;
 
     use super::*;
     use crate::config::error::ErrorDisplayConfig;
@@ -410,7 +382,7 @@ mod tests {
     use crate::config::error_kind::Severity;
 
     fn add(errors: &ErrorCollector, range: TextRange, kind: ErrorKind, msg: String) {
-        errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
+        errors.error_builder(range, kind, msg).emit();
     }
 
     #[test]

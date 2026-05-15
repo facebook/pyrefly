@@ -167,7 +167,6 @@ impl Val {
 mod extract {
     use crate::dimension::SizeExpr;
     use crate::literal::Lit;
-    use crate::literal::Literal;
     use crate::tensor::TensorShape;
     use crate::tuple::Tuple;
     use crate::types::Type;
@@ -213,9 +212,7 @@ mod extract {
     /// Extract literal int from Type::Literal(Lit::Int(...)).
     pub fn literal_int(ty: &Type) -> Option<i64> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Int(n), ..
-            }) => n.as_i64(),
+            Type::Literal(lit) if let Lit::Int(n) = &lit.value => n.as_i64(),
             _ => None,
         }
     }
@@ -231,9 +228,9 @@ mod extract {
             // Type variable or quantified
             Type::Quantified(_) | Type::Var(_) => Some(ty.clone()),
             // Literal int -> wrap in SizeExpr
-            Type::Literal(box Literal {
-                value: Lit::Int(n), ..
-            }) => n.as_i64().map(|v| Type::Size(SizeExpr::Literal(v))),
+            Type::Literal(lit) if let Lit::Int(n) = &lit.value => {
+                n.as_i64().map(|v| Type::Size(SizeExpr::Literal(v)))
+            }
             _ => None,
         }
     }
@@ -283,10 +280,7 @@ mod extract {
     /// Extract bool literal from Type::Literal(Lit::Bool(...)).
     pub fn bool_arg(ty: &Type) -> Option<bool> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Bool(b),
-                ..
-            }) => Some(*b),
+            Type::Literal(lit) if let Lit::Bool(b) = &lit.value => Some(*b),
             _ => None,
         }
     }
@@ -294,9 +288,7 @@ mod extract {
     /// Extract string literal from Type::Literal(Lit::Str(...)).
     pub fn string_arg(ty: &Type) -> Option<String> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Str(s), ..
-            }) => Some(s.to_string()),
+            Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(s.to_string()),
             _ => None,
         }
     }
@@ -2298,11 +2290,14 @@ fn eval_dsl_expr(
                     let vals: Vec<Val> = dims.iter().map(|d| dim_val(d.clone())).collect();
                     Ok(Val::List(vals))
                 }
-                TensorShape::Unpacked(box (prefix, middle, suffix)) => Ok(Val::Unpacked {
-                    prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
-                    middle: middle.clone(),
-                    suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
-                }),
+                TensorShape::Unpacked(unpacked) => {
+                    let (prefix, middle, suffix) = &**unpacked;
+                    Ok(Val::Unpacked {
+                        prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
+                        middle: middle.clone(),
+                        suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
+                    })
+                }
             }
         }
 

@@ -16,14 +16,13 @@ use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::typed_dict::TypedDict;
 use crate::types::Type;
-use crate::types::Union;
 
 /// Turn unions of unions into a flattened list for one union, and return the deduped list.
 fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
             match x {
-                Type::Union(box Union { members, .. }) => flatten(members, res),
+                Type::Union(u) => flatten(u.members, res),
                 Type::Never(_) => {}
                 _ => res.push(x),
             }
@@ -309,8 +308,13 @@ fn flatten_unpacked_concrete_tuples(elts: Vec<Type>) -> Vec<Type> {
     let mut result = Vec::new();
     for elt in elts {
         match elt {
-            Type::Unpack(box Type::Tuple(Tuple::Concrete(elts))) => {
-                result.extend(elts);
+            Type::Unpack(inner) if matches!(*inner, Type::Tuple(Tuple::Concrete(_))) => {
+                // Repeated match because pattern guards cannot move out of bindings.
+                if let Type::Tuple(Tuple::Concrete(elts)) = *inner {
+                    result.extend(elts);
+                } else {
+                    unreachable!("guarded by matches! above")
+                }
             }
             _ => result.push(elt),
         }
@@ -325,12 +329,12 @@ fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
     let mut additional_elts = Vec::new();
     types.retain(|t| {
         let retain = match t {
-            Type::Type(box t) if first_elt.is_none() => {
-                first_elt = Some((idx, t.clone()));
+            Type::Type(t) if first_elt.is_none() => {
+                first_elt = Some((idx, (**t).clone()));
                 true
             }
-            Type::Type(box t) => {
-                additional_elts.push(t.clone());
+            Type::Type(t) => {
+                additional_elts.push((**t).clone());
                 false
             }
             _ => true,
@@ -354,34 +358,39 @@ fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
 pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
     match tuple {
         Tuple::Concrete(elts) => Tuple::Concrete(flatten_unpacked_concrete_tuples(elts)),
-        Tuple::Unpacked(box (prefix, Type::Tuple(middle), suffix))
-            if prefix.is_empty() && suffix.is_empty() =>
-        {
-            middle
+        Tuple::Unpacked(unpacked) => {
+            let (prefix, middle, suffix) = *unpacked;
+            if prefix.is_empty()
+                && suffix.is_empty()
+                && let Type::Tuple(middle) = middle
+            {
+                return middle;
+            }
+            match middle {
+                Type::Tuple(Tuple::Concrete(elts)) => {
+                    Tuple::Concrete(flatten_unpacked_concrete_tuples(
+                        prefix
+                            .into_iter()
+                            .chain(elts)
+                            .chain(suffix)
+                            .collect::<Vec<_>>(),
+                    ))
+                }
+                Type::Tuple(Tuple::Unpacked(m_unpacked)) => {
+                    let (m_prefix, m_middle, m_suffix) = *m_unpacked;
+                    let mut new_prefix = flatten_unpacked_concrete_tuples(prefix);
+                    new_prefix.extend(flatten_unpacked_concrete_tuples(m_prefix));
+                    let mut new_suffix = flatten_unpacked_concrete_tuples(m_suffix);
+                    new_suffix.extend(flatten_unpacked_concrete_tuples(suffix));
+                    Tuple::unpacked(new_prefix, m_middle, new_suffix)
+                }
+                _ => Tuple::unpacked(
+                    flatten_unpacked_concrete_tuples(prefix),
+                    middle,
+                    flatten_unpacked_concrete_tuples(suffix),
+                ),
+            }
         }
-        Tuple::Unpacked(box (prefix, middle, suffix)) => match middle {
-            Type::Tuple(Tuple::Concrete(elts)) => {
-                Tuple::Concrete(flatten_unpacked_concrete_tuples(
-                    prefix
-                        .into_iter()
-                        .chain(elts)
-                        .chain(suffix)
-                        .collect::<Vec<_>>(),
-                ))
-            }
-            Type::Tuple(Tuple::Unpacked(box (m_prefix, m_middle, m_suffix))) => {
-                let mut new_prefix = flatten_unpacked_concrete_tuples(prefix);
-                new_prefix.extend(flatten_unpacked_concrete_tuples(m_prefix));
-                let mut new_suffix = flatten_unpacked_concrete_tuples(m_suffix);
-                new_suffix.extend(flatten_unpacked_concrete_tuples(suffix));
-                Tuple::unpacked(new_prefix, m_middle, new_suffix)
-            }
-            _ => Tuple::unpacked(
-                flatten_unpacked_concrete_tuples(prefix),
-                middle,
-                flatten_unpacked_concrete_tuples(suffix),
-            ),
-        },
         _ => tuple,
     }
 }

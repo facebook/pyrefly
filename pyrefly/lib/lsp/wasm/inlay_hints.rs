@@ -13,8 +13,6 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::literal::LitEnum;
-use pyrefly_types::literal::Literal;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -116,20 +114,19 @@ impl<'a> Transaction<'a> {
                             true
                         }
                     }
-                    Expr::Attribute(ExprAttribute {
-                        box value, attr, ..
-                    }) if let Type::Literal(box Literal {
-                        value: Lit::Enum(box LitEnum { class, member, .. }),
-                        ..
-                    }) = ty =>
+                    Expr::Attribute(ExprAttribute { value, attr, .. })
+                        if let Type::Literal(lit) = ty
+                            && let Lit::Enum(lit_enum) = &lit.value =>
                     {
                         // Exclude enum literals
-                        match value {
+                        match &**value {
                             Expr::Name(object) => {
-                                *object.id() != *class.name() || *attr.id() != *member
+                                *object.id() != *lit_enum.class.name()
+                                    || *attr.id() != *lit_enum.member
                             }
                             Expr::Attribute(ExprAttribute { attr: object, .. }) => {
-                                *object.id() != *class.name() || *attr.id() != *member
+                                *object.id() != *lit_enum.class.name()
+                                    || *attr.id() != *lit_enum.member
                             }
                             _ => true,
                         }

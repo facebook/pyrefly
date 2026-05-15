@@ -7,6 +7,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -20,16 +21,15 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
 use ruff_notebook::Notebook;
 use ruff_text_size::TextRange;
-use vec1::vec1;
 
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
 use crate::module::bundled::BundledStub;
 use crate::module::third_party::get_bundled_third_party;
 use crate::module::typeshed::typeshed;
 use crate::module::typeshed_third_party::typeshed_third_party;
+use crate::state::errors::ModuleRanges;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::notebook::LspNotebook;
 use crate::state::state::TransactionTimingCounters;
@@ -81,6 +81,25 @@ impl LspFile {
 pub struct Load {
     pub errors: ErrorCollector,
     pub module_info: Module,
+    /// Pre-computed multi-line ranges and ignore-all directives, populated
+    /// before AST eviction so error reporting can avoid re-parsing.
+    pub(crate) module_ranges: OnceLock<ModuleRanges>,
+}
+
+impl Load {
+    /// Store pre-computed module ranges. Called before AST eviction.
+    pub fn set_module_ranges(&self, ranges: ModuleRanges) {
+        let _ = self.module_ranges.set(ranges);
+    }
+
+    /// Get pre-computed module ranges. Panics if `set_module_ranges` was never
+    /// called — every module that reaches error collection must have had its
+    /// ranges computed at the Answers step.
+    pub fn module_ranges(&self) -> &ModuleRanges {
+        self.module_ranges
+            .get()
+            .expect("module_ranges must be set at the Answers step before error collection")
+    }
 }
 
 impl Load {
@@ -169,18 +188,21 @@ impl Load {
         };
         let errors = ErrorCollector::new(module_info.dupe(), error_style);
         if let Some(err) = self_error {
-            errors.add(
-                TextRange::default(),
-                ErrorInfo::Kind(ErrorKind::MissingImport),
-                vec1![format!(
-                    "Failed to load `{name}` from `{}`, got {err:#}",
-                    module_info.path()
-                )],
-            );
+            errors
+                .error_builder(
+                    TextRange::default(),
+                    ErrorKind::MissingImport,
+                    format!(
+                        "Failed to load `{name}` from `{}`, got {err:#}",
+                        module_info.path()
+                    ),
+                )
+                .emit();
         }
         Self {
             errors,
             module_info,
+            module_ranges: OnceLock::new(),
         }
     }
 }

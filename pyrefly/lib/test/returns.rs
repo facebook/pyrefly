@@ -831,6 +831,19 @@ def f(value: int | str | float) -> str:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2894
+testcase!(
+    test_exhaustive_isinstance_no_bad_return,
+    r#"
+class A: ...
+class B: ...
+
+def test(ab: A | B) -> int:
+    if isinstance(ab, A): return 1
+    if isinstance(ab, B): return 2
+"#,
+);
+
 testcase!(
     test_pruned_if_last_statement_no_bad_override,
     r#"

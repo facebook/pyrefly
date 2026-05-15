@@ -25,7 +25,6 @@ use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTParams;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
@@ -70,7 +69,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     name.range,
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    ErrorKind::InvalidTypeVar,
                     format!("Expected a {kind}, got `{}`", self.for_display(t.clone())),
                 );
             }
@@ -80,7 +79,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         name.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                        ErrorKind::InvalidTypeVar,
                         "Redundant type parameter declaration".to_owned(),
                     );
                 }
@@ -105,7 +104,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                            ErrorKind::InvalidInheritance,
                             format!(
                                 "Duplicated type parameter declaration `{}`",
                                 self.module().display(x)
@@ -119,7 +118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 name.range,
-                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                ErrorKind::InvalidInheritance,
                 format!(
                     "Class `{}` specifies type parameters in both `Generic` and `Protocol` bases",
                     name.id,
@@ -139,7 +138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if !implicit_tparams_okay {
                     self.error(errors,
                         name.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                        ErrorKind::InvalidTypeVar,
                         format!(
                             "Class `{}` uses type variables not specified in `Generic` or `Protocol` base",
                             name.id,

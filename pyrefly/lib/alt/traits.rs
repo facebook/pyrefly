@@ -38,6 +38,7 @@ use crate::binding::binding::BindingClassBaseType;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
+use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
@@ -63,6 +64,7 @@ use crate::binding::binding::KeyClassBaseType;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyDecoratedFunction;
@@ -509,6 +511,22 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
         AbstractClassMembers::recursive()
+    }
+}
+
+impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSubscriptSymmetry {
+    fn solve(
+        _answers: &AnswersSolver<Ans>,
+        _binding: &BindingClassSubscriptSymmetry,
+        _range: TextRange,
+        _errors: &ErrorCollector,
+    ) -> Arc<bool> {
+        // TODO: implement algorithm
+        Arc::new(true)
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        true
     }
 }
 

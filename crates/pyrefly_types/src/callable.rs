@@ -29,8 +29,6 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
-use vec1::Vec1;
-use vec1::vec1;
 
 use crate::class::Class;
 use crate::class::ClassType;
@@ -447,7 +445,7 @@ impl<To> Visit<To> for DefaultValue
 where
     Type: Visit<To>,
 {
-    const RECURSE_CONTAINS: bool = <Type as Visit<To>>::VISIT_CONTAINS;
+    const RECURSE_CONTAINS: bool = true;
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
         self.ty.visit(f);
     }
@@ -457,7 +455,7 @@ impl<To> VisitMut<To> for DefaultValue
 where
     Type: VisitMut<To>,
 {
-    const RECURSE_CONTAINS: bool = <Type as VisitMut<To>>::VISIT_CONTAINS;
+    const RECURSE_CONTAINS: bool = true;
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
         self.ty.visit_mut(f);
     }
@@ -537,11 +535,11 @@ impl Deprecation {
         Self { message }
     }
 
-    /// Format a base description using deprecation metadata.
-    pub fn as_error_message(&self, base: String) -> Vec1<String> {
+    /// Format deprecation metadata for error reporting.
+    pub fn as_error_detail(&self) -> Option<String> {
         match self.message.as_ref().map(|s| s.trim()) {
-            Some(msg) if !msg.is_empty() => vec1![base, msg.to_owned()],
-            _ => vec1![base],
+            Some(msg) if !msg.is_empty() => Some(msg.to_owned()),
+            _ => None,
         }
     }
 }

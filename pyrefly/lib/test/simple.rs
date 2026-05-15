@@ -2386,6 +2386,33 @@ def f(x):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2221
+testcase!(
+    test_shutil_copyfileobj_with_urlopen,
+    r#"
+import shutil
+import urllib.request as request
+with request.urlopen("https://example.com") as remote, open("out.html", 'wb') as local:
+    shutil.copyfileobj(remote, local)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2866
+testcase!(
+    test_reduce_gcd_return_type,
+    r#"
+from functools import reduce
+from math import gcd
+
+def detect_indentation(values: list[int]) -> int:
+    try:
+        indentation = reduce(gcd, [v for v in values if not v % 2]) or 1
+    except TypeError:
+        indentation = 1
+    return indentation
+"#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/3048
 testcase!(
     test_enumerate_reversed,
