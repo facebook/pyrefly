@@ -149,17 +149,10 @@ impl ClassAttribute {
         match self {
             Self::ReadWrite(ty) => Self::ReadOnly(ty, reason),
             Self::Property(getter, _, cls) => Self::Property(getter, None, cls),
-            Self::Descriptor(
+            Self::Descriptor(descriptor, base) => Self::Descriptor(
                 Descriptor {
-                    range, cls, getter, ..
-                },
-                base,
-            ) => Self::Descriptor(
-                Descriptor {
-                    range,
-                    cls,
-                    getter,
                     setter: false,
+                    ..descriptor
                 },
                 base,
             ),
@@ -223,6 +216,10 @@ pub struct Descriptor {
     getter: bool,
     /// Does `__set__` exists on the descriptor? Similar considerations to `getter` apply.
     setter: bool,
+    /// How the descriptor field was initialized. Used to distinguish class-body
+    /// descriptors (which have an actual object on the class) from annotation-only
+    /// descriptors (which rely on metaclass or other runtime machinery).
+    initialization: ClassFieldInitialization,
 }
 
 #[derive(Clone, Debug)]
@@ -516,7 +513,7 @@ impl ClassField {
     fn initialization(&self) -> ClassFieldInitialization {
         match &self.0 {
             ClassFieldInner::Property { .. } => ClassFieldInitialization::ClassBody(None),
-            ClassFieldInner::Descriptor { .. } => ClassFieldInitialization::ClassBody(None),
+            ClassFieldInner::Descriptor { descriptor, .. } => descriptor.initialization.clone(),
             ClassFieldInner::Method { .. } => ClassFieldInitialization::ClassBody(None),
             ClassFieldInner::NestedClass { .. } => ClassFieldInitialization::ClassBody(None),
             ClassFieldInner::ClassAttribute { initialization, .. } => initialization.clone(),
@@ -1049,21 +1046,21 @@ impl ClassField {
         }
     }
 
-    /// Check if this field is a non-data descriptor (has __get__ but no __set__).
-    /// Used for detecting possible soundness problems in dataclasses.
-    pub fn is_non_data_descriptor(&self) -> bool {
-        matches!(
-            &self.0,
-            ClassFieldInner::Descriptor { descriptor, .. } if !descriptor.setter
-        )
-    }
-
     /// For a `__get__`-only descriptor, get the descriptor range and type. Used for
     /// dataclass validation, where we typically disallow non-data descriptors but certain
     /// edge cases (where instance shadows are assignable to the `__get__` return type) are ok.
+    /// This is Used for detecting possible soundness problems in dataclasses.
+    /// Uninitialized descriptors are excluded because there is no actual descriptor
+    /// object on the class to conflict with dataclass field initialization.
     pub fn non_data_descriptor_info(&self) -> Option<(TextRange, ClassType)> {
         match &self.0 {
-            ClassFieldInner::Descriptor { descriptor, .. } if !descriptor.setter => {
+            ClassFieldInner::Descriptor { descriptor, .. }
+                if !descriptor.setter
+                    && matches!(
+                        descriptor.initialization,
+                        ClassFieldInitialization::ClassBody(_)
+                    ) =>
+            {
                 Some((descriptor.range, descriptor.cls.clone()))
             }
             _ => None,
@@ -1110,15 +1107,21 @@ impl ClassField {
     fn dataclass_flags_of(&self, heap: &TypeHeap) -> DataclassFieldKeywords {
         match &self.0 {
             ClassFieldInner::Property { .. } => DataclassFieldKeywords::new(),
-            // Descriptors are always initialized in the class body (otherwise they wouldn't
-            // be detected as descriptors), so they have a default value (the descriptor instance).
-            // For data descriptors, this is sound because assignments go through __set__.
-            // For non-data descriptors, we separately emit an error in check_dataclass_non_data_descriptors.
-            ClassFieldInner::Descriptor { .. } => {
+            // Class-body-initialized descriptors have a default value (the descriptor instance).
+            // Other descriptors (annotation-only, stub, etc.) do not.
+            ClassFieldInner::Descriptor {
+                descriptor:
+                    Descriptor {
+                        initialization: ClassFieldInitialization::ClassBody(_),
+                        ..
+                    },
+                ..
+            } => {
                 let mut kws = DataclassFieldKeywords::new();
                 kws.default = Some(heap.mk_any_implicit());
                 kws
             }
+            ClassFieldInner::Descriptor { .. } => DataclassFieldKeywords::new(),
             ClassFieldInner::Method { .. } => DataclassFieldKeywords::new(),
             ClassFieldInner::NestedClass { .. } => DataclassFieldKeywords::new(),
             ClassFieldInner::ClassAttribute { initialization, .. } => match initialization {
@@ -1838,27 +1841,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Identify whether this is a descriptor
         let mut descriptor = None;
         // Descriptor semantics apply when the field is modeled as class-level:
-        // either by a class-body definition, or by `Magic` for stub/interface
-        // declarations where the runtime initializer is omitted. Some types are
-        // also always treated like descriptors.
-        let is_special_descriptor_type = direct_annotation.as_ref().is_some_and(|annot| {
-            annot
-                .ty
-                .as_ref()
-                .is_some_and(|ty| self.is_special_descriptor_type(ty))
-        });
+        // either by a class-body definition, by `Magic` for stub/interface
+        // declarations where the runtime initializer is omitted, or by an
+        // annotation-only declaration in the class body (`Uninitialized`).
         if matches!(
             initialization,
-            ClassFieldInitialization::ClassBody(_) | ClassFieldInitialization::Magic
-        ) || is_special_descriptor_type
-        {
+            ClassFieldInitialization::ClassBody(_)
+                | ClassFieldInitialization::Magic
+                | ClassFieldInitialization::Uninitialized
+        ) {
             match &ty {
-                // TODO(stroxler): This works for simple descriptors. There are known gaps:
-                // - Gracefully handle instance-only `__get__`/`__set__`. Descriptors only seem to be detected
-                //   when the descriptor attribute is initialized on the class body of the descriptor.
-                // - Do we care about distributing descriptor behavior over unions? If so, what about the case when
-                //   the raw class field is a union of a descriptor and a non-descriptor? Do we want to allow this?
-                // - Child classes with annotation-only overrides should inherit parent descriptor behavior
+                // TODO(stroxler): Do we care about distributing descriptor behavior over unions?
+                // If so, what about the case when the raw class field is a union of a descriptor
+                // and a non-descriptor? Do we want to allow this?
                 Type::ClassType(cls) => {
                     let getter = self
                         .get_class_member(cls.class_object(), &dunder::GET)
@@ -1872,6 +1867,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             cls: cls.clone(),
                             getter,
                             setter,
+                            initialization: initialization.clone(),
                         })
                     }
                 }
@@ -2082,13 +2078,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         class_field
-    }
-
-    /// Is this a type that is special-cased to always have descriptor behavior?
-    fn is_special_descriptor_type(&self, ty: &Type) -> bool {
-        // `sqlalchemy.orm.Mapped` is used in subclasses of `sqlalchemy.orm.DeclarativeBase`,
-        // which does runtime magic to initialize fields annotated as `Mapped`, making them class-level.
-        matches!(ty, Type::ClassType(cls) if cls.has_qname("sqlalchemy.orm.base", "Mapped"))
     }
 
     /// Helper to infer with an optional annotation as a hint and then expand
@@ -4506,6 +4495,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if let Some(setter) =
                             self.resolve_descriptor_setter(attr_name, &x, errors) =>
                     {
+                        // TODO(mfish33) we allow unitialized descriptors in this case. This
+                        // is to have better compatibility with other type checkers and support
+                        // common metaclass patterns. In the future it would be better to detect
+                        // this and use an intersection type between the setter and the descriptor
+                        // class.
                         let got = CallArg::arg(got);
                         self.call_descriptor_setter(setter, base, got, range, errors, context);
                     }
@@ -4848,6 +4842,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     //
                     // TODO(stroxler): Once we have more complex error traces, it would be good to pass
                     // context down so that errors inside the call can mention that it was a descriptor read.
+                    // TODO(mfish33) we allow unitialized descriptors in this case. This
+                    // is to have better compatibility with other type checkers and support
+                    // common metaclass patterns. In the future it would be better to detect
+                    // this and use an intersection type between the setter and the descriptor
+                    // class.
                     Ok(self.call_descriptor_getter(getter, base, range, errors, context))
                 } else {
                     // Reading descriptor with no getter resolves to the descriptor itself

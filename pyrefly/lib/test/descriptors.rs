@@ -272,8 +272,8 @@ def f(x: T) -> None:
 );
 
 // Test that instance-only attributes with descriptor types are not treated as descriptors.
-// Descriptor protocol only applies to class-body initialized attributes; both annotation-only
-// and method-initialized attributes should allow assignment.
+// Descriptor protocol applies to class-body initialized and annotation-only attributes; 
+// Method-initialized attributes should allow assignment.
 testcase!(
     test_instance_only_attribute_does_not_have_descriptor_semantics,
     r#"
@@ -286,16 +286,15 @@ class AnnotationOnly:
     device: Device
 
 class MethodInitialized:
-    device: Device
     def __init__(self) -> None:
         self.device = Device()
 
 def f(a: AnnotationOnly, m: MethodInitialized) -> None:
     # Writes should be allowed (not treated as read-only descriptor)
-    a.device = Device()  # OK: annotation-only, not a descriptor
+    a.device = Device()  # E: Attribute `device` of class `AnnotationOnly` is a read-only descriptor with no `__set__` and cannot be set
     m.device = Device()  # OK: method-initialized, not a descriptor
     # Reads should return Device, not int (descriptor __get__ not invoked)
-    assert_type(a.device, Device)
+    assert_type(a.device, int)
     assert_type(m.device, Device)
     "#,
 );
@@ -340,6 +339,34 @@ class Child(Parent):
 
 def f(c: Child) -> None:
     assert_type(c.value, int)
+    "#,
+);
+
+// Test asymmetric generic descriptors with annotation-only fields (issue #3405).
+testcase!(
+    test_annotation_only_asymmetric_generic_descriptor,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+U = TypeVar("U")
+
+class InstantiatingAttr(Generic[T, U]):
+    def __set__(self, instance: Any, value: U | None) -> None: ...
+    def __get__(self, instance: Any, owner: Any = None) -> T | None: ...
+
+class Pistol:
+    barrelLength: int
+    def __init__(self, barrelLength: int, /) -> None: ...
+
+class Cowboy:
+    holster: InstantiatingAttr[Pistol, tuple[int]]
+
+c = Cowboy()
+c.holster = (6,)
+assert c.holster is not None
+assert_type(c.holster, Pistol)
+print(c.holster.barrelLength)
     "#,
 );
 
