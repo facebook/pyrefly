@@ -10,11 +10,9 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
-use pyrefly_types::literal::Literal;
-use pyrefly_types::literal::Literal;
-use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -2050,6 +2048,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn is_unittest_mock_patcher_instance(&self, ty: &Type) -> bool {
         match ty {
+            Type::BoundMethod(method) => self.is_unittest_mock_patcher_instance(&method.obj),
             Type::ClassType(cls) => {
                 let class = cls.class_object();
                 class.module_name() == ModuleName::from_str("unittest.mock")
@@ -2092,6 +2091,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut module_prefix_len = 0;
         for i in (1..parts.len()).rev() {
             let candidate = ModuleName::from_str(&parts[..i].join("."));
+            if candidate == self.module().name() {
+                module = Some(candidate);
+                module_prefix_len = i;
+                break;
+            }
             match self.exports.module_exists(candidate) {
                 FindingOrError::Finding(_) => {
                     module = Some(candidate);
@@ -2112,6 +2116,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut base_ty = ModuleType::new_as(module).to_type(self.heap);
         for attr in &parts[module_prefix_len..] {
             let attr_name = Name::new(*attr);
+            if let Type::Module(module_type) = &base_ty {
+                let module_name = ModuleName::from_parts(module_type.parts());
+                if !self.exports.export_exists(module_name, &attr_name)
+                    && !self.exports.export_exists(module_name, &dunder::GETATTR)
+                {
+                    errors
+                        .error_builder(
+                            range,
+                            ErrorKind::MissingAttribute,
+                            format!("No attribute `{attr_name}` in module `{module_name}`"),
+                        )
+                        .emit();
+                    return;
+                }
+            }
             base_ty = self.type_of_attr_get(
                 &base_ty,
                 &attr_name,
