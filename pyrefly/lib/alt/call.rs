@@ -15,7 +15,6 @@ use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::literal::Literal;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -2110,7 +2109,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         };
 
-        let mut base_ty = ModuleType::new_as(module).to_type();
+        let mut base_ty = ModuleType::new_as(module).to_type(self.heap);
         for attr in &parts[module_prefix_len..] {
             let attr_name = Name::new(*attr);
             base_ty = self.type_of_attr_get(
