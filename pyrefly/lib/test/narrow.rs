@@ -649,6 +649,41 @@ def f(e: E):
 );
 
 testcase!(
+    test_match_enum_self_fallback,
+    r#"
+from enum import Enum, auto
+from typing import assert_never, final
+
+class ExtendableTime(Enum):
+    DAY = auto()
+    NIGHT = auto()
+
+    def bye(self):
+        match self:
+            case ExtendableTime.DAY:
+                pass
+            case ExtendableTime.NIGHT:
+                pass
+            case _ as unreachable:
+                assert_never(unreachable)
+
+@final
+class FinalTime(Enum):
+    DAY = auto()
+    NIGHT = auto()
+
+    def bye(self):
+        match self:
+            case FinalTime.DAY:
+                pass
+            case FinalTime.NIGHT:
+                pass
+            case _ as unreachable:
+                assert_never(unreachable)
+    "#,
+);
+
+testcase!(
     test_match_or,
     r#"
 from typing import assert_type, Literal
