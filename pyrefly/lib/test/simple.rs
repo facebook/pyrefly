@@ -2000,6 +2000,21 @@ def f(x: int = "test"): # E: Default `Literal['test']` is not assignable to para
 );
 
 testcase!(
+    test_parameter_default_typevar_bound,
+    r#"
+from typing import Literal, TypeVar
+
+T = TypeVar("T", bound=Literal["foo"])
+
+def ok(t: T = "foo") -> None:
+    pass
+
+def bad(t: T = "bar") -> None:  # E: Default `Literal['bar']` is not assignable to parameter `t` with type `Literal['foo']`
+    pass
+"#,
+);
+
+testcase!(
     test_parameter_default_infer,
     r#"
 from typing import reveal_type

@@ -947,10 +947,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         )
                     )
                 );
+                let quantified_bound = match &param_ty {
+                    Type::Quantified(q) if q.is_type_var() => {
+                        Some(q.bound_type(self.stdlib, self.heap))
+                    }
+                    _ => None,
+                };
+                let check_ty = quantified_bound.as_ref().unwrap_or(&param_ty);
                 let check: Option<(&Type, &dyn Fn() -> TypeCheckContext)> = if skip_check {
                     None
                 } else {
-                    Some((&param_ty, &make_context))
+                    Some((check_ty, &make_context))
                 };
                 let required = self.get_requiredness(default, check, stub_or_impl, errors);
                 (param_ty, required, false)
