@@ -135,6 +135,15 @@ impl<'a> BindingsBuilder<'a> {
                     .iter()
                     .filter(|x| !matches!(x, Pattern::MatchStar(_)))
                     .count();
+                // If every sub-pattern is irrefutable (wildcards like `_`, bare names,
+                // or `*rest`), the structural `IsSequence + LenEq/LenGte` narrow on the
+                // subject fully captures what the pattern proves. Spurious Placeholders
+                // added by `and_all` for empty sub-pattern narrow ops would otherwise
+                // block negative narrowing (see equivalent fix in MatchClass below).
+                let all_subpatterns_irrefutable = x
+                    .patterns
+                    .iter()
+                    .all(|p| p.is_irrefutable() || p.is_wildcard());
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
                     node_index: AtomicNodeIndex::default(),
@@ -254,6 +263,12 @@ impl<'a> BindingsBuilder<'a> {
                     KeyExpect::UnpackedLength(x.range),
                     BindingExpect::UnpackedLength(subject_idx, x.range, expect),
                 );
+                if all_subpatterns_irrefutable
+                    && let Some(subject) = match_subject.as_single()
+                    && let Some((op, _)) = narrow_ops.0.get_mut(subject.name())
+                {
+                    op.strip_placeholders();
+                }
                 narrow_ops
             }
             Pattern::MatchMapping(x) => {
