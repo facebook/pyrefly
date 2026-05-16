@@ -924,23 +924,37 @@ impl<'a> BindingsBuilder<'a> {
                 x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
             }
             Expr::Named(x) => {
-                // For scopes defined in terms of Definitions, we should normally already have the name in Static, but
-                // we still need this for comprehensions, whose scope is defined on-the-fly.
-                self.scopes.add_lvalue_to_current_static(&x.target);
-                self.bind_target_with_expr(&mut x.target, &mut x.value, &|expr, ann| {
-                    Binding::Expr(ann, Box::new(expr.clone()))
-                });
-                // PEP 572: walrus operators inside comprehensions bind to
-                // the enclosing (non-comprehension) scope.
+                // PEP 572: walrus operators inside comprehensions bind to the
+                // enclosing (non-comprehension) scope. Evaluate the RHS before
+                // adding the target to the comprehension's static scope, so
+                // any reference to the target's name inside the RHS resolves
+                // against the enclosing scope rather than the (still
+                // uninitialized) comprehension binding we're about to create.
+                // See https://github.com/facebook/pyrefly/issues/3398.
                 if self.scopes.in_comprehension()
                     && let Expr::Name(name) = &*x.target
-                    && let Some(idx) = self.scopes.get_current_flow_idx(&name.id)
                 {
-                    self.scopes.define_in_enclosing_non_comprehension_scope(
-                        Hashed::new(&name.id),
-                        idx,
-                        FlowStyle::Other,
-                    );
+                    let identifier = ShortIdentifier::expr_name(name);
+                    let mut user = self.declare_current_idx(Key::Definition(identifier));
+                    self.ensure_expr(&mut x.value, user.usage());
+                    self.scopes.add_lvalue_to_current_static(&x.target);
+                    let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
+                    let binding = Binding::Expr(ann, Box::new((*x.value).clone()));
+                    self.insert_binding_current(user, binding);
+                    if let Some(idx) = self.scopes.get_current_flow_idx(&name.id) {
+                        self.scopes.define_in_enclosing_non_comprehension_scope(
+                            Hashed::new(&name.id),
+                            idx,
+                            FlowStyle::Other,
+                        );
+                    }
+                } else {
+                    // For scopes defined in terms of Definitions, we should normally already have the name in Static, but
+                    // we still need this for comprehensions, whose scope is defined on-the-fly.
+                    self.scopes.add_lvalue_to_current_static(&x.target);
+                    self.bind_target_with_expr(&mut x.target, &mut x.value, &|expr, ann| {
+                        Binding::Expr(ann, Box::new(expr.clone()))
+                    });
                 }
             }
             Expr::Lambda(x) => {

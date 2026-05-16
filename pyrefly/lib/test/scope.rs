@@ -675,6 +675,21 @@ def h(matrix: list[list[int]]) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3398
+// The RHS of a walrus inside a comprehension must resolve names against the
+// enclosing scope, not the (yet uninitialized) comprehension binding the
+// walrus is about to create.
+testcase!(
+    test_walrus_in_comprehension_reads_outer_name,
+    r#"
+def demo(text: str) -> None:
+    [text := text.replace(s, f"\\{s}") for s in "&#" if s in text]
+
+def with_int(n: int) -> None:
+    [n := n + 1 for _ in range(3)]
+"#,
+);
+
 testcase!(
     test_forward_reference_ok,
     r#"
