@@ -1639,7 +1639,9 @@ more details on how baseline files work.
 ### `min-severity`
 
 The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
-below this threshold are hidden from output and do not affect the exit code.
+below this threshold are hidden from output. Diagnostics at or above the threshold are
+displayed and cause a nonzero exit code — for example, `--min-severity warn` makes
+warnings cause a nonzero exit.
 
 ```toml
 # pyrefly.toml — show warnings and errors
@@ -1658,7 +1660,7 @@ min-severity = "warn"
 - Notes:
     - `min-severity` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
-    - This setting controls CLI display only. To change the severity of individual
+    - This setting only controls CLI display and exit code. To change the severity of individual
       error kinds, use the [`errors`](#errors) table instead.
     - In the IDE, diagnostics below error severity are only shown for files that
       are currently open in the editor, regardless of this setting.
@@ -2978,14 +2980,16 @@ error suppression comments.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
 - **ignore**: the diagnostic is not emitted
-- **info**: the diagnostic shows up blue in the IDE and does not cause a nonzero exit in the CLI
-- **warn**: the diagnostic shows up yellow in the IDE and does not cause a nonzero exit in the CLI
-- **error**: the diagnostic shows up red in the IDE and causes a nonzero exit in the CLI
+- **info**: the diagnostic shows up blue in the IDE
+- **warn**: the diagnostic shows up yellow in the IDE
+- **error**: the diagnostic shows up red in the IDE
 
 The default severity for diagnostics is `error` unless otherwise noted. Diagnostics with default severity `ignore` must be explicitly enabled to be emitted.
 
 By default, `pyrefly check` only displays diagnostics with severity `error` or higher.
 Use the [`min-severity`](../configuration#min-severity) config option or `--min-severity` CLI flag to also show lower-severity diagnostics (e.g. `--min-severity warn`).
+
+By default, only `error`-level diagnostics cause a nonzero exit code in the CLI. When [`min-severity`](../configuration#min-severity) is set, any diagnostic at or above that threshold causes a nonzero exit.
 
 In the IDE, diagnostics below `error` severity are only shown for files that are currently open in the editor.
 
@@ -3980,7 +3984,7 @@ In this example, `os.bacarat` is treated as a module name, so failing to find it
 
 ## missing-override-decorator
 
-A method overrides a parent class method but does not have the `@override` decorator.
+A method overrides a parent class method but does not have the `@override` decorator. We do not emit this error for dunder methods.
 
 This error supports strict override enforcement as specified in the [typing spec](https://typing.python.org/en/latest/spec/class-compat.html#strict-enforcement-per-project). When enabled, it requires all overriding methods to be explicitly marked with `@typing.override`.
 

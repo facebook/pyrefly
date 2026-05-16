@@ -462,7 +462,9 @@ more details on how baseline files work.
 ### `min-severity`
 
 The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
-below this threshold are hidden from output and do not affect the exit code.
+below this threshold are hidden from output. Diagnostics at or above the threshold are
+displayed and cause a nonzero exit code — for example, `--min-severity warn` makes
+warnings cause a nonzero exit.
 
 ```toml
 # pyrefly.toml — show warnings and errors
@@ -481,7 +483,7 @@ min-severity = "warn"
 - Notes:
     - `min-severity` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
-    - This setting controls CLI display only. To change the severity of individual
+    - This setting only controls CLI display and exit code. To change the severity of individual
       error kinds, use the [`errors`](#errors) table instead.
     - In the IDE, diagnostics below error severity are only shown for files that
       are currently open in the editor, regardless of this setting.
