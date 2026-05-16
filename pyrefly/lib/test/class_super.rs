@@ -144,6 +144,21 @@ class Triangle(Shape):
 );
 
 testcase!(
+    test_super_method_assigned_to_self_attribute,
+    r#"
+class Parent:
+    def meth(self) -> None: ...
+
+class Child(Parent):
+    def __init__(self) -> None:
+        self.meth = super().meth
+
+Parent().meth()
+Child().meth()
+"#,
+);
+
+testcase!(
     test_illegal_location,
     r#"
 class A:

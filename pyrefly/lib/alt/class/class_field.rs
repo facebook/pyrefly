@@ -2429,7 +2429,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(inherited_ty) if inferred_from_method => {
                         // Inherit the previous type of the attribute if the only declaration-like
                         // thing the current class does is assign to the attribute in a method.
-                        inherited_ty
+                        //
+                        // Exception: if the assigned value is a `BoundMethod` (e.g.
+                        // `self.meth = super().meth`), the bound form is callable *without*
+                        // `self`. Using the inherited unbound function type here would make
+                        // the field appear to require `self` at call sites, and would also
+                        // make the assignment itself look type-incompatible (bound vs
+                        // unbound). Preserve the bound-method type instead.
+                        let swallowed = self.error_swallower();
+                        let inferred = self.attribute_expr_infer(e, None, name, &swallowed);
+                        if matches!(&inferred, Type::BoundMethod(_)) {
+                            inferred
+                        } else {
+                            inherited_ty
+                        }
                     }
                     Some(inherited_ty)
                         if inherited_annotation.is_none() && direct_annotation.is_none() =>
