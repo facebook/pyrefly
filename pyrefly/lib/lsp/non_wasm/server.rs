@@ -5037,7 +5037,7 @@ impl Server {
                             if let Some(cell_idx) = info.to_cell_for_lsp(range.start())
                                 && let Some(path) = to_real_path(info.path())
                                 && let Some(notebook) = open_notebooks.get(&path)
-                                && let Some(cell_url) = notebook.get_cell_url(cell_idx)
+                                && let Some(cell_url) = notebook.get_code_cell_url(cell_idx)
                             {
                                 uri = cell_url.clone();
                             }
@@ -5088,9 +5088,7 @@ impl Server {
         let info = transaction.get_module_info(&handle)?;
         let position =
             self.from_lsp_position(uri, &info, params.text_document_position_params.position);
-        if transaction.prepare_rename(&handle, position).is_none() {
-            return None;
-        }
+        transaction.prepare_rename(&handle, position)?;
         let identifier = transaction.identifier_at(&handle, position)?;
         let mut ranges = transaction.find_local_references(&handle, position, true);
         let rename_config = self.workspaces.rename_config(handle.path().as_path());
