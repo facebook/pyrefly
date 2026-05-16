@@ -1370,3 +1370,12 @@ class Config:
         debug = True
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/3398
+testcase!(
+    test_walrus_in_comprehension_reads_enclosing_scope_param,
+    r#"
+def demo(text: str) -> None:
+    [text := text.replace(s, f"\\{s}") for s in "&#" if s in text]
+"#,
+);
