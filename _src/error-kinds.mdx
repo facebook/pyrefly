@@ -1025,7 +1025,7 @@ In this example, `os.bacarat` is treated as a module name, so failing to find it
 
 ## missing-override-decorator
 
-A method overrides a parent class method but does not have the `@override` decorator. We do not emit this error for dunder methods.
+A method overrides a parent class method but does not have the `@override` decorator. We do not emit this error for dunder methods that are inherited from `object` (e.g., `__repr__`, `__eq__`, `__str__`), but we do emit it for dunder methods inherited from other classes.
 
 This error supports strict override enforcement as specified in the [typing spec](https://typing.python.org/en/latest/spec/class-compat.html#strict-enforcement-per-project). When enabled, it requires all overriding methods to be explicitly marked with `@typing.override`.
 
@@ -1034,9 +1034,14 @@ from typing import override
 
 class Base:
     def foo(self) -> None: ...
+    def __len__(self) -> int: ...
 
 class Derived(Base):
     def foo(self) -> None: ...  # missing-override-decorator
+
+    def __len__(self) -> int: ...  # missing-override-decorator (inherited from Base, not object)
+
+    def __repr__(self) -> str: ...  # OK (inherited from object)
 
     @override
     def foo(self) -> None: ...  # OK
