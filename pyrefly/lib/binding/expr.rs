@@ -9,6 +9,7 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_util::gas::Gas;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::BoolOp;
@@ -33,6 +34,8 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use vec1::Vec1;
+use vec1::vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
@@ -69,6 +72,40 @@ use crate::types::types::AnyStyle;
 /// like reveal_type.
 fn is_special_name(name: &str) -> bool {
     matches!(name, "reveal_type" | "assert_type")
+}
+
+/// Walk a chain of `Expr::Attribute` nodes (e.g. `a.b.c`) and collect the
+/// base `ExprName` and attribute identifiers in order. Returns `None` if the
+/// chain doesn't end in a Name
+fn chase_static_attr_chain(expr: &Expr) -> Option<(ExprName, Vec1<Identifier>)> {
+    // For now arbitrarily cap attribute unwinding at length 10 which should be ok
+    // for any reasonably formed code
+    let mut gas = Gas::new(10);
+    chase_static_attr_chain_impl(expr, &mut gas)
+}
+
+fn chase_static_attr_chain_impl(
+    expr: &Expr,
+    gas: &mut Gas,
+) -> Option<(ExprName, Vec1<Identifier>)> {
+    if gas.stop() {
+        return None;
+    }
+
+    match expr {
+        Expr::Attribute(ExprAttribute {
+            value: box Expr::Name(name),
+            attr,
+            ..
+        }) => Some((name.clone(), vec1![attr.clone()])),
+        Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+            chase_static_attr_chain_impl(value, gas).map(|(name, mut attrs)| {
+                attrs.push(attr.clone());
+                (name, attrs)
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Looking up names in an expression requires knowing the identity of the binding
@@ -276,7 +313,7 @@ impl<'a> BindingsBuilder<'a> {
     fn ensure_simple_attr(
         &mut self,
         value: &Identifier,
-        attr: &Identifier,
+        attrs: Vec1<Identifier>,
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) -> Idx<Key> {
@@ -284,10 +321,7 @@ impl<'a> BindingsBuilder<'a> {
             value,
             usage,
             tparams_builder.as_mut().map(|tparams_builder| {
-                (
-                    tparams_builder,
-                    LegacyTParamId::Attr(value.clone(), attr.clone()),
-                )
+                (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
         )
     }
@@ -1189,12 +1223,14 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            Expr::Attribute(ExprAttribute { value, attr, .. })
-                if let Expr::Name(value) = &**value
+            Expr::Attribute(..)
+                if let Some((base, attrs)) = chase_static_attr_chain(x)
                 // We assume "args" and "kwargs" are ParamSpec attributes rather than imported TypeVars.
-                    && attr.id != "args" && attr.id != "kwargs" =>
+                    && attrs.last().id != "args" 
+                    && attrs.last().id != "kwargs" =>
             {
-                // We intercept <name>.<name> to check if this is an imported legacy type parameter.
+                // We intercept dotted names (e.g. `mod.T` or `pkg.mod.T`) to check if the
+                // final attribute is an imported legacy type parameter.
                 //
                 // The value part of an attribute access is a module/object reference,
                 // not a type annotation. For example, in `x: pd.DataFrame`, `pd` is a
@@ -1208,8 +1244,8 @@ impl<'a> BindingsBuilder<'a> {
                     ref u => u.clone(),
                 };
                 self.ensure_simple_attr(
-                    &Ast::expr_name_identifier(value.clone()),
-                    attr,
+                    &Ast::expr_name_identifier(base),
+                    attrs,
                     &mut attr_value_usage,
                     tparams_builder,
                 );

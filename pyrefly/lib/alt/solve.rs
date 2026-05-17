@@ -45,7 +45,6 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -262,18 +261,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<LegacyTypeParameterLookup> {
         let maybe_parameter = match binding {
             BindingLegacyTypeParam::ParamKeyed(k) => self.get_idx(*k),
-            BindingLegacyTypeParam::ModuleKeyed(k, attr) => {
-                let module = self.get_idx(*k);
-                // Errors in attribute lookup are reported elsewhere, so we provide dummy values
-                // for arguments related to error reporting.
-                self.attr_infer(
-                    &module,
-                    attr,
-                    TextRange::default(),
-                    &self.error_swallower(),
-                    None,
-                )
-                .into()
+            BindingLegacyTypeParam::ModuleKeyed(k, attrs) => {
+                // Errors in attribute lookup are reported elsewhere.
+                attrs.iter().fold(self.get_idx(*k), |acc, attr| {
+                    self.attr_infer(
+                        &acc,
+                        attr,
+                        TextRange::default(),
+                        &self.error_swallower(),
+                        None,
+                    )
+                    .into()
+                })
             }
         };
         // Use the scope_anchor (the KeyLegacyTypeParam's own range, i.e. the first occurrence
@@ -4539,15 +4538,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             LegacyTypeParameterLookup::NotParameter(ty) => ty.clone(),
         };
         match self.bindings().get(key) {
-            BindingLegacyTypeParam::ModuleKeyed(idx, attr) => {
-                // `idx` points to a module whose `attr` attribute may be a legacy type
+            BindingLegacyTypeParam::ModuleKeyed(idx, attrs) => {
+                // `idx` points to a module whose attr chain may end in a legacy type
                 // variable that needs to be replaced with a QuantifiedValue. Since the
-                // ModuleKeyed binding is for the module itself, we use the mechanism for
-                // attribute ("facet") type narrowing to change the type that will be
-                // produced when `attr` is accessed.
+                // binding is for the module itself, we use the mechanism for attribute
+                // ("facet") type narrowing to change the type produced when the final
+                // attr is accessed.
                 let module = (*self.get_idx(*idx)).clone();
                 if matches!(ty, Type::QuantifiedValue(_)) {
-                    module.with_narrow(&vec1![FacetKind::Attribute((**attr).clone())], ty)
+                    let facets = attrs.mapped_ref(|a| FacetKind::Attribute(a.clone()));
+                    module.with_narrow(&facets, ty)
                 } else {
                     module
                 }

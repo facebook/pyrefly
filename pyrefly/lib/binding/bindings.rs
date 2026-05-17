@@ -48,6 +48,7 @@ use ruff_text_size::TextSize;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
@@ -1934,13 +1935,15 @@ impl<'a> BindingsBuilder<'a> {
 pub enum LegacyTParamId {
     /// A simple name referring to a legacy type parameter.
     Name(Identifier),
-    /// A <name>.<name> reference to a legacy type parameter.
-    Attr(Identifier, Identifier),
+    /// A dotted reference to a legacy type parameter (e.g. `mod.T` or `pkg.mod.T`).
+    /// The first Identifier is the base name looked up in scope (mod or pkg), the
+    /// vector contains the attribute chain, i.e T or mod.T
+    Attr(Identifier, Vec1<Identifier>),
 }
 
 impl LegacyTParamId {
     /// Get the identifier of the name that will actually be bound (for a normal name, this is
-    /// just itself; for a `<base>.<attr>` attribute it is the base portion, which gets narrowed).
+    /// just itself; for a `<base>.<attr>*` attribute it is the base portion, which gets narrowed).
     fn as_identifier(&self) -> &Identifier {
         match self {
             Self::Name(name) => name,
@@ -1963,7 +1966,14 @@ impl LegacyTParamId {
     fn tvar_name(&self) -> String {
         match self {
             Self::Name(name) => name.id.as_str().to_owned(),
-            Self::Attr(base, attr) => format!("{base}.{attr}"),
+            Self::Attr(base, attrs) => {
+                let mut result = format!("{base}");
+                for attr in attrs {
+                    result.push('.');
+                    result.push_str(attr.as_str());
+                }
+                result
+            }
         }
     }
 }
@@ -1972,7 +1982,7 @@ impl Ranged for LegacyTParamId {
     fn range(&self) -> TextRange {
         match self {
             Self::Name(name) => name.range,
-            Self::Attr(_, attr) => attr.range,
+            Self::Attr(_, attrs) => attrs.last().range,
         }
     }
 }
@@ -2213,10 +2223,13 @@ impl<'a> BindingsBuilder<'a> {
                 )),
                 Some(_) => None,
             },
-            LegacyTParamId::Attr(_, attr) => match binding {
+            LegacyTParamId::Attr(_, attrs) => match binding {
                 Some(Binding::Module(..) | Binding::Import(..)) | None => Some((
-                    KeyLegacyTypeParam(ShortIdentifier::new(attr)),
-                    BindingLegacyTypeParam::ModuleKeyed(original_idx, Box::new(attr.id.clone())),
+                    KeyLegacyTypeParam(ShortIdentifier::new(attrs.last())),
+                    BindingLegacyTypeParam::ModuleKeyed(
+                        original_idx,
+                        attrs.mapped_ref(|a| a.id.clone()),
+                    ),
                 )),
                 Some(_) => None,
             },

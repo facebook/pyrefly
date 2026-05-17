@@ -47,6 +47,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
@@ -123,7 +124,7 @@ assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
 assert_words!(BindingClassField, 11);
 assert_bytes!(BindingClassSynthesizedFields, 4);
-assert_bytes!(BindingLegacyTypeParam, 16);
+assert_bytes!(BindingLegacyTypeParam, 32);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
@@ -3181,20 +3182,25 @@ impl DisplayWith<Bindings> for BindingClassSubscriptSymmetry {
 pub enum BindingLegacyTypeParam {
     /// The key points directly to an expression that may be a legacy type parameter.
     ParamKeyed(Idx<Key>),
-    /// The key points to a module with an attribute that may be a legacy type parameter.
-    ModuleKeyed(Idx<Key>, Box<Name>),
+    /// The key points to a module with attribute(s) that may be a legacy type parameter.
+    /// Supports multi-level dotted access (e.g. `mod.T` or `pkg.mod.T`).
+    ModuleKeyed(Idx<Key>, Vec1<Name>),
 }
 
 impl DisplayWith<Bindings> for BindingLegacyTypeParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(
-            f,
-            "BindingLegacyTypeParam({})",
-            match self {
-                Self::ParamKeyed(k) => format!("{}", ctx.display(*k)),
-                Self::ModuleKeyed(k, attr) => format!("{}.{attr}", ctx.display(*k)),
+        write!(f, "BindingLegacyTypeParam(")?;
+        match self {
+            Self::ParamKeyed(k) => write!(f, "{}", ctx.display(*k)),
+            Self::ModuleKeyed(k, attrs) => {
+                write!(f, "{}", ctx.display(*k))?;
+                for attr in attrs.iter() {
+                    write!(f, ".{}", attr)?;
+                }
+                Ok(())
             }
-        )
+        }?;
+        write!(f, ")")
     }
 }
 
