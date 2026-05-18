@@ -134,7 +134,7 @@ pub fn make_error_config(
         if disallow_any_generics || strict {
             errors.insert(ErrorKind::ImplicitAny.to_name().to_owned(), Severity::Error);
         }
-        if disallow_any_explicit || strict {
+        if disallow_any_explicit {
             errors.insert(ErrorKind::ExplicitAny.to_name().to_owned(), Severity::Error);
         }
         if report_deprecated_as_note && errors.contains_key(ErrorKind::Deprecated.to_name()) {

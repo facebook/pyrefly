@@ -356,6 +356,22 @@ mod tests {
     }
 
     #[test]
+    fn test_migrate_from_mypy_strict_does_not_enable_explicit_any() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "strict", Some("True".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let _ = error_codes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert!(pyrefly_cfg.root.errors.is_some());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(errors.severity(ErrorKind::RedundantCast), Severity::Warn);
+        assert_eq!(errors.severity(ErrorKind::ExplicitAny), Severity::Ignore);
+    }
+
+    #[test]
     fn test_migrate_from_pyright_report_explicit_any() {
         let mut pyright_cfg = default_pyright_config();
         pyright_cfg.errors.report_explicit_any = Some(Severity::Warn);
