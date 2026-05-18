@@ -2298,21 +2298,16 @@ impl Solver {
                 quantified.as_gradual_type()
             }
             Variable::PartialQuantified(q) => q.as_gradual_type(),
-            Variable::PartialContained(_) => {
-                unreachable!("overload residual capture should not include PartialContained vars")
-            }
-            Variable::Recursive => {
-                unreachable!("overload residual capture should not include Recursive vars")
-            }
+            Variable::PartialContained(_) | Variable::Recursive => self.heap.mk_any_implicit(),
             Variable::Unwrap(_) => {
                 unreachable!("overload residual capture should not include Unwrap vars")
             }
         }
     }
 
-    fn are_branch_bounds_compatible_with_solved_type(
+    fn branch_bounds_compatibility_check(
         &self,
-        branch_value: &Variable,
+        branch_value: &mut Variable,
         solved_ty: &Type,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> bool {
@@ -2324,14 +2319,14 @@ impl Solver {
                 return is_subset(branch_ty, solved_ty).is_ok()
                     && is_subset(solved_ty, branch_ty).is_ok();
             }
-            Variable::PartialQuantified(_) => {
-                unreachable!("overload residual capture should not include PartialQuantified vars")
-            }
-            Variable::PartialContained(_) => {
-                unreachable!("overload residual capture should not include PartialContained vars")
-            }
-            Variable::Recursive => {
-                unreachable!("overload residual capture should not include Recursive vars")
+            Variable::PartialQuantified(_)
+            | Variable::PartialContained(_)
+            | Variable::Recursive => {
+                // During the overload branch probe, the captured Quantified var
+                // was unified with a partial/recursive var. Pin it to the solved
+                // type so downstream materialization sees a concrete answer.
+                *branch_value = Variable::Answer(solved_ty.clone());
+                return true;
             }
         };
         bounds
@@ -2361,7 +2356,7 @@ impl Solver {
 
     fn compute_overload_pruning_by_witness(
         &self,
-        solved_vars_with_residuals: &[SolvedVarWithResiduals],
+        solved_vars_with_residuals: &mut [SolvedVarWithResiduals],
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> OverloadPruningByWitness {
         let mut all_branch_indices_by_witness: HashMap<OverloadResidualIdentity, SmallSet<usize>> =
@@ -2380,7 +2375,7 @@ impl Solver {
                 OverloadResidualIdentity,
                 SmallSet<usize>,
             > = HashMap::new();
-            for residual in &solved_var.overload_residuals {
+            for residual in &mut solved_var.overload_residuals {
                 let identity = OverloadResidualIdentity {
                     witness_hash: residual.witness.identity.witness_hash,
                 };
@@ -2402,10 +2397,10 @@ impl Solver {
                 let surviving_for_solved_var = surviving_per_witness_for_solved_var
                     .entry(identity.clone())
                     .or_default();
-                for branch in &residual.branches {
+                for branch in &mut residual.branches {
                     all_branch_indices.insert(branch.branch_index);
-                    if self.are_branch_bounds_compatible_with_solved_type(
-                        &branch.value,
+                    if self.branch_bounds_compatibility_check(
+                        &mut branch.value,
                         &solved_var.solved_ty,
                         is_subset,
                     ) {
@@ -2470,11 +2465,11 @@ impl Solver {
     fn compute_overload_pruning_by_witness_from_payloads(
         &self,
         solved_vars_by_payload: &SmallMap<Var, SolvedVarByPayload>,
-        overload_witness_payloads: &OverloadWitnessPayloadByHash,
+        overload_witness_payloads: &mut OverloadWitnessPayloadByHash,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> OverloadPruningByWitness {
         overload_witness_payloads
-            .iter()
+            .iter_mut()
             .filter_map(|(witness_hash, branch_captures)| {
                 let identity = OverloadResidualIdentity {
                     witness_hash: *witness_hash,
@@ -2484,12 +2479,12 @@ impl Solver {
                 for (var, solved_var) in solved_vars_by_payload {
                     let mut surviving_for_solved_var = SmallSet::new();
                     let mut saw_var_in_witness = false;
-                    for capture in branch_captures {
-                        let Some(branch_value) = capture.values.get(var) else {
+                    for capture in branch_captures.iter_mut() {
+                        let Some(branch_value) = capture.values.get_mut(var) else {
                             continue;
                         };
                         saw_var_in_witness = true;
-                        if self.are_branch_bounds_compatible_with_solved_type(
+                        if self.branch_bounds_compatibility_check(
                             branch_value,
                             &solved_var.solved_ty,
                             is_subset,
@@ -2588,7 +2583,7 @@ impl Solver {
         call_context: &CallContext,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let tracked_fresh_vars = call_context.take_deferred_quantified_vars();
-        let overload_witness_payloads = call_context.take_overload_witness_payloads();
+        let mut overload_witness_payloads = call_context.take_overload_witness_payloads();
         call_context.mark_boundary_consumed_and_drained();
         let payload_vars: SmallSet<Var> = overload_witness_payloads
             .values()
@@ -2614,7 +2609,7 @@ impl Solver {
             QuantifiedHandle(all_boundary_vars),
             infer_with_first_use,
             &mut |got, want| subset.is_subset_eq_probe_for_pruning(got, want),
-            Some(&overload_witness_payloads),
+            Some(&mut overload_witness_payloads),
         )
     }
 
@@ -2646,11 +2641,12 @@ impl Solver {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-        overload_witness_payloads: Option<&OverloadWitnessPayloadByHash>,
+        overload_witness_payloads: Option<&mut OverloadWitnessPayloadByHash>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let mut err = Vec::new();
-        let use_payload_pruning =
-            overload_witness_payloads.is_some_and(|payloads| !payloads.is_empty());
+        let use_payload_pruning = overload_witness_payloads
+            .as_ref()
+            .is_some_and(|payloads| !payloads.is_empty());
         let mut solved_quantified_names_by_var: SmallMap<Var, Name> = SmallMap::new();
         let mut solved_vars_with_residuals = Vec::new();
         let lock = self.variables.lock();
@@ -2724,7 +2720,7 @@ impl Solver {
                 is_subset,
             )
         } else {
-            self.compute_overload_pruning_by_witness(&solved_vars_with_residuals, is_subset)
+            self.compute_overload_pruning_by_witness(&mut solved_vars_with_residuals, is_subset)
         };
         for decision in overload_pruning_by_witness.values() {
             if !decision.all_pruned {
