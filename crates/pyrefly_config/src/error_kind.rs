@@ -153,6 +153,8 @@ pub enum ErrorKind {
     Deprecated,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
+    /// Explicit usage of `typing.Any` in an annotation.
+    ExplicitAny,
     /// Raised when a class implicitly becomes abstract by defining abstract members without
     /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
     ImplicitAbstractClass,
@@ -418,6 +420,7 @@ impl ErrorKind {
         match self {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
+            ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,

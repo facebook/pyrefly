@@ -237,6 +237,18 @@ impl TypeFormContext {
             _ => false,
         }
     }
+
+    fn can_report_explicit_any(self) -> bool {
+        !matches!(
+            self,
+            TypeFormContext::GenericBase
+                | TypeFormContext::ParamSpecDefault
+                | TypeFormContext::TupleOrCallableParam
+                | TypeFormContext::TypeArgument
+                | TypeFormContext::TypeArgumentCallableReturn
+                | TypeFormContext::TypeArgumentForType
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -1271,6 +1283,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ty = if let Some(untyped) = untyped {
             let validated =
                 self.validate_type_form(untyped, range, TypeFormContext::TypeAlias, errors);
+            self.check_explicit_any(&validated, range, errors);
             if validated.is_error() {
                 return TypeAlias::error(name.clone(), style);
             }
@@ -5893,6 +5906,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty
     }
 
+    fn check_explicit_any(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
+        if ty.any(|ty| matches!(ty, Type::Any(AnyStyle::Explicit))) {
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::ExplicitAny,
+                    "Explicit `Any` is not allowed".to_owned(),
+                )
+                .emit();
+        }
+    }
+
     /// Type check a delete expression, including ensuring that the target of the
     /// delete is legal.
     fn check_del_statement(&self, delete_target: &Expr, errors: &ErrorCollector) -> Type {
@@ -6047,6 +6072,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.untype(inferred_ty, x.range(), errors)
             }
         };
-        self.validate_type_form(result, x.range(), type_form_context, errors)
+        let result = self.validate_type_form(result, x.range(), type_form_context, errors);
+        if type_form_context.can_report_explicit_any() {
+            self.check_explicit_any(&result, x.range(), errors);
+        }
+        result
     }
 }

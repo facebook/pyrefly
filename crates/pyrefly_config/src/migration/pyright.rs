@@ -187,6 +187,8 @@ pub struct RuleOverrides {
     // Type annotation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_invalid_type_form: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_explicit_any: Option<Severity>,
 
     // Abstract/instantiation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -322,6 +324,7 @@ impl RuleOverrides {
         add(self.report_missing_module_source, ErrorKind::MissingSource);
         add(self.report_missing_type_stubs, ErrorKind::UntypedImport);
         add(self.report_invalid_type_form, ErrorKind::InvalidAnnotation);
+        add(self.report_explicit_any, ErrorKind::ExplicitAny);
         add(self.report_abstract_usage, ErrorKind::BadInstantiation);
         add(self.report_argument_type, ErrorKind::BadArgumentType);
         add(self.report_assert_type_failure, ErrorKind::AssertType);

@@ -484,6 +484,23 @@ y = 10 // 0  # error: division by zero
 z = 10 % 0   # error: division by zero
 ```
 
+## explicit-any
+
+`typing.Any` was written explicitly in an annotation. This diagnostic is useful for codebases that want to prevent `Any` from silently allowing arbitrary operations.
+
+The default severity of this diagnostic is `ignore`.
+
+```python
+from typing import Any
+
+def f(x: Any) -> Any:  # explicit-any on both annotations
+    return x
+
+# Fix:
+def f(x: object) -> object:
+    return x
+```
+
 ## implicit-abstract-class
 
 Pyrefly emits this error when a class that inherits from an abstract class but is not itself explicitly abstract (for example, it does not directly inherit from `abc.ABC` or use `abc.ABCMeta`) has unimplemented abstract members. Such classes cannot be instantiated at runtime. To resolve the issue, explicitly declare the class as abstract or provide concrete implementations.
