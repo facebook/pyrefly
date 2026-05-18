@@ -5,12 +5,13 @@ slug: /configuration
 description: Configure Pyrefly settings and options
 ---
 
-{/*
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- */}
+{/\*
+
+- Copyright (c) Meta Platforms, Inc. and affiliates.
+-
+- This source code is licensed under the MIT license found in the
+- LICENSE file in the root directory of this source tree.
+  \*/}
 
 # Pyrefly Configuration
 
@@ -699,6 +700,8 @@ See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for mor
 - Equivalent configs:
     - `true` emulates mypy's `check_untyped_defs` flag.
     - `false` emulates mypy's default behavior.
+- Related options:
+    - [`infer-return-types`](#infer-return-types): Controls when Pyrefly infers return types for unannotated functions.
 
 ### `infer-return-types`
 
@@ -713,6 +716,18 @@ unannotated functions are only eligible when `check-unannotated-defs` is `true`.
   `check-unannotated-defs = false` to still get return type inference for
   partially annotated functions.
 - `"never"`: Never infer return types; unannotated returns are treated as `Any`.
+
+:::tip Disabling return type inference
+If you want to disable return type inference (e.g., to match mypy's default
+behavior or reduce type check duration), set:
+
+\`\`\`toml
+infer-return-types = "never"
+\`\`\`
+
+This is often combined with [`check-unannotated-defs = false`](#check-unannotated-defs)
+for a more permissive setup.
+:::
 
 :::info
 To provide inferred return types with `"checked"` or `"annotated"`, especially
@@ -759,7 +774,7 @@ take precedence if both are set.
 - `"check-and-infer-return-type"` maps to `check-unannotated-defs = true` and `infer-return-types = "checked"`.
 - `"check-and-infer-return-any"` maps to `check-unannotated-defs = true` and `infer-return-types = "never"`.
 - `"skip-and-infer-return-any"` maps to `check-unannotated-defs = false` and `infer-return-types = "never"`.
-:::
+  :::
 
 ### `use-ignore-files`
 
@@ -869,9 +884,7 @@ The command should output a JSON file with the following structure:
     "db": {
         "//colorama:py-stubs": {
             "srcs": {
-                "colorama": [
-                    "colorama/__init__.pyi"
-                ]
+                "colorama": ["colorama/__init__.pyi"]
             },
             "deps": [],
             "buildfile_path": "colorama/BUCK",
@@ -880,9 +893,7 @@ The command should output a JSON file with the following structure:
         },
         "//colorama:py": {
             "srcs": {
-                "colorama": [
-                    "colorama/__init__.py"
-                ]
+                "colorama": ["colorama/__init__.py"]
             },
             "deps": ["//colorama:py-stubs"],
             "buildfile_path": "colorama/BUCK",
@@ -1421,9 +1432,9 @@ assert-type = false
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| 0    | Success - command completed without issues |
-| 1    | User error - command completed but problems (e.g., type errors) were found |
+| Code | Meaning                                                                                  |
+| ---- | ---------------------------------------------------------------------------------------- |
+| 0    | Success - command completed without issues                                               |
+| 1    | User error - command completed but problems (e.g., type errors) were found               |
 | 3    | Infrastructure error - an error in the environment prevented the command from completing |
-| 101  | Panic - Pyrefly encountered an internal error and crashed |
+| 101  | Panic - Pyrefly encountered an internal error and crashed                                |
