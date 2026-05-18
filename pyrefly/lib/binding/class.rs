@@ -388,7 +388,7 @@ impl<'a> BindingsBuilder<'a> {
             args.keywords.iter_mut().for_each(|keyword| {
                 if let Some(name) = &keyword.arg {
                     self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.id.clone(), keyword.value.clone()));
+                    keywords.push((name.clone(), keyword.value.clone()));
                 } else {
                     self.error(
                         keyword.range(),
@@ -1150,7 +1150,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Name, Expr)]>,
+        keywords: Box<[(Identifier, Expr)]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1598,8 +1598,12 @@ impl<'a> BindingsBuilder<'a> {
                 (Some(name), _) if name == "extra_items" => Some(name),
                 _ => None,
             };
-            if let Some(kw_name) = recognized_kw {
-                base_class_keywords.push((kw_name.clone(), kw.value.clone()));
+            if recognized_kw.is_some() {
+                let kw_name = kw
+                    .arg
+                    .clone()
+                    .expect("recognized TypedDict keyword must have a name");
+                base_class_keywords.push((kw_name, kw.value.clone()));
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")
