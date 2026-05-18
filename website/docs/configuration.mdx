@@ -315,11 +315,15 @@ against
 [`sys.platform`](https://docs.python.org/3/library/sys.html#sys.platform)
 values.
 
-- Type: string
+- Type: string or list of strings
 - Default: result from [Environment Autoconfiguration](#environment-autoconfiguration), or
   "linux" if the Python interpreter cannot be queried
 - Flag equivalent: `--python-platform`
 - Equivalent configs: `pythonPlatform` in Pyright, `platform` in mypy
+
+Use `python-platform = "all"` to avoid pruning platform-specific branches, or
+provide a list such as `python-platform = ["linux", "win32"]` to type check
+branches that may run on any of those platforms.
 
 ### `python-version`
 
