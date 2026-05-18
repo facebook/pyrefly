@@ -13,7 +13,6 @@ use std::str::FromStr;
 
 use dupe::Dupe;
 use itertools::Itertools;
-use parse_display::Display;
 use pyrefly_util::prelude::SliceExt;
 use regex::Match;
 use regex::Regex;
@@ -162,19 +161,11 @@ impl PythonVersion {
 
 /// The platform on which Python is running, e.g. "linux", "darwin", "win32".
 /// See <https://docs.python.org/3/library/sys.html#sys.platform> for examples.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    Display
-)]
-pub struct PythonPlatform(String);
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PythonPlatform {
+    All,
+    Platforms(Vec<String>),
+}
 
 impl FromStr for PythonPlatform {
     type Err = Infallible;
@@ -194,36 +185,133 @@ impl PythonPlatform {
     pub fn new(platform: &str) -> Self {
         // Try and normalise common names, particularly those that Pyright allows (All, Linux, Darwin, Windows)
         match platform {
-            "Linux" | "linux" | "All" => Self::linux(),
+            "All" | "all" => Self::All,
+            "Linux" | "linux" => Self::linux(),
             "Darwin" | "darwin" | "mac" | "macos" => Self::mac(),
             "Windows" | "windows" | "win32" | "Win32" => Self::windows(),
-            _ => Self(platform.to_owned()),
+            _ => Self::Platforms(vec![platform.to_owned()]),
         }
     }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn new_many(platforms: Vec<String>) -> anyhow::Result<Self> {
+        if platforms.is_empty() {
+            return Err(anyhow::anyhow!(
+                "`python-platform` list must contain at least one value"
+            ));
+        }
+        let mut found_all = false;
+        let mut platforms = platforms
+            .into_iter()
+            .flat_map(|platform| match Self::new(&platform) {
+                Self::All => {
+                    found_all = true;
+                    Vec::new()
+                }
+                Self::Platforms(platforms) => platforms,
+            })
+            .collect::<Vec<_>>();
+        if found_all {
+            if platforms.is_empty() {
+                return Ok(Self::All);
+            }
+            return Err(anyhow::anyhow!(
+                "`all` cannot be combined with other `python-platform` values"
+            ));
+        }
+        platforms.sort();
+        platforms.dedup();
+        Ok(Self::Platforms(platforms))
+    }
+
+    fn possible_platforms(&self) -> Option<&[String]> {
+        match self {
+            Self::All => None,
+            Self::Platforms(platforms) => Some(platforms),
+        }
+    }
+
+    fn possible_os_names(&self) -> Option<Vec<String>> {
+        let mut names = self
+            .possible_platforms()?
+            .iter()
+            .map(|platform| Self::new(platform).os_name().to_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        Some(names)
     }
 
     pub fn linux() -> Self {
-        Self("linux".to_owned())
+        Self::Platforms(vec!["linux".to_owned()])
     }
 
     pub fn windows() -> Self {
-        Self("win32".to_owned())
+        Self::Platforms(vec!["win32".to_owned()])
     }
 
     pub fn mac() -> Self {
-        Self("darwin".to_owned())
+        Self::Platforms(vec!["darwin".to_owned()])
     }
 
     /// Return the `os.name` value corresponding to this platform.
     /// See <https://docs.python.org/3/library/os.html#os.name>.
     pub fn os_name(&self) -> &str {
-        match self.0.as_str() {
+        let Self::Platforms(platforms) = self else {
+            unreachable!("`all` does not have one corresponding os.name value");
+        };
+        let [platform] = &**platforms else {
+            unreachable!("multiple platforms do not have one corresponding os.name value");
+        };
+        match platform.as_str() {
             "win32" => "nt",
             "java" => "java",
             _ => "posix",
+        }
+    }
+}
+
+impl Display for PythonPlatform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::All => write!(f, "all"),
+            Self::Platforms(platforms) => write!(f, "{}", platforms.join(", ")),
+        }
+    }
+}
+
+impl Serialize for PythonPlatform {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::All => serializer.serialize_str("all"),
+            Self::Platforms(platforms) => {
+                if let [platform] = &**platforms {
+                    serializer.serialize_str(platform)
+                } else {
+                    platforms.serialize(serializer)
+                }
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PythonPlatform {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Platform {
+            One(String),
+            Many(Vec<String>),
+        }
+
+        match Platform::deserialize(deserializer)? {
+            Platform::One(platform) => Ok(Self::new(&platform)),
+            Platform::Many(platforms) => Self::new_many(platforms).map_err(de::Error::custom),
         }
     }
 }
@@ -348,9 +436,98 @@ impl<'de> Deserialize<'de> for SysInfo {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
+enum StringValue {
+    Any,
+    Set(Vec<String>),
+}
+
+impl StringValue {
+    fn one(value: String) -> Self {
+        Self::Set(vec![value])
+    }
+
+    fn from_platform(platform: &PythonPlatform) -> Self {
+        match platform.possible_platforms() {
+            Some(platforms) => Self::Set(platforms.to_vec()),
+            None => Self::Any,
+        }
+    }
+
+    fn from_os_names(platform: &PythonPlatform) -> Self {
+        match platform.possible_os_names() {
+            Some(names) => Self::Set(names),
+            None => Self::Any,
+        }
+    }
+
+    fn to_bool(&self) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Set(values) => values.iter().any(|value| !value.is_empty()),
+        }
+    }
+
+    fn compare(&self, op: CmpOp, other: &Self) -> Option<bool> {
+        let left = match self {
+            Self::Any => return None,
+            Self::Set(left) => left,
+        };
+        let right = match other {
+            Self::Any => return None,
+            Self::Set(right) => right,
+        };
+        if !matches!(
+            op,
+            CmpOp::Eq | CmpOp::NotEq | CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE
+        ) {
+            return None;
+        }
+        aggregate_bools(
+            left.iter()
+                .cartesian_product(right)
+                .map(|(left, right)| match op {
+                    CmpOp::Eq => left == right,
+                    CmpOp::NotEq => left != right,
+                    CmpOp::Lt => left < right,
+                    CmpOp::LtE => left <= right,
+                    CmpOp::Gt => left > right,
+                    CmpOp::GtE => left >= right,
+                    _ => unreachable!("unsupported string comparison operator checked above"),
+                }),
+        )
+    }
+
+    fn starts_with(&self, prefix: &Self) -> Option<bool> {
+        let values = match self {
+            Self::Any => return None,
+            Self::Set(values) => values,
+        };
+        let prefixes = match prefix {
+            Self::Any => return None,
+            Self::Set(prefixes) => prefixes,
+        };
+        aggregate_bools(
+            values
+                .iter()
+                .cartesian_product(prefixes)
+                .map(|(value, prefix)| value.starts_with(prefix)),
+        )
+    }
+}
+
+fn aggregate_bools(mut values: impl Iterator<Item = bool>) -> Option<bool> {
+    let first = values.next()?;
+    if values.all(|value| value == first) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Clone)]
 enum Value {
     Tuple(Vec<Value>),
-    String(String),
+    String(StringValue),
     Int(i64),
     Bool(bool),
     /// I know what the value evaluates to when considered truthy, but not its precise outcome.
@@ -369,7 +546,7 @@ impl Value {
             Value::Bool(x) => *x,
             Value::Truthiness(x) => *x,
             Value::Int(x) => *x != 0,
-            Value::String(x) => !x.is_empty(),
+            Value::String(x) => x.to_bool(),
             Value::Tuple(x) => !x.is_empty(),
             Value::VersionInfo(_) => true,
         }
@@ -393,9 +570,28 @@ impl Value {
         match op {
             CmpOp::In | CmpOp::NotIn => {
                 let contains = match other {
-                    Value::Tuple(values) => values
-                        .iter()
-                        .any(|value| self.compare(CmpOp::Eq, value) == Some(true)),
+                    Value::Tuple(values) => {
+                        let Value::String(left) = self else {
+                            return None;
+                        };
+                        let strings = values
+                            .iter()
+                            .map(|value| match value {
+                                Value::String(value) => Some(value),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>()?;
+                        let left_values = match left {
+                            StringValue::Any => return None,
+                            StringValue::Set(left_values) => left_values,
+                        };
+                        aggregate_bools(left_values.iter().map(|left| {
+                            strings.iter().any(|right| match right {
+                                StringValue::Any => true,
+                                StringValue::Set(right_values) => right_values.contains(left),
+                            })
+                        }))?
+                    }
                     _ => return None,
                 };
                 return Some(if matches!(op, CmpOp::In) {
@@ -412,6 +608,7 @@ impl Value {
         }
 
         Some(match (self, other) {
+            (Value::String(left), Value::String(right)) => left.compare(op, right)?,
             (Value::VersionInfo(left), Value::Tuple(right)) => {
                 compare_version_with_tuple(left, right, op)?
             }
@@ -531,7 +728,7 @@ impl SysInfo {
                     && &name.id == "sys" =>
             {
                 match attr.as_str() {
-                    "platform" => Some(Value::String(self.0.platform.as_str().to_owned())),
+                    "platform" => Some(Value::String(StringValue::from_platform(&self.0.platform))),
                     "version_info" => Some(Value::VersionInfo(self.0.version)),
                     _ => None,
                 }
@@ -541,7 +738,7 @@ impl SysInfo {
                     && &name.id == "os"
                     && attr.as_str() == "name" =>
             {
-                Some(Value::String(self.0.platform.os_name().to_owned()))
+                Some(Value::String(StringValue::from_os_names(&self.0.platform)))
             }
             Expr::Name(name) if Self::is_type_checking_constant_name(name.id()) => {
                 Some(Value::Bool(self.type_checking()))
@@ -572,7 +769,7 @@ impl SysInfo {
                 && let Some(Value::String(x)) = self.evaluate(value)
                 && let Some(Value::String(y)) = self.evaluate(arg) =>
             {
-                Some(Value::Bool(x.starts_with(&y)))
+                Some(Value::Bool(x.starts_with(&y)?))
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 let base = self.evaluate(value)?;
@@ -592,7 +789,9 @@ impl SysInfo {
             }
             Expr::NoneLiteral(_) => Some(Value::Truthiness(false)),
             Expr::BooleanLiteral(ExprBooleanLiteral { value: b, .. }) => Some(Value::Bool(*b)),
-            Expr::StringLiteral(x) => Some(Value::String(x.value.to_str().to_owned())),
+            Expr::StringLiteral(x) => {
+                Some(Value::String(StringValue::one(x.value.to_str().to_owned())))
+            }
             Expr::BoolOp(x) => match x.op {
                 BoolOp::And => {
                     let mut res = Some(Value::Bool(true));
@@ -817,6 +1016,50 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_platform_eval() {
+        fn eval(platform: PythonPlatform, expression: &str) -> Option<bool> {
+            let expression = Ast::parse_expr(expression, ruff_text_size::TextSize::new(0)).unwrap();
+            SysInfo::new(PythonVersion::default(), platform).evaluate_bool(&expression)
+        }
+
+        let linux_and_windows =
+            PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]).unwrap();
+        assert_eq!(
+            eval(linux_and_windows.clone(), r#"sys.platform == "linux""#),
+            None
+        );
+        assert_eq!(
+            eval(
+                linux_and_windows.clone(),
+                r#"sys.platform in ("linux", "win32")"#
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            eval(linux_and_windows.clone(), r#"sys.platform == "darwin""#),
+            Some(false)
+        );
+        assert_eq!(
+            eval(linux_and_windows.clone(), r#"sys.platform.startswith("w")"#),
+            None
+        );
+        assert_eq!(
+            eval(linux_and_windows.clone(), r#"sys.platform.startswith("x")"#),
+            Some(false)
+        );
+        assert_eq!(eval(linux_and_windows, r#"os.name == "posix""#), None);
+
+        let posix_platforms =
+            PythonPlatform::new_many(vec!["linux".to_owned(), "darwin".to_owned()]).unwrap();
+        assert_eq!(eval(posix_platforms, r#"os.name == "posix""#), Some(true));
+
+        assert_eq!(
+            eval(PythonPlatform::All, r#"sys.platform == "linux""#),
+            None
+        );
+    }
+
+    #[test]
     fn test_deserialize_sys_info() {
         assert_eq!(
             serde_json::from_str::<SysInfo>(
@@ -832,7 +1075,30 @@ mod tests {
             .unwrap(),
             SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::mac()),
         );
+        assert_eq!(
+            serde_json::from_str::<SysInfo>(
+                r#"{"python_platform": ["linux", "win32"], "python_version": "3.10.1"}"#
+            )
+            .unwrap(),
+            SysInfo::new(
+                PythonVersion::new(3, 10, 1),
+                PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]).unwrap()
+            ),
+        );
+        assert_eq!(
+            serde_json::from_str::<SysInfo>(
+                r#"{"python_platform": "all", "python_version": "3.10.1"}"#
+            )
+            .unwrap(),
+            SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::All),
+        );
         assert!(serde_json::from_str::<SysInfo>(r#"{"python_version": "3.10.1"}"#).is_err());
+        assert!(
+            serde_json::from_str::<SysInfo>(
+                r#"{"python_platform": ["all", "linux"], "python_version": "3.10.1"}"#
+            )
+            .is_err()
+        );
         assert!(
             serde_json::from_str::<SysInfo>(r#"{"python_platform": "linux", "python_platform": "linux", "python_version": "3.10.1"}"#).is_err()
         );

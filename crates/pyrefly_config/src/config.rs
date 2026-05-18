@@ -1814,6 +1814,40 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_python_platform_list() {
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = ["linux", "win32"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]).unwrap())
+        );
+
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = "all"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::All)
+        );
+
+        assert!(
+            ConfigFile::parse_config(
+                r#"
+                python-platform = ["all", "linux"]
+                "#,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn deserialize_pyrefly_config_snake_case() {
         let config_str = r#"
              project_includes = ["tests", "./implementation"]
