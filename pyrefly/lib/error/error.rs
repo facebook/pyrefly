@@ -96,16 +96,13 @@ impl Error {
                 writeln!(f, "{details}")?;
             }
         } else if self.severity.is_enabled() {
-            // In min-text format, sanitize the message to ensure one error per line
-            // by replacing newlines with spaces.
-            let sanitized_msg = self.msg_header.replace('\n', " ");
             writeln!(
                 f,
                 "{} {}:{}: {} [{}]",
                 self.severity.label(),
                 self.path_string_with_fragment(project_root),
                 self.display_range,
-                sanitized_msg,
+                self.msg_header,
                 self.error_kind.to_name(),
             )?;
         }
@@ -128,15 +125,12 @@ impl Error {
                 anstream::println!("{details}");
             }
         } else if self.severity.is_enabled() {
-            // In min-text format, sanitize the message to ensure one error per line
-            // by replacing newlines with spaces.
-            let sanitized_msg = self.msg_header.replace('\n', " ");
             anstream::println!(
                 "{} {}:{}: {} {}",
                 self.severity.painted(),
                 Paint::blue(&self.path_string_with_fragment(project_root)),
                 Paint::dim(self.display_range()),
-                Paint::new(&*sanitized_msg),
+                Paint::new(&*self.msg_header),
                 Paint::dim(format!("[{}]", self.error_kind().to_name()).as_str()),
             );
         }
@@ -354,6 +348,10 @@ impl Error {
         error_kind: ErrorKind,
     ) -> Self {
         let display_range = module.display_range(range);
+        assert!(
+            !header.contains(['\n', '\r']),
+            "error header must not contain newlines"
+        );
         let msg_header = header.into_boxed_str();
         let msg_details = if details.is_empty() {
             None
@@ -591,6 +589,23 @@ mod tests {
         );
     }
 
+    #[test]
+    #[should_panic(expected = "error header must not contain newlines")]
+    fn test_error_header_rejects_newlines() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("x = 1".to_owned()),
+        );
+        let _ = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "first line\r\nsecond line".to_owned(),
+            Vec::new(),
+            ErrorKind::BadReturn,
+        );
+    }
+
     /// Integration test: verify that binary operator errors from the type checker
     /// produce secondary annotations labeling both operands with their types.
     #[test]
@@ -611,49 +626,5 @@ def f(x: None) -> None:
         assert_eq!(annotations.len(), 2);
         assert_eq!(&*annotations[0].label, "has type `None`");
         assert_eq!(&*annotations[1].label, "has type `Literal[2]`");
-    }
-
-    #[test]
-    fn test_mintext_format_sanitizes_newlines() {
-        let module_info = Module::new(
-            ModuleName::from_str("test"),
-            ModulePath::filesystem(PathBuf::from("test.py")),
-            Arc::new("x.append(y)".to_owned()),
-        );
-        // Create an error message with embedded newlines (like union type errors)
-        let error_with_newlines = Error::new(
-            module_info,
-            TextRange::new(TextSize::new(0), TextSize::new(11)),
-            "Object of class `NoneType` has no attribute `append`\nObject of class `bool` has no attribute `append`"
-                .to_owned(),
-            Vec::new(),
-            ErrorKind::MissingAttribute,
-        );
-
-        let root = PathBuf::new();
-        let mut mintext_output = Vec::new();
-        error_with_newlines
-            .write_line(&mut Cursor::new(&mut mintext_output), root.as_path(), false)
-            .unwrap();
-
-        let output_str = str::from_utf8(&mintext_output).unwrap();
-        // Verify that embedded newlines are replaced with spaces
-        // The output ends with a single newline from writeln!, which is expected in min-text format
-        let lines: Vec<&str> = output_str.split('\n').collect();
-        assert_eq!(lines.len(), 2, "output should have exactly 2 parts: the error line and a final empty part after the trailing newline");
-        let error_line = lines[0];
-
-        // Verify the message still appears, but on a single line without embedded newlines
-        assert!(
-            error_line.contains("Object of class `NoneType` has no attribute `append`"),
-            "first part of message should be present"
-        );
-        assert!(
-            error_line.contains("Object of class `bool` has no attribute `append`"),
-            "second part of message should be present"
-        );
-        // Verify the format is still min-text: "SEVERITY path:range: message [kind]"
-        assert!(error_line.starts_with("ERROR test.py:1:1-11:"), "output should start with 'ERROR test.py:1:1-11:'");
-        assert!(error_line.ends_with("[missing-attribute]"), "output should end with error kind");
     }
 }

@@ -27,7 +27,6 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -614,7 +613,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if !error_messages.is_empty() {
             error_messages.sort();
             error_messages.dedup();
-            let mut msg = vec1![error_messages.join("\n")];
+            let header = error_messages.remove(0);
+            let mut details = error_messages;
             // Skip suggestions when we have a partial union failure to avoid suggesting
             // attributes from the types that have them when the problem is that some types
             // don't have the attribute at all.
@@ -623,9 +623,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .as_ref()
                     .and_then(|attr_base| self.suggest_attribute_name(attr_name, attr_base))
             {
-                msg.push(format!("Did you mean `{suggestion}`?"));
+                details.push(format!("Did you mean `{suggestion}`?"));
             }
-            let (header, details) = msg.split_off_first();
             errors
                 .error_builder(range, ErrorKind::MissingAttribute, header)
                 .with_details(details)
