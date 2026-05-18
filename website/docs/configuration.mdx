@@ -495,13 +495,15 @@ min-severity = "warn"
 Default format for `pyrefly check` error output when `--output-format` is not
 set on the CLI.
 
-- Type: `"min-text" | "full-text" | "json" | "github" | "omit-errors"`
+- Type: `"min-text" | "full-text" | "json" | "github" | "junit-xml" | "omit-errors"`
 - Default: `full-text`
 - Flag equivalent: `--output-format`
 - Notes:
     - `output-format` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - A CLI `--output-format` flag still takes precedence over the config value.
+    - `"junit-xml"` emits a JUnit XML `<testsuites>` report suitable for CI
+      dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).
 
 ### `preset`
 

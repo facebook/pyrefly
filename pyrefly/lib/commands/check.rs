@@ -431,6 +431,7 @@ fn write_errors_to_file(
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -445,6 +446,7 @@ fn write_errors_to_console(
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -535,6 +537,112 @@ fn write_error_github_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<(
 
 fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
     buffered_write_error_github(stdout(), errors)
+}
+
+fn xml_escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
+            c if (c as u32) < 0x20 => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn xml_escape_cdata(s: &str) -> String {
+    // CDATA cannot contain "]]>"; split it across CDATA boundaries.
+    s.replace("]]>", "]]]]><![CDATA[>")
+}
+
+fn write_error_junit_xml<W: std::io::Write>(
+    mut writer: W,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let visible: Vec<&Error> = errors
+        .iter()
+        .filter(|e| matches!(e.severity(), Severity::Error | Severity::Warn))
+        .collect();
+    let n = visible.len();
+
+    writeln!(writer, r#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
+    writeln!(writer, "<testsuites>")?;
+    writeln!(
+        writer,
+        r#"  <testsuite name="pyrefly" tests="{n}" failures="{n}" errors="0" time="0">"#
+    )?;
+
+    for err in visible {
+        let error_path = err.path().as_path();
+        let path = error_path
+            .strip_prefix(relative_to)
+            .unwrap_or(error_path)
+            .to_string_lossy()
+            .into_owned();
+        let line = err.display_range().start.line_within_cell().get();
+        let kind = err.error_kind().to_name();
+        let header = err.msg_header();
+        let full = err.msg();
+        let failure_type = match err.severity() {
+            Severity::Warn => "warning".to_owned(),
+            _ => kind.to_owned(),
+        };
+
+        writeln!(
+            writer,
+            r#"    <testcase classname="{}" name="{}:L{}" file="{}" line="{}" time="0">"#,
+            xml_escape_attr(&path),
+            xml_escape_attr(kind),
+            line,
+            xml_escape_attr(&path),
+            line,
+        )?;
+        writeln!(
+            writer,
+            r#"      <failure type="{}" message="{}"><![CDATA[{}]]></failure>"#,
+            xml_escape_attr(&failure_type),
+            xml_escape_attr(header),
+            xml_escape_cdata(&full),
+        )?;
+        writeln!(writer, "    </testcase>")?;
+    }
+
+    writeln!(writer, "  </testsuite>")?;
+    writeln!(writer, "</testsuites>")?;
+    Ok(())
+}
+
+fn buffered_write_error_junit_xml(
+    writer: impl std::io::Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_junit_xml(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_junit_xml_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let file = File::create(path)?;
+    buffered_write_error_junit_xml(file, relative_to, errors)
+}
+
+fn write_error_junit_xml_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_junit_xml(stdout(), relative_to, errors)
 }
 
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
@@ -1446,6 +1554,51 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn junit_xml_output_format_writes_well_formed_xml() {
+        let errors = vec![
+            sample_error("first error".into()),
+            sample_error("second error".into()),
+        ];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#),
+            "missing XML declaration: {output}"
+        );
+        assert!(
+            output.contains(r#"<testsuite name="pyrefly" tests="2" failures="2""#),
+            "missing testsuite element: {output}"
+        );
+        assert!(output.contains("<failure type="), "missing failure element: {output}");
+        assert!(output.contains("repo/foo.py"), "missing file path: {output}");
+        assert!(output.ends_with("</testsuites>\n"), "missing closing tag: {output}");
+    }
+
+    #[test]
+    fn junit_xml_escapes_special_chars_in_messages() {
+        let errors = vec![sample_error(r#"a < b & c > d "e" 'f'"#.into())];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("&lt;"), "< not escaped: {output}");
+        assert!(output.contains("&amp;"), "& not escaped: {output}");
+        assert!(output.contains("&gt;"), "> not escaped: {output}");
+        assert!(output.contains("&quot;"), "\" not escaped: {output}");
+        assert!(output.contains("&apos;"), "' not escaped: {output}");
+
+        // CDATA split for ]]>
+        let errors2 = vec![sample_error("x ]]> y".into())];
+        let mut buf2 = Vec::new();
+        write_error_junit_xml(&mut buf2, Path::new("/"), &errors2).unwrap();
+        let output2 = String::from_utf8(buf2).unwrap();
+        assert!(
+            output2.contains("]]]]><![CDATA["),
+            "CDATA ]]> was not split across CDATA boundaries: {output2}"
+        );
     }
 
     #[test]

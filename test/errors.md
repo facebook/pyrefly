@@ -127,3 +127,15 @@ $ echo "x: str = 0" > $TMPDIR/test.py && \
  WARN */test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
 [1]
 ```
+
+## `--output-format junit-xml` emits well-formed XML
+
+```scrut {output_stream: stdout}
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/bad.py && \
+> $PYREFLY check --output-format junit-xml $TMPDIR/bad.py 2>/dev/null | head -3
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="pyrefly" tests=* failures=* errors="0" time="0"> (glob)
+[1]
+```

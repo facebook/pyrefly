@@ -159,6 +159,8 @@ pub enum OutputFormat {
     Json,
     /// Emit GitHub Actions workflow commands
     Github,
+    /// Emit JUnit XML
+    JunitXml,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }
@@ -2091,6 +2093,10 @@ output-format = "omit-errors"
 "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(config.output_format, Some(OutputFormat::OmitErrors));
+
+        let config_str = r#"output-format = "junit-xml""#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.output_format, Some(OutputFormat::JunitXml));
     }
 
     #[test]
