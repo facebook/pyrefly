@@ -3230,3 +3230,90 @@ def b():
             assert_type(val, int)
 "#,
 );
+
+testcase!(
+    test_sentinel_type_narrow_to_boolean,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: bool | MISSING):
+    if x is MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, bool)
+    if x is not MISSING:
+        assert_type(x, bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    test_sentinel_type_narrow_to_boolean_eq,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: bool | MISSING):
+    if x == MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, bool)
+    if x != MISSING:
+        assert_type(x, bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    sentinel_narrow_from_union,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: int | bool | MISSING):
+    if x is MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, int | bool)
+    if x is not MISSING:
+        assert_type(x, int | bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    sentinel_is_truthy,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+x: MISSING | None = MISSING
+if x:
+    assert_type(x, MISSING)
+else:
+    assert_type(x, None)
+    "#,
+);
+
+testcase!(
+    sentinel_narrow_with_type_param,
+    r#"
+from typing_extensions import Sentinel
+
+MIS = Sentinel("MIS", repr="MISSING")
+
+def a[T](x: T | MIS) -> T:
+    if x is not MIS:
+        return x
+    else:
+        raise ValueError("a")
+    "#,
+);

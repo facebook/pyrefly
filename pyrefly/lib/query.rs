@@ -425,6 +425,10 @@ fn type_shape_kind(context: &TypeShapeContext, ty: &Type) -> TypeShapeKind {
             "typing.Literal",
             vec![named_leaf(literal.value.to_string())],
         ),
+        Type::Sentinel(sentinel) => named_type_shape_kind(
+            "typing_extensions.Sentinel",
+            vec![named_leaf(format!("{}", sentinel))],
+        ),
         Type::LiteralString(_) => {
             named_type_shape_kind("typing_extensions.LiteralString", Vec::new())
         }

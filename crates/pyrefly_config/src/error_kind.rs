@@ -225,6 +225,8 @@ pub enum ErrorKind {
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
+    /// An error caused by incorrect usage or definition of a Sentinel.
+    InvalidSentinel,
     /// Attempting to call `super()` in a way that is not allowed.
     /// e.g. calling `super(Y, x)` on an object `x` that does not match the class `Y`.
     InvalidSuperCall,

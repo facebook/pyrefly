@@ -2354,6 +2354,7 @@ pub enum Binding {
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
+    Sentinel(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -2395,6 +2396,10 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeVarTuple(x) => {
                 let (a, name, call) = x.as_ref();
                 write!(f, "TypeVarTuple({}, {name}, {})", ann(a), m.display(call))
+            }
+            Self::Sentinel(x) => {
+                let (a, name, call) = x.as_ref();
+                write!(f, "Sentinel({}, {name}, {})", ann(a), m.display(call))
             }
             Self::ReturnExplicit(x) => {
                 write!(f, "ReturnExplicit({}, ", ann(&x.annot))?;
@@ -2693,6 +2698,7 @@ impl Binding {
             Binding::NameAssign(x) if x.name.as_str() == x.name.to_uppercase() => {
                 Some(SymbolKind::Constant)
             }
+            Binding::Sentinel(_) => Some(SymbolKind::Constant),
             Binding::NameAssign(x) => {
                 if x.name
                     .as_str()

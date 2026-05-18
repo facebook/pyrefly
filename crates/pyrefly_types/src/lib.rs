@@ -38,6 +38,7 @@ pub mod module;
 pub mod param_spec;
 pub mod quantified;
 pub mod read_only;
+pub mod sentinel;
 pub mod shaped_array;
 pub mod simplify;
 pub mod special_form;

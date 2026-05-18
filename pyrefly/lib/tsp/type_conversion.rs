@@ -360,6 +360,9 @@ impl TypeConverter<'_> {
 
             // --- Materialization is a solver artifact ---
             PyreflyType::Materialization => builtin("Unknown"),
+
+            // --- Sentinel type ---
+            PyreflyType::Sentinel(_) => builtin("Sentinel"),
         }
     }
 

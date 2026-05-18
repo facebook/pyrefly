@@ -585,6 +585,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_qname(t.qname())?;
                 output.write_str("]")
             }
+            Type::Sentinel(t) => output.write_qname(t.qname()),
             Type::TypeVarTuple(t) => {
                 let type_var_tuple_qname = self.stdlib.map(|s| s.type_var_tuple().qname());
                 output.write_builtin("TypeVarTuple", type_var_tuple_qname)?;

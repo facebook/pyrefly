@@ -74,6 +74,7 @@ pub enum SpecialExport {
     UsesShapeDsl,
     ShapeDslFunction,
     ShapedArray,
+    Sentinel,
 }
 
 impl SpecialExport {
@@ -139,6 +140,7 @@ impl SpecialExport {
             "uses_shape_dsl" => Some(Self::UsesShapeDsl),
             "shape_dsl_function" => Some(Self::ShapeDslFunction),
             "shaped_array" => Some(Self::ShapedArray),
+            "Sentinel" => Some(Self::Sentinel),
             _ => None,
         }
     }
@@ -213,6 +215,7 @@ impl SpecialExport {
             Self::UsesShapeDsl => matches!(m.as_str(), "shape_extensions"),
             Self::ShapeDslFunction => matches!(m.as_str(), "shape_extensions.dsl"),
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
+            Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
         }
     }
 

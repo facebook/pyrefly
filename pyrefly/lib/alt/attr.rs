@@ -2336,6 +2336,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeVar(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.type_var().clone(),
             )),
+            Type::Sentinel(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.sentinel().clone(),
+            )),
             Type::ParamSpec(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.param_spec().clone(),
             )),

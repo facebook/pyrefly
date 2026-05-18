@@ -281,6 +281,30 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
+    fn assign_sentinel(&mut self, name: &ExprName, call: &mut ExprCall) {
+        // Type var declarations are static types only; skip them for first-usage type inference.
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
+        self.ensure_expr(&mut call.func, static_type_usage);
+        if let Some(expr) = call.arguments.args.iter_mut().next() {
+            self.ensure_expr(expr, static_type_usage);
+        }
+        for kw in call.arguments.keywords.iter_mut() {
+            self.ensure_expr(&mut kw.value, static_type_usage);
+        }
+        // Like legacy type var, Sentinel can only be created with a single Sentinel binding to a
+        // single variable (https://peps.python.org/pep-0661/#typing). Thus we bind it in the same
+        // way legacy type vars are bound.
+        self.bind_legacy_type_var_or_typing_alias(name, |ann| {
+            Binding::Sentinel(Box::new((
+                ann,
+                Ast::expr_name_identifier(name.clone()),
+                Box::new(call.clone()),
+            )))
+        })
+    }
+
     fn ensure_type_alias_type_args(
         &mut self,
         call: &mut ExprCall,
@@ -596,6 +620,10 @@ impl<'a> BindingsBuilder<'a> {
                             }
                             SpecialExport::TypeVarTuple => {
                                 self.assign_type_var_tuple(name, call);
+                                return;
+                            }
+                            SpecialExport::Sentinel => {
+                                self.assign_sentinel(name, call);
                                 return;
                             }
                             SpecialExport::Enum

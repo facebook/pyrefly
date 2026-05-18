@@ -294,6 +294,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 self.heap.mk_never()
             }
+            (Type::Sentinel(s1), Type::Sentinel(s2)) if s1 == s2 => self.heap.mk_never(),
             (Type::ClassType(cls), Type::Literal(lit))
                 if cls.is_builtin("bool")
                     && let Lit::Bool(b) = &lit.value =>
@@ -850,7 +851,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                     );
                     match right {
-                        Type::None | Type::Ellipsis | Type::Literal(_) => {
+                        Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_) => {
                             if self.is_subset_eq(&right, &facet_ty) {
                                 t.clone()
                             } else {
@@ -872,8 +873,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     match (&facet_ty, &right) {
                         (
-                            Type::None | Type::Ellipsis | Type::Literal(_),
-                            Type::None | Type::Ellipsis | Type::Literal(_),
+                            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_),
+                            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_),
                         ) if self.literal_equal(&right, &facet_ty) => self.heap.mk_never(),
                         _ => t.clone(),
                     }
@@ -1410,7 +1411,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
+                if matches!(
+                    right,
+                    Type::Literal(_) | Type::None | Type::Ellipsis | Type::Sentinel(_)
+                ) {
                     self.intersect(ty, &right)
                 } else {
                     ty.clone()
@@ -1418,7 +1422,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotEq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
+                if matches!(
+                    right,
+                    Type::Literal(_) | Type::None | Type::Ellipsis | Type::Sentinel(_)
+                ) {
                     self.distribute_over_union(ty, |t| match (t, &right) {
                         (_, _) if self.literal_equal(t, &right) => self.heap.mk_never(),
                         (Type::ClassType(cls), Type::Literal(lit))
@@ -2163,6 +2170,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match (left, right) {
             (Type::None, Type::None) => true,
             (Type::Ellipsis, Type::Ellipsis) => true,
+            (Type::Sentinel(s1), Type::Sentinel(s2)) => s1 == s2,
             (Type::Literal(left), Type::Literal(right)) => left.value == right.value,
             _ => false,
         }

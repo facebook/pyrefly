@@ -59,6 +59,7 @@ use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
 use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
@@ -858,6 +859,9 @@ pub enum Type {
     /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
     /// stores a reference that is untyped once we actually look up the value.
     UntypedAlias(Box<TypeAliasData>),
+    // Sentinel types, documented here: https://docs.python.org/3.15/library/functions.html#sentinel
+    // First introduced in PEP 661: https://peps.python.org/pep-0661/
+    Sentinel(Sentinel),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -919,6 +923,7 @@ impl Visit for Type {
             Type::Annotated(x, _metadata) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
+            Type::Sentinel(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
@@ -975,6 +980,7 @@ impl VisitMut for Type {
             Type::Annotated(x, _metadata) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
+            Type::Sentinel(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
@@ -1919,6 +1925,7 @@ impl Type {
             Type::ParamSpec(t) => Some(t.qname()),
             Type::SelfType(cls) => Some(cls.qname()),
             Type::Literal(lit) if let Lit::Enum(e) = &lit.value => Some(e.class.qname()),
+            Type::Sentinel(s) => Some(s.qname()),
             _ => None,
         }
     }
@@ -1932,6 +1939,7 @@ impl Type {
             Type::Literal(lit) if let Lit::Str(x) = &lit.value => Some(!x.is_empty()),
             Type::Type(_) => Some(true),
             Type::None => Some(false),
+            Type::Sentinel(_) => Some(true),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
             Type::Union(u) => {
                 let mut answer = None;

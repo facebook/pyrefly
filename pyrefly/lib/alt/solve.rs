@@ -5343,6 +5343,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_none()
             }
             Binding::Delete(x) => self.check_del_statement(x, errors),
+            Binding::Sentinel(x) => {
+                let (ann, name, call) = x.as_ref();
+                let ty = self
+                    .sentinel_from_call(name.clone(), call, errors)
+                    .to_type(self.heap);
+                if let Some(k) = ann
+                    && let AnnotationWithTarget {
+                        target,
+                        annotation:
+                            Annotation {
+                                ty: Some(want),
+                                qualifiers: _,
+                            },
+                    } = &*self.get_idx(*k)
+                {
+                    // Validate the annotation already on assigned name
+                    self.check_type(&ty, want, call.range, errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
+                    });
+                }
+                ty
+            }
         }
     }
 
@@ -5697,6 +5719,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(*t)
             }
+            Type::Sentinel(sentinel) => Some(self.heap.mk_sentinel(sentinel)),
             Type::None => Some(self.heap.mk_none()), // Both a value and a type
             Type::Ellipsis => Some(self.heap.mk_ellipsis()), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),

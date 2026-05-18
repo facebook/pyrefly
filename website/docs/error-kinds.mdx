@@ -885,6 +885,20 @@ class TD(TypedDict):
     x: Option[Self]
 ```
 
+## invalid-sentinel
+
+An error caused by incorrect definition of a Sentinel. A few examples:
+
+```python
+from typing_extensions import Sentinel
+
+# Sentinels must be assigned to a matching variable.
+A = Sentinel("B")
+
+# Invalid arguments passed to Sentinel constructor
+MISSING = Sentinel("MISSING", non_existent="")
+```
+
 ## invalid-super-call
 
 `super()` has [a few restrictions](https://docs.python.org/3/library/functions.html#super) on how it is called.
