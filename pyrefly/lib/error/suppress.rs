@@ -160,6 +160,41 @@ fn read_and_validate_file(path: &Path) -> anyhow::Result<(String, ModModule)> {
     }
 }
 
+/// Linter pragma prefixes (lowercase) that, when present on the line directly
+/// above a target line, indicate we should NOT insert a new pyrefly suppression
+/// line between them — the foreign pragma applies to the *next* line and a
+/// pyrefly comment inserted between them would silently disable it. See #3373.
+const FOREIGN_LINTER_PRAGMAS: &[&str] = &[
+    "noqa",
+    "nosemgrep",
+    "nosec",
+    "type: ignore",
+    "pyright:",
+    "pylint:",
+    "ruff:",
+    "flake8:",
+];
+
+/// Returns true if `line` contains a comment that begins with a known
+/// non-pyrefly linter pragma. Excludes pyrefly's own comments — those are
+/// handled by the existing merge path.
+fn has_foreign_linter_pragma(line: &str) -> bool {
+    let Some(start) = find_comment_start_in_line(line) else {
+        return false;
+    };
+    // Skip the `#` and any whitespace.
+    let body = line[start + 1..].trim_start();
+    let body_lower = body.to_lowercase();
+    // Exclude pyrefly comments — handled elsewhere.
+    if body_lower.starts_with("pyrefly:")
+        || body_lower.starts_with("pyre:")
+        || body_lower.starts_with("pyre-")
+    {
+        return false;
+    }
+    FOREIGN_LINTER_PRAGMAS.iter().any(|p| body_lower.starts_with(p))
+}
+
 /// Extracts error codes from an existing pyrefly ignore comment.
 /// Returns Some(Vec<String>) if the line contains a valid ignore comment, None otherwise.
 /// Uses string-aware parsing to avoid matching inside string literals.
@@ -376,14 +411,27 @@ fn add_suppressions(
                     buf.push_str(error_comment);
                     buf.push_str(line_ending);
                 } else {
-                    // Add suppression line above the error line
-                    buf.push_str(get_indentation(line));
-                    buf.push_str(error_comment);
-                    buf.push_str(line_ending);
+                    // Bug fix #3373: don't insert between a foreign linter pragma and its target
+                    // line — that would silently disable the foreign pragma. Append inline instead.
+                    let force_inline = idx > 0
+                        && !lines_to_skip.contains(&(idx - 1))
+                        && has_foreign_linter_pragma(lines[idx - 1]);
 
-                    // Write the current line as-is
-                    buf.push_str(line);
-                    buf.push_str(line_ending);
+                    if force_inline {
+                        buf.push_str(line);
+                        buf.push_str("  ");
+                        buf.push_str(error_comment);
+                        buf.push_str(line_ending);
+                    } else {
+                        // Add suppression line above the error line
+                        buf.push_str(get_indentation(line));
+                        buf.push_str(error_comment);
+                        buf.push_str(line_ending);
+
+                        // Write the current line as-is
+                        buf.push_str(line);
+                        buf.push_str(line_ending);
+                    }
                 }
             } else {
                 // No error on this line, write as-is
@@ -2078,6 +2126,112 @@ def foo(x: tuple) -> None:
         second: {x.other_bad_attr}
     """)
 "#,
+        );
+    }
+
+    #[test]
+    fn foreign_pragma_detection() {
+        assert!(has_foreign_linter_pragma("# noqa: F821"));
+        assert!(has_foreign_linter_pragma("    # noqa"));
+        assert!(has_foreign_linter_pragma("# nosemgrep: rules.foo"));
+        assert!(has_foreign_linter_pragma("x = 1  # noqa")); // trailing comment counts
+        assert!(has_foreign_linter_pragma("# type: ignore"));
+        assert!(has_foreign_linter_pragma("# pyright: ignore[reportFoo]"));
+        assert!(has_foreign_linter_pragma("# pylint: disable=W"));
+        assert!(!has_foreign_linter_pragma("# pyrefly: ignore [bad-return]"));
+        assert!(!has_foreign_linter_pragma("# pyre-fixme[1]"));
+        assert!(!has_foreign_linter_pragma("# regular comment"));
+        assert!(!has_foreign_linter_pragma("x = '# noqa'")); // string, not comment
+        assert!(!has_foreign_linter_pragma(""));
+    }
+
+    #[test]
+    fn test_add_suppressions_preserves_noqa_pragma() {
+        // Bug #3373: # noqa above the target must not be orphaned.
+        assert_suppress_errors(
+            r#"
+def foo():
+    # noqa: F821
+    return undefined_variable
+"#,
+            r#"
+def foo():
+    # noqa: F821
+    return undefined_variable  # pyrefly: ignore [unknown-name]
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_preserves_nosemgrep_pragma() {
+        // The exact scenario from issue #3373.
+        assert_suppress_errors(
+            r#"
+import subprocess
+def run_command(cmd):
+    # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true
+    result = subprocess.run(cmd, shell=True, foo="bar")
+    return result.returncode
+"#,
+            r#"
+import subprocess
+def run_command(cmd):
+    # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true
+    result = subprocess.run(cmd, shell=True, foo="bar")  # pyrefly: ignore [no-matching-overload]
+    return result.returncode
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_preserves_pyright_pragma() {
+        assert_suppress_errors(
+            r#"
+def foo():
+    # pyright: ignore[reportFoo]
+    bar()
+"#,
+            r#"
+def foo():
+    # pyright: ignore[reportFoo]
+    bar()  # pyrefly: ignore [unknown-name]
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_plain_comment_above_still_inserts_above() {
+        // Sanity: a plain comment is NOT a foreign pragma, behavior unchanged.
+        assert_suppress_errors(
+            r#"
+def foo() -> int:
+    # comment
+    return ""
+"#,
+            r#"
+def foo() -> int:
+    # comment
+    # pyrefly: ignore [bad-return]
+    return ""
+"#,
+        );
+    }
+
+    #[test]
+    fn test_add_suppressions_pragma_string_not_comment() {
+        // # noqa appearing inside a string literal must NOT trigger inline behavior.
+        assert_suppress_errors(
+            r##"
+def foo() -> int:
+    msg = "# noqa: do not match"
+    return ""
+"##,
+            r##"
+def foo() -> int:
+    msg = "# noqa: do not match"
+    # pyrefly: ignore [bad-return]
+    return ""
+"##,
         );
     }
 }
