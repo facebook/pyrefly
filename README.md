@@ -34,7 +34,7 @@ Pyrefly's current development status is [stable](https://github.com/facebook/pyr
 
 - Try out pyrefly in your browser: [Sandbox](https://pyrefly.org/sandbox/)
 - Get the command-line tool: `pip install pyrefly`
-- Get the IDE Extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
+- Get the IDE extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
 
 ### Version Policy
 
