@@ -93,11 +93,9 @@ fn chase_static_attr_chain_impl(
     }
 
     match expr {
-        Expr::Attribute(ExprAttribute {
-            value: box Expr::Name(name),
-            attr,
-            ..
-        }) => Some((name.clone(), vec1![attr.clone()])),
+        Expr::Attribute(ExprAttribute { value, attr, .. }) if let Expr::Name(name) = &**value => {
+            Some((name.clone(), vec1![attr.clone()]))
+        }
         Expr::Attribute(ExprAttribute { value, attr, .. }) => {
             chase_static_attr_chain_impl(value, gas).map(|(name, mut attrs)| {
                 attrs.push(attr.clone());
