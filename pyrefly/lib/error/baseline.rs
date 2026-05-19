@@ -227,7 +227,8 @@ mod tests {
         let error = Error::new(
             module,
             TextRange::new(TextSize::new(4), TextSize::new(10)),
-            vec1!["err".to_owned()],
+            "err".to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         );
         assert!(processor.matches_baseline(&error));
