@@ -234,7 +234,7 @@ impl PythonPlatform {
         let mut names = self
             .possible_platforms()?
             .iter()
-            .map(|platform| Self::new(platform).os_name().to_owned())
+            .map(|platform| Self::os_name_for_platform(platform).to_owned())
             .collect::<Vec<_>>();
         names.sort();
         names.dedup();
@@ -255,14 +255,18 @@ impl PythonPlatform {
 
     /// Return the `os.name` value corresponding to this platform.
     /// See <https://docs.python.org/3/library/os.html#os.name>.
-    pub fn os_name(&self) -> &str {
+    pub fn os_name(&self) -> Option<&str> {
         let Self::Platforms(platforms) = self else {
-            unreachable!("`all` does not have one corresponding os.name value");
+            return None;
         };
         let [platform] = &**platforms else {
-            unreachable!("multiple platforms do not have one corresponding os.name value");
+            return None;
         };
-        match platform.as_str() {
+        Some(Self::os_name_for_platform(platform))
+    }
+
+    fn os_name_for_platform(platform: &str) -> &str {
+        match platform {
             "win32" => "nt",
             "java" => "java",
             _ => "posix",
@@ -570,28 +574,30 @@ impl Value {
         match op {
             CmpOp::In | CmpOp::NotIn => {
                 let contains = match other {
-                    Value::Tuple(values) => {
-                        let Value::String(left) = self else {
-                            return None;
-                        };
-                        let strings = values
+                    Value::Tuple(values) => match self {
+                        Value::String(left) => {
+                            let strings = values
+                                .iter()
+                                .map(|value| match value {
+                                    Value::String(value) => Some(value),
+                                    _ => None,
+                                })
+                                .collect::<Option<Vec<_>>>()?;
+                            let left_values = match left {
+                                StringValue::Any => return None,
+                                StringValue::Set(left_values) => left_values,
+                            };
+                            aggregate_bools(left_values.iter().map(|left| {
+                                strings.iter().any(|right| match right {
+                                    StringValue::Any => true,
+                                    StringValue::Set(right_values) => right_values.contains(left),
+                                })
+                            }))?
+                        }
+                        _ => values
                             .iter()
-                            .map(|value| match value {
-                                Value::String(value) => Some(value),
-                                _ => None,
-                            })
-                            .collect::<Option<Vec<_>>>()?;
-                        let left_values = match left {
-                            StringValue::Any => return None,
-                            StringValue::Set(left_values) => left_values,
-                        };
-                        aggregate_bools(left_values.iter().map(|left| {
-                            strings.iter().any(|right| match right {
-                                StringValue::Any => true,
-                                StringValue::Set(right_values) => right_values.contains(left),
-                            })
-                        }))?
-                    }
+                            .any(|value| self.compare(CmpOp::Eq, value) == Some(true)),
+                    },
                     _ => return None,
                 };
                 return Some(if matches!(op, CmpOp::In) {
@@ -1056,6 +1062,20 @@ mod tests {
         assert_eq!(
             eval(PythonPlatform::All, r#"sys.platform == "linux""#),
             None
+        );
+        assert_eq!(
+            eval(
+                PythonPlatform::linux(),
+                r#"sys.version_info in ((3, 13), (3, 12))"#
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            eval(
+                PythonPlatform::linux(),
+                r#"sys.version_info not in ((3, 13), (3, 12))"#
+            ),
+            Some(false)
         );
     }
 
