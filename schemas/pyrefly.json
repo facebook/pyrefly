@@ -171,7 +171,7 @@
             }
           ],
           "default": "linux",
-          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix"]
+          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix", "all", ["linux", "darwin"]]
         },
         "python-version": {
           "description": "The Python version to use for type checking. Format: <major>[.<minor>[.<micro>]]",
