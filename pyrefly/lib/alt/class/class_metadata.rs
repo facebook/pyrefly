@@ -582,7 +582,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|(name, _)| name.id != "metaclass" && !(is_pydantic_model && name.id == EXTRA))
             .collect::<Vec<_>>();
-
         if !keywords.is_empty() && metaclass.is_some() {
             return;
         }
