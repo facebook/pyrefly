@@ -39,9 +39,9 @@ use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::class::attrs::is_attrs_setters_frozen;
 use crate::alt::call::CallStyle;
 use crate::alt::callable::CallKeyword;
+use crate::alt::class::attrs::is_attrs_setters_frozen;
 use crate::alt::class::django::is_django_choices_subclass;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::solve::TypeFormContext;
@@ -607,7 +607,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .filter(|(name, _)| name.id != "metaclass" && !(is_pydantic_model && name.id == EXTRA))
             .collect::<Vec<_>>();
-
         if !keywords.is_empty() && metaclass.is_some() {
             return;
         }
