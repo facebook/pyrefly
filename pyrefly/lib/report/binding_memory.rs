@@ -166,6 +166,7 @@ mod tests {
             pydantic_config_dict: PydanticConfigDict::default(),
             pydantic_before_validator_fields: Box::default(),
             django_field_info: Box::default(),
+            capture_init: None,
         };
         assert_eq!(
             ReportKey::new(module, &v),
