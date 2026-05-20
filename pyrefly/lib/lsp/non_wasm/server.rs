@@ -4217,7 +4217,7 @@ impl Server {
             .state
             .config_finder()
             .python_file(handle.module_kind(), handle.path());
-        let loader = LoaderFindCache::new(config.dupe());
+        let loader = LoaderFindCache::new(config.dupe(), self.state.dir_cache_enabled());
         let Some(target_path) = loader
             .find_import_prefer_executable(target_module, Some(handle.path()), None)
             .finding()
