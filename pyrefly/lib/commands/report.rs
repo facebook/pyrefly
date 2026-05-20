@@ -999,8 +999,9 @@ impl ReportArgs {
                         }
                         continue;
                     }
-                    // Non-schema fields only count when initialized in a recognized method.
-                    if !initialized_in_recognized_method {
+                    // Non-schema fields only count when initialized in a recognized method,
+                    // or declared in a stub.
+                    if !initialized_in_recognized_method && !module.path().is_interface() {
                         continue;
                     }
                     Some(*annotation)
@@ -2118,9 +2119,14 @@ mod tests {
 
     /// Build a `ModuleReport` from a checked-in Python test file using a custom `TestEnv`,
     /// mirroring the production pipeline in `run_inner`.
-    fn build_module_report_for_test_with_env(py_file: &str, mut env: TestEnv) -> ModuleReport {
-        let code = load_test_file(py_file);
-        env.add("test", &code);
+    fn build_module_report_for_test_with_env(file: &str, mut env: TestEnv) -> ModuleReport {
+        let code = load_test_file(file);
+        let module_path = format!(
+            "test.{}",
+            file.rsplit_once('.').map_or("py", |(_, ext)| ext)
+        );
+        env.add_with_path("test", &module_path, &code);
+
         let (state, handle_fn) = env
             .with_default_require_level(Require::Everything)
             .to_state();
@@ -2158,7 +2164,7 @@ mod tests {
 
         ReportArgs::build_module_report(
             "test".to_owned(),
-            "test.py".to_owned(),
+            module_path,
             "test",
             line_count,
             &functions,
@@ -2352,6 +2358,12 @@ mod tests {
     fn test_report_partial_stub() {
         let report = build_stub_module_report("partial_stub.pyi", "partial_stub.py");
         compare_snapshot("partial_stub.expected.json", &report);
+    }
+
+    #[test]
+    fn test_report_stub_class_attrs() {
+        let report = build_module_report_for_test("stub_class_attrs.pyi");
+        compare_snapshot("stub_class_attrs.expected.json", &report);
     }
 
     /// Stubs-only packages: .py discovered via site-package-path, merged like co-located stubs.
