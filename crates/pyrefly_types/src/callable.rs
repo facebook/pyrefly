@@ -37,6 +37,7 @@ use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
+use crate::meta_shape_dsl::ShapeTransformRef;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
 use crate::types::Type;
@@ -646,6 +647,9 @@ pub struct FuncFlags {
     /// `dataclass_transform` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
     pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
+    /// A function decorated with `@uses_shape_dsl`, whose return type should be
+    /// refined by evaluating the referenced shape-DSL function at call sites.
+    pub shape_transform: Option<Arc<ShapeTransformRef>>,
 }
 
 impl FuncFlags {
