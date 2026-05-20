@@ -1031,7 +1031,10 @@ impl Transaction<'_> {
             let instance_ty = match class_ty {
                 Type::ClassDef(cls) => solver.instantiate(&cls),
                 Type::ClassType(cls) => Type::ClassType(cls),
-                Type::Type(inner) if let Type::ClassType(cls) = *inner => Type::ClassType(cls),
+                Type::Type(inner) => match *inner {
+                    Type::ClassType(cls) => Type::ClassType(cls),
+                    _ => return Vec::new(),
+                },
                 _ => return Vec::new(),
             };
             solver
