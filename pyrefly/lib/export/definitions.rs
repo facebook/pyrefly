@@ -495,8 +495,7 @@ impl DefinitionsBuilder {
         let reachability = self.reachability;
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                e.get_mut()
-                    .merge(style, range, in_main_guard, reachability);
+                e.get_mut().merge(style, range, in_main_guard, reachability);
             }
             Entry::Vacant(e) => {
                 e.insert(Definition {

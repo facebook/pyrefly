@@ -331,7 +331,7 @@ Hover Result: `() -> None`
 
 14 |   def f():
            ^
-Hover Result: None
+Hover Result: `() -> None`
 
 18 |   x = 3
        ^
