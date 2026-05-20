@@ -19,9 +19,7 @@ use crate::meta_shape_dsl::DslMetaShapeFunction;
 use crate::meta_shape_dsl::MetaShapeFunction;
 use crate::meta_shape_dsl::parse_dsl;
 
-// ============================================================================
-// DSL-based MetaShapeFunction construction
-// ============================================================================
+// Section: DSL-based MetaShapeFunction construction
 
 /// Look up a DSL function by name and create a `DslMetaShapeFunction`.
 fn dsl_fn(
@@ -39,9 +37,7 @@ fn dsl_fn(
     })
 }
 
-// ============================================================================
-// Meta-Shape Registry
-// ============================================================================
+// Section: Meta-Shape Registry
 
 /// Registry mapping PyTorch op names to their shape functions.
 ///
@@ -569,9 +565,7 @@ impl Default for TensorOpsRegistry {
     }
 }
 
-// ============================================================================
-// DSL source code
-// ============================================================================
+// Section: DSL source code
 
 /// The full DSL source defining all tensor shape ops and utility functions.
 /// This is valid Python syntax (a strict subset) that we parse with Pyrefly's parser.
