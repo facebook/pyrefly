@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
@@ -1120,14 +1121,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         result: Type,
     ) -> Type {
-        use std::sync::OnceLock;
-        static TENSOR_OPS_REGISTRY: OnceLock<TensorOpsRegistry> = OnceLock::new();
+        // Check ClassMetadata.capture_init first (populated from @uses_shape_dsl
+        // decorator on the forward method). Fall back to TensorOpsRegistry for
+        // classes not yet migrated to stub-based declarations.
+        let class_metadata = self.get_metadata_for_class(ct.class_object());
+        let capture_names_from_metadata: Vec<Name>;
+        let capture_names: &[Name] = if let Some(names) = class_metadata.capture_init() {
+            capture_names_from_metadata = names.to_vec();
+            &capture_names_from_metadata
+        } else {
+            use std::sync::OnceLock;
+            static TENSOR_OPS_REGISTRY: OnceLock<TensorOpsRegistry> = OnceLock::new();
 
-        let class_name = format!("{}.{}", ct.class_object().module_name(), ct.name());
-        let registry = TENSOR_OPS_REGISTRY.get_or_init(TensorOpsRegistry::new);
-        let capture_names = match registry.get_init_capture(&class_name) {
-            Some(names) => names,
-            None => return result,
+            let class_name = format!("{}.{}", ct.class_object().module_name(), ct.name());
+            let registry = TENSOR_OPS_REGISTRY.get_or_init(TensorOpsRegistry::new);
+            match registry.get_init_capture(&class_name) {
+                Some(names) => {
+                    capture_names_from_metadata = names.iter().map(Name::new).collect();
+                    &capture_names_from_metadata
+                }
+                None => return result,
+            }
         };
 
         let infer_type_or_expr = |toe: TypeOrExpr, errors: &ErrorCollector| -> Type {
@@ -1139,17 +1153,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let mut fields = SmallMap::new();
         for (i, param_name) in capture_names.iter().enumerate() {
-            let name = Name::new(param_name);
             // First check keyword args.
             if let Some(kw) = keywords.iter().find(|k| {
                 k.arg
                     .is_some_and(|id| id.id.as_str() == param_name.as_str())
             }) {
-                fields.insert(name, infer_type_or_expr(kw.value, errors));
+                fields.insert(param_name.clone(), infer_type_or_expr(kw.value, errors));
             } else if i < args.len() {
                 // Map positional arg by index to the capture param name.
                 if let CallArg::Arg(toe) = &args[i] {
-                    fields.insert(name, infer_type_or_expr(*toe, errors));
+                    fields.insert(param_name.clone(), infer_type_or_expr(*toe, errors));
                 }
             }
             // If neither keyword nor positional, the param uses its default.
@@ -1422,6 +1435,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ) => self.call_infer_inner(
                 signature,
                 Some(&metadata.kind),
+                metadata.flags.shape_transform.as_deref(),
                 tparams.as_deref(),
                 Some(obj),
                 args,
@@ -1435,6 +1449,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ),
             CallTarget::Callable(TargetWithTParams(tparams, callable)) => self.call_infer_inner(
                 callable,
+                None,
                 None,
                 tparams.as_deref(),
                 None,
@@ -1456,6 +1471,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             )) => self.call_infer_inner(
                 callable,
                 Some(&metadata.kind),
+                metadata.flags.shape_transform.as_deref(),
                 tparams.as_deref(),
                 None,
                 args,
@@ -1471,6 +1487,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.call_overloads(
                     overloads,
                     &metadata,
+                    metadata.flags.shape_transform.as_deref(),
                     None,
                     args,
                     keywords,
@@ -1486,6 +1503,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.call_overloads(
                     overloads,
                     &meta,
+                    meta.flags.shape_transform.as_deref(),
                     Some(obj),
                     args,
                     keywords,
@@ -1553,6 +1571,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         callable: Callable,
         callable_name: Option<&FunctionKind>,
+        shape_transform: Option<&ShapeTransformRef>,
         tparams: Option<&TParams>,
         self_obj: Option<Type>,
         args: &[CallArg],
@@ -1570,6 +1589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let res_no_hint = self.callable_infer(
             callable.clone(),
             callable_name,
+            shape_transform,
             tparams,
             self_obj.clone(),
             args,
@@ -1589,6 +1609,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let res_with_hint = self.callable_infer(
                     callable,
                     callable_name,
+                    shape_transform,
                     tparams,
                     self_obj,
                     args,

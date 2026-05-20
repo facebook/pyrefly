@@ -12,6 +12,7 @@ use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
+use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
 use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -1326,6 +1327,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         callable: Callable,
         callable_name: Option<&FunctionKind>,
+        shape_transform: Option<&ShapeTransformRef>,
         tparams: Option<&TParams>,
         self_obj: Option<Type>,
         args: &[CallArg],
@@ -1348,6 +1350,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.callable_infer_inner(
                     callable.clone(),
                     callable_name,
+                    shape_transform,
                     tparams,
                     self_obj.clone(),
                     args,
@@ -1368,6 +1371,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         callable: Callable,
         callable_name: Option<&FunctionKind>,
+        shape_transform: Option<&ShapeTransformRef>,
         tparams: Option<&TParams>,
         mut self_obj: Option<Type>,
         mut args: &[CallArg],
@@ -1387,14 +1391,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         call_context.set_argument_side(ArgumentSide::Got);
         call_context.require_boundary_consumption();
 
-        // Look up meta-shape early so we can conditionally collect bound args.
-        // Only consult the registry when tensor_shapes is enabled to avoid
-        // unnecessary DSL parsing and per-call HashMap lookups.
-        let meta_shape_func = if self.solver().tensor_shapes {
+        // Prefer decorator-based shape_transform over the legacy registry.
+        // Fall back to lookup_meta_shape only when shape_transform is None.
+        // The decorator path is not gated by tensor_shapes — @uses_shape_dsl
+        // is itself the opt-in. The registry applies implicitly by qualified
+        // name and needs the feature gate to avoid unnecessary DSL parsing
+        // and per-call HashMap lookups.
+        let shape_transform_func = shape_transform.map(|t| t.to_meta_shape_function());
+        let registry_func = if shape_transform_func.is_none() && self.solver().tensor_shapes {
             Self::lookup_meta_shape(callable_name)
         } else {
             None
         };
+        let meta_shape_func: Option<&dyn MetaShapeFunction> = shape_transform_func
+            .as_ref()
+            .map(|b| &**b)
+            .or(registry_func);
         let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func.map(|_| HashMap::new());
 
         let (callable_qs, mut callable) = if let Some(tparams) = tparams {
