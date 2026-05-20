@@ -62,6 +62,7 @@ use tracing::info;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::files::UpsellDecision;
+use crate::commands::files::get_config_finder_for_snippet;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
@@ -219,11 +220,10 @@ pub struct SnippetCheckArgs {
 impl SnippetCheckArgs {
     pub async fn run(
         self,
-        wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
-        let (_, config_finder, _) =
-            FilesArgs::get(vec![], self.config, self.config_override, wrapper)?;
+        let config_finder = get_config_finder_for_snippet(self.config, self.config_override)?;
+
         let check_args = CheckArgs {
             output: self.output,
             behavior: BehaviorArgs {
@@ -759,9 +759,9 @@ fn decide_upsell(
 /// `SynthesizedPresetReason`. Pure function of the reason — trivial to
 /// unit-test against a `Vec<u8>` without spinning up a real check run.
 ///
-/// `IdeOverride` is intentionally suppressed: it can only be produced by
-/// the LSP path, and even if it leaks in here we don't want to nag a user
-/// who has explicitly set `typeCheckingMode`.
+/// `UserOverride` is intentionally suppressed: the user chose the
+/// preset themselves (via `--preset` or the IDE `typeCheckingMode`
+/// setting), so nagging them to configure pyrefly would be noise.
 fn write_unconfigured_upsell<W: Write>(
     reason: SynthesizedPresetReason,
     out: &mut W,
@@ -794,9 +794,7 @@ fn write_unconfigured_upsell<W: Write>(
             writeln!(out, "Run `pyrefly init` to continue setting up Pyrefly.")?;
             writeln!(out, "Docs: {UPSELL_DOCS_URL}")?;
         }
-        // CLI never produces an IdeOverride; if one slips in (e.g.
-        // tests), suppress the upsell rather than emit confusing copy.
-        SynthesizedPresetReason::IdeOverride => {}
+        SynthesizedPresetReason::UserOverride => {}
     }
     Ok(())
 }
@@ -1142,6 +1140,17 @@ impl CheckArgs {
                 .collect()
         };
 
+        // Filter by minimum severity. Directives are not subject to this
+        // filter — they are merged separately in the output step below.
+        // This must run before `--suppress-errors` so suppression respects
+        // the user's severity threshold: a finding the user asked to hide
+        // via `--min-severity` should not get a suppression comment written
+        // into source.
+        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
+        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
+            .into_iter()
+            .partition(|e| e.severity() >= min_severity);
+
         // Suppress operates on ordinary diagnostics only — directives are
         // structurally excluded since they live in `directives`, not `ordinary_errors`.
         if self.behavior.suppress_errors {
@@ -1159,13 +1168,6 @@ impl CheckArgs {
             let unused_errors = loads.collect_unused_ignore_errors(&collected);
             suppress::remove_unused_ignores(unused_errors);
         }
-
-        // Filter by minimum severity. Directives are not subject to this
-        // filter — they are merged separately in the output step below.
-        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
-        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
-            .into_iter()
-            .partition(|e| e.severity() >= min_severity);
 
         // We update the baseline file if requested, after reporting any new
         // errors using the old baseline. Directives are structurally excluded
@@ -1194,12 +1196,7 @@ impl CheckArgs {
 
         // Count only ordinary errors for exit code determination. Directives
         // (e.g. reveal_type) do not contribute to the error count.
-        let mut ordinary_errors_count = config_errors_count;
-        for error in &ordinary_errors {
-            if error.severity() >= Severity::Error {
-                ordinary_errors_count += 1;
-            }
-        }
+        let ordinary_errors_count = config_errors_count + ordinary_errors.len();
 
         // Merge directives into the display list, re-sorting by module
         // name, path, and source range so output preserves file/line
@@ -1231,7 +1228,12 @@ impl CheckArgs {
 
         if self.output.summary != Summary::None {
             let suppress_count = errors.suppressed.len();
-            let mut parts = vec![count(ordinary_errors_count, "error")];
+            let label = if min_severity < Severity::Error {
+                "diagnostic"
+            } else {
+                "error"
+            };
+            let mut parts = vec![count(ordinary_errors_count, label)];
             if suppress_count > 0 {
                 parts.push(format!("{} suppressed", number_thousands(suppress_count)));
             }
@@ -1374,12 +1376,10 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
-    use vec1::Vec1;
-    use vec1::vec1;
 
     use super::*;
 
-    fn sample_error(msg: Vec1<String>) -> Error {
+    fn sample_error(msg: String) -> Error {
         let module = Module::new(
             ModuleName::from_str("sample"),
             ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
@@ -1389,14 +1389,14 @@ mod tests {
             module,
             TextRange::new(TextSize::from(0), TextSize::from(1)),
             msg,
+            Vec::new(),
             ErrorKind::BadAssignment,
         )
     }
 
     #[test]
     fn github_actions_command_includes_full_path_and_metadata() {
-        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]))
-            .expect("should emit command");
+        let cmd = github_actions_command(&sample_error("bad".into())).expect("should emit command");
         assert!(cmd.starts_with("::error "), "{cmd}");
         assert!(
             cmd.contains("file=/repo/foo.py"),
@@ -1411,9 +1411,9 @@ mod tests {
 
     #[test]
     fn github_actions_command_respects_severity_mapping() {
-        let warning = sample_error(vec1!["bad".into()]).with_severity(Severity::Warn);
-        let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
-        let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
+        let warning = sample_error("bad".into()).with_severity(Severity::Warn);
+        let notice = sample_error("bad".into()).with_severity(Severity::Info);
+        let ignored = sample_error("bad".into()).with_severity(Severity::Ignore);
         assert!(
             github_actions_command(&warning)
                 .unwrap()
@@ -1440,7 +1440,7 @@ mod tests {
 
     #[test]
     fn github_output_format_writes_commands() {
-        let errors = vec![sample_error(vec1!["bad".into()])];
+        let errors = vec![sample_error("bad".into())];
         let mut buf = Vec::new();
         write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();
@@ -1535,13 +1535,11 @@ mod tests {
         assert!(s.contains("`pyrefly init`"), "{s}");
     }
 
-    /// `IdeOverride` is suppressed: the user explicitly chose a behavior
-    /// via the IDE setting, so we don't pester them with an upsell. This
-    /// also documents that the CLI never emits an `IdeOverride`-flavored
-    /// upsell even if one accidentally reaches this code path.
+    /// `UserOverride` is suppressed: the user explicitly chose a
+    /// preset via the IDE setting or `--preset` flag.
     #[test]
-    fn upsell_is_silent_for_ide_override() {
-        let s = upsell_string(SynthesizedPresetReason::IdeOverride);
+    fn upsell_is_silent_for_user_override() {
+        let s = upsell_string(SynthesizedPresetReason::UserOverride);
         assert!(s.is_empty(), "expected no upsell, got {s:?}");
     }
 }

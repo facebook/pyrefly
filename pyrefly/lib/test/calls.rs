@@ -444,6 +444,29 @@ def f(condition: bool):
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2914
+testcase!(
+    test_non_callable_bool_attribute,
+    r#"
+class BadBool:
+    __bool__: int = 3
+
+assert BadBool()  # E: `__bool__` attribute of `BadBool` has type `int`, which is not callable
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3060
+testcase!(
+    test_setdefault_then_index,
+    r#"
+def parse_groups(entries: list[tuple[str, str]]) -> None:
+    groups = {}
+    for group, host in entries:
+        groups.setdefault(group, {})
+        groups[group][host] = True
+"#,
+);
+
 testcase!(
     test_call_instance_with_non_callable_dunder_call,
     r#"

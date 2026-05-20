@@ -13,7 +13,6 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::facet::FacetKind;
-use pyrefly_types::types::Union;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
@@ -76,9 +75,7 @@ impl<'a> Transaction<'a> {
     fn type_contains_typed_dict(ty: &Type) -> bool {
         match ty {
             Type::TypedDict(_) | Type::PartialTypedDict(_) => true,
-            Type::Union(box Union { members, .. }) => {
-                members.iter().any(Self::type_contains_typed_dict)
-            }
+            Type::Union(u) => u.members.iter().any(Self::type_contains_typed_dict),
             _ => false,
         }
     }
@@ -288,8 +285,8 @@ impl<'a> Transaction<'a> {
                                 .or_insert_with(|| field.ty.clone());
                         }
                     }
-                    Type::Union(box Union { members, .. }) => {
-                        stack.extend(members);
+                    Type::Union(u) => {
+                        stack.extend(u.members);
                     }
                     _ => {}
                 }

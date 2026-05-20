@@ -323,11 +323,16 @@ impl TArgs {
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
         match ty {
-            Type::TypeAlias(box TypeAliasData::Ref(r))
-            | Type::UntypedAlias(box TypeAliasData::Ref(r)) => {
-                // We don't have the value of the type alias available to do the substitution, so store
-                // the targs so that we can apply them when the value is looked up.
-                r.args = Some(self.clone())
+            Type::TypeAlias(ta) | Type::UntypedAlias(ta)
+                if matches!(**ta, TypeAliasData::Ref(_)) =>
+            {
+                // Repeated match because pattern guards cannot mutably borrow.
+                if let TypeAliasData::Ref(r) = &mut **ta {
+                    // Store targs so they can be applied when the value is looked up.
+                    r.args = Some(self.clone())
+                } else {
+                    unreachable!("guarded by matches! above")
+                }
             }
             _ => self.substitution().substitute_into_mut(ty),
         }
@@ -1160,11 +1165,11 @@ impl Type {
     }
 
     pub fn is_implicit_literal(&self) -> bool {
-        matches!(
-            self,
-            Type::Literal(box Literal { style: LitStyle::Implicit, ..}) |
-            Type::LiteralString(LitStyle::Implicit)
-        )
+        match self {
+            Type::Literal(lit) => lit.style == LitStyle::Implicit,
+            Type::LiteralString(LitStyle::Implicit) => true,
+            _ => false,
+        }
     }
 
     pub fn is_literal_string(&self) -> bool {
@@ -1410,11 +1415,8 @@ impl Type {
 
     pub fn is_typeguard(&self) -> bool {
         match self {
-            Type::Callable(box callable)
-            | Type::Function(box Function {
-                signature: callable,
-                metadata: _,
-            }) => callable.is_typeguard(),
+            Type::Callable(c) => c.is_typeguard(),
+            Type::Function(f) => f.signature.is_typeguard(),
             Type::Forall(forall) => forall.body.is_typeguard(),
             Type::BoundMethod(method) => method.func.is_typeguard(),
             Type::Overload(overload) => overload.is_typeguard(),
@@ -1424,11 +1426,8 @@ impl Type {
 
     pub fn is_typeis(&self) -> bool {
         match self {
-            Type::Callable(box callable)
-            | Type::Function(box Function {
-                signature: callable,
-                metadata: _,
-            }) => callable.is_typeis(),
+            Type::Callable(c) => c.is_typeis(),
+            Type::Function(f) => f.signature.is_typeis(),
             Type::Forall(forall) => forall.body.is_typeis(),
             Type::BoundMethod(method) => method.func.is_typeis(),
             Type::Overload(overload) => overload.is_typeis(),
@@ -1524,28 +1523,34 @@ impl Type {
         &'a self,
         visit: &dyn Fn(&'a FuncMetadata) -> T,
     ) -> T {
-        match self {
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                tparams: _,
-                body: Forallable::Function(func),
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func:
-                    BoundMethodType::Function(func)
-                    | BoundMethodType::Forall(Forall {
-                        tparams: _,
-                        body: func,
-                    }),
-                ..
-            }) => visit(&func.metadata),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => visit(&overload.metadata),
-            _ => T::default(),
+        let func: Option<&Function> = match self {
+            Type::Function(func) => Some(func),
+            Type::Forall(forall) => match &forall.body {
+                Forallable::Function(func) => Some(func),
+                _ => None,
+            },
+            Type::BoundMethod(bm) => match &bm.func {
+                BoundMethodType::Function(func) => Some(func),
+                BoundMethodType::Forall(forall) => Some(&forall.body),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(func) = func {
+            return visit(&func.metadata);
         }
+        let overload: Option<&Overload> = match self {
+            Type::Overload(overload) => Some(overload),
+            Type::BoundMethod(bm) => match &bm.func {
+                BoundMethodType::Overload(overload) => Some(overload),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(overload) = overload {
+            return visit(&overload.metadata);
+        }
+        T::default()
     }
 
     pub fn has_toplevel_func_metadata(&self) -> bool {
@@ -1637,27 +1642,33 @@ impl Type {
     /// Transforms this type's function metadata, if it is a function. Note that we do *not*
     /// recurse into the type to find nested function types.
     pub fn transform_toplevel_func_metadata(&mut self, mut f: impl FnMut(&mut FuncMetadata)) {
-        match self {
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                tparams: _,
-                body: Forallable::Function(func),
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func:
-                    BoundMethodType::Function(func)
-                    | BoundMethodType::Forall(Forall {
-                        tparams: _,
-                        body: func,
-                    }),
-                ..
-            }) => f(&mut func.metadata),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => f(&mut overload.metadata),
-            _ => {}
+        let func: Option<&mut Function> = match self {
+            Type::Function(func) => Some(func),
+            Type::Forall(forall) => match &mut forall.body {
+                Forallable::Function(func) => Some(func),
+                _ => None,
+            },
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Function(func) => Some(func),
+                BoundMethodType::Forall(forall) => Some(&mut forall.body),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(func) = func {
+            f(&mut func.metadata);
+            return;
+        }
+        let overload: Option<&mut Overload> = match self {
+            Type::Overload(overload) => Some(overload),
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Overload(overload) => Some(overload),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(overload) = overload {
+            f(&mut overload.metadata);
         }
     }
 
@@ -1666,28 +1677,25 @@ impl Type {
     pub fn visit_toplevel_callable<'a>(&'a self, mut f: impl FnMut(&'a Callable)) {
         match self {
             Type::Callable(callable) => f(callable),
-            Type::Forall(box Forall {
-                body: Forallable::Callable(callable),
-                ..
-            }) => f(callable),
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                body: Forallable::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Forall(Forall { body: func, .. }),
-                ..
-            }) => f(&func.signature),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => {
+            Type::Forall(forall) => match &forall.body {
+                Forallable::Callable(callable) => f(callable),
+                Forallable::Function(func) => f(&func.signature),
+                _ => {}
+            },
+            Type::Function(func) => f(&func.signature),
+            Type::BoundMethod(bm) => match &bm.func {
+                BoundMethodType::Function(func) => f(&func.signature),
+                BoundMethodType::Forall(forall) => f(&forall.body.signature),
+                BoundMethodType::Overload(overload) => {
+                    for x in overload.signatures.iter() {
+                        match x {
+                            OverloadType::Function(function) => f(&function.signature),
+                            OverloadType::Forall(forall) => f(&forall.body.signature),
+                        }
+                    }
+                }
+            },
+            Type::Overload(overload) => {
                 for x in overload.signatures.iter() {
                     match x {
                         OverloadType::Function(function) => f(&function.signature),
@@ -1704,28 +1712,25 @@ impl Type {
     pub fn transform_toplevel_callable<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
         match self {
             Type::Callable(callable) => f(callable),
-            Type::Forall(box Forall {
-                body: Forallable::Callable(callable),
-                ..
-            }) => f(callable),
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                body: Forallable::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Forall(Forall { body: func, .. }),
-                ..
-            }) => f(&mut func.signature),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => {
+            Type::Forall(forall) => match &mut forall.body {
+                Forallable::Callable(callable) => f(callable),
+                Forallable::Function(func) => f(&mut func.signature),
+                _ => {}
+            },
+            Type::Function(func) => f(&mut func.signature),
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Function(func) => f(&mut func.signature),
+                BoundMethodType::Forall(forall) => f(&mut forall.body.signature),
+                BoundMethodType::Overload(overload) => {
+                    for x in overload.signatures.iter_mut() {
+                        match x {
+                            OverloadType::Function(function) => f(&mut function.signature),
+                            OverloadType::Forall(forall) => f(&mut forall.body.signature),
+                        }
+                    }
+                }
+            },
+            Type::Overload(overload) => {
                 for x in overload.signatures.iter_mut() {
                     match x {
                         OverloadType::Function(function) => f(&mut function.signature),
@@ -1923,7 +1928,7 @@ impl Type {
 
     pub fn into_unions(self) -> Vec<Type> {
         match self {
-            Type::Union(box Union { members: types, .. }) => types,
+            Type::Union(u) => u.members,
             _ => vec![self],
         }
     }
@@ -1931,15 +1936,12 @@ impl Type {
     /// Create an optional type (union with None).
     pub fn optional(x: Self) -> Self {
         // We would like the resulting type not nested, and well sorted.
-        if let Type::Union(box Union {
-            members: mut xs, ..
-        }) = x
-        {
-            match xs.binary_search(&Type::None) {
-                Ok(_) => Type::union(xs),
+        if let Type::Union(mut u) = x {
+            match u.members.binary_search(&Type::None) {
+                Ok(_) => Type::union(u.members),
                 Err(i) => {
-                    xs.insert(i, Type::None);
-                    Type::union(xs)
+                    u.members.insert(i, Type::None);
+                    Type::union(u.members)
                 }
             }
         } else {
@@ -1977,9 +1979,9 @@ impl Type {
             Type::Type(_) => Some(true),
             Type::None => Some(false),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
-            Type::Union(box Union { members, .. }) => {
+            Type::Union(u) => {
                 let mut answer = None;
-                for option in members {
+                for option in &u.members {
                     let option_bool = option.as_bool();
                     option_bool?;
                     if answer.is_none() {

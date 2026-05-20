@@ -190,13 +190,11 @@ pub fn derive_v2_response(
         };
     }
     match reason {
-        Some(SynthesizedPresetReason::IdeOverride) => {
-            // The IdeOverride reason is set by the unconfigured resolver
-            // when the user explicitly chose a non-`Auto` value for the
-            // `python.pyrefly.typeCheckingMode` workspace setting AND no
-            // nearby `pyrefly.toml` was found, so we surface both facts.
-            // Fall back to `<unknown>` only if the workspace state and
-            // the reason somehow disagree — shouldn't happen in practice.
+        Some(SynthesizedPresetReason::UserOverride) => {
+            // In the LSP this is produced by the unconfigured resolver
+            // when the user chose a non-`Auto` `typeCheckingMode`. On the
+            // CLI it comes from `--preset`. Either way the user made a
+            // deliberate choice, so we just surface the current value.
             let value = workspace_type_checking_mode
                 .map(type_checking_mode_kebab)
                 .unwrap_or("<unknown>");
@@ -309,8 +307,6 @@ impl TypeErrorDisplayStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// Unit tests for the V2 status-bar response derivation. The test
     /// matrix covers the four `SynthesizedPresetReason` cases plus the
     /// configured-file branches. The full LSP integration (parsing the
@@ -329,9 +325,9 @@ mod tests {
         use crate::state::lsp::TypeCheckingMode;
 
         #[test]
-        fn ide_override_yields_null_label() {
+        fn user_override_yields_null_label() {
             let r = derive_v2_response(
-                Some(SynthesizedPresetReason::IdeOverride),
+                Some(SynthesizedPresetReason::UserOverride),
                 &ConfigSource::Synthetic,
                 false,
                 false,

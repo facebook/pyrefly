@@ -6,7 +6,6 @@
  */
 
 use std::cmp::Ordering;
-use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Display;
@@ -229,7 +228,7 @@ impl PythonPlatform {
     }
 }
 
-static SYS_INFO_INTERNER: Interner<SysInfoInner, DefaultHasher> = Interner::new();
+static SYS_INFO_INTERNER: Interner<SysInfoInner> = Interner::new();
 
 /// Information available from the Python library `sys`, namely
 /// `version` and `platform`.

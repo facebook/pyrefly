@@ -41,8 +41,8 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 # Activation function type — all are shape-preserving: Tensor[*S] -> Tensor[*S]
 ShapePreservingActivation = (

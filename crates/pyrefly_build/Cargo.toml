@@ -17,7 +17,7 @@ pyrefly_util = { path = "../pyrefly_util" }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 starlark_map = "0.13.0"
-static_interner = "0.1.1"
+static_interner = { version = "0.1.2", features = ["dupe"] }
 tempfile = "3.27.0"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 vec1 = { version = "1.12.1", features = ["serde"] }

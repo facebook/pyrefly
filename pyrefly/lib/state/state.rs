@@ -34,7 +34,6 @@ use enum_iterator::Sequence;
 use fxhash::FxHashMap;
 use itertools::Itertools;
 use pyrefly_build::handle::Handle;
-use pyrefly_python::ignore::parse_ignore_all;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -69,7 +68,6 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
-use vec1::vec1;
 use web_time::Instant;
 
 use crate::alt::answers::AnswerEntry;
@@ -91,6 +89,7 @@ use crate::binding::binding::KeyClassBaseType;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyTParams;
@@ -106,9 +105,9 @@ use crate::config::error_kind::ErrorKind;
 use crate::config::finder::ConfigError;
 use crate::config::finder::ConfigFinder;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::export::exports::ExportOrigin;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
@@ -118,9 +117,6 @@ use crate::module::typeshed::BundledTypeshedStdlib;
 use crate::solver::solver::VarRecurser;
 use crate::state::epoch::Epoch;
 use crate::state::errors::Errors;
-use crate::state::errors::ModuleRanges;
-use crate::state::errors::sorted_backslash_continuation_ranges;
-use crate::state::errors::sorted_multi_line_string_ranges;
 use crate::state::load::FileContents;
 use crate::state::load::Load;
 use crate::state::loader::FindingOrError;
@@ -214,8 +210,8 @@ pub enum ModuleDep {
     IsReexport(Name),
     /// `LookupExport::get_deprecated`.
     GetDeprecated(Name),
-    /// `LookupExport::is_final`.
-    IsFinal(Name),
+    /// `LookupExport::export_origin`.
+    ExportOrigin(Name),
     /// `LookupExport::docstring_range`.
     DocstringRange(Name),
     /// `LookupExport::is_submodule_imported_implicitly`.
@@ -314,7 +310,8 @@ impl ModuleDeps {
             | AnyExportedKey::KeyVariance(KeyVariance(c))
             | AnyExportedKey::KeyClassMetadata(KeyClassMetadata(c))
             | AnyExportedKey::KeyClassMro(KeyClassMro(c))
-            | AnyExportedKey::KeyAbstractClassCheck(KeyAbstractClassCheck(c)) => {
+            | AnyExportedKey::KeyAbstractClassCheck(KeyAbstractClassCheck(c))
+            | AnyExportedKey::KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry(c)) => {
                 self.classes.insert(c);
             }
         }
@@ -331,7 +328,7 @@ impl ModuleDeps {
             | ModuleDep::IsSpecialExport(name)
             | ModuleDep::IsReexport(name)
             | ModuleDep::GetDeprecated(name)
-            | ModuleDep::IsFinal(name)
+            | ModuleDep::ExportOrigin(name)
             | ModuleDep::DocstringRange(name)
             | ModuleDep::IsSubmoduleImportedImplicitly(name) => {
                 self.names.entry(name).or_default().metadata = true;
@@ -428,7 +425,7 @@ impl ModuleDep {
             ModuleDep::IsSpecialExport(_) => "is_special_export",
             ModuleDep::IsReexport(_) => "is_reexport",
             ModuleDep::GetDeprecated(_) => "get_deprecated",
-            ModuleDep::IsFinal(_) => "is_final",
+            ModuleDep::ExportOrigin(_) => "export_origin",
             ModuleDep::DocstringRange(_) => "docstring_range",
             ModuleDep::IsSubmoduleImportedImplicitly(_) => "is_submodule_imported_implicitly",
             ModuleDep::Wildcard => "get_wildcard",
@@ -880,23 +877,8 @@ impl<'a> Transaction<'a> {
                 .filter_map(|handle| {
                     self.with_module_config_inner(handle, |config, x| {
                         let load = x.get_load()?;
-                        let mut multi_line = x
-                            .get_ast()
-                            .map(|ast| sorted_multi_line_string_ranges(&ast, &load.module_info))
-                            .unwrap_or_default();
-                        let lines: Vec<&str> = load.module_info.contents().lines().collect();
-                        multi_line
-                            .extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
-                        multi_line.sort();
-                        let ignore_all = parse_ignore_all(load.module_info.contents(), &multi_line);
-                        Some((
-                            load,
-                            config.dupe(),
-                            ModuleRanges {
-                                multi_line,
-                                ignore_all,
-                            },
-                        ))
+                        let module_ranges = x.module_ranges();
+                        Some((load, module_ranges, config.dupe()))
                     })
                 })
                 .collect(),
@@ -904,23 +886,6 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_all_errors(&self) -> Errors {
-        /// Extract multi-line ranges and ignore-all directives from the AST
-        /// and source text.
-        fn module_ranges_from(state: &dyn ModuleStateReader, load: &Load) -> ModuleRanges {
-            let mut multi_line = state
-                .get_ast()
-                .map(|ast| sorted_multi_line_string_ranges(&ast, &load.module_info))
-                .unwrap_or_default();
-            let lines: Vec<&str> = load.module_info.contents().lines().collect();
-            multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
-            multi_line.sort();
-            let ignore_all = parse_ignore_all(load.module_info.contents(), &multi_line);
-            ModuleRanges {
-                multi_line,
-                ignore_all,
-            }
-        }
-
         if self.data.updated_modules.is_empty() {
             // Optimized path
             return Errors::new(
@@ -929,8 +894,8 @@ impl<'a> Transaction<'a> {
                     .values()
                     .filter_map(|x| {
                         let load = x.state.get_load()?;
-                        let ranges = module_ranges_from(&x.state, &load);
-                        Some((load, x.config.dupe(), ranges))
+                        let module_ranges = x.state.module_ranges();
+                        Some((load, module_ranges, x.config.dupe()))
                     })
                     .collect(),
             );
@@ -941,16 +906,16 @@ impl<'a> Transaction<'a> {
             .iter_unordered()
             .filter_map(|x| {
                 let load = x.1.state.get_load()?;
-                let ranges = module_ranges_from(&x.1.state, &load);
-                Some((load, x.1.config.read().dupe(), ranges))
+                let module_ranges = x.1.state.module_ranges();
+                Some((load, module_ranges, x.1.config.read().dupe()))
             })
             .collect::<Vec<_>>();
         for (k, v) in self.readable.modules.iter() {
             if self.data.updated_modules.get(k).is_none()
                 && let Some(load) = v.state.get_load()
             {
-                let ranges = module_ranges_from(&v.state, &load);
-                res.push((load, v.config.dupe(), ranges));
+                let module_ranges = v.state.module_ranges();
+                res.push((load, module_ranges, v.config.dupe()));
             }
         }
         Errors::new(res)
@@ -1506,8 +1471,6 @@ impl<'a> Transaction<'a> {
                     pysa_reporter.report_module(&module_data.handle, self);
                 }
                 if self.data.pysa_reporter.is_some() || self.data.cinderx_reporter.is_some() {
-                    // With inline report writers, we delay AST eviction past Answers because
-                    // reporting needs the AST. Evict it now that reporting has completed.
                     post.evict_ast();
                 }
                 if !require.keep_bindings() && !require.keep_answers() {
@@ -1674,7 +1637,7 @@ impl<'a> Transaction<'a> {
         kind: ErrorKind,
     ) {
         let load = module_data.state.get_load().unwrap();
-        load.errors.add(range, ErrorInfo::Kind(kind), vec1![msg]);
+        load.errors.error_builder(range, kind, msg).emit();
     }
 
     fn lookup<'b>(&'b self, module_data: &'b ArcId<ModuleDataMut>) -> TransactionHandle<'b> {
@@ -1830,7 +1793,10 @@ impl<'a> Transaction<'a> {
             .updated_loaders
             .ensure(loader, || match self.readable.loaders.get(loader) {
                 Some(v) => v.dupe(),
-                None => Arc::new(LoaderFindCache::new(loader.dupe())),
+                None => Arc::new(LoaderFindCache::new(
+                    loader.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
             })
             .0
             .dupe()
@@ -2202,10 +2168,22 @@ impl<'a> Transaction<'a> {
     fn invalidate_find(&mut self) {
         let new_loaders = LockedMap::new();
         for loader in self.data.updated_loaders.keys() {
-            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
+            new_loaders.insert(
+                loader.dupe(),
+                Arc::new(LoaderFindCache::new(
+                    loader.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
+            );
         }
         for loader in self.readable.loaders.keys() {
-            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
+            new_loaders.insert(
+                loader.dupe(),
+                Arc::new(LoaderFindCache::new(
+                    loader.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
+            );
         }
         self.data.updated_loaders = new_loaders;
 
@@ -2265,7 +2243,13 @@ impl<'a> Transaction<'a> {
                 new_loaders.insert(c.dupe(), l.dupe());
             });
         configs.iter().for_each(|config| {
-            new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
+            new_loaders.insert(
+                config.dupe(),
+                Arc::new(LoaderFindCache::new(
+                    config.dupe(),
+                    self.data.state.dir_cache_enabled,
+                )),
+            );
         });
         self.data.updated_loaders = new_loaders;
 
@@ -2871,37 +2855,43 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         )?
     }
 
-    fn is_final(&self, mut module: ModuleName, name: &Name) -> bool {
+    fn export_origin(&self, mut module: ModuleName, name: &Name) -> ExportOrigin {
         let mut seen = HashSet::new();
         let mut name = name.clone();
 
-        loop {
+        let is_final = loop {
             if !seen.insert(module) {
-                return false; // Cycle detected
+                break false; // Cycle detected
             }
 
-            let next = self.with_exports(
-                module,
-                |exports, lookup| match exports.exports(lookup).get(&name) {
-                    Some(ExportLocation::ThisModule(Export { is_final, .. })) => Err(*is_final),
-                    Some(ExportLocation::OtherModule(other_module, original_name)) => {
-                        Ok((*other_module, original_name.clone()))
-                    }
-                    None => Err(false),
-                },
-                ModuleDep::IsFinal(name.clone()),
-            );
+            let next = self
+                .with_exports(
+                    module,
+                    |exports, lookup| match exports.exports(lookup).get(&name) {
+                        Some(ExportLocation::ThisModule(Export { is_final, .. })) => Err(*is_final),
+                        Some(ExportLocation::OtherModule(other_module, original_name)) => {
+                            Ok((*other_module, original_name.clone()))
+                        }
+                        None => Err(false),
+                    },
+                    ModuleDep::ExportOrigin(name.clone()),
+                )
+                .unwrap_or(Err(false));
 
             match next {
-                Some(Err(is_final)) => return is_final,
-                Some(Ok((other_module, original_name))) => {
+                Err(is_final) => break is_final,
+                Ok((other_module, original_name)) => {
                     if let Some(original_name) = original_name {
                         name = original_name;
                     }
                     module = other_module;
                 }
-                None => return false,
             }
+        };
+
+        ExportOrigin {
+            origin: (module, name),
+            is_final,
         }
     }
 }
@@ -3161,10 +3151,19 @@ pub struct State {
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
+    dir_cache_enabled: bool,
 }
 
 impl State {
     pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
+        Self::new_with_options(config_finder, thread_count, false)
+    }
+
+    pub fn new_with_options(
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+        dir_cache_enabled: bool,
+    ) -> Self {
         Self {
             threads: ThreadPool::new(thread_count),
             uniques: UniqueFactory::new(),
@@ -3172,11 +3171,16 @@ impl State {
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),
+            dir_cache_enabled,
         }
     }
 
     pub fn config_finder(&self) -> &ConfigFinder {
         &self.config_finder
+    }
+
+    pub fn dir_cache_enabled(&self) -> bool {
+        self.dir_cache_enabled
     }
 
     fn get_config(&self, handle: &Handle) -> ArcId<ConfigFile> {

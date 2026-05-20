@@ -376,27 +376,14 @@ fn add_suppressions(
                     buf.push_str(error_comment);
                     buf.push_str(line_ending);
                 } else {
-                    // Calculate once whether suppression goes below this line
-                    let suppression_below =
-                        idx + 1 < lines.len() && lines_to_skip.contains(&(idx + 1));
-
-                    if !suppression_below {
-                        // Add suppression line above (normal case)
-                        buf.push_str(get_indentation(line));
-                        buf.push_str(error_comment);
-                        buf.push_str(line_ending);
-                    }
+                    // Add suppression line above the error line
+                    buf.push_str(get_indentation(line));
+                    buf.push_str(error_comment);
+                    buf.push_str(line_ending);
 
                     // Write the current line as-is
                     buf.push_str(line);
                     buf.push_str(line_ending);
-
-                    if suppression_below {
-                        // Add suppression line below
-                        buf.push_str(get_indentation(lines[idx + 1]));
-                        buf.push_str(error_comment);
-                        buf.push_str(line_ending);
-                    }
                 }
             } else {
                 // No error on this line, write as-is
@@ -818,6 +805,50 @@ def foo(x: int) -> str:
 x: int = foo("Hello")
 "#,
         );
+    }
+
+    #[test]
+    fn test_add_suppressions_adjacent_lines_with_interleaved_existing_suppressions() {
+        // Regression test: when two consecutive code lines each have an existing
+        // `# pyrefly: ignore` comment above them, and new errors are added to both,
+        // each suppression must remain directly above its error line.
+        let tdir = tempfile::tempdir().unwrap();
+        let path = tdir.path().join("test.py");
+        let before = "\
+def foo() -> None:
+    # pyrefly: ignore [some-error]
+    x = 1
+    # pyrefly: ignore [some-error]
+    y = 2
+";
+        fs_anyhow::write(&path, before).unwrap();
+
+        let errors = vec![
+            SerializedError {
+                path: path.clone(),
+                line: 2, // x = 1 (0-indexed)
+                name: "new-error".to_owned(),
+                message: String::new(),
+            },
+            SerializedError {
+                path: path.clone(),
+                line: 4, // y = 2 (0-indexed)
+                name: "new-error".to_owned(),
+                message: String::new(),
+            },
+        ];
+
+        suppress::suppress_errors(errors, CommentLocation::LineBefore);
+
+        let result = fs_anyhow::read_to_string(&path).unwrap();
+        let expected = "\
+def foo() -> None:
+    # pyrefly: ignore [new-error, some-error]
+    x = 1
+    # pyrefly: ignore [new-error, some-error]
+    y = 2
+";
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -2004,5 +2035,49 @@ def f() -> int:
     return 1
 "#;
         assert_remove_ignores_via_suppress_command(input, want, 1);
+    }
+
+    #[test]
+    fn test_suppress_multiline_fstring_attribute_access() {
+        // Regression test: when a missing-attribute error occurs on an
+        // interpolation inside a multi-line f-string, the suppression must
+        // be placed above the f-string, NOT inside the string literal.
+        let input = r#"
+def foo(x: tuple) -> None:
+    print(f"""value: {x.bad_attr} and {x.other_bad_attr}""")
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo(x: tuple) -> None:
+    # pyrefly: ignore [missing-attribute]
+    print(f"""value: {x.bad_attr} and {x.other_bad_attr}""")
+"#,
+        );
+    }
+
+    #[test]
+    fn test_suppress_multiline_fstring_attr_on_separate_lines() {
+        // Regression test: when errors are on separate lines inside a
+        // multi-line f-string, all suppressions go above the f-string
+        // opening line, not inside the string body.
+        let input = r#"
+def foo(x: tuple) -> None:
+    print(f"""
+        first: {x.bad_attr}
+        second: {x.other_bad_attr}
+    """)
+"#;
+        assert_suppress_errors(
+            input,
+            r#"
+def foo(x: tuple) -> None:
+    # pyrefly: ignore [missing-attribute]
+    print(f"""
+        first: {x.bad_attr}
+        second: {x.other_bad_attr}
+    """)
+"#,
+        );
     }
 }

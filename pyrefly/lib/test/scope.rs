@@ -1370,3 +1370,25 @@ class Config:
         debug = True
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/3398
+testcase!(
+    test_walrus_in_comprehension_reads_enclosing_scope_param,
+    r#"
+def demo(text: str) -> None:
+    [text := text.replace(s, f"\\{s}") for s in "&#" if s in text]
+"#,
+);
+
+// Walrus target read on the RHS should not resolve through a class scope.
+// Python raises UnboundLocalError here because comprehensions can't see class
+// scopes; we should not silently resolve `text` to the class's `str`.
+testcase!(
+    test_walrus_in_comprehension_skips_class_scope,
+    r#"
+class C:
+    text: str = "hello"
+    def method(self) -> None:
+        result = [text := text.replace("a", "b") for _ in [1]]  # E: `text` is uninitialized
+"#,
+);

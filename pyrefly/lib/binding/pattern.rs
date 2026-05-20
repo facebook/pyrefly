@@ -39,7 +39,6 @@ use crate::binding::narrow::NarrowingSubject;
 use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::facet::UnresolvedFacetKind;
 
@@ -471,7 +470,7 @@ impl<'a> BindingsBuilder<'a> {
                     if pattern.is_irrefutable() && idx != n_subpatterns - 1 {
                         self.error(
                             pattern.range(),
-                            ErrorInfo::Kind(ErrorKind::BadMatch),
+                            ErrorKind::BadMatch,
                             "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                         )
                     }
@@ -579,6 +578,9 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
+            // Reachability is checked before the guard is bound (below). This is
+            // intentional: if the pattern itself can never match the subject type,
+            // the case is unreachable regardless of any guard condition.
             if let Some(narrowing_subject) = match_subject.as_single()
                 && let Some((op, range)) = new_narrow_ops.0.get(narrowing_subject.name())
             {

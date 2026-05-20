@@ -22,7 +22,6 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -54,7 +53,6 @@ use crate::binding::pydantic::STRICT_DEFAULT;
 use crate::binding::pydantic::VALIDATE_BY_ALIAS;
 use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::types::Type;
 
@@ -203,8 +201,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Recursively expands nested RootModels (e.g., RootModel[RootModel[int]] expands to RootModel[int] | int).
     pub fn extract_root_model_inner_type(&self, ty: &Type) -> Option<Type> {
         match ty {
-            Type::Union(box Union { members: types, .. }) => {
-                let root_types: Vec<Type> = types
+            Type::Union(f) => {
+                let root_types: Vec<Type> = f
+                    .members
                     .iter()
                     .filter_map(|t| self.extract_root_model_inner_type(t))
                     .collect();
@@ -433,7 +432,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.error(
             errors,
             range,
-            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+            ErrorKind::InvalidLiteral,
             "Invalid value for `extra`. Expected one of 'allow', 'ignore', or 'forbid'".to_owned(),
         );
     }
@@ -484,7 +483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    ErrorKind::BadArgumentType,
                     format!(
                         "Pydantic `{label}` value has type `{}`, which is not assignable to field type `{}`",
                         self.for_display(val.clone()),
@@ -525,7 +524,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    ErrorKind::BadArgumentType,
                     format!(
                         "Default value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
                         self.for_display(default_ty.clone()),
@@ -701,7 +700,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadArgumentType),
+                    ErrorKind::BadArgumentType,
                     format!(
                         "Argument value `{}` violates Pydantic `{}` constraint `{}` for field `{}`",
                         self.for_display(value_ty.clone()),

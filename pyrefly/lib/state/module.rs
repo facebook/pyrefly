@@ -52,6 +52,7 @@ use crate::state::dirty::Dirty;
 use crate::state::epoch::AtomicEpoch;
 use crate::state::epoch::Epoch;
 use crate::state::epoch::Epochs;
+use crate::state::errors::ModuleRanges;
 use crate::state::load::Load;
 use crate::state::require::AtomicRequire;
 use crate::state::require::Require;
@@ -465,6 +466,7 @@ pub trait ModuleStateReader {
     fn get_ast(&self) -> Option<Arc<ModModule>>;
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>>;
     fn get_solutions(&self) -> Option<Arc<Solutions>>;
+    fn module_ranges(&self) -> Option<Arc<ModuleRanges>>;
 }
 
 impl ModuleStateReader for ModuleState {
@@ -483,6 +485,17 @@ impl ModuleStateReader for ModuleState {
     fn get_solutions(&self) -> Option<Arc<Solutions>> {
         self.steps.solutions.dupe()
     }
+
+    fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
+        if let Some(answers) = self.steps.answers.as_ref() {
+            Some(answers.0.module_ranges().dupe())
+        } else {
+            self.steps
+                .solutions
+                .as_ref()
+                .map(|s| s.module_ranges().dupe())
+        }
+    }
 }
 
 impl ModuleStateReader for ModuleStateMut {
@@ -500,5 +513,15 @@ impl ModuleStateReader for ModuleStateMut {
 
     fn get_solutions(&self) -> Option<Arc<Solutions>> {
         self.get_solutions()
+    }
+
+    fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
+        let answers = self.load_answers();
+        if let Some(answers) = answers.as_ref() {
+            return Some(answers.0.module_ranges().dupe());
+        }
+        self.load_solutions()
+            .as_ref()
+            .map(|s| s.module_ranges().dupe())
     }
 }

@@ -31,7 +31,6 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
@@ -1239,12 +1238,17 @@ impl<'a> Transaction<'a> {
         match ty {
             Type::ClassType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
             Type::SelfType(class_type) => solver.type_order().instance_as_dunder_call(&class_type),
-            Type::Union(box Union { members, .. }) => Self::callable_from_types(solver, members),
-            Type::TypeAlias(box TypeAliasData::Value(alias)) => {
-                Self::callable_from_type(solver, alias.as_type())
+            Type::Union(u) => Self::callable_from_types(solver, u.members),
+            Type::TypeAlias(data) if matches!(*data, TypeAliasData::Value(_)) => {
+                // Repeated match because pattern guards cannot move out of bindings.
+                if let TypeAliasData::Value(alias) = *data {
+                    Self::callable_from_type(solver, alias.as_type())
+                } else {
+                    unreachable!("guarded by matches! above")
+                }
             }
-            Type::Type(box inner) => Self::callable_from_type(solver, inner),
-            Type::Quantified(box quantified) => match quantified.restriction {
+            Type::Type(inner) => Self::callable_from_type(solver, *inner),
+            Type::Quantified(quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
                 Restriction::Constraints(options) => Self::callable_from_types(solver, options),
                 Restriction::Unrestricted => None,
@@ -1778,8 +1782,20 @@ impl<'a> Transaction<'a> {
                 let completions = |ty| solver.completions(ty, Some(name), false);
 
                 match base_type {
-                    Type::Union(box Union { members: tys, .. }) | Type::Intersect(box (tys, _)) => {
-                        tys.into_iter()
+                    Type::Union(u) => u
+                        .members
+                        .into_iter()
+                        .filter_map(|ty_| {
+                            self.find_definition_for_base_type(
+                                handle,
+                                preference,
+                                completions(ty_),
+                                name,
+                            )
+                        })
+                        .collect(),
+                    Type::Intersect(i) => {
+                        i.0.into_iter()
                             .filter_map(|ty_| {
                                 self.find_definition_for_base_type(
                                     handle,
@@ -2981,6 +2997,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::convert_star_import::convert_star_import_code_actions(self, handle, selection)
     }
 
+    pub fn convert_dict_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::convert_dict::convert_dict_code_actions(self, handle, selection)
+    }
+
     /// Determines whether a module is a third-party package.
     ///
     /// Checks if the module's path is located within any of the configured
@@ -3167,6 +3191,9 @@ impl<'a> Transaction<'a> {
         .concat()
     }
 
+    /// Find references to an external definition within the given handle's module.
+    /// When the exact byte-range comparison fails (e.g. CRLF/LF differences),
+    /// falls back to comparing line numbers, which are encoding-invariant.
     fn local_references_from_external_definition(
         &self,
         handle: &Handle,
@@ -3176,6 +3203,10 @@ impl<'a> Transaction<'a> {
         let index = self.get_solutions(handle)?.get_index()?;
         let index = index.lock();
         let mut references = Vec::new();
+
+        // Lazily computed line number for fallback comparison.
+        let definition_line = || module.to_lsp_position(definition_range.start()).line;
+
         for ((imported_module_name, imported_name), ranges) in index
             .externally_defined_variable_references
             .iter()
@@ -3187,7 +3218,8 @@ impl<'a> Transaction<'a> {
                 imported_name.clone(),
                 FindPreference::default(),
             ) && imported_handle.path().as_path() == module.path().as_path()
-                && export.location == definition_range
+                && (export.location == definition_range
+                    || module.to_lsp_position(export.location.start()).line == definition_line())
             {
                 references.extend(ranges.iter().copied());
             }
@@ -3197,7 +3229,9 @@ impl<'a> Transaction<'a> {
         {
             if attribute_module_path == module.path() {
                 for (def_range, ref_range) in def_and_ref_ranges {
-                    if def_range == &definition_range {
+                    if *def_range == definition_range
+                        || module.to_lsp_position(def_range.start()).line == definition_line()
+                    {
                         references.push(*ref_range);
                     }
                 }
@@ -3949,18 +3983,25 @@ fn patch_definition_for_handle_impl<T: RdepTransaction>(
     match definition.module.path().details() {
         ModulePathDetails::Memory(path_buf) if handle.path() != definition.module.path() => {
             let TextRangeWithModule { module, range } = definition;
-            let module = if let Some(info) = transaction.module_info(&Handle::new(
+            let new_module = if let Some(info) = transaction.module_info(&Handle::new(
                 module.name(),
                 ModulePath::filesystem((**path_buf).clone()),
                 handle.sys_info().dupe(),
             )) {
                 info
             } else {
-                module.dupe()
+                return TextRangeWithModule {
+                    module: module.dupe(),
+                    range: *range,
+                };
             };
+            // Remap range from in-memory to on-disk byte offsets so that
+            // module and range stay consistent (e.g. when CRLF/LF differ).
+            let lsp_range = module.to_lsp_range(*range);
+            let range = new_module.from_lsp_range(lsp_range, None);
             TextRangeWithModule {
-                module,
-                range: *range,
+                module: new_module,
+                range,
             }
         }
         _ => definition.clone(),

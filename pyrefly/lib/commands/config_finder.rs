@@ -161,7 +161,7 @@ impl ConfigConfigurer for DefaultConfigConfigurerWithOverrides {
         mut config: ConfigFile,
         mut errors: Vec<ConfigError>,
     ) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
-        apply_unconfigured_resolver_if_applicable(&mut config, root, UnconfiguredOverride::Auto);
+        apply_unconfigured_resolver_if_applicable(&mut config, root, self.args.preset().into());
         let (c, mut configure_errors) = self.args.override_config(config);
         if self.ignore_errors {
             errors.clear();

@@ -45,7 +45,7 @@ To use them in your project, copy the `fixtures/` directory into your project
 and set `search_path` to point to it. The path is relative to the location of
 your `pyrefly.toml`.
 
-The fixtures also provide the `torch_shapes` package, which exports `Dim` — the
+The fixtures also provide the `shape_extensions` package, which exports `Dim` — the
 bridge between runtime integer values and type-level symbols.
 
 ## Imports and runtime considerations
@@ -67,7 +67,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch_shapes import Dim
+from shape_extensions import Dim
 ```
 
 This works with both old-style and new-style generics (PEP 695
@@ -95,19 +95,19 @@ import torch.nn as nn
 
 if TYPE_CHECKING:
     from torch import Tensor
-    from torch_shapes import Dim
+    from shape_extensions import Dim
 ```
 
-### Option 2: `torch_shapes.TypeVar` (runtime-compatible)
+### Option 2: `shape_extensions.TypeVar` (runtime-compatible)
 
 If you need annotations to evaluate at runtime (e.g., for runtime shape
 validation or keeping `assert_type` in production code), import
-`torch_shapes` directly. The package patches
+`shape_extensions` directly. The package patches
 `torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
 syntax at runtime without crashing. It also provides a `TypeVar` that
 supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
 
-Use old-style generics with `torch_shapes.TypeVar`:
+Use old-style generics with `shape_extensions.TypeVar`:
 
 ```python
 from typing import assert_type
@@ -115,7 +115,7 @@ from typing import assert_type
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch_shapes import Dim, TypeVar
+from shape_extensions import Dim, TypeVar
 
 N = TypeVar("N")
 M = TypeVar("M")
@@ -128,6 +128,11 @@ class Linear(nn.Module):
 PEP 695 new-style generics (`class Foo[T]`) automatically use
 `typing.TypeVar` internally, which doesn't support arithmetic — so this
 option requires old-style generics.
+
+```sandbox
+dir: tensor-shapes-setup
+description: Experiment with Dim arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
+```
 
 ## Hello world
 
@@ -144,7 +149,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch_shapes import Dim
+from shape_extensions import Dim
 
 
 class TwoLayerNet[InDim, HidDim, OutDim](nn.Module):

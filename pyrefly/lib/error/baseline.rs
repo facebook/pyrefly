@@ -98,7 +98,6 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
-    use vec1::vec1;
 
     use super::*;
     use crate::config::error_kind::ErrorKind;
@@ -114,7 +113,8 @@ mod tests {
         let error = Error::new(
             module,
             TextRange::new(TextSize::new(0), TextSize::new(5)),
-            vec1!["Test error message".to_owned()],
+            "Test error message".to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         );
 
@@ -166,7 +166,8 @@ mod tests {
         let error1 = Error::new(
             module.clone(),
             TextRange::new(TextSize::new(2), TextSize::new(5)),
-            vec1!["Any error message".to_owned()],
+            "Any error message".to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         );
         assert!(processor.matches_baseline(&error1, Path::new("/")));
@@ -175,7 +176,8 @@ mod tests {
         let error2 = Error::new(
             module.clone(),
             TextRange::new(TextSize::new(4), TextSize::new(5)),
-            vec1!["Test error".to_owned()],
+            "Test error".to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         );
         assert!(!processor.matches_baseline(&error2, Path::new("/")));
@@ -184,7 +186,8 @@ mod tests {
         let error3 = Error::new(
             module,
             TextRange::new(TextSize::new(2), TextSize::new(5)),
-            vec1!["Any error message".to_owned()],
+            "Any error message".to_owned(),
+            Vec::new(),
             ErrorKind::AssertType,
         );
         assert!(!processor.matches_baseline(&error3, Path::new("/")));
@@ -193,7 +196,8 @@ mod tests {
         let error4 = Error::new(
             module2.clone(),
             TextRange::new(TextSize::new(2), TextSize::new(5)),
-            vec1!["Any error message".to_owned()],
+            "Any error message".to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         );
         assert!(!processor.matches_baseline(&error4, Path::new("/")));

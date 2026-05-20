@@ -47,6 +47,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
@@ -102,6 +103,7 @@ assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
 assert_bytes!(KeyClassMro, 4);
 assert_bytes!(KeyAbstractClassCheck, 4);
+assert_bytes!(KeyClassSubscriptSymmetry, 4);
 assert_words!(KeyLegacyTypeParam, 1);
 assert_words!(KeyYield, 1);
 assert_words!(KeyYieldFrom, 1);
@@ -119,6 +121,7 @@ assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 11);
 assert_bytes!(BindingClassMro, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
+assert_bytes!(BindingClassSubscriptSymmetry, 4);
 assert_words!(BindingClassField, 11);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
@@ -150,6 +153,7 @@ pub enum AnyIdx {
     KeyClassMetadata(Idx<KeyClassMetadata>),
     KeyClassMro(Idx<KeyClassMro>),
     KeyAbstractClassCheck(Idx<KeyAbstractClassCheck>),
+    KeyClassSubscriptSymmetry(Idx<KeyClassSubscriptSymmetry>),
     KeyLegacyTypeParam(Idx<KeyLegacyTypeParam>),
     KeyYield(Idx<KeyYield>),
     KeyYieldFrom(Idx<KeyYieldFrom>),
@@ -225,6 +229,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyAbstractClassCheck(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAbstractClassCheck>(*idx)
             }
+            AnyIdx::KeyClassSubscriptSymmetry(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassSubscriptSymmetry>(*idx)
+            }
             AnyIdx::KeyLegacyTypeParam(idx) => {
                 $self.$method::<$crate::binding::binding::KeyLegacyTypeParam>(*idx)
             }
@@ -295,6 +302,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyAbstractClassCheck(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAbstractClassCheck>(*idx, $($args),+)
             }
+            AnyIdx::KeyClassSubscriptSymmetry(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassSubscriptSymmetry>(*idx, $($args),+)
+            }
             AnyIdx::KeyLegacyTypeParam(idx) => {
                 $self.$method::<$crate::binding::binding::KeyLegacyTypeParam>(*idx, $($args),+)
             }
@@ -334,6 +344,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAbstractClassCheck(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyClassSubscriptSymmetry(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyLegacyTypeParam(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyYield(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyYieldFrom(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -354,6 +365,7 @@ pub enum AnyExportedKey {
     KeyClassMetadata(KeyClassMetadata),
     KeyClassMro(KeyClassMro),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
+    KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry),
     KeyTypeAlias(KeyTypeAlias),
 }
 
@@ -741,6 +753,28 @@ impl Exported for KeyAbstractClassCheck {
         AnyExportedKey::KeyAbstractClassCheck(self.clone())
     }
 }
+impl Keyed for KeyClassSubscriptSymmetry {
+    const EXPORTED: bool = true;
+    type Value = BindingClassSubscriptSymmetry;
+    type Answer = bool;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyClassSubscriptSymmetry(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassSubscriptSymmetry(self.clone()))
+    }
+}
+impl Exported for KeyClassSubscriptSymmetry {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassSubscriptSymmetry(self.clone())
+    }
+}
 impl Keyed for KeyLegacyTypeParam {
     type Value = BindingLegacyTypeParam;
     type Answer = LegacyTypeParameterLookup;
@@ -1002,6 +1036,8 @@ pub enum KeyExpect {
     UninitializedCheck(TextRange),
     /// Forward reference string literal in union type check.
     ForwardRefUnion(TextRange),
+    /// A name used in annotation position that may be an invalid implicit alias.
+    ImplicitAliasCheck(TextRange),
 }
 
 impl Ranged for KeyExpect {
@@ -1017,7 +1053,8 @@ impl Ranged for KeyExpect {
             | KeyExpect::MatchCaseReachability(range)
             | KeyExpect::PrivateAttributeAccess(range)
             | KeyExpect::UninitializedCheck(range)
-            | KeyExpect::ForwardRefUnion(range) => *range,
+            | KeyExpect::ForwardRefUnion(range)
+            | KeyExpect::ImplicitAliasCheck(range) => *range,
         }
     }
 }
@@ -1036,6 +1073,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
+            KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
         };
         write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
@@ -1139,6 +1177,14 @@ pub enum BindingExpect {
         /// The range for error reporting (covers the whole union expression).
         range: TextRange,
     },
+    /// A local name used in annotation position whose definition has invalid
+    /// annotation syntax. The error is emitted at solve time after checking
+    /// semantic exemptions (TypeVar, functional TypedDict, etc.).
+    ImplicitAliasCheck {
+        name: Name,
+        expr: Box<Expr>,
+        problem: Box<str>,
+    },
 }
 
 impl DisplayWith<Bindings> for BindingExpect {
@@ -1170,7 +1216,8 @@ impl DisplayWith<Bindings> for BindingExpect {
             Self::CheckRaisedException(RaisedException::WithoutCause(exc)) => {
                 write!(f, "RaisedException::WithoutCause({})", m.display(exc))
             }
-            Self::CheckRaisedException(RaisedException::WithCause(box (exc, cause))) => {
+            Self::CheckRaisedException(RaisedException::WithCause(exc_cause)) => {
+                let (exc, cause) = &**exc_cause;
                 write!(
                     f,
                     "RaisedException::WithCause({}, {})",
@@ -1253,6 +1300,9 @@ impl DisplayWith<Bindings> for BindingExpect {
                     right_is_forward_ref,
                     m.display(range)
                 )
+            }
+            Self::ImplicitAliasCheck { name, problem, .. } => {
+                write!(f, "ImplicitAliasCheck({name}, {problem})",)
             }
         }
     }
@@ -1581,6 +1631,15 @@ pub struct KeyAbstractClassCheck(pub ClassDefIndex);
 impl DisplayWith<ModuleInfo> for KeyAbstractClassCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyAbstractClassCheck(class{})", self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyClassSubscriptSymmetry(pub ClassDefIndex);
+
+impl DisplayWith<ModuleInfo> for KeyClassSubscriptSymmetry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyClassSubscriptSymmetry(class{})", self.0)
     }
 }
 
@@ -3104,24 +3163,44 @@ impl DisplayWith<Bindings> for BindingAbstractClassCheck {
 }
 
 #[derive(Clone, Debug)]
+pub struct BindingClassSubscriptSymmetry {
+    pub class_idx: Idx<KeyClass>,
+}
+
+impl DisplayWith<Bindings> for BindingClassSubscriptSymmetry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(
+            f,
+            "BindingClassSubscriptSymmetry({})",
+            ctx.display(self.class_idx)
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
 /// A legacy type parameter (`T = typing.TypeVar("T")`).
 pub enum BindingLegacyTypeParam {
     /// The key points directly to an expression that may be a legacy type parameter.
     ParamKeyed(Idx<Key>),
-    /// The key points to a module with an attribute that may be a legacy type parameter.
-    ModuleKeyed(Idx<Key>, Box<Name>),
+    /// The key points to a module with attribute(s) that may be a legacy type parameter.
+    /// Supports multi-level dotted access (e.g. `mod.T` or `pkg.mod.T`).
+    ModuleKeyed(Idx<Key>, Box<Vec1<Name>>),
 }
 
 impl DisplayWith<Bindings> for BindingLegacyTypeParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(
-            f,
-            "BindingLegacyTypeParam({})",
-            match self {
-                Self::ParamKeyed(k) => format!("{}", ctx.display(*k)),
-                Self::ModuleKeyed(k, attr) => format!("{}.{attr}", ctx.display(*k)),
+        write!(f, "BindingLegacyTypeParam(")?;
+        match self {
+            Self::ParamKeyed(k) => write!(f, "{}", ctx.display(*k)),
+            Self::ModuleKeyed(k, attrs) => {
+                write!(f, "{}", ctx.display(*k))?;
+                for attr in attrs.iter() {
+                    write!(f, ".{}", attr)?;
+                }
+                Ok(())
             }
-        )
+        }?;
+        write!(f, ")")
     }
 }
 

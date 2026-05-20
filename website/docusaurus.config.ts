@@ -16,6 +16,7 @@ import StylexPlugin from '@stylexjs/webpack-plugin';
 import PyodidePlugin from '@pyodide/webpack-plugin';
 import path from "path";
 import fs from "fs";
+import remarkSandboxPlugin from "./src/sandbox/remarkSandboxPlugin";
 
 const BasePath = 'en/docs';
 
@@ -310,6 +311,14 @@ const config: Config = {
                   component: '@site/src/pages/redirect-getting-started.tsx',
                   exact: true,
                 });
+                addRoute({
+                  path: '/pycon26/challenge',
+                  component: '@site/src/pages/externalRedirect.tsx',
+                  exact: true,
+                  props: {
+                    url: 'https://github.com/migeed-z/pyrefly-type-challenge',
+                  },
+                });
               },
             };
         },
@@ -404,6 +413,11 @@ const config: Config = {
                             'https://www.internalfb.com/code/fbsource/fbcode/pyrefly/website/',
                         external: 'https://github.com/facebook/pyrefly/edit/main/website/',
                     }),
+                    beforeDefaultRemarkPlugins: [
+                        [remarkSandboxPlugin, {
+                            sandboxExamplesDir: path.resolve(__dirname, 'sandbox-examples'),
+                        }],
+                    ],
                 },
                 staticDocsProject: 'Pyrefly',
                 theme: {

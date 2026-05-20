@@ -337,7 +337,12 @@ impl<'a> BindingsBuilder<'a> {
                 //
                 // We ignore such names for first-usage-tracking purposes, since
                 // we are not going to analyze the code at all.
-                self.ensure_expr(illegal_target, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    illegal_target,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
                 // Make sure the RHS is properly bound, so that we can report errors there.
                 let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
                 if ensure_assigned && let Some(assigned) = &mut assigned {
@@ -430,7 +435,12 @@ impl<'a> BindingsBuilder<'a> {
             // Parser error recovery can synthesize empty identifiers. Skip creating a definition
             // binding, but still analyze any assigned value so we surface downstream errors.
             if ensure_assigned && let Some(assigned) = &mut assigned {
-                self.ensure_expr(assigned, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    assigned,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
             return;
         }
@@ -503,7 +513,8 @@ impl<'a> BindingsBuilder<'a> {
         let has_type_alias_qualifier = direct_ann
             .is_some_and(|(e, _)| self.as_special_export(e) == Some(SpecialExport::TypeAlias));
         let is_definitely_type_alias = receiver_idx.is_none()
-            && (has_type_alias_qualifier || self.is_definitely_type_alias_rhs(value.as_ref()));
+            && (has_type_alias_qualifier
+                || (direct_ann.is_none() && self.is_definitely_type_alias_rhs(value.as_ref())));
         let has_typeform_annotation = direct_ann.is_some_and(|(e, _)| {
             self.as_special_export(e) == Some(SpecialExport::TypeForm)
                 || matches!(e, Expr::Subscript(x) if self.as_special_export(&x.value) == Some(SpecialExport::TypeForm))
@@ -522,7 +533,13 @@ impl<'a> BindingsBuilder<'a> {
                 tparams = Some(collector.lookup_keys().into_boxed_slice());
             }
         } else if has_typeform_annotation && value.is_string_literal_expr() {
-            self.ensure_type_with_usage(&mut value, &mut None, &mut Usage::StaticTypeInformation);
+            self.ensure_type_with_usage(
+                &mut value,
+                &mut None,
+                &mut Usage::StaticTypeInformation {
+                    is_annotation: false,
+                },
+            );
         } else {
             self.ensure_expr(&mut value, current.usage());
         }

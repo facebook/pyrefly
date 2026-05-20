@@ -1836,6 +1836,22 @@ testcase!(
 );
 
 testcase!(
+    test_crash_on_decorator_assign,
+    r#"
+from typing import TypeVar
+@T=TypeVar()  # E: Expected newline, found `=`
+"#,
+);
+
+testcase!(
+    test_crash_on_multi_target_named_tuple,
+    r#"
+from typing import NamedTuple
+a = b = NamedTuple("b", [("x", int)])
+"#,
+);
+
+testcase!(
     test_check_invalid_rhs,
     r#"
 def f(x): pass
@@ -2368,6 +2384,33 @@ def f(x):
     y &= x
     assert_type(y, Any)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2221
+testcase!(
+    test_shutil_copyfileobj_with_urlopen,
+    r#"
+import shutil
+import urllib.request as request
+with request.urlopen("https://example.com") as remote, open("out.html", 'wb') as local:
+    shutil.copyfileobj(remote, local)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2866
+testcase!(
+    test_reduce_gcd_return_type,
+    r#"
+from functools import reduce
+from math import gcd
+
+def detect_indentation(values: list[int]) -> int:
+    try:
+        indentation = reduce(gcd, [v for v in values if not v % 2]) or 1
+    except TypeError:
+        indentation = 1
+    return indentation
+"#,
 );
 
 // Regression test for https://github.com/facebook/pyrefly/issues/3048

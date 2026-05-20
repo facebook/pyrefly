@@ -447,7 +447,7 @@ impl SemanticTokenBuilder {
             }
             Stmt::With(with) => {
                 for with_item in with.items.iter() {
-                    if let Some(box name) = &with_item.optional_vars {
+                    if let Some(name) = &with_item.optional_vars {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }

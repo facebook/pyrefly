@@ -20,7 +20,7 @@ for popular IDEs and editors such as
 See the [Pyrefly website](https://pyrefly.org) for full documentation and how to
 add Pyrefly to your editor of choice.
 
-Pyrefly is currently in [beta](https://github.com/facebook/pyrefly/releases/tag/0.42.0).
+Pyrefly's current development status is [stable](https://github.com/facebook/pyrefly/releases/tag/1.0.0).
 
 ### Key Features
 
@@ -34,14 +34,16 @@ Pyrefly is currently in [beta](https://github.com/facebook/pyrefly/releases/tag/
 
 - Try out pyrefly in your browser: [Sandbox](https://pyrefly.org/sandbox/)
 - Get the command-line tool: `pip install pyrefly`
-- Get the IDE Extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
+- Get the IDE extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
 
 ### Version Policy
 
-Pyrefly releases new minor versions (`0.x.0`) weekly, with patch fixes (`0.x.y`) in between as needed.
-Pyrefly does *not* follow strict semantic versioning: any version may introduce new type errors and
-other breaking changes. The [`pyrefly suppress`](https://pyrefly.org/en/docs/error-suppressions/)
-command can be used to easily silence errors when upgrading to a new version.
+Pyrefly releases new minor versions (`1.x.0`) monthly and patch versions in between
+as-needed for critical fixes. Pyrefly does *not* follow strict semantic versioning:
+minor versions contain more significant changes than patch versions, but any
+version may introduce new type errors and other breaking changes. The
+[`pyrefly suppress`](https://pyrefly.org/en/docs/error-suppressions/) command can be used
+to easily silence errors when upgrading to a new version.
 
 ## Getting Involved
 

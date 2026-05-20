@@ -43,8 +43,8 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 def find_multiple(n: int, k: int) -> int:

@@ -33,7 +33,6 @@ use pyrefly_types::tensor::TensorShape;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TArgs;
-use pyrefly_types::types::Union;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
@@ -48,17 +47,15 @@ use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrSubsetError;
 use crate::config::error_kind::ErrorKind;
+use crate::error::collector::ErrorBuilder;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
-use crate::error::error::ErrorQuickFix;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncFlags;
@@ -1573,15 +1570,11 @@ impl Solver {
     /// Simplify a type as much as we can.
     fn simplify_mut(&self, t: &mut Type) {
         t.transform_mut(&mut |x| {
-            if let Type::Union(box Union {
-                members: xs,
-                display_name: original_name,
-            }) = x
-            {
-                let mut merged = unions(mem::take(xs), &self.heap);
+            if let Type::Union(u) = x {
+                let mut merged = unions(mem::take(&mut u.members), &self.heap);
                 // Preserve union display names during simplification
-                if let Type::Union(box Union { display_name, .. }) = &mut merged {
-                    *display_name = original_name.clone();
+                if let Type::Union(merged_u) = &mut merged {
+                    merged_u.display_name = u.display_name.take();
                 }
                 *x = merged;
             }
@@ -1595,9 +1588,10 @@ impl Solver {
             }
             // Flatten Tensor[prefix, *tuple[...], suffix] after TypeVarTuple resolution
             if let Type::Tensor(tensor) = x
-                && let TensorShape::Unpacked(box (prefix, middle, suffix)) = &mut tensor.shape
-                && let Type::Tuple(tuple_variant) = middle
+                && let TensorShape::Unpacked(unpacked) = &mut tensor.shape
+                && let Type::Tuple(tuple_variant) = &unpacked.1
             {
+                let (prefix, _, suffix) = &**unpacked;
                 match tuple_variant {
                     Tuple::Concrete(elements) => {
                         let mut new_dims = prefix.clone();
@@ -1605,7 +1599,8 @@ impl Solver {
                         new_dims.extend(suffix.clone());
                         tensor.shape = TensorShape::Concrete(new_dims);
                     }
-                    Tuple::Unpacked(box (tuple_prefix, tuple_middle, tuple_suffix)) => {
+                    Tuple::Unpacked(inner) => {
+                        let (tuple_prefix, tuple_middle, tuple_suffix) = &**inner;
                         let mut new_prefix = prefix.clone();
                         new_prefix.extend(tuple_prefix.clone());
                         let mut new_suffix = tuple_suffix.clone();
@@ -1620,20 +1615,21 @@ impl Solver {
                 }
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
-            if let Type::Concatenate(ts, box Type::ParamSpecValue(paramlist)) = x {
+            if let Type::Concatenate(ts, inner) = x
+                && let Type::ParamSpecValue(paramlist) = &mut **inner
+            {
                 let params = mem::take(paramlist).prepend_types(ts).into_owned();
                 *x = self.heap.mk_param_spec_value(params);
             }
-            if let Type::Concatenate(ts, box Type::Concatenate(ts2, pspec)) = x {
+            if let Type::Concatenate(ts, inner) = x
+                && let Type::Concatenate(ts2, pspec) = &mut **inner
+            {
                 let combined: Box<[PrefixParam]> = ts.iter().chain(ts2.iter()).cloned().collect();
                 *x = self.heap.mk_concatenate(combined, (**pspec).clone());
             }
             let (callable, kind) = match x {
                 Type::Callable(c) => (Some(&mut **c), None),
-                Type::Function(box Function {
-                    signature: c,
-                    metadata: k,
-                }) => (Some(c), Some(k)),
+                Type::Function(f) => (Some(&mut f.signature), Some(&mut f.metadata)),
                 _ => (None, None),
             };
             if let Some(Callable {
@@ -1679,7 +1675,13 @@ impl Solver {
                 let mut new_params = Vec::new();
                 for param in mem::take(param_list).into_items() {
                     match param {
-                        Param::Varargs(_, Type::Unpack(box Type::Tuple(Tuple::Concrete(elts)))) => {
+                        Param::Varargs(_, Type::Unpack(inner))
+                            if matches!(*inner, Type::Tuple(Tuple::Concrete(_))) =>
+                        {
+                            // Guarded by matches! above
+                            let Type::Tuple(Tuple::Concrete(elts)) = *inner else {
+                                unreachable!("guarded by matches! above")
+                            };
                             for elt in elts {
                                 new_params.push(Param::PosOnly(None, elt, Required::Required));
                             }
@@ -1696,7 +1698,8 @@ impl Solver {
     /// See test::generic_basic::test_typevar_or_none for why we need to do this.
     fn erase_unsolved_variables(&self, t: &mut Type) {
         t.transform_mut(&mut |x| match x {
-            Type::Union(box Union { members: xs, .. }) => {
+            Type::Union(u) => {
+                let xs = &mut u.members;
                 let erase_type = |x: &Type| match x {
                     Type::Var(v) => {
                         let lock = self.variables.lock();
@@ -1901,15 +1904,25 @@ impl Solver {
         }
     }
 
-    /// Add a bound to the variable if it is a Quantified or Unwrap
+    /// Add a bound to the variable if it is a Quantified or Unwrap.
+    ///
+    /// Given two recorded bounds `A` and `B` on the same variable where `B <: A`:
+    ///
+    /// - For *lower* bounds we keep `A`. From `A <: T` we get `B <: T` (transitivity
+    ///   through `B <: A`), so `A` carries strictly more information.
+    /// - For *upper* bounds we keep `B`. From `T <: B` we get `T <: A` (transitivity
+    ///   through `B <: A`), so `B` carries strictly more information. Without this,
+    ///   a tight bound like `T <: int` would be discarded in favor of a looser
+    ///   `T <: int | () -> int` that was recorded first.
     fn get_new_bound(
         &self,
         existing_bound: Option<Type>,
         bound: Type,
+        is_upper: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> NewBound {
         // Check if the new bound can absorb or be absorbed into the existing bound.
-        // Examples: `float` absorbs `int`, `list[Any]` absorbs `list[int]`.
+        // Examples (lower bound): `float` absorbs `int`, `list[Any]` absorbs `list[int]`.
         // TODO(https://github.com/facebook/pyrefly/issues/105): there are a few fishy things:
         // * We're only checking against the first bound.
         // * We're keeping `Any` separate so it can be filtered out in `solve_one_bounds`.
@@ -1920,9 +1933,13 @@ impl Solver {
                 let _ = is_subset(&bound, &first); // Ignore the result, just pin vars
                 None
             } else if is_subset(&bound.materialize(), &first).is_ok() {
-                Some(first)
+                // `bound <: first`: lower bounds keep `first` (the supertype), upper
+                // bounds keep `bound` (the subtype).
+                Some(if is_upper { bound.clone() } else { first })
             } else if is_subset(&first.materialize(), &bound).is_ok() {
-                Some(bound.clone())
+                // `first <: bound`: lower bounds adopt `bound` (the supertype), upper
+                // bounds keep `first` (the subtype).
+                Some(if is_upper { first } else { bound.clone() })
             } else {
                 None
             }
@@ -2006,7 +2023,7 @@ impl Solver {
             upper_bound.map_or(Ok(()), |upper_bound| is_subset(&bound, &upper_bound))
         });
         let new_bound = if res.is_ok() {
-            self.get_new_bound(first_bound, bound, is_subset)
+            self.get_new_bound(first_bound, bound, false, is_subset)
         } else {
             // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
             NewBound::AddBound(Type::any_error())
@@ -2055,7 +2072,7 @@ impl Solver {
             lower_bound.map_or(Ok(()), |lower_bound| is_subset(&lower_bound, &bound))
         });
         let new_bound = if res.is_ok() {
-            self.get_new_bound(first_bound, bound, is_subset)
+            self.get_new_bound(first_bound, bound, true, is_subset)
         } else {
             // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
             NewBound::AddBound(Type::any_error())
@@ -2301,21 +2318,16 @@ impl Solver {
                 quantified.as_gradual_type()
             }
             Variable::PartialQuantified(q) => q.as_gradual_type(),
-            Variable::PartialContained(_) => {
-                unreachable!("overload residual capture should not include PartialContained vars")
-            }
-            Variable::Recursive => {
-                unreachable!("overload residual capture should not include Recursive vars")
-            }
+            Variable::PartialContained(_) | Variable::Recursive => self.heap.mk_any_implicit(),
             Variable::Unwrap(_) => {
                 unreachable!("overload residual capture should not include Unwrap vars")
             }
         }
     }
 
-    fn are_branch_bounds_compatible_with_solved_type(
+    fn branch_bounds_compatibility_check(
         &self,
-        branch_value: &Variable,
+        branch_value: &mut Variable,
         solved_ty: &Type,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> bool {
@@ -2327,14 +2339,14 @@ impl Solver {
                 return is_subset(branch_ty, solved_ty).is_ok()
                     && is_subset(solved_ty, branch_ty).is_ok();
             }
-            Variable::PartialQuantified(_) => {
-                unreachable!("overload residual capture should not include PartialQuantified vars")
-            }
-            Variable::PartialContained(_) => {
-                unreachable!("overload residual capture should not include PartialContained vars")
-            }
-            Variable::Recursive => {
-                unreachable!("overload residual capture should not include Recursive vars")
+            Variable::PartialQuantified(_)
+            | Variable::PartialContained(_)
+            | Variable::Recursive => {
+                // During the overload branch probe, the captured Quantified var
+                // was unified with a partial/recursive var. Pin it to the solved
+                // type so downstream materialization sees a concrete answer.
+                *branch_value = Variable::Answer(solved_ty.clone());
+                return true;
             }
         };
         bounds
@@ -2364,7 +2376,7 @@ impl Solver {
 
     fn compute_overload_pruning_by_witness(
         &self,
-        solved_vars_with_residuals: &[SolvedVarWithResiduals],
+        solved_vars_with_residuals: &mut [SolvedVarWithResiduals],
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> OverloadPruningByWitness {
         let mut all_branch_indices_by_witness: HashMap<OverloadResidualIdentity, SmallSet<usize>> =
@@ -2383,7 +2395,7 @@ impl Solver {
                 OverloadResidualIdentity,
                 SmallSet<usize>,
             > = HashMap::new();
-            for residual in &solved_var.overload_residuals {
+            for residual in &mut solved_var.overload_residuals {
                 let identity = OverloadResidualIdentity {
                     witness_hash: residual.witness.identity.witness_hash,
                 };
@@ -2405,10 +2417,10 @@ impl Solver {
                 let surviving_for_solved_var = surviving_per_witness_for_solved_var
                     .entry(identity.clone())
                     .or_default();
-                for branch in &residual.branches {
+                for branch in &mut residual.branches {
                     all_branch_indices.insert(branch.branch_index);
-                    if self.are_branch_bounds_compatible_with_solved_type(
-                        &branch.value,
+                    if self.branch_bounds_compatibility_check(
+                        &mut branch.value,
                         &solved_var.solved_ty,
                         is_subset,
                     ) {
@@ -2473,11 +2485,11 @@ impl Solver {
     fn compute_overload_pruning_by_witness_from_payloads(
         &self,
         solved_vars_by_payload: &SmallMap<Var, SolvedVarByPayload>,
-        overload_witness_payloads: &OverloadWitnessPayloadByHash,
+        overload_witness_payloads: &mut OverloadWitnessPayloadByHash,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> OverloadPruningByWitness {
         overload_witness_payloads
-            .iter()
+            .iter_mut()
             .filter_map(|(witness_hash, branch_captures)| {
                 let identity = OverloadResidualIdentity {
                     witness_hash: *witness_hash,
@@ -2487,12 +2499,12 @@ impl Solver {
                 for (var, solved_var) in solved_vars_by_payload {
                     let mut surviving_for_solved_var = SmallSet::new();
                     let mut saw_var_in_witness = false;
-                    for capture in branch_captures {
-                        let Some(branch_value) = capture.values.get(var) else {
+                    for capture in branch_captures.iter_mut() {
+                        let Some(branch_value) = capture.values.get_mut(var) else {
                             continue;
                         };
                         saw_var_in_witness = true;
-                        if self.are_branch_bounds_compatible_with_solved_type(
+                        if self.branch_bounds_compatibility_check(
                             branch_value,
                             &solved_var.solved_ty,
                             is_subset,
@@ -2591,7 +2603,7 @@ impl Solver {
         call_context: &CallContext,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let tracked_fresh_vars = call_context.take_deferred_quantified_vars();
-        let overload_witness_payloads = call_context.take_overload_witness_payloads();
+        let mut overload_witness_payloads = call_context.take_overload_witness_payloads();
         call_context.mark_boundary_consumed_and_drained();
         let payload_vars: SmallSet<Var> = overload_witness_payloads
             .values()
@@ -2617,7 +2629,7 @@ impl Solver {
             QuantifiedHandle(all_boundary_vars),
             infer_with_first_use,
             &mut |got, want| subset.is_subset_eq_probe_for_pruning(got, want),
-            Some(&overload_witness_payloads),
+            Some(&mut overload_witness_payloads),
         )
     }
 
@@ -2649,11 +2661,12 @@ impl Solver {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-        overload_witness_payloads: Option<&OverloadWitnessPayloadByHash>,
+        overload_witness_payloads: Option<&mut OverloadWitnessPayloadByHash>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let mut err = Vec::new();
-        let use_payload_pruning =
-            overload_witness_payloads.is_some_and(|payloads| !payloads.is_empty());
+        let use_payload_pruning = overload_witness_payloads
+            .as_ref()
+            .is_some_and(|payloads| !payloads.is_empty());
         let mut solved_quantified_names_by_var: SmallMap<Var, Name> = SmallMap::new();
         let mut solved_vars_with_residuals = Vec::new();
         let lock = self.variables.lock();
@@ -2727,7 +2740,7 @@ impl Solver {
                 is_subset,
             )
         } else {
-            self.compute_overload_pruning_by_witness(&solved_vars_with_residuals, is_subset)
+            self.compute_overload_pruning_by_witness(&mut solved_vars_with_residuals, is_subset)
         };
         for decision in overload_pruning_by_witness.values() {
             if !decision.all_pruned {
@@ -3011,51 +3024,35 @@ impl Solver {
     }
 
     /// Generate an error message that `got <: want` failed.
-    pub fn error(
+    /// Returns a builder so the caller can chain additional decorations before emitting.
+    pub fn error_builder<'a>(
         &self,
         got: &Type,
         want: &Type,
-        errors: &ErrorCollector,
+        errors: &'a ErrorCollector,
         loc: TextRange,
         tcc: &dyn Fn() -> TypeCheckContext,
         subset_error: SubsetError,
-        note: Option<String>,
-        quick_fixes: Vec<ErrorQuickFix>,
-    ) {
+    ) -> ErrorBuilder<'a> {
+        if !errors.is_active() {
+            // Optimization: return early to avoid evaluating `tcc`.
+            return errors.error_builder(loc, ErrorKind::InternalError, String::new());
+        }
         let tcc = tcc();
         let msg = tcc.kind.format_error(
             &self.for_display(got.clone()),
             &self.for_display(want.clone()),
             errors.module().name(),
         );
-        let mut msg_lines = vec1![msg];
-        if let Some(subset_error_msg) = subset_error.to_error_msg() {
-            msg_lines.push(subset_error_msg);
+        let mut builder = errors.error_builder(loc, tcc.kind.as_error_kind(), msg);
+        builder = builder.with_context(tcc.context.map(|ctx| || ctx));
+        for (range, label) in tcc.annotations {
+            builder = builder.with_annotation(range, label);
         }
-        if let Some(note) = note {
-            msg_lines.push(note);
+        if let Some(detail) = subset_error.to_error_msg() {
+            builder = builder.with_detail(detail);
         }
-        let extra_annotations = tcc.annotations;
-        match tcc.context {
-            Some(ctx) => {
-                errors.add_with_annotations_and_quick_fixes(
-                    loc,
-                    ErrorInfo::Context(&|| ctx.clone()),
-                    msg_lines,
-                    extra_annotations,
-                    quick_fixes,
-                );
-            }
-            None => {
-                errors.add_with_annotations_and_quick_fixes(
-                    loc,
-                    ErrorInfo::Kind(tcc.kind.as_error_kind()),
-                    msg_lines,
-                    extra_annotations,
-                    quick_fixes,
-                );
-            }
-        }
+        builder
     }
 
     /// Union a list of types together. In the process may cause some variables to be forced.
@@ -3130,8 +3127,8 @@ impl Solver {
                         _ => res.push(v.to_type(heap)),
                     }
                 }
-                Type::Union(box Union { members: ts, .. }) => {
-                    for t in ts {
+                Type::Union(u) => {
+                    for t in u.members {
                         expand(t, variables, recurser, heap, query_var, residual_read, res);
                     }
                 }
@@ -3444,8 +3441,9 @@ impl SubsetError {
             SubsetError::MissingAttribute(protocol, attribute) => Some(format!(
                 "Protocol `{protocol}` requires attribute `{attribute}`"
             )),
-            SubsetError::IncompatibleAttribute(box (protocol, got, attribute, err)) => {
-                Some(err.to_error_msg(&Name::new(format!("{got}")), &protocol, &attribute))
+            SubsetError::IncompatibleAttribute(inner) => {
+                let (protocol, got, attribute, err) = &*inner;
+                Some(err.to_error_msg(&Name::new(format!("{got}")), protocol, attribute))
             }
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
             SubsetError::OpenTypedDict(err) => Some(err.to_error_msg()),

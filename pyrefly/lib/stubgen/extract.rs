@@ -29,10 +29,12 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 
 use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::export::definitions::Definitions;
@@ -483,6 +485,91 @@ fn extract_return_type(
     None
 }
 
+/// Names already represented as variables in the extracted class body.
+fn stub_class_level_variable_names(body: &[StubItem]) -> HashSet<&str> {
+    let mut out = HashSet::new();
+    for item in body {
+        if let StubItem::Variable(v) = item {
+            out.insert(v.name.as_str());
+        }
+    }
+    out
+}
+
+/// Instance attributes inferred from methods (e.g. `self.name` in `__init__`) that
+/// are not already declared in the class body, materialized as stub `name: T` lines.
+///
+/// Emitted in alphabetical order by field name (stable regardless of map / inference order).
+fn extract_instance_attr_stubs_from_class_fields(
+    class_def: &StmtClassDef,
+    class_body: &[StubItem],
+    ctx: &mut ExtractionContext,
+) -> Vec<StubVariable> {
+    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+        return Vec::new();
+    };
+    let already = stub_class_level_variable_names(class_body);
+    let class_fields = match ctx.bindings.get_class_fields(def_index) {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    for (name, _) in class_fields.iter() {
+        if already.contains(name.as_str()) {
+            continue;
+        }
+        if !should_include_name(name.as_str(), ctx.config, true, ctx.dunder_all) {
+            continue;
+        }
+        let key = KeyClassField(def_index, name.clone());
+        let Some(field_idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+            continue;
+        };
+        let Some(field) = ctx.answers.get_idx(field_idx) else {
+            continue;
+        };
+        if !field.is_simple_instance_attribute() {
+            continue;
+        }
+        let Some(ann) = format_type(&field.ty(), ctx) else {
+            continue;
+        };
+        out.push(StubVariable {
+            name: name.to_string(),
+            annotation: Some(ann),
+            value: None,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Inserts synthesized instance attribute stubs before `__init__` when present,
+/// otherwise at the start of the class body.
+fn merge_instance_field_stubs(
+    synthesized: Vec<StubVariable>,
+    mut body: Vec<StubItem>,
+) -> Vec<StubItem> {
+    if synthesized.is_empty() {
+        return body;
+    }
+    let init_idx = body
+        .iter()
+        .position(|item| matches!(item, StubItem::Function(f) if f.name == "__init__"));
+    let synth: Vec<StubItem> = synthesized.into_iter().map(StubItem::Variable).collect();
+    match init_idx {
+        Some(i) => {
+            body.splice(i..i, synth);
+            body
+        }
+        None => {
+            body.splice(0..0, synth);
+            body
+        }
+    }
+}
+
 fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Option<StubClass> {
     let name = class_def.name.id.as_str();
     if !should_include_name(name, ctx.config, false, ctx.dunder_all) {
@@ -533,6 +620,8 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
     let body = extract_stmts(&class_def.body, ctx, true);
+    let extra = extract_instance_attr_stubs_from_class_fields(class_def, &body, ctx);
+    let body = merge_instance_field_stubs(extra, body);
 
     Some(StubClass {
         name: name.to_owned(),

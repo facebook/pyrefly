@@ -17,7 +17,6 @@ use pyrefly_python::dunder;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::tensor::TensorShape;
-use pyrefly_types::types::Union;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -210,8 +209,8 @@ fn on_type(
         Type::Quantified(q) => {
             on_var(q.name(), variance, inj, q.variance());
         }
-        Type::Union(box Union { members: tys, .. }) => {
-            for ty in tys {
+        Type::Union(f) => {
+            for ty in &f.members {
                 on_type(variance, inj, ty, on_edge, on_var);
             }
         }
@@ -226,7 +225,8 @@ fn on_type(
                         visit_dim(dim);
                     }
                 }
-                TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+                TensorShape::Unpacked(f) => {
+                    let (prefix, middle, suffix) = &**f;
                     for dim in prefix {
                         visit_dim(dim);
                     }

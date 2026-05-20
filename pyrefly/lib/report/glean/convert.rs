@@ -20,7 +20,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
 use regex::RegexBuilder;
 use ruff_python_ast::Decorator;
@@ -755,8 +754,8 @@ impl GleanState<'_> {
                     let completions = |ty| solver.completions(ty, Some(attr_name), false);
 
                     let tys = match base_type.clone() {
-                        Type::Union(box Union { members: tys, .. })
-                        | Type::Intersect(box (tys, _)) => tys,
+                        Type::Union(u) => u.members,
+                        Type::Intersect(i) => i.0,
                         ty => vec![ty],
                     };
 

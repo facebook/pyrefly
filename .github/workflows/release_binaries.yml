@@ -93,13 +93,9 @@ jobs:
           # Fix git safe.directory for container builds (checkout creates repo with different owner)
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Read rust-toolchain file
-        run: echo "toolchain=$(cat pyrefly/rust-toolchain)" && echo "toolchain=$(cat pyrefly/rust-toolchain)" >> ${{ matrix.github_env }}
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ env.toolchain }}
           targets: ${{ matrix.target }}
 
       - name: Set up Rust cache
@@ -130,7 +126,7 @@ jobs:
           command: build
           target: ${{ matrix.target }}
           args: "--release --manifest-path pyrefly/Cargo.toml -p pyrefly"
-          toolchain: ${{ env.toolchain }}
+          toolchain: stable
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'

@@ -147,6 +147,26 @@ pub fn get_project_config_for_current_dir(
     Ok((config, config_finder.errors()))
 }
 
+pub fn get_config_finder_for_snippet(
+    config: Option<PathBuf>,
+    args: ConfigOverrideArgs,
+) -> anyhow::Result<ConfigFinder> {
+    let (config, errors) = match config {
+        Some(explicit) => get_explicit_config(&explicit, args),
+        None => {
+            let current_dir = std::env::current_dir().context("cannot identify current dir")?;
+            let finder = default_config_finder_with_overrides(args.clone(), false, None);
+            match finder.directory(&current_dir) {
+                Some(config) => (config, finder.errors()),
+                None => args.override_config(ConfigFile::default()),
+            }
+        }
+    };
+    let config_finder = ConfigFinder::new_constant(config);
+    add_config_errors(&config_finder, errors)?;
+    Ok(config_finder)
+}
+
 /// Get inputs for a full-project check. We will look for a config file and type-check the project it defines.
 ///
 /// Also returns the `UpsellDecision`: in project mode every checked
@@ -170,18 +190,18 @@ fn get_globs_and_config_for_project(
         }
         ConfigSource::FailedParse(path) => {
             warn!(
-                "Config at `{}` failed to parse, checking with default configuration",
+                "Config at `{}` failed to parse, checking with auto configuration",
                 path.display()
             );
         }
         ConfigSource::PythonToolMarker(path) | ConfigSource::Marker(path) => {
             info!(
-                "Found `{}` marking project root, checking root directory with default configuration",
+                "Found `{}` marking project root, checking root directory with auto configuration",
                 path.display(),
             );
         }
         ConfigSource::Synthetic => {
-            info!("Checking current directory with default configuration");
+            info!("Checking current directory with auto configuration");
         }
     }
     let current_dir = std::env::current_dir().ok();

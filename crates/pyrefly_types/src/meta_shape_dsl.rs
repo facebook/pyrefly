@@ -167,7 +167,6 @@ impl Val {
 mod extract {
     use crate::dimension::SizeExpr;
     use crate::literal::Lit;
-    use crate::literal::Literal;
     use crate::tensor::TensorShape;
     use crate::tuple::Tuple;
     use crate::types::Type;
@@ -213,9 +212,7 @@ mod extract {
     /// Extract literal int from Type::Literal(Lit::Int(...)).
     pub fn literal_int(ty: &Type) -> Option<i64> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Int(n), ..
-            }) => n.as_i64(),
+            Type::Literal(lit) if let Lit::Int(n) = &lit.value => n.as_i64(),
             _ => None,
         }
     }
@@ -231,9 +228,9 @@ mod extract {
             // Type variable or quantified
             Type::Quantified(_) | Type::Var(_) => Some(ty.clone()),
             // Literal int -> wrap in SizeExpr
-            Type::Literal(box Literal {
-                value: Lit::Int(n), ..
-            }) => n.as_i64().map(|v| Type::Size(SizeExpr::Literal(v))),
+            Type::Literal(lit) if let Lit::Int(n) = &lit.value => {
+                n.as_i64().map(|v| Type::Size(SizeExpr::Literal(v)))
+            }
             _ => None,
         }
     }
@@ -283,10 +280,7 @@ mod extract {
     /// Extract bool literal from Type::Literal(Lit::Bool(...)).
     pub fn bool_arg(ty: &Type) -> Option<bool> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Bool(b),
-                ..
-            }) => Some(*b),
+            Type::Literal(lit) if let Lit::Bool(b) = &lit.value => Some(*b),
             _ => None,
         }
     }
@@ -294,9 +288,7 @@ mod extract {
     /// Extract string literal from Type::Literal(Lit::Str(...)).
     pub fn string_arg(ty: &Type) -> Option<String> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Str(s), ..
-            }) => Some(s.to_string()),
+            Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(s.to_string()),
             _ => None,
         }
     }
@@ -615,10 +607,10 @@ impl fmt::Display for DslBuiltin {
         match self {
             DslBuiltin::Len => write!(f, "len"),
             DslBuiltin::Range => write!(f, "range"),
-            DslBuiltin::Prod => write!(f, "torch_shapes.prod"),
-            DslBuiltin::Sum => write!(f, "torch_shapes.sum"),
+            DslBuiltin::Prod => write!(f, "shape_extensions.prod"),
+            DslBuiltin::Sum => write!(f, "shape_extensions.sum"),
             DslBuiltin::Str => write!(f, "str"),
-            DslBuiltin::ParseEinsumEquation => write!(f, "torch_shapes.parse_einsum_equation"),
+            DslBuiltin::ParseEinsumEquation => write!(f, "shape_extensions.parse_einsum_equation"),
             DslBuiltin::Enumerate => write!(f, "enumerate"),
             DslBuiltin::Zip => write!(f, "zip"),
         }
@@ -1251,7 +1243,7 @@ fn convert_expr(expr: &Expr) -> Result<DslExpr, String> {
 /// Convert a function call expression, dispatching special forms.
 fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
     // Extract function name for dispatch. Supports both simple names (`len`)
-    // and dotted names (`torch_shapes.prod`).
+    // and dotted names (`shape_extensions.prod`).
     let func_name = match call.func.as_ref() {
         Expr::Name(n) => n.id.to_string(),
         Expr::Attribute(a) => {
@@ -1332,14 +1324,14 @@ fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
         "str"
         | "enumerate"
         | "zip"
-        | "torch_shapes.prod"
-        | "torch_shapes.sum"
-        | "torch_shapes.parse_einsum_equation" => {
+        | "shape_extensions.prod"
+        | "shape_extensions.sum"
+        | "shape_extensions.parse_einsum_equation" => {
             let builtin = match func_name.as_str() {
-                "torch_shapes.prod" => DslBuiltin::Prod,
-                "torch_shapes.sum" => DslBuiltin::Sum,
+                "shape_extensions.prod" => DslBuiltin::Prod,
+                "shape_extensions.sum" => DslBuiltin::Sum,
                 "str" => DslBuiltin::Str,
-                "torch_shapes.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
+                "shape_extensions.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
                 "enumerate" => DslBuiltin::Enumerate,
                 "zip" => DslBuiltin::Zip,
                 _ => unreachable!(),
@@ -2298,11 +2290,14 @@ fn eval_dsl_expr(
                     let vals: Vec<Val> = dims.iter().map(|d| dim_val(d.clone())).collect();
                     Ok(Val::List(vals))
                 }
-                TensorShape::Unpacked(box (prefix, middle, suffix)) => Ok(Val::Unpacked {
-                    prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
-                    middle: middle.clone(),
-                    suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
-                }),
+                TensorShape::Unpacked(unpacked) => {
+                    let (prefix, middle, suffix) = &**unpacked;
+                    Ok(Val::Unpacked {
+                        prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
+                        middle: middle.clone(),
+                        suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
+                    })
+                }
             }
         }
 

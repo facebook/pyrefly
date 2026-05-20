@@ -107,9 +107,10 @@ pub enum SynthesizedPresetReason {
     /// section in `pyproject.toml`). Both axes affect the surfaced
     /// upsell wording.
     Migrated(MigratedFromKind),
-    /// The IDE workspace setting `typeCheckingMode` was set to a
-    /// specific preset, overriding any auto-detection.
-    IdeOverride,
+    /// The user explicitly chose a preset — either via the IDE
+    /// workspace setting `typeCheckingMode` or the `--preset` CLI
+    /// flag — overriding any auto-detection.
+    UserOverride,
 }
 
 /// Where did this config come from?
@@ -613,9 +614,10 @@ pub struct ConfigFile {
 
     /// Runtime-only metadata. Populated by `resolve_unconfigured_config`
     /// when this `ConfigFile` was synthesized rather than loaded from a
-    /// `pyrefly.toml` / `[tool.pyrefly]` section. Used by the status bar
-    /// (LSP) and the upsell message (CLI) to explain to the user why
-    /// Pyrefly is behaving the way it is. Never serialized.
+    /// `pyrefly.toml` / `[tool.pyrefly]` section, and by the `--preset`
+    /// flag when a user specifies a preset on the command line. Used by
+    /// the status bar (LSP) and the upsell message (CLI) to explain to
+    /// the user why Pyrefly is behaving the way it is. Never serialized.
     #[serde(skip)]
     #[derivative(PartialEq = "ignore")]
     pub synthesized_preset_reason: Option<SynthesizedPresetReason>,
@@ -3109,5 +3111,62 @@ output-format = "omit-errors"
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.
         assert_eq!(config.source.root(), Some(root.path()));
+    }
+
+    #[test]
+    fn test_explicit_search_path_wins_over_site_packages() {
+        // An explicit search path should take priority over a site-package
+        // path when resolving a file path back to a module name, even when
+        // the site-package path would also match.
+        let root = TempDir::new().unwrap();
+        let sp_dir = root.path().join("venv/lib/python3.13/site-packages");
+        let mylib_dir = sp_dir.join("mylib");
+        fs::create_dir_all(&mylib_dir).unwrap();
+        let submod = mylib_dir.join("submod.py");
+        fs::write(&submod, "").unwrap();
+
+        let mut config = ConfigFile {
+            search_path_from_args: vec![mylib_dir.clone()],
+            import_root: Some(root.path().to_path_buf()),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.site_package_path = Some(vec![sp_dir]);
+        config.python_environment.set_empty_to_default();
+
+        let handle = config.handle_from_module_path(ModulePath::filesystem(submod));
+        // The explicit search path points into mylib, so the file resolves
+        // as `submod` rather than `mylib.submod` (from site-packages) or
+        // the full venv-relative path (from import_root).
+        assert_eq!(handle.module(), ModuleName::from_str("submod"));
+    }
+
+    #[test]
+    fn test_site_packages_wins_over_heuristic_import_root() {
+        // A site-package path should take priority over the heuristic
+        // import_root when resolving files in site-packages.
+        let root = TempDir::new().unwrap();
+        let sp_dir = root.path().join("venv/lib/python3.13/site-packages");
+        let fastapi_dir = sp_dir.join("fastapi");
+        fs::create_dir_all(&fastapi_dir).unwrap();
+        let init = fastapi_dir.join("__init__.py");
+        fs::write(&init, "").unwrap();
+
+        let mut config = ConfigFile {
+            import_root: Some(root.path().to_path_buf()),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.site_package_path = Some(vec![sp_dir]);
+        config.python_environment.set_empty_to_default();
+
+        let handle = config.handle_from_module_path(ModulePath::filesystem(init));
+        assert_eq!(handle.module(), ModuleName::from_str("fastapi"));
     }
 }

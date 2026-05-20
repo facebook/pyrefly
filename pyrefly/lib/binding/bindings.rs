@@ -12,6 +12,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use itertools::Itertools;
 use pyrefly_graph::index::Idx;
 use pyrefly_graph::index::Index;
 use pyrefly_graph::index_map::IndexMap;
@@ -35,6 +36,7 @@ use ruff_python_ast::ModModule;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtFunctionDef;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::TypeParam;
 use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
@@ -49,12 +51,12 @@ use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
+use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
 use crate::binding::binding::BranchInfo;
@@ -66,6 +68,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
+use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
@@ -98,13 +101,13 @@ use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::Solver;
+use crate::state::errors::ModuleRanges;
 use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
 use crate::table;
@@ -200,6 +203,9 @@ struct BindingsInner {
     infer_pytest_fixture_types: bool,
     table: BindingTable,
     metadata: Arc<BindingsMetadata>,
+    /// Multi-line ranges and ignore-all directives, computed from the AST
+    /// here, before the AST is evicted from memory. Used for error suppression.
+    module_ranges: Arc<ModuleRanges>,
     scope_trace: Option<ScopeTrace>,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
@@ -351,6 +357,10 @@ impl Bindings {
             infer_pytest_fixture_types: false,
             table: Default::default(),
             metadata: Arc::new(BindingsMetadata::new()),
+            module_ranges: Arc::new(ModuleRanges {
+                multi_line: Vec::new(),
+                ignore_all: SmallMap::new(),
+            }),
             scope_trace: None,
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
@@ -378,11 +388,26 @@ impl Bindings {
         &self.0.metadata
     }
 
+    pub fn module_ranges(&self) -> &Arc<ModuleRanges> {
+        &self.0.module_ranges
+    }
+
     /// Look up pre-computed class fields by `ClassDefIndex`. O(1) Vec index.
     /// Returns `None` if the index is out of bounds (e.g., stale cross-module
     /// index after incremental rebuild).
     pub fn get_class_fields(&self, idx: ClassDefIndex) -> Option<&ClassFields> {
         Some(&self.0.metadata.get_class_checked(idx)?.fields)
+    }
+
+    /// Per-module class index for a class definition statement (`ClassDefIndex`),
+    /// used for `KeyClassField` / `ClassFields` lookups.
+    pub fn class_def_index(&self, class_def: &StmtClassDef) -> Option<ClassDefIndex> {
+        let key = KeyClass(ShortIdentifier::new(&class_def.name));
+        let idx = self.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        match self.get(idx) {
+            BindingClass::ClassDef(c) => Some(c.def_index),
+            BindingClass::FunctionalClassDef(d, ..) => Some(*d),
+        }
     }
 
     pub fn unused_parameters(&self) -> &[UnusedParameter] {
@@ -547,7 +572,7 @@ impl Bindings {
 
     pub fn function_has_return_annotation(&self, name: &Identifier) -> bool {
         let b = self.get(self.key_to_idx(&Key::ReturnType(ShortIdentifier::new(name))));
-        if let Binding::ReturnType(box r) = b {
+        if let Binding::ReturnType(r) = b {
             r.kind.has_return_annotation()
         } else if matches!(b, Binding::Any(_)) {
             // This happens when we have an un-annotated return & the inference behavior is "skip and infer Any"
@@ -636,6 +661,10 @@ impl Bindings {
         infer_return_types: InferReturnTypes,
     ) -> Self {
         let pytest_info = PytestBindingInfo::from_module(&x);
+        // Compute module ranges from the AST before consuming it. These are
+        // needed later for error collection, which runs after the AST may
+        // have been evicted.
+        let module_ranges = Arc::new(ModuleRanges::compute(&x, &module_info));
         let mut builder = BindingsBuilder {
             module_info: module_info.dupe(),
             lookup,
@@ -688,7 +717,7 @@ impl Bindings {
         for (range, name) in exports.invalid_dunder_all_entries(lookup) {
             builder.error(
                 range,
-                ErrorInfo::Kind(ErrorKind::BadDunderAll),
+                ErrorKind::BadDunderAll,
                 format!("Name `{name}` is listed in `__all__` but is not defined in the module"),
             );
             let key = builder.insert_binding(
@@ -702,7 +731,7 @@ impl Bindings {
         if let Some(range) = exports.unresolvable_dunder_all_range() {
             builder.error(
                 range,
-                ErrorInfo::Kind(ErrorKind::UnresolvableDunderAll),
+                ErrorKind::UnresolvableDunderAll,
                 "`__all__` could not be statically analyzed; falling back to module-level definitions for star imports".to_owned(),
             );
         }
@@ -718,11 +747,10 @@ impl Bindings {
         let semantic_errors = builder.semantic_syntax_errors.into_inner();
         for error in semantic_errors {
             if Self::should_emit_semantic_syntax_error(&error) {
-                builder.errors.add(
-                    error.range,
-                    ErrorInfo::Kind(ErrorKind::InvalidSyntax),
-                    vec1![error.to_string()],
-                );
+                builder
+                    .errors
+                    .error_builder(error.range, ErrorKind::InvalidSyntax, error.to_string())
+                    .emit();
             }
         }
 
@@ -764,6 +792,7 @@ impl Bindings {
             infer_pytest_fixture_types: solver.infer_pytest_fixture_types,
             table: builder.table,
             metadata: Arc::new(builder.metadata),
+            module_ranges,
             scope_trace: if enable_trace {
                 Some(scope_trace)
             } else {
@@ -1179,7 +1208,8 @@ impl<'a> BindingsBuilder<'a> {
         match self.lookup.module_exists(builtins_module) {
             FindingOrError::Error(err @ FindError::MissingImport(..)) if !ignore_if_missing => {
                 let (_, msg) = err.display();
-                self.errors.internal_error(TextRange::default(), msg);
+                let (header, _) = msg.split_off_first();
+                self.errors.internal_error(TextRange::default(), header);
             }
             FindingOrError::Error(_) => (),
             FindingOrError::Finding(_) => {
@@ -1326,12 +1356,21 @@ impl<'a> BindingsBuilder<'a> {
         None
     }
 
-    pub fn error(&self, range: TextRange, info: ErrorInfo, msg: String) {
-        self.errors.add(range, info, vec1![msg]);
+    pub fn error(&self, range: TextRange, kind: ErrorKind, msg: String) {
+        self.errors.error_builder(range, kind, msg).emit();
     }
 
-    pub fn error_multiline(&self, range: TextRange, info: ErrorInfo, msg: Vec1<String>) {
-        self.errors.add(range, info, msg);
+    pub fn error_with_detail(
+        &self,
+        range: TextRange,
+        kind: ErrorKind,
+        header: String,
+        detail: String,
+    ) {
+        self.errors
+            .error_builder(range, kind, header)
+            .with_detail(detail)
+            .emit();
     }
 
     pub fn declare_mutable_capture(&mut self, name: &Identifier, kind: MutableCaptureKind) {
@@ -1347,11 +1386,7 @@ impl<'a> BindingsBuilder<'a> {
                     && self.scopes.in_module_or_class_top_level()
                     && !self.scopes.in_class_body();
                 if !should_suppress {
-                    self.error(
-                        name.range,
-                        ErrorInfo::Kind(ErrorKind::UnknownName),
-                        error.message(name),
-                    );
+                    self.error(name.range, ErrorKind::UnknownName, error.message(name));
                 }
                 Binding::Any(AnyStyle::Error)
             }
@@ -1406,8 +1441,10 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
-        let may_prove_initialized =
-            !matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
+        let may_prove_initialized = !matches!(
+            usage,
+            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
+        );
         let name_read_info = self.scopes.look_up_name_for_read(name, usage);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
@@ -1558,7 +1595,7 @@ impl<'a> BindingsBuilder<'a> {
             // Determine side effects based on usage and first_use state.
             if matches!(
                 deferred.usage,
-                Usage::StaticTypeInformation | Usage::TypeAliasRhs
+                Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
             ) {
                 self.mark_does_not_pin_if_first_use(def_idx);
             } else if !is_narrowing {
@@ -1591,6 +1628,43 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Forward(default_idx)
             };
             self.insert_binding_idx(deferred.bound_name_idx, binding);
+        }
+
+        if matches!(
+            deferred.usage,
+            Usage::StaticTypeInformation {
+                is_annotation: true
+            }
+        ) {
+            let range = self.idx_to_key(deferred.bound_name_idx).range();
+            self.maybe_insert_implicit_alias_check(range, deferred.lookup_result_idx);
+        }
+    }
+
+    /// Check whether a name used in annotation position resolves to a
+    /// NameAssign with invalid annotation syntax. If so, insert a
+    /// `KeyExpect::ImplicitAliasCheck` binding.
+    fn maybe_insert_implicit_alias_check(
+        &mut self,
+        bound_name_range: TextRange,
+        lookup_result_idx: Idx<Key>,
+    ) {
+        if let Some((_, Some(Binding::NameAssign(na)))) =
+            self.get_original_binding(lookup_result_idx)
+        {
+            if na.annotation.is_some() || na.is_in_function_scope {
+                return;
+            }
+            if let Some(problem) = Ast::annotation_syntax_problem(&na.expr) {
+                self.insert_binding(
+                    KeyExpect::ImplicitAliasCheck(bound_name_range),
+                    BindingExpect::ImplicitAliasCheck {
+                        name: na.name.clone(),
+                        expr: na.expr.clone(),
+                        problem: problem.into(),
+                    },
+                );
+            }
         }
     }
 
@@ -1748,7 +1822,7 @@ impl<'a> BindingsBuilder<'a> {
             ) {
                 self.error(
                     self.idx_to_key(idx).range(),
-                    ErrorInfo::Kind(ErrorKind::Redefinition),
+                    ErrorKind::Redefinition,
                     format!("Cannot redefine existing type alias `{name}`",),
                 )
             } else if matches!(
@@ -1757,7 +1831,7 @@ impl<'a> BindingsBuilder<'a> {
             ) {
                 self.error(
                     self.idx_to_key(idx).range(),
-                    ErrorInfo::Kind(ErrorKind::Redefinition),
+                    ErrorKind::Redefinition,
                     format!("Cannot redefine existing name `{name}` as a type alias",),
                 );
             }
@@ -1769,21 +1843,27 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(prev_idx) = prev_idx
             && let Some(Binding::Import(prev)) = self.idx_to_binding(prev_idx)
         {
-            // A duplicate import of the same symbol is not a reassignment;
-            // skip the cross-module `is_final` lookup in that case so that
-            // repeated `from X import Y` blocks (common in
-            // `if TYPE_CHECKING:` and method-local imports) don't force
-            // `Step::Exports` on the import target.
+            // Fast path: exact duplicate import needs no cross-module lookup.
+            // This avoids forcing `Step::Exports` for repeated `from X import Y`
+            // blocks common in `if TYPE_CHECKING:` and method-local imports.
             if let Some(Binding::Import(cur)) = self.idx_to_binding(idx)
                 && cur.module == prev.module
                 && cur.name == prev.name
             {
                 return;
             }
-            if self.lookup.is_final(prev.module, &prev.name) {
+            let prev_origin = self.lookup.export_origin(prev.module, &prev.name);
+            if prev_origin.is_final {
+                // Both are imports but from different modules.
+                // Compare origins to check if they trace back to the same definition.
+                if let Some(Binding::Import(cur)) = self.idx_to_binding(idx)
+                    && self.lookup.export_origin(cur.module, &cur.name).origin == prev_origin.origin
+                {
+                    return;
+                }
                 self.error(
                     self.idx_to_key(idx).range(),
-                    ErrorInfo::Kind(ErrorKind::BadAssignment),
+                    ErrorKind::BadAssignment,
                     format!("Cannot assign to `{name}` because it is imported as final"),
                 );
             }
@@ -1811,7 +1891,7 @@ impl<'a> BindingsBuilder<'a> {
             {
                 self.error(
                     name.range,
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeVar),
+                    ErrorKind::InvalidTypeVar,
                     format!(
                         "Type parameter `{}` shadows a type parameter of the same name from an enclosing scope",
                         name.id
@@ -1954,13 +2034,15 @@ impl<'a> BindingsBuilder<'a> {
 pub enum LegacyTParamId {
     /// A simple name referring to a legacy type parameter.
     Name(Identifier),
-    /// A <name>.<name> reference to a legacy type parameter.
-    Attr(Identifier, Identifier),
+    /// A dotted reference to a legacy type parameter. The first `Identifier` is the
+    /// base name looked up in scope; the `Vec1` is the attribute chain applied to it.
+    /// For example `mod.T` is `Attr(mod, [T])` and `pkg.mod.T` is `Attr(pkg, [mod, T])`.
+    Attr(Identifier, Vec1<Identifier>),
 }
 
 impl LegacyTParamId {
     /// Get the identifier of the name that will actually be bound (for a normal name, this is
-    /// just itself; for a `<base>.<attr>` attribute it is the base portion, which gets narrowed).
+    /// just itself; for a dotted attribute chain it is the base portion, which gets narrowed).
     fn as_identifier(&self) -> &Identifier {
         match self {
             Self::Name(name) => name,
@@ -1983,7 +2065,9 @@ impl LegacyTParamId {
     fn tvar_name(&self) -> String {
         match self {
             Self::Name(name) => name.id.as_str().to_owned(),
-            Self::Attr(base, attr) => format!("{base}.{attr}"),
+            Self::Attr(base, attrs) => {
+                format!("{base}.{}", attrs.iter().map(|a| a.as_str()).join("."))
+            }
         }
     }
 }
@@ -1992,7 +2076,7 @@ impl Ranged for LegacyTParamId {
     fn range(&self) -> TextRange {
         match self {
             Self::Name(name) => name.range,
-            Self::Attr(_, attr) => attr.range,
+            Self::Attr(_, attrs) => attrs.last().range,
         }
     }
 }
@@ -2126,7 +2210,9 @@ impl<'a> BindingsBuilder<'a> {
     ) -> TParamLookupResult {
         let name = id.as_identifier();
         // Legacy type parameter lookups are in static type contexts
-        let mut usage = Usage::StaticTypeInformation;
+        let mut usage = Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
         self.lookup_name(Hashed::new(&name.id), &mut usage)
             .found()
             .map_or(TParamLookupResult::NotFound, |original_idx| {
@@ -2231,10 +2317,13 @@ impl<'a> BindingsBuilder<'a> {
                 )),
                 Some(_) => None,
             },
-            LegacyTParamId::Attr(_, attr) => match binding {
-                Some(Binding::Module(..)) | None => Some((
-                    KeyLegacyTypeParam(ShortIdentifier::new(attr)),
-                    BindingLegacyTypeParam::ModuleKeyed(original_idx, Box::new(attr.id.clone())),
+            LegacyTParamId::Attr(_, attrs) => match binding {
+                Some(Binding::Module(..) | Binding::Import(..)) | None => Some((
+                    KeyLegacyTypeParam(ShortIdentifier::new(attrs.last())),
+                    BindingLegacyTypeParam::ModuleKeyed(
+                        original_idx,
+                        Box::new(attrs.mapped_ref(|a| a.id.clone())),
+                    ),
                 )),
                 Some(_) => None,
             },

@@ -1,13 +1,7 @@
 @generated
 {
   "aliases_explicit.py": [],
-  "aliases_implicit.py": [
-    "Line 106: Expected 1 errors",
-    "Line 111: Expected 1 errors",
-    "Line 112: Expected 1 errors",
-    "Line 113: Expected 1 errors",
-    "Line 117: Expected 1 errors"
-  ],
+  "aliases_implicit.py": [],
   "aliases_newtype.py": [],
   "aliases_recursive.py": [],
   "aliases_type_statement.py": [],
@@ -106,14 +100,9 @@
   ],
   "generics_self_advanced.py": [],
   "generics_self_attributes.py": [],
-  "generics_self_basic.py": [
-    "Line 20: Expected 1 errors",
-    "Line 33: Expected 1 errors"
-  ],
+  "generics_self_basic.py": [],
   "generics_self_protocols.py": [],
-  "generics_self_usage.py": [
-    "Line 87: Expected 1 errors"
-  ],
+  "generics_self_usage.py": [],
   "generics_syntax_compatibility.py": [],
   "generics_syntax_declarations.py": [],
   "generics_syntax_infer_variance.py": [],
@@ -181,7 +170,6 @@
   "typeddicts_type_consistency.py": [],
   "typeddicts_usage.py": [],
   "typeforms_typeform.py": [
-    "Line 49: Unexpected errors ['`type[list[int]]` is not assignable to `GenericAlias`', 'Expected `v2_actual` to be a type alias, got `GenericAlias`']",
     "Line 58: Unexpected errors [\"Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`\"]"
   ]
 }

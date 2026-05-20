@@ -7,7 +7,7 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-This variant uses TypeVar and TypeVarTuple from torch_shapes instead of PEP 695
+This variant uses TypeVar and TypeVarTuple from shape_extensions instead of PEP 695
 syntax, providing runtime-safe type variable declarations that support arithmetic.
 """
 
@@ -26,8 +26,8 @@ from torch.nn.attention.flex_attention import (
 
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim, TypeVar, TypeVarTuple
     from torch import Tensor
-    from torch_shapes import Dim, TypeVar, TypeVarTuple
 
 # Module-level type variable declarations
 VocabSize = TypeVar("VocabSize")

@@ -172,6 +172,32 @@ x2 = {}
 );
 
 testcase!(
+    test_explicit_any_default_disabled,
+    r#"
+from typing import Any
+
+def f(value: Any) -> Any:
+    print(value.asdfsdf)
+    return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_error,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, TypeAlias
+
+def f(value: Any) -> Any:  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+    print(value.asdfsdf)
+    return value
+
+xs: list[Any] = []  # E: Explicit `Any` is not allowed
+Alias: TypeAlias = dict[str, Any]  # E: Explicit `Any` is not allowed
+"#,
+);
+
+testcase!(
     test_warn_on_implicit_any_in_attribute,
     TestEnv::new().enable_implicit_any_attribute_error(),
     r#"
@@ -179,6 +205,17 @@ from typing import Any
 class A:
     def __init__(self):
         self.x = None  # E: implicitly inferred to be `Any | None`
+    "#,
+);
+
+testcase!(
+    test_implicit_any_attribute_slots_excluded,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+class A:
+    __slots__ = ()
+    __match_args__ = ()
+    x = ()  # E: implicitly inferred to be `tuple[Any, ...]`
     "#,
 );
 

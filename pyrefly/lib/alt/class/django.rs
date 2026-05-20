@@ -19,7 +19,6 @@ use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::Type;
-use pyrefly_types::types::Union;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprStringLiteral;
@@ -117,8 +116,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::ClassDef(cls) => {
                 self.get_django_field_type_from_class(cls, class, field_name, initial_value_expr)
             }
-            Type::Union(box Union { members: union, .. }) => {
-                let transformed: Vec<_> = union
+            Type::Union(f) => {
+                let transformed: Vec<_> = f
+                    .members
                     .iter()
                     .map(|variant| {
                         self.get_django_field_type(variant, class, field_name, initial_value_expr)
@@ -126,7 +126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                     .collect();
 
-                if transformed != union.to_vec() {
+                if transformed != f.members.to_vec() {
                     Some(unions(transformed, self.heap))
                 } else {
                     None
@@ -516,9 +516,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Get the related model type from the field
         let ty = class_field.ty();
         let (related_cls, is_foreign_key_nullable) = match ty {
-            Type::Union(box Union { members: union, .. }) => {
+            Type::Union(f) => {
                 // Nullable foreign key: extract the class type from the union
-                let cls = union.iter().find_map(|variant| match variant {
+                let cls = f.members.iter().find_map(|variant| match variant {
                     Type::ClassType(cls) => Some(cls.clone()),
                     _ => None,
                 })?;

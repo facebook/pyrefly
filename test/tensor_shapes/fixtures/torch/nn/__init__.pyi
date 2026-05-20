@@ -21,8 +21,8 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim as _Dim
     from torch import Tensor
-    from torch_shapes import Dim as _Dim
 
 # Re-export submodules
 from . import functional as functional, init as init

@@ -748,6 +748,81 @@ Completion Results:
 }
 
 #[test]
+fn from_import_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    // NOTE: trailing space after `import` is intentional — it places the
+    // cursor in whitespace so the empty-import completion path triggers.
+    let main_code = "from foo import \n#               ^\n";
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let expected = [
+        "# main.py",
+        "1 | from foo import ",
+        "                    ^",
+        "Completion Results:",
+        "- (Variable) imperial_guard",
+        "- (Constant) __annotations__",
+        "- (Constant) __builtins__",
+        "- (Constant) __cached__",
+        "- (Constant) __debug__",
+        "- (Constant) __dict__",
+        "- (Constant) __doc__",
+        "- (Constant) __file__",
+        "- (Constant) __loader__",
+        "- (Constant) __name__",
+        "- (Constant) __package__",
+        "- (Constant) __path__",
+        "- (Constant) __spec__",
+        "",
+        "",
+        "# foo.py",
+    ]
+    .join("\n");
+    assert_eq!(expected, report.trim());
+}
+
+#[test]
+fn from_import_relative_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    // NOTE: trailing space after `import` is intentional.
+    let main_code = "from .foo import \n#                ^\n";
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let expected = [
+        "# main.py",
+        "1 | from .foo import ",
+        "                     ^",
+        "Completion Results:",
+        "- (Variable) imperial_guard",
+        "- (Constant) __annotations__",
+        "- (Constant) __builtins__",
+        "- (Constant) __cached__",
+        "- (Constant) __debug__",
+        "- (Constant) __dict__",
+        "- (Constant) __doc__",
+        "- (Constant) __file__",
+        "- (Constant) __loader__",
+        "- (Constant) __name__",
+        "- (Constant) __package__",
+        "- (Constant) __path__",
+        "- (Constant) __spec__",
+        "",
+        "",
+        "# foo.py",
+    ]
+    .join("\n");
+    assert_eq!(expected, report.trim());
+}
+
+#[test]
 fn from_import_deprecated() {
     let foo_code = r#"
 from warnings import deprecated

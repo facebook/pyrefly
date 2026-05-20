@@ -11,7 +11,6 @@
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
@@ -189,9 +188,10 @@ pub(crate) fn type_to_structured(
             pending_class_traits.push((idx, ct.class_object().clone()));
             idx
         }
-        Type::Union(box Union { members, .. }) => {
-            let has_none = members.iter().any(|m| matches!(m, Type::None));
-            let non_none: Vec<&Type> = members
+        Type::Union(u) => {
+            let has_none = u.members.iter().any(|m| matches!(m, Type::None));
+            let non_none: Vec<&Type> = u
+                .members
                 .iter()
                 .filter(|m| !matches!(m, Type::None))
                 .collect();
@@ -210,7 +210,8 @@ pub(crate) fn type_to_structured(
                 insert_wrapper_other_form("typing.Optional", inner_idx, table)
             } else if !has_none {
                 // Union without None
-                let arg_indices: Vec<usize> = members
+                let arg_indices: Vec<usize> = u
+                    .members
                     .iter()
                     .map(|m| type_to_structured(m, table, pending_class_traits))
                     .collect();
@@ -248,7 +249,7 @@ pub(crate) fn type_to_structured(
             };
             table.insert(sty, hash)
         }
-        Type::BoundMethod(box bm) => {
+        Type::BoundMethod(bm) => {
             let self_idx = type_to_structured(&bm.obj, table, pending_class_traits);
             let func_type = bm.func.clone().as_type();
             let func_idx = type_to_structured(&func_type, table, pending_class_traits);
@@ -291,7 +292,7 @@ pub(crate) fn type_to_structured(
             // Unwrap Self and treat as the underlying ClassType
             type_to_structured(&Type::ClassType(ct.clone()), table, pending_class_traits)
         }
-        Type::TypeAlias(box data) | Type::UntypedAlias(box data) => match data {
+        Type::TypeAlias(data) | Type::UntypedAlias(data) => match &**data {
             TypeAliasData::Value(ta) => {
                 type_to_structured(&ta.as_type(), table, pending_class_traits)
             }
@@ -307,10 +308,11 @@ pub(crate) fn type_to_structured(
                     .iter()
                     .map(|e| type_to_structured(e, table, pending_class_traits))
                     .collect(),
-                pyrefly_types::tuple::Tuple::Unbounded(box inner) => {
+                pyrefly_types::tuple::Tuple::Unbounded(inner) => {
                     vec![type_to_structured(inner, table, pending_class_traits)]
                 }
-                pyrefly_types::tuple::Tuple::Unpacked(box (prefix, middle, suffix)) => {
+                pyrefly_types::tuple::Tuple::Unpacked(unpacked) => {
+                    let (prefix, middle, suffix) = &**unpacked;
                     let mut indices: Vec<usize> = prefix
                         .iter()
                         .map(|e| type_to_structured(e, table, pending_class_traits))
@@ -329,20 +331,21 @@ pub(crate) fn type_to_structured(
         Type::Module(_) => insert_simple_other_form("types.ModuleType", table),
         Type::Overload(_) => insert_simple_other_form("typing.overload", table),
         Type::LiteralString(_) => insert_simple_other_form("typing.LiteralString", table),
-        Type::Forall(box forall) => {
+        Type::Forall(forall) => {
             // Unwrap Forall and recurse into the body
             type_to_structured(&forall.body.clone().as_type(), table, pending_class_traits)
         }
-        Type::SuperInstance(box (ct, _)) => {
+        Type::SuperInstance(si) => {
+            let (ct, _) = &**si;
             // Treat super() as the underlying ClassType
             type_to_structured(&Type::ClassType(ct.clone()), table, pending_class_traits)
         }
-        Type::KwCall(box kc) => type_to_structured(&kc.return_ty, table, pending_class_traits),
+        Type::KwCall(kc) => type_to_structured(&kc.return_ty, table, pending_class_traits),
         // Callable kinds
-        Type::Callable(box c) => {
+        Type::Callable(c) => {
             callable_to_structured(&c.params, &c.ret, None, table, pending_class_traits)
         }
-        Type::CallableResidual(box residual) => match &residual.kind {
+        Type::CallableResidual(residual) => match &residual.kind {
             CallableResidualKind::Generic { quantified } => {
                 type_to_structured(&quantified.as_gradual_type(), table, pending_class_traits)
             }
@@ -350,7 +353,7 @@ pub(crate) fn type_to_structured(
                 type_to_structured(&Type::any_implicit(), table, pending_class_traits)
             }
         },
-        Type::Function(box f) => {
+        Type::Function(f) => {
             let defining_func = {
                 let kind = &f.metadata.kind;
                 let module = kind.module_name();
@@ -369,7 +372,7 @@ pub(crate) fn type_to_structured(
             )
         }
         // Variable kinds
-        Type::Quantified(box q) | Type::QuantifiedValue(box q) => {
+        Type::Quantified(q) | Type::QuantifiedValue(q) => {
             quantified_to_structured(q, table, pending_class_traits)
         }
         Type::TypeVar(tv) => {
@@ -393,8 +396,8 @@ pub(crate) fn type_to_structured(
             table.insert(sty, hash)
         }
         // Literal kind
-        Type::Literal(box Literal { value, .. }) => {
-            let promoted_idx = match value {
+        Type::Literal(lit) => {
+            let promoted_idx = match &lit.value {
                 Lit::Str(_) => insert_simple_class("builtins.str", table),
                 Lit::Int(_) => insert_simple_class("builtins.int", table),
                 Lit::Bool(_) => insert_simple_class("builtins.bool", table),
@@ -403,7 +406,7 @@ pub(crate) fn type_to_structured(
                     type_to_structured(&e.class.clone().to_type(), table, pending_class_traits)
                 }
             };
-            let value_str = format!("{}", value);
+            let value_str = format!("{}", lit.value);
             let promoted_hash = table.hash_at(promoted_idx);
             let hash = hash_literal(&value_str, promoted_hash);
             let sty = StructuredType::Literal {

@@ -861,3 +861,52 @@ def bar(tmpdir):
     shutil.rmtree(tmpdir, ignore_errors=True)
 "#,
 );
+
+// Regression test for a panic when pruning against a residual Variable
+// in the case where overload analysis merged the Quantified with a partial
+// type (behavior for Recursive / Unwrap is the same).
+testcase!(
+    test_overload_residual_with_partial_quantified_var,
+    r#"
+from typing import overload, Callable, assert_type
+
+class C[T]:
+    @overload
+    def method(self, x: T) -> T: ...
+    @overload
+    def method(self, x: str) -> str: ...
+    def method(self, x): return x
+
+def apply[U](fn: Callable[[U], U], default: U) -> U: ...
+
+c = C()
+result = apply(c.method, 42)
+assert_type(result, int)
+    "#,
+);
+
+// Regression test for a panic when converting a residual Variable to a Type
+// in the case where overload analysis merged the Quantified with a partial
+// type (behavior for Recursive / Unwrap is the same).
+testcase!(
+    test_overload_residual_with_partial_contained_var,
+    r#"
+from typing import overload, Any, Callable, assert_type, reveal_type
+
+class C[T]:
+    def __init__(self, items: list[T]) -> None: ...
+    @overload
+    def method(self, x: T) -> T: ...
+    @overload
+    def method(self, x: str) -> str: ...
+    def method(self, x): return x
+
+def apply[U](fn: Callable[[U], U]) -> U: ...
+
+c = C([])
+result = apply(c.method)
+# The partial type for `c` does not get pinned, so it resolves to Unknown
+assert_type(result, str | Any)
+assert_type(c, C[Any])
+    "#,
+);

@@ -23,13 +23,11 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
@@ -79,9 +77,26 @@ pub struct ClassMetadata {
 }
 
 impl VisitMut<Type> for ClassMetadata {
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {
-        // TODO: This is definitely wrong. We have types in lots of these places.
-        // Doesn't seem to have gone wrong yet, but it will.
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        // Class metadata is exported cross-module, so every embedded type position must
+        // be traversed to allow export-time forcing/sanitization.
+        if let Some(metaclass) = self.metaclass.get_mut() {
+            metaclass.visit_mut(f);
+        }
+        for (_name, ty) in &mut self.keywords.0 {
+            ty.visit_mut(f);
+        }
+        if let Some(typed_dict_metadata) = &mut self.typed_dict_metadata
+            && let ExtraItems::Extra(extra_item) = &mut typed_dict_metadata.extra_items
+        {
+            extra_item.ty.visit_mut(f);
+        }
+        if let Some(enum_metadata) = &mut self.enum_metadata {
+            enum_metadata.cls.visit_mut(f);
+        }
+        if let Some(dataclass_transform_metadata) = &mut self.dataclass_transform_metadata {
+            dataclass_transform_metadata.visit_mut(f);
+        }
     }
 }
 
@@ -704,17 +719,19 @@ impl Linearization {
                             let ctx = ClassDisplayContext::new(&[cls, ctype.class_object()]);
                             // TODO: Extend this error message to say where in the class bases the mismatch comes from
                             // we will need to wire additional information for this.
-                            errors.add(
-                                cls.range(),
-                                ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                                vec1![format!(
-                                    "Class `{}` has inconsistent type arguments for base class `{}`: `{}` and `{}`",
-                                    ctx.display(cls),
-                                    ctx.display(ctype.class_object()),
-                                    Type::ClassType(prev.clone()),
-                                    Type::ClassType(ctype.clone()),
-                                )],
-                            );
+                            errors
+                                .error_builder(
+                                    cls.range(),
+                                    ErrorKind::InvalidInheritance,
+                                    format!(
+                                        "Class `{}` has inconsistent type arguments for base class `{}`: `{}` and `{}`",
+                                        ctx.display(cls),
+                                        ctx.display(ctype.class_object()),
+                                        Type::ClassType(prev.clone()),
+                                        Type::ClassType(ctype.clone()),
+                                    ),
+                                )
+                                .emit();
                             true
                         } else {
                             seen_ancestors.insert(ctype.class_object().dupe(), ctype.clone());
@@ -739,15 +756,17 @@ impl Linearization {
                 ClassMro::Cyclic => {
                     let base = base.class_object();
                     let ctx = ClassDisplayContext::new(&[cls, base]);
-                    errors.add(
-                        cls.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                        vec1![format!(
-                            "Class `{}` inheriting from `{}` creates a cycle",
-                            ctx.display(cls),
-                            ctx.display(base),
-                        )],
-                    );
+                    errors
+                        .error_builder(
+                            cls.range(),
+                            ErrorKind::InvalidInheritance,
+                            format!(
+                                "Class `{}` inheriting from `{}` creates a cycle",
+                                ctx.display(cls),
+                                ctx.display(base),
+                            ),
+                        )
+                        .emit();
                     // Signal that we detected a cycle
                     return Linearization::Cyclic;
                 }
@@ -823,15 +842,17 @@ impl Linearization {
                     .class_object()
                     .dupe();
                 let ctx = ClassDisplayContext::new(&[cls, first_candidate]);
-                errors.add(
-                    cls.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidInheritance),
-                    vec1![format!(
-                        "Class `{}` has a nonlinearizable inheritance chain detected at `{}`",
-                        ctx.display(cls),
-                        ctx.display(first_candidate),
-                    )],
-                );
+                errors
+                    .error_builder(
+                        cls.range(),
+                        ErrorKind::InvalidInheritance,
+                        format!(
+                            "Class `{}` has a nonlinearizable inheritance chain detected at `{}`",
+                            ctx.display(cls),
+                            ctx.display(first_candidate),
+                        ),
+                    )
+                    .emit();
 
                 ancestor_chains = Vec::new()
             }

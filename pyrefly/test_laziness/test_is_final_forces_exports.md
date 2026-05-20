@@ -1,10 +1,10 @@
-# is_final check forces exports on transitive dep
+# finality check forces exports on transitive dep
 
 `a` imports `value` from `b`. `b` imports `X` from `c` and then
 reassigns `X = 2`. `a` only uses `value`, not `X`.
 
 **Superfluous:** `c` being computed to Exports. During `b`'s binding,
-the reassignment `X = 2` triggers `is_final(c, "X")` to check if `X`
+the reassignment `X = 2` triggers `export_origin(c, "X")` to check if `X`
 was declared as `Final` in `c`. This demands `Step::Exports` on `c`,
 even though `a` never uses `X`.
 
@@ -40,5 +40,5 @@ a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
 a -> b::Exports(get_deprecated)
 a -> b::KeyExport(Name("value"))
-  b -> c::Exports(is_final)
+  b -> c::Exports(export_origin)
 ```
