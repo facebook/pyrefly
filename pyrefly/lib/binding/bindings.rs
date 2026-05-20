@@ -1572,9 +1572,9 @@ impl<'a> BindingsBuilder<'a> {
                     // When we use a variable, we mark it as initialized
                     // If the variable was uninitialized before, this will
                     // prevent us from emitting errors for every subsequent usage
-                    let _ =
-                        self.scopes
-                            .define_in_current_flow(name, idx, FlowStyle::Other, false);
+                    let _ = self
+                        .scopes
+                        .define_in_current_flow(name, idx, FlowStyle::Other, false);
                 }
                 NameLookupResult::Found {
                     idx,

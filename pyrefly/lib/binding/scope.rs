@@ -2217,6 +2217,7 @@ impl Scopes {
             range,
             StaticStyle::ImplicitBuiltinImport(module),
             range,
+            Reachability::Reachable,
         );
         Key::Import(Box::new((name.into_key().clone(), range)))
     }
@@ -3248,6 +3249,7 @@ impl Scopes {
                                 range: TextRange::default(),
                                 style: StaticStyle::ImplicitBuiltinImport(module),
                                 last_range: TextRange::default(),
+                                reachability: Reachability::Reachable,
                             }))
                         })
                     },
