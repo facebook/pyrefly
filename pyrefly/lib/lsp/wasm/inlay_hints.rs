@@ -197,9 +197,7 @@ impl<'a> Transaction<'a> {
         let make_type_hint =
             |prefix: &str, position: TextSize, ty: &Type, insertable: bool| -> InlayHintData {
                 let type_parts = Self::label_parts_for_display(ty, &stdlib);
-                let label_parts = once((prefix.to_owned(), None))
-                    .chain(type_parts.into_iter())
-                    .collect();
+                let label_parts = once((prefix.to_owned(), None)).chain(type_parts).collect();
                 let rendered = insertable
                     .then(|| self.render_type_hint(ty, handle, import_tracker.as_ref(), ast_ref));
                 let text_edit = rendered
