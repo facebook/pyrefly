@@ -383,6 +383,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn tuple_membership_type(
+        &self,
+        tuple: &Tuple,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let elements = match tuple {
+            Tuple::Concrete(elts) => elts.clone(),
+            Tuple::Unbounded(elt) => vec![(**elt).clone()],
+            Tuple::Unpacked(unpacked) => {
+                let (prefix, middle, suffix) = &**unpacked;
+                let mut elements = prefix.clone();
+                let middle = if let Type::Var(_) = middle {
+                    self.force_for_narrowing(middle, range, errors)
+                } else {
+                    middle.clone()
+                };
+                match middle {
+                    Type::Tuple(tuple) => {
+                        elements.push(self.tuple_membership_type(&tuple, range, errors)?)
+                    }
+                    Type::TypeVarTuple(_) | Type::Quantified(_) | Type::Unpack(_) => return None,
+                    _ => elements.push(middle),
+                }
+                elements.extend(suffix.clone());
+                elements
+            }
+        };
+        if elements.iter().any(|ty| self.behaves_like_any(ty)) {
+            None
+        } else if elements.is_empty() {
+            Some(self.heap.mk_never())
+        } else {
+            Some(self.unions(elements))
+        }
+    }
+
     /// Unwrap a class object for isinstance narrowing. When the right-hand side is `tuple`
     /// and the left-hand side is a heterogeneous tuple type, creates a TypeVarTuple for
     /// precise narrowing. Otherwise falls back to standard class object unwrapping.
@@ -1074,6 +1111,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Check if the right operand is a TypedDict.
                 // If so, we can narrow the left operand to the union of the TypedDict's keys.
                 let right_ty = self.expr_infer(v, errors);
+                if let Type::Tuple(tuple) = &right_ty
+                    && let Some(member_ty) = self.tuple_membership_type(tuple, range, errors)
+                {
+                    return self.intersect(ty, &member_ty);
+                }
                 if let Type::TypedDict(typed_dict) = &right_ty {
                     let fields = self.typed_dict_fields(typed_dict);
                     if fields.is_empty() {
