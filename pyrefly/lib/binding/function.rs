@@ -6,6 +6,7 @@
  */
 
 use std::mem;
+use std::sync::Arc;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
@@ -16,6 +17,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::PlaceholderBodyKind;
+use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -804,11 +806,26 @@ impl<'a> BindingsBuilder<'a> {
             _ => (None, None),
         };
 
+        // Check whether this function is decorated with `@shape_dsl_function`
+        // before `decorators()` takes the decorator list.
+        let is_shape_dsl = x.decorator_list.iter().any(|d| {
+            self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
+        });
+
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
+
+        // Convert the function body to DSL IR before `function_body` takes the body.
+        let shape_dsl_def = if is_shape_dsl {
+            Some(Arc::new(
+                convert_shape_dsl_function(&x).expect("@shape_dsl_function body must be valid DSL"),
+            ))
+        } else {
+            None
+        };
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
@@ -844,6 +861,7 @@ impl<'a> BindingsBuilder<'a> {
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 module_style: self.module_info.path().style(),
                 outer_funcs,
+                shape_dsl_def,
             },
         );
 

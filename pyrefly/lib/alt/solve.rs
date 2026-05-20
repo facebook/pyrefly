@@ -5314,6 +5314,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &x.legacy_tparams,
             x.module_style,
             x.outer_funcs.clone(),
+            x.shape_dsl_def.clone(),
             errors,
         )
     }
