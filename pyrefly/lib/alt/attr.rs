@@ -44,6 +44,7 @@ use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
 use crate::solver::solver::SubsetError;
 use crate::state::loader::FindingOrError;
+use crate::types::callable::Function;
 use crate::types::callable::FunctionKind;
 use crate::types::callable::PropertyMetadata;
 use crate::types::callable::PropertyRole;
