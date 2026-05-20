@@ -74,6 +74,9 @@ pub struct ClassMetadata {
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
     is_metaclass: bool,
     slots_info: Option<SlotsInfo>,
+    /// `__init__` parameter names to capture for shape inference, extracted from
+    /// `@uses_shape_dsl(..., capture_init=[...])` on a `forward` method.
+    capture_init: Option<Vec<Name>>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -132,6 +135,7 @@ impl ClassMetadata {
         is_factory_boy_factory: bool,
         is_metaclass: bool,
         slots_info: Option<SlotsInfo>,
+        capture_init: Option<Vec<Name>>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -158,6 +162,7 @@ impl ClassMetadata {
             is_factory_boy_factory,
             is_metaclass,
             slots_info,
+            capture_init,
         }
     }
 
@@ -187,6 +192,7 @@ impl ClassMetadata {
             is_factory_boy_factory: false,
             is_metaclass: false,
             slots_info: None,
+            capture_init: None,
         }
     }
 
@@ -345,6 +351,10 @@ impl ClassMetadata {
 
     pub fn django_model_metadata(&self) -> Option<&DjangoModelMetadata> {
         self.django_model_metadata.as_ref()
+    }
+
+    pub fn capture_init(&self) -> Option<&[Name]> {
+        self.capture_init.as_deref()
     }
 }
 
