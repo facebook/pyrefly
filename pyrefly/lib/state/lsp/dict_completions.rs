@@ -546,18 +546,6 @@ impl<'a> Transaction<'a> {
         })
     }
 
-<<<<<<< HEAD
-    /// Adds dict key completions for the given position. Handles a key string being
-    /// typed (`d["k|"]`, `{"k|": …}`) as well as an empty subscript slot (`d[|]`),
-    /// where the inserted key is quoted. Returns `true` if this function claimed the
-    /// position, in which case the caller should skip overload-based literal completions
-    /// to avoid showing redundant entries.
-||||||| parent of a2b84bfde (fix)
-    /// Adds dict key completions for the given position. Returns `true` if this function
-    /// claimed the position (i.e., we are inside a dict/TypedDict key string literal), in
-    /// which case the caller should skip overload-based literal completions to avoid showing
-    /// redundant entries.
-=======
     pub(crate) fn add_dict_value_literal_completions(
         &self,
         handle: &Handle,
@@ -590,11 +578,11 @@ impl<'a> Transaction<'a> {
         Self::add_literal_completions_from_type(&field_ty, completions, true);
     }
 
-    /// Adds dict key completions for the given position. Returns `true` if this function
-    /// claimed the position (i.e., we are inside a dict/TypedDict key string literal), in
-    /// which case the caller should skip overload-based literal completions to avoid showing
-    /// redundant entries.
->>>>>>> a2b84bfde (fix)
+    /// Adds dict key completions for the given position. Handles a key string being
+    /// typed (`d["k|"]`, `{"k|": …}`) as well as an empty subscript slot (`d[|]`),
+    /// where the inserted key is quoted. Returns `true` if this function claimed the
+    /// position, in which case the caller should skip overload-based literal completions
+    /// to avoid showing redundant entries.
     pub(crate) fn add_dict_key_completions(
         &self,
         handle: &Handle,
@@ -618,8 +606,54 @@ impl<'a> Transaction<'a> {
                 return false;
             }
         }
-        let suggestions =
-            self.dict_key_suggestions(handle, context.base_expr(), context.base_range());
+        let mut suggestions = self.dict_key_suggestions(handle, context.base_expr());
+        let dict_literal_members = match &context {
+            DictKeyLiteralContext::DictLiteral { dict, literal } => self
+                .narrowed_typed_dict_members_for_dict_literal(
+                    handle,
+                    module,
+                    dict,
+                    Some(literal.range()),
+                    None,
+                ),
+            DictKeyLiteralContext::KeyAccess { .. }
+            | DictKeyLiteralContext::BareSubscript { .. } => None,
+        };
+
+        // For key access we query the container expression; for literals we recover the
+        // contextual type because incomplete dict literals may infer as plain `dict[...]`.
+        if let Some(base_type) = match (&context, dict_literal_members.as_ref()) {
+            (DictKeyLiteralContext::DictLiteral { .. }, Some(members)) => self
+                .ad_hoc_solve(
+                    handle,
+                    "dict_literal_typed_dict_union",
+                    |solver| match members.len() {
+                        0 => None,
+                        1 => members.first().cloned(),
+                        _ => Some(solver.unions(members.clone())),
+                    },
+                )
+                .flatten(),
+            _ => self.get_type_trace(handle, context.base_range()),
+        } && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
+        {
+            let present_keys = match &context {
+                DictKeyLiteralContext::DictLiteral { dict, literal } => {
+                    Self::dict_literal_present_keys(dict, Some(literal.range()))
+                }
+                DictKeyLiteralContext::KeyAccess { .. }
+                | DictKeyLiteralContext::BareSubscript { .. } => BTreeMap::new(),
+            };
+            for (key, ty) in typed_keys {
+                if present_keys.contains_key(&key) {
+                    continue;
+                }
+                let entry = suggestions.entry(key).or_insert(None);
+                if entry.is_none() {
+                    *entry = Some(ty);
+                }
+            }
+        }
         if suggestions.is_empty() {
             return false;
         }
@@ -646,7 +680,6 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         base_expr: Option<&Expr>,
-        base_range: TextRange,
     ) -> BTreeMap<String, Option<Type>> {
         let mut suggestions: BTreeMap<String, Option<Type>> = BTreeMap::new();
 
@@ -687,64 +720,6 @@ impl<'a> Transaction<'a> {
                             suggestions.entry(key).or_insert(ty_opt);
                         }
                     }
-                }
-            }
-        }
-
-<<<<<<< HEAD
-        // For key access we query the container expression; for literals we query the
-        // literal itself to pick up contextual TypedDict typing from assignments.
-        if let Some(base_type) = self.get_type_trace(handle, base_range)
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
-||||||| parent of a2b84bfde (fix)
-        // For key access we query the container expression; for literals we query the
-        // literal itself to pick up contextual TypedDict typing from assignments.
-        if let Some(base_type) = self.get_type_trace(handle, context.base_range())
-            && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
-=======
-        let dict_literal_members = match &context {
-            DictKeyLiteralContext::DictLiteral { dict, literal } => self
-                .narrowed_typed_dict_members_for_dict_literal(
-                    handle,
-                    module,
-                    dict,
-                    Some(literal.range()),
-                    None,
-                ),
-            DictKeyLiteralContext::KeyAccess { .. } => None,
-        };
-
-        // For key access we query the container expression; for literals we recover the
-        // contextual type because incomplete dict literals may infer as plain `dict[...]`.
-        if let Some(base_type) = match (&context, dict_literal_members.as_ref()) {
-            (DictKeyLiteralContext::DictLiteral { .. }, Some(members)) => self
-                .ad_hoc_solve(
-                    handle,
-                    "dict_literal_typed_dict_union",
-                    |solver| match members.len() {
-                        0 => None,
-                        1 => members.first().cloned(),
-                        _ => Some(solver.unions(members.clone())),
-                    },
-                )
-                .flatten(),
-            _ => self.get_type_trace(handle, context.base_range()),
-        } && let Some(typed_keys) = self.collect_typed_dict_keys(handle, base_type)
->>>>>>> a2b84bfde (fix)
-        {
-            let present_keys = match &context {
-                DictKeyLiteralContext::DictLiteral { dict, literal } => {
-                    Self::dict_literal_present_keys(dict, Some(literal.range()))
-                }
-                DictKeyLiteralContext::KeyAccess { .. } => BTreeMap::new(),
-            };
-            for (key, ty) in typed_keys {
-                if present_keys.contains_key(&key) {
-                    continue;
-                }
-                let entry = suggestions.entry(key).or_insert(None);
-                if entry.is_none() {
-                    *entry = Some(ty);
                 }
             }
         }
