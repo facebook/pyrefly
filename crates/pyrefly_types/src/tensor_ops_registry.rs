@@ -576,6 +576,8 @@ impl Default for TensorOpsRegistry {
 /// The full DSL source defining all tensor shape ops and utility functions.
 /// This is valid Python syntax (a strict subset) that we parse with Pyrefly's parser.
 const DSL_SOURCE: &str = r#"
+import shape_extensions.dsl
+
 def normalize_dim(rank: int, dim: int) -> int:
     if dim < 0:
         return dim + rank
