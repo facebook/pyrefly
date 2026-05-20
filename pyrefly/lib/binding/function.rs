@@ -828,9 +828,12 @@ impl<'a> BindingsBuilder<'a> {
         // Convert the function to DSL IR before `function_header` takes `returns`
         // and before `function_body` takes `body`.
         let shape_dsl_def = if is_shape_dsl {
-            Some(Arc::new(
+            let dsl_fn = Arc::new(
                 convert_shape_dsl_function(&x).expect("@shape_dsl_function body must be valid DSL"),
-            ))
+            );
+            self.metadata
+                .push_shape_dsl(func_name.id.clone(), Arc::clone(&dsl_fn));
+            Some(dsl_fn)
         } else {
             None
         };

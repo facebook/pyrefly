@@ -12,6 +12,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -41,6 +42,62 @@ use crate::meta_shape_dsl::ShapeTransformRef;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
 use crate::types::Type;
+
+/// A wrapper for derived/cached data that should not participate in
+/// equality, hashing, or ordering comparisons. `Derived<T>` always
+/// compares as equal, hashes as a no-op, and orders as `Equal`.
+///
+/// This is useful for attaching auxiliary data to types that derive
+/// `PartialEq`, `Hash`, `Ord`, etc. without affecting their identity.
+#[derive(Debug, Clone)]
+pub struct Derived<T>(pub T);
+
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for Derived<T> {}
+
+impl<T> Hash for Derived<T> {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+impl<T> PartialOrd for Derived<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for Derived<T> {
+    fn cmp(&self, _other: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
+impl<T> Visit<Type> for Derived<T> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl<T> VisitMut<Type> for Derived<T> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl<T> TypeEq for Derived<T> {
+    fn type_eq(&self, _other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        true
+    }
+}
+
+impl<T> Deref for Derived<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -818,7 +875,11 @@ pub enum FunctionKind {
     /// A function whose return type is computed by a shape DSL definition.
     /// The `FuncId` provides identity (module, class, name) for display and
     /// lookup; the `ShapeDslFunction` carries the parsed DSL IR.
-    ShapeDsl(Arc<FuncId>, Arc<ShapeDslFunction>),
+    ShapeDsl(
+        Arc<FuncId>,
+        Arc<ShapeDslFunction>,
+        Derived<Arc<Vec<Arc<ShapeDslFunction>>>>,
+    ),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
 }
@@ -1230,7 +1291,7 @@ impl FunctionKind {
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
-            Self::ShapeDsl(id, _) => id.module.name().dupe(),
+            Self::ShapeDsl(id, _, _) => id.module.name().dupe(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
         }
     }
@@ -1258,7 +1319,7 @@ impl FunctionKind {
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
-            Self::ShapeDsl(id, _) => Cow::Borrowed(&id.name),
+            Self::ShapeDsl(id, _, _) => Cow::Borrowed(&id.name),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
         }
     }
@@ -1286,14 +1347,14 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
-            Self::ShapeDsl(id, _) => id.cls.clone(),
+            Self::ShapeDsl(id, _, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
         }
     }
 
     pub fn outer_funcs(&self) -> Option<&Name> {
         match self {
-            Self::Def(func_id) | Self::ShapeDsl(func_id, _) => func_id.outer_funcs.as_ref(),
+            Self::Def(func_id) | Self::ShapeDsl(func_id, _, _) => func_id.outer_funcs.as_ref(),
             _ => None,
         }
     }
