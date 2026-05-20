@@ -182,6 +182,17 @@ class A:
     "#,
 );
 
+testcase!(
+    test_implicit_any_attribute_slots_excluded,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+class A:
+    __slots__ = ()
+    __match_args__ = ()
+    x = ()  # E: implicitly inferred to be `tuple[Any, ...]`
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/1774
 testcase!(
     test_nested_list_set_item,

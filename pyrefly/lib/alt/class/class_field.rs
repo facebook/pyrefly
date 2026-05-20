@@ -2107,11 +2107,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             // We interpret `self.foo = ()` to mean the type of foo is an arbitrary-length tuple,
             // since an empty tuple base attr almost always means to hold a tuple of something in
-            // derived classes. We exclude `__match_args__` because its value is semantically
-            // significant: `__match_args__ = ()` means "no positional match arguments" and
-            // should have type `tuple[()]`, not `tuple[Any, ...]`.
+            // derived classes. We also exclude `__match_args__` and `__slots__` because their values
+            // are semantically significant.
             (None, Expr::Tuple(ExprTuple { elts, .. }))
-                if elts.is_empty() && *name != dunder::MATCH_ARGS =>
+                if elts.is_empty() && *name != dunder::MATCH_ARGS && *name != dunder::SLOTS =>
             {
                 self.error(errors, x.range(), ErrorInfo::Kind(ErrorKind::ImplicitAnyAttribute), "This expression is implicitly inferred to be `tuple[Any, ...]`. Please provide an explicit type annotation.".to_owned());
                 self.heap.mk_unbounded_tuple(self.heap.mk_any_implicit())
