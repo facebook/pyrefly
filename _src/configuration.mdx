@@ -699,6 +699,8 @@ See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for mor
 - Equivalent configs:
     - `true` emulates mypy's `check_untyped_defs` flag.
     - `false` emulates mypy's default behavior.
+- Related options:
+    - [`infer-return-types`](#infer-return-types): Controls when Pyrefly infers return types for unannotated functions.
 
 ### `infer-return-types`
 
@@ -710,9 +712,11 @@ unannotated functions are only eligible when `check-unannotated-defs` is `true`.
   completely unannotated ones.
 - `"annotated"`: Infer return types only for functions that have at least one
   parameter or return annotation. This is useful when combined with
-  `check-unannotated-defs = false` to still get return type inference for
+  [`check-unannotated-defs = false`](#check-unannotated-defs) to still get return type inference for
   partially annotated functions.
 - `"never"`: Never infer return types; unannotated returns are treated as `Any`.
+  This is often combined with [`check-unannotated-defs = false`](#check-unannotated-defs)
+  for a more permissive setup.
 
 :::info
 To provide inferred return types with `"checked"` or `"annotated"`, especially

@@ -35,8 +35,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.4fa57ee7.js" defer="defer"></script>
-<script src="/assets/js/main.a7df8401.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.1e2d59d7.js" defer="defer"></script>
+<script src="/assets/js/main.49aa3aa5.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -105,7 +105,7 @@ without touching Pyrefly&#x27;s internals — see the
 space, each with different trade-offs. Here&#x27;s how Pyrefly&#x27;s approach compares.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="pyre-and-pyright-static-type-checking">Pyre and Pyright (static type checking)<a href="#pyre-and-pyright-static-type-checking" class="hash-link" aria-label="Direct link to Pyre and Pyright (static type checking)" title="Direct link to Pyre and Pyright (static type checking)">​</a></h3>
 <p>An early attempt at tensor shapes in Pyre, the precursor of Pyrefly, is
-described in <a href="https://www.youtube.com/watch?v=iPVgG-W7ET8" target="_blank" rel="noopener noreferrer">this PyCon 2023 talk</a>.
+described in <a href="https://www.youtube.com/watch?v=ld9rwCvGdhc&amp;t=11470s" target="_blank" rel="noopener noreferrer">this PyCon 2021 talk</a>.
 That system used <code>Literal</code> to wrap concrete sizes and explicit type constructors
 like <code>IntDiv</code> for arithmetic — avoiding the need to support integers as type
 arguments or arithmetic on type variables, but at the cost of verbose syntax
