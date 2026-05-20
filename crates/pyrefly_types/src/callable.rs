@@ -819,6 +819,8 @@ pub enum FunctionKind {
     /// The `FuncId` provides identity (module, class, name) for display and
     /// lookup; the `ShapeDslFunction` carries the parsed DSL IR.
     ShapeDsl(Arc<FuncId>, Arc<ShapeDslFunction>),
+    /// The `shape_extensions.uses_shape_dsl` decorator function itself.
+    UsesShapeDsl,
 }
 
 impl Callable {
@@ -1194,6 +1196,7 @@ impl FunctionKind {
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
+            ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
             _ => Self::Def(Arc::new(FuncId {
                 module,
                 cls,
@@ -1228,6 +1231,7 @@ impl FunctionKind {
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
             Self::ShapeDsl(id, _) => id.module.name().dupe(),
+            Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
         }
     }
 
@@ -1255,6 +1259,7 @@ impl FunctionKind {
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
             Self::ShapeDsl(id, _) => Cow::Borrowed(&id.name),
+            Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
         }
     }
 
@@ -1282,6 +1287,7 @@ impl FunctionKind {
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
             Self::ShapeDsl(id, _) => id.cls.clone(),
+            Self::UsesShapeDsl => None,
         }
     }
 
