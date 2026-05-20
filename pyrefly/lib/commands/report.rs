@@ -625,8 +625,26 @@ impl ReportArgs {
     }
 
     /// Module-level dunders that typestats always excludes from the report.
-    const EXCLUDED_MODULE_DUNDERS: &'static [&'static str] =
-        &["__all__", "__dir__", "__doc__", "__getattr__"];
+    const EXCLUDED_MODULE_DUNDERS: &'static [&'static str] = &[
+        // User-level module hooks.
+        "__all__",
+        "__dir__",
+        "__doc__",
+        "__getattr__",
+        // CPython-injected globals.
+        // Keep in sync with `IMPLICIT_GLOBALS` in `crates/pyrefly_types/src/globals.rs`.
+        "__annotations__",
+        "__builtins__",
+        "__cached__",
+        "__debug__",
+        "__dict__",
+        "__file__",
+        "__loader__",
+        "__name__",
+        "__package__",
+        "__path__",
+        "__spec__",
+    ];
 
     /// Walk re-exports to the defining module's FQN, `None` on cycle/miss.
     fn trace_export_origin(
@@ -2724,6 +2742,14 @@ mod tests {
     fn test_report_private_filtering() {
         let report = build_module_report_for_test("private_filtering.py");
         compare_snapshot("private_filtering.expected.json", &report);
+    }
+
+    /// CPython-injected module globals are excluded even when control flow
+    /// wraps them in Phi bindings (issue #3505).
+    #[test]
+    fn test_report_implicit_module_globals() {
+        let report = build_module_report_for_test("implicit_module_globals.py");
+        compare_snapshot("implicit_module_globals.expected.json", &report);
     }
 
     /// --module name override: entity counts (n_functions vs n_methods) must
