@@ -689,13 +689,7 @@ fn test_inlay_hint_never_has_location() {
             if hint.position.line != 6 || hint.position.character != 19 {
                 return false;
             }
-            check_inlay_hint_label_values(
-                hint,
-                &[
-                    (" -> ", false),
-                    ("Never", true),
-                ],
-            )
+            check_inlay_hint_label_values(hint, &[(" -> ", false), ("Never", true)])
         })
         .unwrap();
 
