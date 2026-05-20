@@ -194,6 +194,11 @@ impl PythonPlatform {
     }
 
     pub fn new_many(platforms: Vec<String>) -> anyhow::Result<Self> {
+        Self::new_platforms(platforms.into_iter().map(|platform| Self::new(&platform)))
+    }
+
+    pub fn new_platforms(platforms: impl IntoIterator<Item = Self>) -> anyhow::Result<Self> {
+        let platforms = platforms.into_iter().collect::<Vec<_>>();
         if platforms.is_empty() {
             return Err(anyhow::anyhow!(
                 "`python-platform` list must contain at least one value"
@@ -202,7 +207,7 @@ impl PythonPlatform {
         let mut found_all = false;
         let mut platforms = platforms
             .into_iter()
-            .flat_map(|platform| match Self::new(&platform) {
+            .flat_map(|platform| match platform {
                 Self::All => {
                     found_all = true;
                     Vec::new()
