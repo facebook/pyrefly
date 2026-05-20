@@ -129,6 +129,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         pydantic_config_dict: &PydanticConfigDict,
         pydantic_before_validator_fields: &[Name],
         django_field_info: &DjangoFieldInfo,
+        capture_init: Option<&[Name]>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         // Get class decorators.
@@ -507,6 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_factory_boy_factory,
             is_metaclass,
             slots_info,
+            capture_init.map(|names| names.to_vec()),
         )
     }
 
