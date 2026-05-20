@@ -101,16 +101,15 @@ fn collect_pytest_fixture_parameter_ranges(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::FunctionDef(function_def) => {
-                if is_pytest_fixture_function(function_def, class_key, pytest_info)
-                    || is_pytest_test_function(function_def, class_context)
-                {
-                    collect_fixture_param_ranges_from_parameters(
-                        &function_def.parameters,
-                        fixture_name,
-                        references,
-                    );
-                }
+            Stmt::FunctionDef(function_def)
+                if (is_pytest_fixture_function(function_def, class_key, pytest_info)
+                    || is_pytest_test_function(function_def, class_context)) =>
+            {
+                collect_fixture_param_ranges_from_parameters(
+                    &function_def.parameters,
+                    fixture_name,
+                    references,
+                );
             }
             Stmt::ClassDef(class_def) => {
                 let nested_class_key = class_key_for_definition(bindings, class_def);
@@ -140,16 +139,15 @@ fn collect_pytest_fixture_definitions_for_name(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::FunctionDef(function_def) => {
+            Stmt::FunctionDef(function_def)
                 if function_def.name.id() == fixture_name
-                    && is_pytest_fixture_function(function_def, class_key, pytest_info)
-                {
-                    out.push(PytestFixtureDefinition {
-                        name: function_def.name.id.clone(),
-                        range: function_def.name.range,
-                        docstring_range: Docstring::range_from_stmts(&function_def.body),
-                    });
-                }
+                    && is_pytest_fixture_function(function_def, class_key, pytest_info) =>
+            {
+                out.push(PytestFixtureDefinition {
+                    name: function_def.name.id.clone(),
+                    range: function_def.name.range,
+                    docstring_range: Docstring::range_from_stmts(&function_def.body),
+                });
             }
             Stmt::ClassDef(class_def) => {
                 let nested_class_key = class_key_for_definition(bindings, class_def);
@@ -177,13 +175,12 @@ fn has_fixture_definition_at_range(
 ) -> bool {
     for stmt in stmts {
         match stmt {
-            Stmt::FunctionDef(function_def) => {
+            Stmt::FunctionDef(function_def)
                 if function_def.name.id() == fixture_name
                     && function_def.name.range == definition_range
-                    && is_pytest_fixture_function(function_def, class_key, pytest_info)
-                {
-                    return true;
-                }
+                    && is_pytest_fixture_function(function_def, class_key, pytest_info) =>
+            {
+                return true;
             }
             Stmt::ClassDef(class_def) => {
                 let nested_class_key = class_key_for_definition(bindings, class_def);
