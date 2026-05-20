@@ -10,6 +10,18 @@ Functional neural network operations including convolution, pooling, activation,
 
 from typing import Literal, overload
 
+from shape_extensions import uses_shape_dsl
+from torch._shapes import (
+    adaptive_pool_ir,
+    conv_ir,
+    conv_transpose_ir,
+    cosine_similarity_ir,
+    interpolate_ir,
+    loss_ir,
+    pad_ir,
+    pool_ir,
+)
+
 from .. import Tensor
 
 __all__ = [
@@ -93,6 +105,7 @@ __all__ = [
 # ====================================================================
 
 # Convolution operations
+@uses_shape_dsl(conv_ir)
 def conv1d(
     self: Tensor,
     weight: Tensor,
@@ -105,6 +118,7 @@ def conv1d(
     """1D convolution. Shape inference via meta-shape: torch.nn.functional.conv1d"""
     ...
 
+@uses_shape_dsl(conv_ir)
 def conv2d(
     self: Tensor,
     weight: Tensor,
@@ -117,6 +131,7 @@ def conv2d(
     """2D convolution. Shape inference via meta-shape: torch.nn.functional.conv2d"""
     ...
 
+@uses_shape_dsl(conv_ir)
 def conv3d(
     self: Tensor,
     weight: Tensor,
@@ -130,6 +145,7 @@ def conv3d(
     ...
 
 # Transposed convolution operations
+@uses_shape_dsl(conv_transpose_ir)
 def conv_transpose1d(
     self: Tensor,
     weight: Tensor,
@@ -143,6 +159,7 @@ def conv_transpose1d(
     """1D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose1d"""
     ...
 
+@uses_shape_dsl(conv_transpose_ir)
 def conv_transpose2d(
     self: Tensor,
     weight: Tensor,
@@ -156,6 +173,7 @@ def conv_transpose2d(
     """2D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose2d"""
     ...
 
+@uses_shape_dsl(conv_transpose_ir)
 def conv_transpose3d(
     self: Tensor,
     weight: Tensor,
@@ -170,6 +188,7 @@ def conv_transpose3d(
     ...
 
 # Max pooling operations
+@uses_shape_dsl(pool_ir)
 @overload
 def max_pool1d(
     self: Tensor,
@@ -196,6 +215,7 @@ def max_pool1d(
     """1D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool1d"""
     ...
 
+@uses_shape_dsl(pool_ir)
 @overload
 def max_pool2d(
     self: Tensor,
@@ -222,6 +242,7 @@ def max_pool2d(
     """2D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool2d"""
     ...
 
+@uses_shape_dsl(pool_ir)
 @overload
 def max_pool3d(
     self: Tensor,
@@ -249,6 +270,7 @@ def max_pool3d(
     ...
 
 # Average pooling operations
+@uses_shape_dsl(pool_ir)
 def avg_pool1d(
     self: Tensor,
     kernel_size: int | tuple[int],
@@ -260,6 +282,7 @@ def avg_pool1d(
     """1D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool1d"""
     ...
 
+@uses_shape_dsl(pool_ir)
 def avg_pool2d(
     self: Tensor,
     kernel_size: int | tuple[int, int],
@@ -272,6 +295,7 @@ def avg_pool2d(
     """2D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool2d"""
     ...
 
+@uses_shape_dsl(pool_ir)
 def avg_pool3d(
     self: Tensor,
     kernel_size: int | tuple[int, int, int],
@@ -285,12 +309,14 @@ def avg_pool3d(
     ...
 
 # Adaptive max pooling operations
+@uses_shape_dsl(adaptive_pool_ir)
 def adaptive_max_pool1d(
     self: Tensor, output_size: int | tuple[int], return_indices: bool = False
 ) -> Tensor:
     """1D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool1d"""
     ...
 
+@uses_shape_dsl(adaptive_pool_ir)
 def adaptive_max_pool2d(
     self: Tensor,
     output_size: int | tuple[int, int] | None,
@@ -299,6 +325,7 @@ def adaptive_max_pool2d(
     """2D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool2d"""
     ...
 
+@uses_shape_dsl(adaptive_pool_ir)
 def adaptive_max_pool3d(
     self: Tensor,
     output_size: int | tuple[int, int, int] | None,
@@ -308,16 +335,19 @@ def adaptive_max_pool3d(
     ...
 
 # Adaptive average pooling operations
+@uses_shape_dsl(adaptive_pool_ir)
 def adaptive_avg_pool1d(self: Tensor, output_size: int | tuple[int]) -> Tensor:
     """1D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool1d"""
     ...
 
+@uses_shape_dsl(adaptive_pool_ir)
 def adaptive_avg_pool2d(
     self: Tensor, output_size: int | tuple[int, int] | None
 ) -> Tensor:
     """2D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool2d"""
     ...
 
+@uses_shape_dsl(adaptive_pool_ir)
 def adaptive_avg_pool3d(
     self: Tensor, output_size: int | tuple[int, int, int] | None
 ) -> Tensor:
@@ -325,6 +355,7 @@ def adaptive_avg_pool3d(
     ...
 
 # Interpolation/upsampling operations
+@uses_shape_dsl(interpolate_ir)
 def interpolate(
     self: Tensor,
     size: int | tuple[int, ...] | None = None,
@@ -337,6 +368,7 @@ def interpolate(
     """Interpolate/upsample tensor. Shape inference via meta-shape: torch.nn.functional.interpolate"""
     ...
 
+@uses_shape_dsl(interpolate_ir)
 def upsample(
     self: Tensor,
     size: int | tuple[int, ...] | None = None,
@@ -552,6 +584,7 @@ def logsigmoid[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
 # Phase 6: Loss Functions
 # ==============================================================================
 
+@uses_shape_dsl(loss_ir)
 def mse_loss(
     self: Tensor,
     target: Tensor,
@@ -562,6 +595,7 @@ def mse_loss(
     """Mean squared error loss. Shape inference via meta-shape: torch.nn.functional.mse_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def l1_loss(
     self: Tensor,
     target: Tensor,
@@ -572,6 +606,7 @@ def l1_loss(
     """L1 loss. Shape inference via meta-shape: torch.nn.functional.l1_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def nll_loss(
     self: Tensor,
     target: Tensor,
@@ -584,6 +619,7 @@ def nll_loss(
     """Negative log likelihood loss. Shape inference via meta-shape: torch.nn.functional.nll_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def cross_entropy(
     self: Tensor,
     target: Tensor,
@@ -597,6 +633,7 @@ def cross_entropy(
     """Cross entropy loss. Shape inference via meta-shape: torch.nn.functional.cross_entropy"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def binary_cross_entropy(
     self: Tensor,
     target: Tensor,
@@ -608,6 +645,7 @@ def binary_cross_entropy(
     """Binary cross entropy loss. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def binary_cross_entropy_with_logits(
     self: Tensor,
     target: Tensor,
@@ -620,6 +658,7 @@ def binary_cross_entropy_with_logits(
     """Binary cross entropy with logits. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy_with_logits"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def kl_div(
     self: Tensor,
     target: Tensor,
@@ -631,6 +670,7 @@ def kl_div(
     """KL divergence loss. Shape inference via meta-shape: torch.nn.functional.kl_div"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def smooth_l1_loss(
     self: Tensor,
     target: Tensor,
@@ -642,12 +682,14 @@ def smooth_l1_loss(
     """Smooth L1 loss. Shape inference via meta-shape: torch.nn.functional.smooth_l1_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def huber_loss(
     self: Tensor, target: Tensor, reduction: str = "mean", delta: float = 1.0
 ) -> Tensor:
     """Huber loss. Shape inference via meta-shape: torch.nn.functional.huber_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def poisson_nll_loss(
     self: Tensor,
     target: Tensor,
@@ -661,6 +703,7 @@ def poisson_nll_loss(
     """Poisson NLL loss. Shape inference via meta-shape: torch.nn.functional.poisson_nll_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def cosine_embedding_loss(
     self: Tensor,
     input2: Tensor,
@@ -673,6 +716,7 @@ def cosine_embedding_loss(
     """Cosine embedding loss. Shape inference via meta-shape: torch.nn.functional.cosine_embedding_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def margin_ranking_loss(
     self: Tensor,
     input2: Tensor,
@@ -685,6 +729,7 @@ def margin_ranking_loss(
     """Margin ranking loss. Shape inference via meta-shape: torch.nn.functional.margin_ranking_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def triplet_margin_loss(
     self: Tensor,
     positive: Tensor,
@@ -700,6 +745,7 @@ def triplet_margin_loss(
     """Triplet margin loss. Shape inference via meta-shape: torch.nn.functional.triplet_margin_loss"""
     ...
 
+@uses_shape_dsl(loss_ir)
 def hinge_embedding_loss(
     self: Tensor,
     target: Tensor,
@@ -712,6 +758,7 @@ def hinge_embedding_loss(
     ...
 
 # Padding operation
+@uses_shape_dsl(pad_ir)
 def pad(
     self: Tensor, pad: tuple[int, ...], mode: str = "constant", value: float = 0.0
 ) -> Tensor:
@@ -829,6 +876,7 @@ def scaled_dot_product_attention[
     """Scaled dot product attention. Shape inference via meta-shape: torch.nn.functional.scaled_dot_product_attention"""
     ...
 
+@uses_shape_dsl(cosine_similarity_ir)
 def cosine_similarity(
     x1: Tensor, x2: Tensor, dim: int = 1, eps: float = 1e-8
 ) -> Tensor:
