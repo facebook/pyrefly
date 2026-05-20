@@ -30,7 +30,32 @@ fn has_backup_relative_config(interp: &Path) -> bool {
         .is_some_and(|p| p.join(CONFIG_FILE).exists())
 }
 
+#[cfg(windows)]
+fn standard_interpreter_candidates(root: &Path) -> [PathBuf; 1] {
+    [root.join("Scripts").join("python.exe")]
+}
+
+#[cfg(not(windows))]
+fn standard_interpreter_candidates(root: &Path) -> [PathBuf; 2] {
+    [
+        root.join("bin").join("python3"),
+        root.join("bin").join("python"),
+    ]
+}
+
+fn find_standard_interpreter(root: &Path) -> Option<PathBuf> {
+    standard_interpreter_candidates(root)
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
 fn find_in_dir(root: &Path) -> Option<PathBuf> {
+    if root.join(CONFIG_FILE).exists()
+        && let Some(interpreter) = find_standard_interpreter(root)
+    {
+        return Some(interpreter);
+    }
+
     let interpreters = walk_interpreter(root, SEARCH_DEPTH).collect::<Vec<PathBuf>>();
 
     if interpreters.is_empty() {
@@ -73,7 +98,9 @@ fn search_roots(project_path: &Path) -> impl Iterator<Item = &Path> {
 /// then continues searching upward, looking inside known virtual environment directories
 /// (e.g. `.venv`, `venv`) that are present in parent directories up to root.
 pub fn find(project_path: &Path) -> Option<PathBuf> {
-    find_in_dir(project_path).or_else(|| search_roots(project_path).skip(1).find_map(find_in_root))
+    find_in_dir(project_path)
+        .or_else(|| find_in_root(project_path))
+        .or_else(|| search_roots(project_path).skip(1).find_map(find_in_root))
 }
 
 #[cfg(test)]
@@ -132,6 +159,37 @@ mod tests {
         test("3");
         test("3.8");
         test("3.12");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_detects_symlinked_project_venv() {
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let interp_name = interp_name("3");
+        let project_root = root.join("project");
+        let real_venv = root.join("real-venv");
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "real-venv",
+                    vec![
+                        TestPath::file(CONFIG_FILE),
+                        TestPath::dir("bin", vec![TestPath::file(&interp_name)]),
+                    ],
+                ),
+                TestPath::dir("project", vec![TestPath::file("pyrefly.toml")]),
+            ],
+        );
+        symlink(&real_venv, project_root.join(".venv")).unwrap();
+
+        assert_eq!(
+            find(&project_root),
+            Some(project_root.join(".venv/bin").join(interp_name)),
+        );
     }
 
     #[test]
