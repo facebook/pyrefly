@@ -2904,6 +2904,21 @@ fn val_to_type(
             ),
         },
 
+        // Int and Bool synthesize Literal[n] / Literal[bool] from the DSL's
+        // traced runtime value, just like SymInt does via `val_to_scalar_type`.
+        // This is intentionally load-bearing: functions like `dim_ir`,
+        // `numel_ir`, and `size_ir(dim=N)` trace exact integer results, and
+        // downstream consumers (assert_type, reshape validation, shape
+        // inference) rely on the literal precision. Returning
+        // `expected_return_type` here would discard the traced value and
+        // produce `int` instead of e.g. `Literal[3]`.
+        //
+        // This differs from the Tensor/List/Tuple/None/Str branches, which
+        // return `expected_return_type.clone()`. Those branches are correct
+        // because their `expected_return_type` already carries the refined
+        // structure (e.g. `Tensor[B, C, H, W]` with shape injected). For
+        // scalars, the fixture return type is just `int` — the literal value
+        // comes solely from DSL evaluation.
         DslType::Int => match val {
             Val::Int(n) => Lit::Int(LitInt::new(n)).to_implicit_type(),
             _ => panic!(
@@ -2912,6 +2927,10 @@ fn val_to_type(
             ),
         },
 
+        // SymInt synthesizes a type from the traced `Val`: `val_to_scalar_type`
+        // returns `Type::Dim` for `Val::Dim` and `Literal[n]` for `Val::Int`.
+        // The trace value is load-bearing for shape inference — downstream
+        // tensor shape types are built from these dimension representations.
         DslType::SymInt => val_to_scalar_type(&val),
 
         DslType::Bool => match val {
