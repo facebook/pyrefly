@@ -3270,6 +3270,18 @@ fn collect_call_targets_expr(expr: &DslExpr, targets: &mut HashSet<String>) {
     }
 }
 
+/// Validate a set of `ShapeDslFunction`s as a program.
+///
+/// Runs `type_check_program` on the inner `DslFnDef`s, verifying that
+/// cross-function calls have consistent signatures. Panics on type errors.
+///
+/// Intended to be called with a per-caller transitive closure (root +
+/// its resolved helpers), not the full module.
+pub fn validate_shape_dsl_functions(fns: &[Arc<ShapeDslFunction>]) {
+    let defs: Vec<DslFnDef> = fns.iter().map(|f| (*f.inner).clone()).collect();
+    type_check_program(&defs);
+}
+
 /// Reference to a shape-DSL function that refines a callable's return type.
 /// Carried on `FuncFlags` for functions decorated with `@uses_shape_dsl`.
 #[derive(Debug, Clone)]
