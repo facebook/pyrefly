@@ -799,6 +799,14 @@ impl ReportArgs {
         functions: &[Function],
         classes: &[ReportClass],
     ) -> Vec<Variable> {
+        fn untyped_if_call(expr: &Expr) -> SlotCounts {
+            if let Expr::Call(_) = expr {
+                SlotCounts::untyped()
+            } else {
+                SlotCounts::default()
+            }
+        }
+
         let module_prefix = if module.name() != ModuleName::unknown() {
             format!("{}.", module.name())
         } else {
@@ -888,8 +896,16 @@ impl ReportArgs {
                         // IMPLICIT: non-call assignments have 0 slots;
                         // call assignments are untyped (1 slot)
                         Binding::NameAssign(na) => {
-                            let slots = if matches!(na.expr.as_ref(), Expr::Call(_)) {
-                                SlotCounts::untyped()
+                            variables.push(Variable {
+                                name: qualified_name,
+                                annotation: None,
+                                slots: untyped_if_call(na.expr.as_ref()),
+                                location,
+                            });
+                        }
+                        Binding::MultiTargetAssign(_, rhs_idx, _) => {
+                            let slots = if let Binding::Expr(_, expr) = bindings.get(*rhs_idx) {
+                                untyped_if_call(expr.as_ref())
                             } else {
                                 SlotCounts::default()
                             };
@@ -2314,6 +2330,12 @@ mod tests {
     fn test_report_variables() {
         let report = build_module_report_for_test("variables.py");
         compare_snapshot("variables.expected.json", &report);
+    }
+
+    #[test]
+    fn test_report_multi_target_aliases() {
+        let report = build_module_report_for_test("multi_target_aliases.py");
+        compare_snapshot("multi_target_aliases.expected.json", &report);
     }
 
     #[test]
