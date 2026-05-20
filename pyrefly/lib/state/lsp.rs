@@ -2497,12 +2497,8 @@ impl<'a> Transaction<'a> {
             let ast = self.get_ast_or_parse_module(handle, &module_info);
 
             for range in ranges.into_iter() {
-                let (metadata, definition_range) = if let Some((definition_range, metadata)) =
-                    self.refine_keyword_argument_definition_for_callee(
-                        ast.as_ref(),
-                        range,
-                        identifier,
-                    )
+                let (metadata, definition_range) = if let Some((definition_range, metadata)) = self
+                    .refine_keyword_argument_definition_for_callee(ast.as_ref(), range, identifier)
                 {
                     (metadata, definition_range)
                 } else if let Some(param_range) =
