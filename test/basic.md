@@ -256,3 +256,29 @@ $ echo "x: str = 0" > $TMPDIR/test.py && \
  INFO 0 errors (1 warning not shown)* (glob)
 [0]
 ```
+
+## Main help shows `coverage` subcommand and not the hidden `report` alias
+
+```scrut
+$ $PYREFLY --help | grep -E "^ +(coverage|  report)"
+  coverage     Type coverage commands
+[0]
+```
+
+## `pyrefly coverage report --help` shows correct usage
+
+```scrut
+$ $PYREFLY coverage report --help | grep "^Usage:"
+Usage: pyrefly coverage report [OPTIONS] [FILES]...
+[0]
+```
+
+## Deprecated `pyrefly report` alias emits a warning on stderr
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "def f(x: int) -> int: return x" > $TMPDIR/test.py && \
+> $PYREFLY report $TMPDIR/test.py 2>&1 | grep "warning:"
+warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead
+[0]
+```
