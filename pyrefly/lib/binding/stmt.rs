@@ -805,6 +805,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
                 Expr::Attribute(attr) => {
+                    let mut attr = attr;
                     let attr_name = attr.attr.id.clone();
                     self.ensure_type(&mut x.annotation, &mut None);
                     let ann_key = self.insert_binding(
@@ -821,7 +822,15 @@ impl<'a> BindingsBuilder<'a> {
                                 ExprOrBinding::Expr(v.clone())
                             })
                         }
-                        _ => ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                        _ => {
+                            self.ensure_expr(
+                                &mut attr.value,
+                                &mut Usage::StaticTypeInformation {
+                                    is_annotation: false,
+                                },
+                            );
+                            ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))
+                        }
                     };
                     if !self
                         .scopes
