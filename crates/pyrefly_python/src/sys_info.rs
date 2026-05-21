@@ -37,6 +37,7 @@ use serde::de::MapAccess;
 use serde::de::Visitor;
 use static_interner::Intern;
 use static_interner::Interner;
+use vec1::Vec1;
 
 use crate::ast::Ast;
 
@@ -164,7 +165,7 @@ impl PythonVersion {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PythonPlatform {
     All,
-    Platforms(Vec<String>),
+    Platforms(Vec1<String>),
 }
 
 impl FromStr for PythonPlatform {
@@ -189,49 +190,50 @@ impl PythonPlatform {
             "Linux" | "linux" => Self::linux(),
             "Darwin" | "darwin" | "mac" | "macos" => Self::mac(),
             "Windows" | "windows" | "win32" | "Win32" => Self::windows(),
-            _ => Self::Platforms(vec![platform.to_owned()]),
+            _ => Self::Platforms(Vec1::new(platform.to_owned())),
         }
     }
 
-    pub fn new_many(platforms: Vec<String>) -> anyhow::Result<Self> {
+    pub fn new_many(platforms: Vec<String>) -> Self {
         Self::new_platforms(platforms.into_iter().map(|platform| Self::new(&platform)))
     }
 
-    pub fn new_platforms(platforms: impl IntoIterator<Item = Self>) -> anyhow::Result<Self> {
-        let platforms = platforms.into_iter().collect::<Vec<_>>();
-        if platforms.is_empty() {
-            return Err(anyhow::anyhow!(
-                "`python-platform` list must contain at least one value"
-            ));
-        }
-        let mut found_all = false;
-        let mut platforms = platforms
-            .into_iter()
-            .flat_map(|platform| match platform {
-                Self::All => {
-                    found_all = true;
-                    Vec::new()
+    pub fn new_platforms(platforms: impl IntoIterator<Item = Self>) -> Self {
+        let mut platform_names = Vec::new();
+        let mut saw_platform = false;
+        for platform in platforms {
+            saw_platform = true;
+            match platform {
+                Self::All => return Self::All,
+                Self::Platforms(inner) => {
+                    let mut inner = inner.into_vec();
+                    platform_names.append(&mut inner);
                 }
-                Self::Platforms(platforms) => platforms,
-            })
-            .collect::<Vec<_>>();
-        if found_all {
-            if platforms.is_empty() {
-                return Ok(Self::All);
             }
-            return Err(anyhow::anyhow!(
-                "`all` cannot be combined with other `python-platform` values"
-            ));
         }
-        platforms.sort();
-        platforms.dedup();
-        Ok(Self::Platforms(platforms))
+        if !saw_platform {
+            return Self::current();
+        }
+        platform_names.sort();
+        platform_names.dedup();
+        Self::Platforms(
+            Vec1::try_from_vec(platform_names)
+                .expect("platforms is non-empty because empty inputs return current platform"),
+        )
+    }
+
+    fn current() -> Self {
+        match std::env::consts::OS {
+            "macos" => Self::mac(),
+            "windows" => Self::windows(),
+            platform => Self::new(platform),
+        }
     }
 
     fn possible_platforms(&self) -> Option<&[String]> {
         match self {
             Self::All => None,
-            Self::Platforms(platforms) => Some(platforms),
+            Self::Platforms(platforms) => Some(platforms.as_slice()),
         }
     }
 
@@ -247,15 +249,15 @@ impl PythonPlatform {
     }
 
     pub fn linux() -> Self {
-        Self::Platforms(vec!["linux".to_owned()])
+        Self::Platforms(Vec1::new("linux".to_owned()))
     }
 
     pub fn windows() -> Self {
-        Self::Platforms(vec!["win32".to_owned()])
+        Self::Platforms(Vec1::new("win32".to_owned()))
     }
 
     pub fn mac() -> Self {
-        Self::Platforms(vec!["darwin".to_owned()])
+        Self::Platforms(Vec1::new("darwin".to_owned()))
     }
 
     /// Return the `os.name` value corresponding to this platform.
@@ -283,7 +285,7 @@ impl Display for PythonPlatform {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::All => write!(f, "all"),
-            Self::Platforms(platforms) => write!(f, "{}", platforms.join(", ")),
+            Self::Platforms(platforms) => write!(f, "{}", platforms.as_slice().join(", ")),
         }
     }
 }
@@ -296,10 +298,10 @@ impl Serialize for PythonPlatform {
         match self {
             Self::All => serializer.serialize_str("all"),
             Self::Platforms(platforms) => {
-                if let [platform] = &**platforms {
+                if let [platform] = platforms.as_slice() {
                     serializer.serialize_str(platform)
                 } else {
-                    platforms.serialize(serializer)
+                    platforms.as_slice().serialize(serializer)
                 }
             }
         }
@@ -320,7 +322,7 @@ impl<'de> Deserialize<'de> for PythonPlatform {
 
         match Platform::deserialize(deserializer)? {
             Platform::One(platform) => Ok(Self::new(&platform)),
-            Platform::Many(platforms) => Self::new_many(platforms).map_err(de::Error::custom),
+            Platform::Many(platforms) => Ok(Self::new_many(platforms)),
         }
     }
 }
@@ -447,6 +449,9 @@ impl<'de> Deserialize<'de> for SysInfo {
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
 enum StringValue {
     Any,
+    // This is not a Python tuple value. It is an abstract string domain: one
+    // expression whose exact value may be any of these strings depending on
+    // the configured platform.
     Set(Vec<String>),
 }
 
@@ -491,6 +496,11 @@ impl StringValue {
         ) {
             return None;
         }
+        // A StringValue can stand for several possible runtime strings, e.g.
+        // `sys.platform` under `python-platform = ["linux", "win32"]`.
+        // We can statically fold a comparison only when every possible pair of
+        // left/right strings gives the same answer; mixed answers mean the
+        // condition is platform-dependent and must remain unknown.
         aggregate_bools(
             left.iter()
                 .cartesian_product(right)
@@ -515,6 +525,8 @@ impl StringValue {
             Self::Any => return None,
             Self::Set(prefixes) => prefixes,
         };
+        // See `compare`: `startswith` is statically known only when every
+        // possible receiver/prefix pair agrees.
         aggregate_bools(
             values
                 .iter()
@@ -1034,7 +1046,7 @@ mod tests {
         }
 
         let linux_and_windows =
-            PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]).unwrap();
+            PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]);
         assert_eq!(
             eval(linux_and_windows.clone(), r#"sys.platform == "linux""#),
             None
@@ -1061,7 +1073,7 @@ mod tests {
         assert_eq!(eval(linux_and_windows, r#"os.name == "posix""#), None);
 
         let posix_platforms =
-            PythonPlatform::new_many(vec!["linux".to_owned(), "darwin".to_owned()]).unwrap();
+            PythonPlatform::new_many(vec!["linux".to_owned(), "darwin".to_owned()]);
         assert_eq!(eval(posix_platforms, r#"os.name == "posix""#), Some(true));
 
         assert_eq!(
@@ -1107,7 +1119,7 @@ mod tests {
             .unwrap(),
             SysInfo::new(
                 PythonVersion::new(3, 10, 1),
-                PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]).unwrap()
+                PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()])
             ),
         );
         assert_eq!(
@@ -1118,11 +1130,12 @@ mod tests {
             SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::All),
         );
         assert!(serde_json::from_str::<SysInfo>(r#"{"python_version": "3.10.1"}"#).is_err());
-        assert!(
+        assert_eq!(
             serde_json::from_str::<SysInfo>(
                 r#"{"python_platform": ["all", "linux"], "python_version": "3.10.1"}"#
             )
-            .is_err()
+            .unwrap(),
+            SysInfo::new(PythonVersion::new(3, 10, 1), PythonPlatform::All),
         );
         assert!(
             serde_json::from_str::<SysInfo>(r#"{"python_platform": "linux", "python_platform": "linux", "python_version": "3.10.1"}"#).is_err()

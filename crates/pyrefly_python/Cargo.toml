@@ -28,6 +28,7 @@ serde = { version = "1.0.219", features = ["derive", "rc"] }
 starlark_map = "0.13.0"
 static_interner = { version = "0.1.2", features = ["dupe"] }
 thiserror = "2.0.18"
+vec1 = "1.12.1"
 
 [dev-dependencies]
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }

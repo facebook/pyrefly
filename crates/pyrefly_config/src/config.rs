@@ -1774,7 +1774,21 @@ mod tests {
         .unwrap();
         assert_eq!(
             config.python_environment.python_platform,
-            Some(PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]).unwrap())
+            Some(PythonPlatform::new_many(vec![
+                "linux".to_owned(),
+                "win32".to_owned()
+            ]))
+        );
+
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = "linux"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::linux())
         );
 
         let config = ConfigFile::parse_config(
@@ -1788,13 +1802,26 @@ mod tests {
             Some(PythonPlatform::All)
         );
 
-        assert!(
-            ConfigFile::parse_config(
-                r#"
-                python-platform = ["all", "linux"]
-                "#,
-            )
-            .is_err()
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = ["all", "linux"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::All)
+        );
+
+        let config = ConfigFile::parse_config(
+            r#"
+            python-platform = []
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::new_many(Vec::new()))
         );
     }
 
