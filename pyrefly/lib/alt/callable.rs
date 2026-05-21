@@ -524,8 +524,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(HintRef::new(hint, Some(call_errors))),
             arg_errors,
         );
-        let ok =
-            self.check_type_with_call_context(got.ty(), hint, range, call_errors, tcc, call_context);
+        let ok = self.check_type_with_call_context(
+            got.ty(),
+            hint,
+            range,
+            call_errors,
+            tcc,
+            call_context,
+        );
         (got.into_ty(), ok)
     }
 
