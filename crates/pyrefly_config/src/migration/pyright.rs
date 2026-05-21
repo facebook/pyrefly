@@ -40,7 +40,7 @@ impl ExecEnv {
             ..Default::default()
         };
         Ok(SubConfig {
-            matches: Glob::new(self.root)?,
+            matches: vec![Glob::new(self.root)?],
             settings,
         })
     }

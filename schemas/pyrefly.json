@@ -7,8 +7,18 @@
   "$defs": {
     "errorSeverity": {
       "oneOf": [
-        { "type": "boolean" },
-        { "type": "string", "enum": ["ignore", "info", "warn", "error"] }
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "enum": [
+            "ignore",
+            "info",
+            "warn",
+            "error"
+          ]
+        }
       ]
     },
     "configBase": {
@@ -21,15 +31,33 @@
             "$ref": "#/$defs/errorSeverity"
           },
           "properties": {
-            "bad-assignment": { "$ref": "#/$defs/errorSeverity" },
-            "bad-return": { "$ref": "#/$defs/errorSeverity" },
-            "missing-import": { "$ref": "#/$defs/errorSeverity" },
-            "invalid-argument": { "$ref": "#/$defs/errorSeverity" },
-            "assert-type": { "$ref": "#/$defs/errorSeverity" },
-            "bad-override": { "$ref": "#/$defs/errorSeverity" },
-            "incompatible-type": { "$ref": "#/$defs/errorSeverity" },
-            "unused-import": { "$ref": "#/$defs/errorSeverity" },
-            "undefined-variable": { "$ref": "#/$defs/errorSeverity" }
+            "bad-assignment": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "bad-return": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "missing-import": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "invalid-argument": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "assert-type": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "bad-override": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "incompatible-type": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "unused-import": {
+              "$ref": "#/$defs/errorSeverity"
+            },
+            "undefined-variable": {
+              "$ref": "#/$defs/errorSeverity"
+            }
           },
           "default": {}
         },
@@ -67,7 +95,11 @@
         "untyped-def-behavior": {
           "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
           "type": "string",
-          "enum": ["check-and-infer-return-type", "check-and-infer-return-any", "skip-and-infer-return-any"],
+          "enum": [
+            "check-and-infer-return-type",
+            "check-and-infer-return-any",
+            "skip-and-infer-return-any"
+          ],
           "default": "check-and-infer-return-type"
         },
         "permissive-ignores": {
@@ -80,9 +112,19 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["type", "pyrefly", "mypy", "pyright", "pyre", "ty"]
+            "enum": [
+              "type",
+              "pyrefly",
+              "mypy",
+              "pyright",
+              "pyre",
+              "ty"
+            ]
           },
-          "default": ["type", "pyrefly"]
+          "default": [
+            "type",
+            "pyrefly"
+          ]
         },
         "tensor-shapes": {
           "description": "Whether to enable tensor shape checking.",
@@ -96,7 +138,10 @@
         "recursion-overflow-handler": {
           "description": "How should Pyrefly handle recursion overflow during type evaluation?",
           "type": "string",
-          "enum": ["break-with-placeholder", "panic-with-debug-info"],
+          "enum": [
+            "break-with-placeholder",
+            "panic-with-debug-info"
+          ],
           "default": "break-with-placeholder"
         }
       }
@@ -112,7 +157,13 @@
         "preset": {
           "description": "Named preset that provides default error severities and behavior settings. User-specified settings override the preset.",
           "type": "string",
-          "enum": ["off", "basic", "legacy", "default", "strict"]
+          "enum": [
+            "off",
+            "basic",
+            "legacy",
+            "default",
+            "strict"
+          ]
         },
         "project-includes": {
           "description": "The glob patterns used to describe which files to type check, typically understood as user-space files. This does not specify import resolution priority.",
@@ -120,7 +171,10 @@
           "items": {
             "type": "string"
           },
-          "default": ["**/*.py*", "**/*.ipynb"]
+          "default": [
+            "**/*.py*",
+            "**/*.ipynb"
+          ]
         },
         "project-excludes": {
           "description": "The glob patterns used to describe which files to avoid type checking as a way to filter files that match project-includes.",
@@ -128,7 +182,12 @@
           "items": {
             "type": "string"
           },
-          "default": ["**/node_modules", "**/__pycache__", "**/venv/**", "**/.[!/.]*/**"]
+          "default": [
+            "**/node_modules",
+            "**/__pycache__",
+            "**/venv/**",
+            "**/.[!/.]*/**"
+          ]
         },
         "disable-project-excludes-heuristics": {
           "description": "Disable automatic appending of default project-excludes patterns. When true, you have full control over project-excludes.",
@@ -141,7 +200,9 @@
           "items": {
             "type": "string"
           },
-          "default": ["."]
+          "default": [
+            "."
+          ]
         },
         "disable-search-path-heuristics": {
           "description": "Disable any search path heuristics/additional search path behavior that Pyrefly will attempt to do for you.",
@@ -160,7 +221,16 @@
           "description": "The value used with conditions based on type checking against sys.platform values. Common values include 'linux', 'darwin', 'win32', but any valid sys.platform string is accepted.",
           "type": "string",
           "default": "linux",
-          "examples": ["linux", "darwin", "win32", "cygwin", "freebsd", "openbsd", "netbsd", "aix"]
+          "examples": [
+            "linux",
+            "darwin",
+            "win32",
+            "cygwin",
+            "freebsd",
+            "openbsd",
+            "netbsd",
+            "aix"
+          ]
         },
         "python-version": {
           "description": "The Python version to use for type checking. Format: <major>[.<minor>[.<micro>]]",
@@ -210,7 +280,10 @@
             "type": {
               "description": "The type of build system.",
               "type": "string",
-              "enum": ["buck", "custom"]
+              "enum": [
+                "buck",
+                "custom"
+              ]
             },
             "ignore-if-build-system-missing": {
               "description": "Whether to silently ignore the build system configuration if the build system is not found.",
@@ -249,32 +322,50 @@
               "type": "string"
             }
           },
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "allOf": [
             {
               "if": {
                 "properties": {
-                  "type": {"const": "buck"}
+                  "type": {
+                    "const": "buck"
+                  }
                 }
               },
               "then": {
                 "not": {
-                  "required": ["command"]
+                  "required": [
+                    "command"
+                  ]
                 }
               }
             },
             {
               "if": {
                 "properties": {
-                  "type": {"const": "custom"}
+                  "type": {
+                    "const": "custom"
+                  }
                 }
               },
               "then": {
-                "required": ["command"],
+                "required": [
+                  "command"
+                ],
                 "not": {
                   "anyOf": [
-                    {"required": ["isolation-dir"]},
-                    {"required": ["extras"]}
+                    {
+                      "required": [
+                        "isolation-dir"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "extras"
+                      ]
+                    }
                   ]
                 }
               }
@@ -291,11 +382,23 @@
               },
               {
                 "type": "object",
-                "required": ["matches"],
+                "required": [
+                  "matches"
+                ],
                 "properties": {
                   "matches": {
-                    "description": "A filesystem glob pattern detailing which files the config applies to.",
-                    "type": "string"
+                    "description": "One or more filesystem glob patterns detailing which files the config applies to.",
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ]
                   }
                 }
               }

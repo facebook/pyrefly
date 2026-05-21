@@ -1159,7 +1159,7 @@ Examples:
 filepath glob matching. Only certain config options are allowed to be overridden, and a need
 to override other configs means you likely need to use a separate config file for your subdirectory.
 You can have as many SubConfigs as you want in a project, and even multiple separate SubConfigs
-that can apply to a given file when the `matches` glob pattern matches.
+that can apply to a given file when any `matches` glob pattern matches.
 
 #### **SubConfig Allowed Overrides**
 
@@ -1187,15 +1187,15 @@ and would like to see the option supported.
 
 A SubConfig has two or more entries:
 
-- a `matches` key, with a [Filesystem Glob](#filesystem-globbing) detailing which files the config
-  applies to.
+- a `matches` key, with a [Filesystem Glob](#filesystem-globbing) or list of globs detailing which
+  files the config applies to.
 - at least one of the [SubConfig allowed overrides](#subconfig-allowed-overrides)
 
 #### **SubConfig Option Selection**
 
 Since you can have more than one SubConfig matching a file, we need to define a resolution order
 to determine which SubConfig's option should be selected. Pyrefly does this by filtering
-SubConfigs whose `matches` does not match the given file, then takes the first non-null
+SubConfigs whose `matches` do not match the given file, then takes the first non-null
 value that can be found in the order the SubConfigs appear in your configuration.
 
 If no SubConfigs match, or there are no non-null config options present, then we take
@@ -1219,14 +1219,14 @@ invalid-argument = false
 
 [[sub-config]]
 # apply this to `sub/project/tests/file.py`
-matches = "sub/project/tests/file.py"
+matches = ["sub/project/tests/file.py", "sub/project/tests/**/*.py"]
 
 # any unittest imports will by typed as `typing.Any`
 replace-imports-with-any = ["unittest.*"]
 
 [[sub-config]]
 # apply this config to all files in `sub/project`
-matches = "sub/project/**"
+matches = ["sub/project/**", "sub/project/tests/**"]
 
 # enable `assert-type` errors in `sub/project`
 [sub-config.errors]
@@ -1234,7 +1234,7 @@ assert-type = true
 
 [[sub-config]]
 # apply this config to all files in `sub`
-matches = "sub/**"
+matches = ["sub/**", "sub/project/**"]
 
 # disable `assert-type` errors in `sub`
 [sub-config.errors]
@@ -1242,7 +1242,7 @@ assert-type = false
 
 [[sub-config]]
 # apply this config to all files under `tests` dirs in `sub/`
-matches = "sub/**/tests/**"
+matches = ["sub/**/tests/**", "sub/tests/**"]
 
 # any pytest imports will be typed as `typing.Any`
 replace-imports-with-any = ["pytest.*"]
@@ -1378,14 +1378,14 @@ invalid-argument = false
 
 [[sub-config]]
 # apply this to `sub/project/tests/file.py`
-matches = "sub/project/tests/file.py"
+matches = ["sub/project/tests/file.py", "sub/project/tests/**/*.py"]
 
 # any unittest imports will by typed as `typing.Any`
 replace-imports-with-any = ["unittest.*"]
 
 [[sub-config]]
 # apply this config to all files in `sub/project`
-matches = "sub/project/**"
+matches = ["sub/project/**", "sub/project/tests/**"]
 
 # enable `assert-type` errors in `sub/project`
 [sub-config.errors]
@@ -1425,7 +1425,7 @@ invalid-argument = false
 
 [[tool.pyrefly.sub-config]]
 # apply this config to all files in `sub/project`
-matches = "sub/project/**"
+matches = ["sub/project/**", "sub/project/tests/**"]
 
 # enable `assert-type` errors in `sub/project`
 [tool.pyrefly.sub-config.errors]
@@ -1433,7 +1433,7 @@ assert-type = true
 
 [[tool.pyrefly.sub-config]]
 # apply this config to all files in `sub`
-matches = "sub/**"
+matches = ["sub/**", "sub/project/**"]
 
 # disable `assert-type` errors in `sub/project`
 [tool.pyrefly.sub-config.errors]
