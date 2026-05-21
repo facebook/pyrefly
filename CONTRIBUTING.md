@@ -76,7 +76,7 @@ the command line.
 ## Coding conventions
 
 We follow the
-[Buck2 developer basics](https://github.com/facebook/buck2/blob/main/docs/developers/basics.md),
+[Buck2 coding conventions](https://github.com/facebook/buck2/blob/main/docs/developers/basics.md),
 with the caveat that we use our internal error framework for errors reported by
 the type checker.
 
