@@ -140,9 +140,6 @@ impl EnvironmentArgs {
         }
         validate_arg("--site-package-path", self.site_package_path.as_deref())?;
         validate_arg("--search-path", self.search_path.as_deref())?;
-        if let Some(platforms) = &self.python_platform {
-            PythonPlatform::new_platforms(platforms.iter().cloned())?;
-        }
         Ok(())
     }
 
@@ -163,10 +160,8 @@ impl EnvironmentArgs {
             config.synthesized_preset_reason = Some(SynthesizedPresetReason::UserOverride);
         }
         if let Some(x) = &self.python_platform {
-            config.python_environment.python_platform = Some(
-                PythonPlatform::new_platforms(x.iter().cloned())
-                    .expect("python-platform values should be validated before config override"),
-            );
+            config.python_environment.python_platform =
+                Some(PythonPlatform::new_platforms(x.iter().cloned()));
         }
         if let Some(x) = &self.python_version {
             config.python_environment.python_version = Some(*x);
@@ -569,12 +564,15 @@ mod tests {
         assert!(errors.is_empty());
         assert_eq!(
             config.python_environment.python_platform,
-            Some(PythonPlatform::new_many(vec!["linux".to_owned(), "win32".to_owned()]).unwrap())
+            Some(PythonPlatform::new_many(vec![
+                "linux".to_owned(),
+                "win32".to_owned()
+            ]))
         );
     }
 
     #[test]
-    fn repeated_python_platform_flags_reject_all_with_other_platforms() {
+    fn repeated_python_platform_flags_all_wins() {
         let args = ConfigOverrideArgs::parse_from([
             "pyrefly",
             "--python-platform",
@@ -582,6 +580,12 @@ mod tests {
             "--python-platform",
             "linux",
         ]);
-        assert!(args.validate().is_err());
+        args.validate().unwrap();
+        let (config, errors) = args.override_config(ConfigFile::default());
+        assert!(errors.is_empty());
+        assert_eq!(
+            config.python_environment.python_platform,
+            Some(PythonPlatform::All)
+        );
     }
 }
