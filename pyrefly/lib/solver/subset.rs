@@ -2251,6 +2251,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 // TypeGuard is covariant
                 self.is_subset_eq(l, u)
             }
+            (Type::TypeIs(l), Type::TypeIs(u)) => {
+                // TypeIs is invariant: the narrowed type is both a positive and negative refinement.
+                self.is_subset_eq(l, u)
+                    .and_then(|_| self.is_subset_eq(u, l))
+            }
             (Type::TypeGuard(_) | Type::TypeIs(_), _) => self.is_subset_eq(
                 &self
                     .solver
