@@ -82,6 +82,14 @@ impl ModuleErrors {
         self.items.len()
     }
 
+    fn len_excluding(&mut self, excluded: ErrorKind) -> usize {
+        self.cleanup();
+        self.items
+            .iter()
+            .filter(|err| err.error_kind() != excluded)
+            .count()
+    }
+
     /// Iterates over all errors, including ignored ones.
     fn iter(&mut self) -> impl ExactSizeIterator<Item = &Error> {
         self.cleanup();
@@ -187,6 +195,10 @@ impl ErrorCollector {
 
     pub fn len(&self) -> usize {
         self.errors.lock().len()
+    }
+
+    pub fn len_excluding(&self, excluded: ErrorKind) -> usize {
+        self.errors.lock().len_excluding(excluded)
     }
 
     /// Checks whether an error is suppressed, considering ignore-all directives,

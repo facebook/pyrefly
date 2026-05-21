@@ -178,6 +178,19 @@ takes_iter(["hello"])
 );
 
 testcase!(
+    test_string_as_iterable_warning_does_not_break_overload_matching,
+    r#"
+from traceback import format_exception
+
+def f(exc: BaseException) -> None:
+    "".join(format_exception(exc))
+
+s: str = "hello"
+"".join(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
+testcase!(
     test_deprecated_overloaded_signature,
     r#"
 from typing import overload
