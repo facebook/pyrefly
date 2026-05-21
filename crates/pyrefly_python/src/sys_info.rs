@@ -9,11 +9,14 @@ use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::str::FromStr;
 
 use dupe::Dupe;
 use itertools::Itertools;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::small_set1::SmallSet1;
 use regex::Match;
 use regex::Regex;
 use ruff_python_ast::BoolOp;
@@ -37,7 +40,6 @@ use serde::de::MapAccess;
 use serde::de::Visitor;
 use static_interner::Intern;
 use static_interner::Interner;
-use vec1::Vec1;
 
 use crate::ast::Ast;
 
@@ -162,10 +164,56 @@ impl PythonVersion {
 
 /// The platform on which Python is running, e.g. "linux", "darwin", "win32".
 /// See <https://docs.python.org/3/library/sys.html#sys.platform> for examples.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug)]
 pub enum PythonPlatform {
     All,
-    Platforms(Vec1<String>),
+    Platforms(SmallSet1<String>),
+}
+
+impl PartialEq for PythonPlatform {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::All, Self::All) => true,
+            (Self::Platforms(left), Self::Platforms(right)) => {
+                left.into_iter().all(|platform| right.contains(platform))
+                    && right.into_iter().all(|platform| left.contains(platform))
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PythonPlatform {}
+
+impl PartialOrd for PythonPlatform {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PythonPlatform {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::All, Self::All) => Ordering::Equal,
+            (Self::All, Self::Platforms(_)) => Ordering::Less,
+            (Self::Platforms(_), Self::All) => Ordering::Greater,
+            (Self::Platforms(left), Self::Platforms(right)) => {
+                Self::sorted_platforms(left).cmp(&Self::sorted_platforms(right))
+            }
+        }
+    }
+}
+
+impl Hash for PythonPlatform {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::All => 0_u8.hash(state),
+            Self::Platforms(platforms) => {
+                1_u8.hash(state);
+                Self::sorted_platforms(platforms).hash(state);
+            }
+        }
+    }
 }
 
 impl FromStr for PythonPlatform {
@@ -190,7 +238,7 @@ impl PythonPlatform {
             "Linux" | "linux" => Self::linux(),
             "Darwin" | "darwin" | "mac" | "macos" => Self::mac(),
             "Windows" | "windows" | "win32" | "Win32" => Self::windows(),
-            _ => Self::Platforms(Vec1::new(platform.to_owned())),
+            _ => Self::Platforms(SmallSet1::new(platform.to_owned())),
         }
     }
 
@@ -206,20 +254,22 @@ impl PythonPlatform {
             match platform {
                 Self::All => return Self::All,
                 Self::Platforms(inner) => {
-                    let mut inner = inner.into_vec();
-                    platform_names.append(&mut inner);
+                    platform_names.extend((&inner).into_iter().cloned());
                 }
             }
         }
         if !saw_platform {
             return Self::current();
         }
-        platform_names.sort();
-        platform_names.dedup();
-        Self::Platforms(
-            Vec1::try_from_vec(platform_names)
+        let mut platforms = SmallSet1::new(
+            platform_names
+                .pop()
                 .expect("platforms is non-empty because empty inputs return current platform"),
-        )
+        );
+        for platform in platform_names {
+            platforms.insert(platform);
+        }
+        Self::Platforms(platforms)
     }
 
     fn current() -> Self {
@@ -230,18 +280,18 @@ impl PythonPlatform {
         }
     }
 
-    fn possible_platforms(&self) -> Option<&[String]> {
+    fn possible_platforms(&self) -> Option<Vec<String>> {
         match self {
             Self::All => None,
-            Self::Platforms(platforms) => Some(platforms.as_slice()),
+            Self::Platforms(platforms) => Some(platforms.into_iter().cloned().collect()),
         }
     }
 
     fn possible_os_names(&self) -> Option<Vec<String>> {
         let mut names = self
             .possible_platforms()?
-            .iter()
-            .map(|platform| Self::os_name_for_platform(platform).to_owned())
+            .into_iter()
+            .map(|platform| Self::os_name_for_platform(&platform).to_owned())
             .collect::<Vec<_>>();
         names.sort();
         names.dedup();
@@ -249,15 +299,15 @@ impl PythonPlatform {
     }
 
     pub fn linux() -> Self {
-        Self::Platforms(Vec1::new("linux".to_owned()))
+        Self::Platforms(SmallSet1::new("linux".to_owned()))
     }
 
     pub fn windows() -> Self {
-        Self::Platforms(Vec1::new("win32".to_owned()))
+        Self::Platforms(SmallSet1::new("win32".to_owned()))
     }
 
     pub fn mac() -> Self {
-        Self::Platforms(Vec1::new("darwin".to_owned()))
+        Self::Platforms(SmallSet1::new("darwin".to_owned()))
     }
 
     /// Return the `os.name` value corresponding to this platform.
@@ -266,9 +316,10 @@ impl PythonPlatform {
         let Self::Platforms(platforms) = self else {
             return None;
         };
-        let [platform] = &**platforms else {
+        if platforms.into_iter().nth(1).is_some() {
             return None;
-        };
+        }
+        let platform = platforms.first();
         Some(Self::os_name_for_platform(platform))
     }
 
@@ -279,13 +330,24 @@ impl PythonPlatform {
             _ => "posix",
         }
     }
+
+    fn sorted_platforms(platforms: &SmallSet1<String>) -> Vec<&str> {
+        let mut platforms = platforms
+            .into_iter()
+            .map(|platform| platform.as_str())
+            .collect::<Vec<_>>();
+        platforms.sort();
+        platforms
+    }
 }
 
 impl Display for PythonPlatform {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::All => write!(f, "all"),
-            Self::Platforms(platforms) => write!(f, "{}", platforms.as_slice().join(", ")),
+            Self::Platforms(platforms) => {
+                write!(f, "{}", Self::sorted_platforms(platforms).join(", "))
+            }
         }
     }
 }
@@ -298,10 +360,11 @@ impl Serialize for PythonPlatform {
         match self {
             Self::All => serializer.serialize_str("all"),
             Self::Platforms(platforms) => {
+                let platforms = Self::sorted_platforms(platforms);
                 if let [platform] = platforms.as_slice() {
                     serializer.serialize_str(platform)
                 } else {
-                    platforms.as_slice().serialize(serializer)
+                    platforms.serialize(serializer)
                 }
             }
         }

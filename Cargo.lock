@@ -2377,7 +2377,6 @@ dependencies = [
  "static_interner",
  "thiserror 2.0.18",
  "toml",
- "vec1",
 ]
 
 [[package]]
