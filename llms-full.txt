@@ -2130,6 +2130,26 @@ and values that can be overridden here.
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
 
+### `pytorch-efficiency-lints`
+
+Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
+in training code. When `true`, all `pytorch-efficiency-lint-*` error kinds are
+enabled at `warn` severity. You can override individual lint severities in
+[`[errors]`](#errors).
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--pytorch-efficiency-lints`
+
+The following lints are enabled by this flag:
+
+| Lint | What it detects |
+|---|---|
+| [`pytorch-efficiency-lint-cuda-call`](./error-kinds.mdx#pytorch-efficiency-lint-cuda-call) | `Tensor.cuda()` — hard-coded device |
+| [`pytorch-efficiency-lint-item-call`](./error-kinds.mdx#pytorch-efficiency-lint-item-call) | `Tensor.item()` — GPU→CPU sync stall |
+| [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
+| [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
+
 ### `tensor-shapes`
 
 :::warning
@@ -4278,6 +4298,69 @@ class Template(Protocol):
 
     def method(self) -> None:
         self.temp: list[int] = []  # protocol-implicitly-defined-attribute
+```
+
+## pytorch-efficiency-lint-cuda-call
+
+Default severity: `ignore`
+
+Calling `.cuda()` on a `torch.Tensor` hard-codes the target device to CUDA. Use `.to(device)` instead so your code works on any accelerator (CUDA, XPU, MPS, etc.).
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+def f(x: torch.Tensor) -> None:
+    y = x.cuda()  # pytorch-efficiency-lint-cuda-call
+    # Fix: y = x.to(device)
+```
+
+## pytorch-efficiency-lint-item-call
+
+Default severity: `ignore`
+
+Calling `.item()` on a `torch.Tensor` forces GPU-to-CPU synchronization, blocking the training loop until all pending GPU operations complete. This can reduce GPU utilization from over 90% to under 50%. Prefer `tensor[0]` for scalar tensors, accumulate values on the GPU with `torch.sum()`, or defer `.item()` to outside the training loop.
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+def f(x: torch.Tensor) -> None:
+    v = x.item()  # pytorch-efficiency-lint-item-call
+```
+
+## pytorch-efficiency-lint-print-tensor
+
+Default severity: `ignore`
+
+Passing a `torch.Tensor` to `print()` triggers `Tensor.__repr__()`, which forces GPU-to-CPU synchronization and blocks until all pending GPU operations complete. Use `print(tensor.shape)` to inspect metadata without synchronizing, or guard with `if DEBUG: print(tensor)`.
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+def f(x: torch.Tensor) -> None:
+    print(x)  # pytorch-efficiency-lint-print-tensor
+    # Fix: print(x.shape) or print(x.dtype)
+```
+
+## pytorch-efficiency-lint-redundant-to-call
+
+Default severity: `ignore`
+
+Calling `.to(device)` on a tensor returned by a factory function like `torch.zeros()` allocates the tensor on CPU first, then copies it to the target device. Pass `device=` directly to the factory function instead to avoid the redundant allocation and copy.
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+device = torch.device("cuda")
+x = torch.zeros(3, 4).to(device)  # pytorch-efficiency-lint-redundant-to-call
+# Fix: x = torch.zeros(3, 4, device=device)
 ```
 
 ## read-only
