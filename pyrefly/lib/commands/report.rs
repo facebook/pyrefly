@@ -1701,26 +1701,27 @@ impl ReportArgs {
         py_variables: Vec<Variable>,
         py_classes: Vec<ReportClass>,
     ) {
-        let stub_func_names: SmallSet<String> =
-            stub_functions.iter().map(|f| f.name.clone()).collect();
+        // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
+        // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
+        let stub_names: SmallSet<String> = stub_functions
+            .iter()
+            .map(|f| &f.name)
+            .chain(stub_variables.iter().map(|v| &v.name))
+            .chain(stub_classes.iter().map(|c| &c.name))
+            .cloned()
+            .collect();
         for py_func in py_functions {
-            if !stub_func_names.contains(&py_func.name) {
+            if !stub_names.contains(&py_func.name) {
                 stub_functions.push(py_func);
             }
         }
-
-        let stub_var_names: SmallSet<String> =
-            stub_variables.iter().map(|v| v.name.clone()).collect();
         for py_var in py_variables {
-            if !stub_var_names.contains(&py_var.name) {
+            if !stub_names.contains(&py_var.name) {
                 stub_variables.push(py_var);
             }
         }
-
-        let stub_class_names: SmallSet<String> =
-            stub_classes.iter().map(|c| c.name.clone()).collect();
         for py_class in py_classes {
-            if !stub_class_names.contains(&py_class.name) {
+            if !stub_names.contains(&py_class.name) {
                 stub_classes.push(py_class);
             }
         }
@@ -2352,6 +2353,13 @@ mod tests {
     fn test_report_partial_stub() {
         let report = build_stub_module_report("partial_stub.pyi", "partial_stub.py");
         compare_snapshot("partial_stub.expected.json", &report);
+    }
+
+    /// gh-3524: stub functions/classes must not be re-added as untyped attrs by .py re-exports.
+    #[test]
+    fn test_report_stub_reexport() {
+        let report = build_stub_module_report("stub_reexport.pyi", "stub_reexport.py");
+        compare_snapshot("stub_reexport.expected.json", &report);
     }
 
     /// Stubs-only packages: .py discovered via site-package-path, merged like co-located stubs.
