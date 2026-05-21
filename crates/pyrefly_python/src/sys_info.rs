@@ -310,19 +310,6 @@ impl PythonPlatform {
         Self::Platforms(SmallSet1::new("darwin".to_owned()))
     }
 
-    /// Return the `os.name` value corresponding to this platform.
-    /// See <https://docs.python.org/3/library/os.html#os.name>.
-    pub fn os_name(&self) -> Option<&str> {
-        let Self::Platforms(platforms) = self else {
-            return None;
-        };
-        if platforms.into_iter().nth(1).is_some() {
-            return None;
-        }
-        let platform = platforms.first();
-        Some(Self::os_name_for_platform(platform))
-    }
-
     fn os_name_for_platform(platform: &str) -> &str {
         match platform {
             "win32" => "nt",
