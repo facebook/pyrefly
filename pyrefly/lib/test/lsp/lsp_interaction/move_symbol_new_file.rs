@@ -18,6 +18,25 @@ use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::get_test_files_root;
 
+fn same_file_uri(left: &Url, right: &Url) -> bool {
+    match (left.to_file_path(), right.to_file_path()) {
+        (Ok(left_path), Ok(right_path)) => same_file_path(&left_path, &right_path),
+        _ => left == right,
+    }
+}
+
+#[cfg(windows)]
+fn same_file_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let left = left.to_string_lossy().replace('\\', "/");
+    let right = right.to_string_lossy().replace('\\', "/");
+    left.eq_ignore_ascii_case(&right)
+}
+
+#[cfg(not(windows))]
+fn same_file_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    left == right
+}
+
 fn init_with_create_support(root_path: &std::path::Path) -> (LspInteraction, Url) {
     let scope_uri = Url::from_file_path(root_path).unwrap();
     let mut interaction = LspInteraction::new();
@@ -44,9 +63,11 @@ fn has_edit(ops: &[DocumentChangeOperation], uri: &Url, expected_text: &str) -> 
         let DocumentChangeOperation::Edit(edit) = op else {
             return false;
         };
-        edit.text_document.uri == *uri
+        same_file_uri(&edit.text_document.uri, uri)
             && edit.edits.iter().any(|edit| match edit {
-                lsp_types::OneOf::Left(TextEdit { new_text, .. }) => new_text == expected_text,
+                lsp_types::OneOf::Left(TextEdit { new_text, .. }) => {
+                    new_text.replace("\r\n", "\n") == expected_text
+                }
                 lsp_types::OneOf::Right(_) => false,
             })
     })
@@ -98,7 +119,7 @@ fn test_move_symbol_to_new_file_code_action() {
                 }
                 let has_create = ops.iter().any(|op| match op {
                     DocumentChangeOperation::Op(ResourceOp::Create(create)) => {
-                        create.uri == new_uri
+                        same_file_uri(&create.uri, &new_uri)
                     }
                     _ => false,
                 });
