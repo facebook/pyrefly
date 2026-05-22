@@ -22,3 +22,18 @@ def shape_dsl_function(fn: typing.Callable) -> typing.Callable:
     body to DSL IR via convert_fndef.
     """
     return fn
+
+
+def prod(xs: list[int]) -> int:
+    """Compute the product of a list of dimension sizes."""
+    ...
+
+
+def sum(xs: list[int]) -> int:
+    """Compute the sum of a list of dimension sizes."""
+    ...
+
+
+def parse_einsum_equation(spec: str) -> list[list[list[int]]]:
+    """Parse an einsum equation string into output map and check pairs."""
+    ...
