@@ -105,3 +105,35 @@ async def test_data(sample_data):
     reveal_type(sample_data)  # E: revealed type: Any
 "#,
 );
+
+testcase!(
+    test_pytest_fixture_async_parameter_type_with_inference,
+    env_pytest_fixture().enable_infer_pytest_fixture_types(),
+    r#"
+import pytest
+from typing import reveal_type
+
+@pytest.fixture
+async def sample_data() -> int:
+    return 42
+
+async def test_data(sample_data):
+    reveal_type(sample_data)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_pytest_fixture_async_yield_parameter_type_with_inference,
+    env_pytest_fixture().enable_infer_pytest_fixture_types(),
+    r#"
+import pytest
+from typing import reveal_type
+
+@pytest.fixture
+async def sample_data():
+    yield 42
+
+async def test_data(sample_data):
+    reveal_type(sample_data)  # E: revealed type: Literal[42]
+"#,
+);
