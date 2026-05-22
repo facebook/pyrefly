@@ -24,13 +24,11 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use pyrefly_python::ast::Ast;
 use ruff_python_ast::BoolOp as RuffBoolOp;
 use ruff_python_ast::CmpOp as RuffCmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator as RuffOperator;
-use ruff_python_ast::PySourceType;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::UnaryOp as RuffUnaryOp;
 
@@ -555,7 +553,7 @@ enum DslExpr {
 /// Function definition. Corresponds to `<fndef>` in the grammar.
 #[derive(Debug, Clone)]
 pub(crate) struct DslFnDef {
-    pub(crate) name: String,
+    name: String,
     params: Vec<DslParam>,
     return_type: Option<DslType>,
     body: DslBody,
@@ -1902,40 +1900,6 @@ fn type_check_program(fndefs: &[DslFnDef]) {
     }
 }
 
-// Section: Entry point
-
-/// Parse DSL source code, convert to grammar-aligned types, and return the
-/// list of function definitions.
-pub(crate) fn parse_dsl(source: &str) -> Result<Vec<DslFnDef>, String> {
-    let (module, errors, _unsupported) = Ast::parse(source, PySourceType::Python);
-    if !errors.is_empty() {
-        return Err(format!(
-            "DSL syntax errors:\n{}",
-            errors
-                .iter()
-                .map(|e| format!("  {}", e))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
-
-    let fndefs: Vec<DslFnDef> = module
-        .body
-        .iter()
-        .filter_map(|stmt| {
-            if let Stmt::FunctionDef(f) = stmt {
-                Some(convert_fndef(f))
-            } else {
-                None // skip comments, blank lines (not in AST anyway)
-            }
-        })
-        .collect::<Result<_, _>>()?;
-
-    type_check_program(&fndefs);
-
-    Ok(fndefs)
-}
-
 // Section: Interpreter — evaluate DSL directly against runtime Val values
 
 /// Extract a runtime `Val` from a type-checker `Type` based on the declared `DslType`.
@@ -3031,12 +2995,12 @@ fn val_to_type(
 /// A `MetaShapeFunction` backed by a parsed DSL function definition.
 /// The DSL is interpreted directly — no IR conversion.
 #[derive(Debug)]
-pub(crate) struct DslMetaShapeFunction {
+struct DslMetaShapeFunction {
     /// The primary function to evaluate.
-    pub(crate) fn_def: Arc<DslFnDef>,
+    fn_def: Arc<DslFnDef>,
     /// Precomputed lookup table mapping function names to definitions.
     /// Shared across all instances — built once at registry init.
-    pub(crate) fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>>,
+    fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>>,
 }
 
 impl MetaShapeFunction for DslMetaShapeFunction {
