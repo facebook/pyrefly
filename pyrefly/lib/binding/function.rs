@@ -72,6 +72,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::YieldsAndReturns;
 use crate::config::base::InferReturnTypes;
+use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
 use crate::types::types::AnyStyle;
 
@@ -828,12 +829,52 @@ impl<'a> BindingsBuilder<'a> {
         // Convert the function to DSL IR before `function_header` takes `returns`
         // and before `function_body` takes `body`.
         let shape_dsl_def = if is_shape_dsl {
-            let dsl_fn = Arc::new(
-                convert_shape_dsl_function(&x).expect("@shape_dsl_function body must be valid DSL"),
-            );
-            self.metadata
-                .push_shape_dsl(func_name.id.clone(), Arc::clone(&dsl_fn));
-            Some(dsl_fn)
+            // Warn about parameter kinds the DSL silently ignores.
+            if let Some(vararg) = &x.parameters.vararg {
+                self.error(
+                    vararg.range(),
+                    ErrorKind::InvalidArgument,
+                    "@shape_dsl_function: *args parameters are not supported in the shape DSL and will be ignored".to_owned(),
+                );
+            }
+            if let Some(kwarg) = &x.parameters.kwarg {
+                self.error(
+                    kwarg.range(),
+                    ErrorKind::InvalidArgument,
+                    "@shape_dsl_function: **kwargs parameters are not supported in the shape DSL and will be ignored".to_owned(),
+                );
+            }
+            if !x.parameters.kwonlyargs.is_empty() {
+                self.error(
+                    x.parameters.kwonlyargs[0].range(),
+                    ErrorKind::InvalidArgument,
+                    "@shape_dsl_function: keyword-only parameters are not supported in the shape DSL and will be ignored".to_owned(),
+                );
+            }
+            if !x.parameters.posonlyargs.is_empty() {
+                self.error(
+                    x.parameters.posonlyargs[0].range(),
+                    ErrorKind::InvalidArgument,
+                    "@shape_dsl_function: positional-only parameters are not supported in the shape DSL and will be ignored".to_owned(),
+                );
+            }
+
+            match convert_shape_dsl_function(&x) {
+                Ok(dsl_fn) => {
+                    let dsl_fn = Arc::new(dsl_fn);
+                    self.metadata
+                        .push_shape_dsl(func_name.id.clone(), Arc::clone(&dsl_fn));
+                    Some(dsl_fn)
+                }
+                Err(msg) => {
+                    self.error(
+                        x.range,
+                        ErrorKind::InvalidArgument,
+                        format!("@shape_dsl_function: {msg}"),
+                    );
+                    None
+                }
+            }
         } else {
             None
         };

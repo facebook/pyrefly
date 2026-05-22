@@ -30,6 +30,16 @@ def double_ir(x: int) -> int:
     return times_two(x)
 
 def not_a_dsl_fn(x: int) -> int: ...
+
+@shape_dsl_function  # E: @shape_dsl_function: unexpected statement in DSL body
+def bad_syntax_ir(x: int) -> int:
+    while x > 0:
+        x = x - 1
+    return x
+
+@shape_dsl_function
+def kwargs_ir(x: int, **kwargs) -> int:  # E: @shape_dsl_function: **kwargs parameters are not supported
+    return x
 "#,
     );
     env.add_with_path(
@@ -38,7 +48,7 @@ def not_a_dsl_fn(x: int) -> int: ...
         r#"
 from typing import overload
 from shape_extensions import uses_shape_dsl
-from my_shapes import identity_ir, double_ir, not_a_dsl_fn
+from my_shapes import identity_ir, double_ir, not_a_dsl_fn, bad_syntax_ir, kwargs_ir
 
 @uses_shape_dsl(identity_ir)
 def plain_fn(x: int) -> int: ...
@@ -61,6 +71,12 @@ def double_fn(x: int) -> int: ...
 
 @uses_shape_dsl(not_a_dsl_fn)  # E: `@uses_shape_dsl` argument does not resolve to a `@shape_dsl_function`
 def bad_fn(x: int) -> int: ...
+
+@uses_shape_dsl(bad_syntax_ir)  # E: `@uses_shape_dsl` argument does not resolve to a `@shape_dsl_function`
+def bad_syntax_fn(x: int) -> int: ...
+
+@uses_shape_dsl(kwargs_ir)
+def kwargs_fn(x: int) -> int: ...
 "#,
     );
     env
@@ -125,5 +141,31 @@ from my_lib import bad_fn
 # The @uses_shape_dsl argument is not a @shape_dsl_function, so no shape
 # transform is applied and the declared return type (int) is used instead.
 assert_type(bad_fn(1), int)
+"#,
+);
+
+testcase!(
+    test_shape_dsl_unsupported_syntax,
+    shape_dsl_env(),
+    r#"
+from typing import assert_type
+from my_lib import bad_syntax_fn
+
+# bad_syntax_ir uses a while loop which is unsupported DSL syntax, so
+# bad_syntax_fn falls back to the declared return type.
+assert_type(bad_syntax_fn(1), int)
+"#,
+);
+
+testcase!(
+    test_shape_dsl_kwargs_warning,
+    shape_dsl_env(),
+    r#"
+from typing import Literal, assert_type
+from my_lib import kwargs_fn
+
+# kwargs_ir has **kwargs which triggers a warning but the DSL conversion
+# still succeeds (kwargs are silently dropped), so shape inference works.
+assert_type(kwargs_fn(1), Literal[1])
 "#,
 );
