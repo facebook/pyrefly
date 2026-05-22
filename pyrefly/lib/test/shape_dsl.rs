@@ -40,6 +40,10 @@ def bad_syntax_ir(x: int) -> int:
 @shape_dsl_function
 def kwargs_ir(x: int, **kwargs) -> int:  # E: @shape_dsl_function: **kwargs parameters are not supported
     return x
+
+@shape_dsl_function
+def calls_undefined(x: int) -> int:  # E: @shape_dsl_function type error: undefined function: nonexistent
+    return nonexistent(x)  # E: Could not find name `nonexistent`
 "#,
     );
     env.add_with_path(
@@ -77,6 +81,7 @@ def bad_syntax_fn(x: int) -> int: ...
 
 @uses_shape_dsl(kwargs_ir)
 def kwargs_fn(x: int) -> int: ...
+
 "#,
     );
     env
@@ -169,3 +174,8 @@ from my_lib import kwargs_fn
 assert_type(kwargs_fn(1), Literal[1])
 "#,
 );
+
+// The `calls_undefined` function in my_shapes.pyi calls `nonexistent()`,
+// which produces a type error diagnostic (tested by the `# E:` annotation
+// on its definition). No separate test case is needed here — the error is
+// validated by every test that uses `shape_dsl_env()`.

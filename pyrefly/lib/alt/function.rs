@@ -545,20 +545,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
 
         let kind = if let Some(dsl_fn) = shape_dsl_def {
-            // Shape DSL functions carry their parsed IR for call-site evaluation.
-            let func_id = Arc::new(FuncId {
-                module: self.module().dupe(),
-                cls: defining_cls.clone(),
-                name: def.name.id.clone(),
-                def_index: Some(def_index),
-                outer_funcs,
-            });
             // Build the transitive closure of helper functions this DSL function calls,
             // then validate cross-function call signatures.
             let module_dsl_fns = self.bindings().metadata().shape_dsl_functions();
             let helpers = compute_transitive_helpers(&dsl_fn, module_dsl_fns);
-            validate_shape_dsl_functions(&helpers);
-            FunctionKind::ShapeDsl(func_id, dsl_fn, Derived(helpers))
+            if let Err(type_errors) = validate_shape_dsl_functions(&helpers) {
+                for msg in &type_errors {
+                    self.error(
+                        errors,
+                        def.name.range,
+                        ErrorKind::InvalidArgument,
+                        format!("@shape_dsl_function type error: {msg}"),
+                    );
+                }
+                // Fall back to a normal function — the DSL evaluator must
+                // never run on a program that failed type checking.
+                FunctionKind::from_name(
+                    self.module().dupe(),
+                    defining_cls.clone(),
+                    &def.name.id,
+                    Some(def_index),
+                    outer_funcs,
+                )
+            } else {
+                let func_id = Arc::new(FuncId {
+                    module: self.module().dupe(),
+                    cls: defining_cls.clone(),
+                    name: def.name.id.clone(),
+                    def_index: Some(def_index),
+                    outer_funcs,
+                });
+                FunctionKind::ShapeDsl(func_id, dsl_fn, Derived(helpers))
+            }
         } else {
             FunctionKind::from_name(
                 self.module().dupe(),

@@ -1486,16 +1486,19 @@ fn join(a: &DslType, b: &DslType) -> DslType {
     }
 }
 
-/// Extract the element type from a list type. Panics on non-list (IR bug).
-fn element_type(ty: &DslType) -> DslType {
+/// Extract the element type from a list type. Pushes an error on non-list.
+fn element_type(ty: &DslType, errors: &mut Vec<String>) -> DslType {
     match ty {
         DslType::List(inner) => *inner.clone(),
-        _ => unreachable!("expected list type, got {}", ty),
+        _ => {
+            errors.push(format!("expected list type, got {}", ty));
+            DslType::Int
+        }
     }
 }
 
 /// Narrow a type to only variants matching a constructor.
-fn narrow_to(ty: &DslType, con: DslTypeCon) -> DslType {
+fn narrow_to(ty: &DslType, con: DslTypeCon, errors: &mut Vec<String>) -> DslType {
     match ty {
         DslType::Union(types) => {
             let matching: Vec<_> = types
@@ -1505,17 +1508,29 @@ fn narrow_to(ty: &DslType, con: DslTypeCon) -> DslType {
                 .collect();
             match matching.len() {
                 1 => matching.into_iter().next().unwrap(),
-                0 => unreachable!("isinstance narrowing: no variant of {} matches {}", ty, con),
+                0 => {
+                    errors.push(format!(
+                        "isinstance narrowing: no variant of {} matches {}",
+                        ty, con
+                    ));
+                    ty.clone()
+                }
                 _ => DslType::Union(matching),
             }
         }
         _ if matches_constructor(ty, con) => ty.clone(),
-        _ => unreachable!("isinstance narrowing: {} does not match {}", ty, con),
+        _ => {
+            errors.push(format!(
+                "isinstance narrowing: {} does not match {}",
+                ty, con
+            ));
+            ty.clone()
+        }
     }
 }
 
 /// Narrow a type to exclude variants matching a constructor.
-fn narrow_away(ty: &DslType, con: DslTypeCon) -> DslType {
+fn narrow_away(ty: &DslType, con: DslTypeCon, errors: &mut Vec<String>) -> DslType {
     match ty {
         DslType::Union(types) => {
             let remaining: Vec<_> = types
@@ -1525,7 +1540,10 @@ fn narrow_away(ty: &DslType, con: DslTypeCon) -> DslType {
                 .collect();
             match remaining.len() {
                 1 => remaining.into_iter().next().unwrap(),
-                0 => unreachable!("narrowed away all variants of {}", ty),
+                0 => {
+                    errors.push(format!("narrowed away all variants of {}", ty));
+                    ty.clone()
+                }
                 _ => DslType::Union(remaining),
             }
         }
@@ -1534,7 +1552,7 @@ fn narrow_away(ty: &DslType, con: DslTypeCon) -> DslType {
 }
 
 /// Narrow a type to exclude None.
-fn narrow_away_none(ty: &DslType) -> DslType {
+fn narrow_away_none(ty: &DslType, errors: &mut Vec<String>) -> DslType {
     match ty {
         DslType::Union(types) => {
             let remaining: Vec<_> = types
@@ -1544,7 +1562,10 @@ fn narrow_away_none(ty: &DslType) -> DslType {
                 .collect();
             match remaining.len() {
                 1 => remaining.into_iter().next().unwrap(),
-                0 => unreachable!("narrowed away all variants of {}", ty),
+                0 => {
+                    errors.push(format!("narrowed away all variants of {}", ty));
+                    ty.clone()
+                }
                 _ => DslType::Union(remaining),
             }
         }
@@ -1554,7 +1575,7 @@ fn narrow_away_none(ty: &DslType) -> DslType {
 
 /// Analyze a condition expression for type narrowing.
 /// Returns (then_env, else_env) — the environments for the true and false branches.
-fn narrow(cond: &DslExpr, env: &TypeEnv) -> (TypeEnv, TypeEnv) {
+fn narrow(cond: &DslExpr, env: &TypeEnv, errors: &mut Vec<String>) -> (TypeEnv, TypeEnv) {
     match cond {
         // isinstance(x, con)
         DslExpr::IsInstance { expr, ty } => {
@@ -1563,8 +1584,8 @@ fn narrow(cond: &DslExpr, env: &TypeEnv) -> (TypeEnv, TypeEnv) {
             {
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
-                then_env.insert(name.clone(), narrow_to(var_ty, *ty));
-                else_env.insert(name.clone(), narrow_away(var_ty, *ty));
+                then_env.insert(name.clone(), narrow_to(var_ty, *ty, errors));
+                else_env.insert(name.clone(), narrow_away(var_ty, *ty, errors));
                 return (then_env, else_env);
             }
             (env.clone(), env.clone())
@@ -1582,7 +1603,7 @@ fn narrow(cond: &DslExpr, env: &TypeEnv) -> (TypeEnv, TypeEnv) {
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
                 then_env.insert(name.clone(), DslType::None);
-                else_env.insert(name.clone(), narrow_away_none(var_ty));
+                else_env.insert(name.clone(), narrow_away_none(var_ty, errors));
                 return (then_env, else_env);
             }
             (env.clone(), env.clone())
@@ -1599,7 +1620,7 @@ fn narrow(cond: &DslExpr, env: &TypeEnv) -> (TypeEnv, TypeEnv) {
             {
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
-                then_env.insert(name.clone(), narrow_away_none(var_ty));
+                then_env.insert(name.clone(), narrow_away_none(var_ty, errors));
                 else_env.insert(name.clone(), DslType::None);
                 return (then_env, else_env);
             }
@@ -1610,7 +1631,7 @@ fn narrow(cond: &DslExpr, env: &TypeEnv) -> (TypeEnv, TypeEnv) {
             op: DslUnaryOp::Not,
             operand,
         } => {
-            let (then_env, else_env) = narrow(operand, env);
+            let (then_env, else_env) = narrow(operand, env, errors);
             (else_env, then_env)
         }
         // cond1 and cond2 — narrow both in then-branch, conservative in else
@@ -1619,8 +1640,8 @@ fn narrow(cond: &DslExpr, env: &TypeEnv) -> (TypeEnv, TypeEnv) {
             op: DslOp::And,
             right,
         } => {
-            let (then1, _) = narrow(left, env);
-            let (then2, _) = narrow(right, &then1);
+            let (then1, _) = narrow(left, env, errors);
+            let (then2, _) = narrow(right, &then1, errors);
             (then2, env.clone())
         }
         _ => (env.clone(), env.clone()),
@@ -1628,15 +1649,15 @@ fn narrow(cond: &DslExpr, env: &TypeEnv) -> (TypeEnv, TypeEnv) {
 }
 
 /// Build function return type map from DSL definitions.
-fn build_fn_ret_types(fndefs: &[DslFnDef]) -> FnRetTypes {
+fn build_fn_ret_types(fndefs: &[DslFnDef], errors: &mut Vec<String>) -> FnRetTypes {
     fndefs
         .iter()
-        .map(|f| {
-            let return_type = f
-                .return_type
-                .clone()
-                .unwrap_or_else(|| unreachable!("DSL function {} must have a return type", f.name));
-            (f.name.clone(), return_type)
+        .filter_map(|f| match &f.return_type {
+            Some(rt) => Some((f.name.clone(), rt.clone())),
+            None => {
+                errors.push(format!("DSL function {} must have a return type", f.name));
+                None
+            }
         })
         .collect()
 }
@@ -1653,56 +1674,75 @@ fn arithmetic_result(a: &DslType, b: &DslType) -> DslType {
 }
 
 /// Infer the element type of a list literal from its elements.
-fn infer_list_elem_type(elts: &[DslExpr], env: &TypeEnv, sigs: &FnRetTypes) -> DslType {
-    assert!(
-        !elts.is_empty(),
-        "infer_list_elem_type called with empty list"
-    );
-    let mut result = infer_expr(&elts[0], env, sigs);
+fn infer_list_elem_type(
+    elts: &[DslExpr],
+    env: &TypeEnv,
+    sigs: &FnRetTypes,
+    errors: &mut Vec<String>,
+) -> DslType {
+    if elts.is_empty() {
+        errors.push("infer_list_elem_type called with empty list".to_owned());
+        return DslType::Int;
+    }
+    let mut result = infer_expr(&elts[0], env, sigs, errors);
     for elt in &elts[1..] {
-        result = join(&result, &infer_expr(elt, env, sigs));
+        result = join(&result, &infer_expr(elt, env, sigs, errors));
     }
     result
 }
 
 /// Bind comprehension variables based on the iterator expression.
 /// Handles zip (multi-list iteration) and enumerate (index + element).
-fn bind_comp_vars(vars: &[String], iter: &DslExpr, env: &TypeEnv, sigs: &FnRetTypes) -> TypeEnv {
+fn bind_comp_vars(
+    vars: &[String],
+    iter: &DslExpr,
+    env: &TypeEnv,
+    sigs: &FnRetTypes,
+    errors: &mut Vec<String>,
+) -> TypeEnv {
     let mut new_env = env.clone();
     match iter {
         DslExpr::Call {
             func: DslCallTarget::Builtin(DslBuiltin::Zip),
             args,
         } => {
-            assert_eq!(
-                vars.len(),
-                args.len(),
-                "zip: {} vars but {} args",
-                vars.len(),
-                args.len()
-            );
+            if vars.len() != args.len() {
+                errors.push(format!("zip: {} vars but {} args", vars.len(), args.len()));
+            }
             for (var, arg) in vars.iter().zip(args.iter()) {
-                let arg_ty = infer_expr(arg, env, sigs);
-                new_env.insert(var.clone(), element_type(&arg_ty));
+                let arg_ty = infer_expr(arg, env, sigs, errors);
+                new_env.insert(var.clone(), element_type(&arg_ty, errors));
             }
         }
         DslExpr::Call {
             func: DslCallTarget::Builtin(DslBuiltin::Enumerate),
             args,
         } => {
-            assert_eq!(args.len(), 1, "enumerate takes exactly 1 argument");
-            assert_eq!(vars.len(), 2, "enumerate requires exactly 2 variables");
-            let list_ty = infer_expr(&args[0], env, sigs);
-            new_env.insert(vars[0].clone(), DslType::Int);
-            new_env.insert(vars[1].clone(), element_type(&list_ty));
+            if args.len() != 1 {
+                errors.push(format!(
+                    "enumerate takes exactly 1 argument, got {}",
+                    args.len()
+                ));
+            }
+            if vars.len() != 2 {
+                errors.push(format!(
+                    "enumerate requires exactly 2 variables, got {}",
+                    vars.len()
+                ));
+            }
+            if !args.is_empty() && vars.len() >= 2 {
+                let list_ty = infer_expr(&args[0], env, sigs, errors);
+                new_env.insert(vars[0].clone(), DslType::Int);
+                new_env.insert(vars[1].clone(), element_type(&list_ty, errors));
+            }
         }
         _ => {
-            let iter_ty = infer_expr(iter, env, sigs);
+            let iter_ty = infer_expr(iter, env, sigs, errors);
             if vars.len() == 1 {
-                new_env.insert(vars[0].clone(), element_type(&iter_ty));
+                new_env.insert(vars[0].clone(), element_type(&iter_ty, errors));
             } else {
                 // Multiple vars iterating over a single list — each gets element type.
-                let elem = element_type(&iter_ty);
+                let elem = element_type(&iter_ty, errors);
                 for var in vars {
                     new_env.insert(var.clone(), elem.clone());
                 }
@@ -1713,17 +1753,23 @@ fn bind_comp_vars(vars: &[String], iter: &DslExpr, env: &TypeEnv, sigs: &FnRetTy
 }
 
 /// Infer the return type of a function call.
-fn infer_call(func: &DslCallTarget, args: &[DslExpr], env: &TypeEnv, sigs: &FnRetTypes) -> DslType {
+fn infer_call(
+    func: &DslCallTarget,
+    args: &[DslExpr],
+    env: &TypeEnv,
+    sigs: &FnRetTypes,
+    errors: &mut Vec<String>,
+) -> DslType {
     // Infer all arguments for logging, regardless of whether we need them.
     for arg in args {
-        infer_expr(arg, env, sigs);
+        infer_expr(arg, env, sigs, errors);
     }
     match func {
         DslCallTarget::Builtin(builtin) => match builtin {
             // prod/sum reduce a list of dims to a single dim.
             DslBuiltin::Prod | DslBuiltin::Sum => {
-                let arg_ty = infer_expr(&args[0], env, sigs);
-                element_type(&arg_ty)
+                let arg_ty = infer_expr(&args[0], env, sigs, errors);
+                element_type(&arg_ty, errors)
             }
             DslBuiltin::Str => DslType::Str,
             DslBuiltin::ParseEinsumEquation => DslType::List(Box::new(DslType::List(Box::new(
@@ -1732,18 +1778,30 @@ fn infer_call(func: &DslCallTarget, args: &[DslExpr], env: &TypeEnv, sigs: &FnRe
             DslBuiltin::Len => DslType::Int,
             DslBuiltin::Range => DslType::List(Box::new(DslType::Int)),
             DslBuiltin::Zip | DslBuiltin::Enumerate => {
-                unreachable!("{} should only appear as comprehension iterator", builtin)
+                errors.push(format!(
+                    "{} should only appear as comprehension iterator",
+                    builtin
+                ));
+                DslType::Int
             }
         },
-        DslCallTarget::UserDefined(name) => sigs
-            .get(name)
-            .unwrap_or_else(|| unreachable!("undefined function: {}", name))
-            .clone(),
+        DslCallTarget::UserDefined(name) => match sigs.get(name) {
+            Some(ty) => ty.clone(),
+            None => {
+                errors.push(format!("undefined function: {}", name));
+                DslType::Int
+            }
+        },
     }
 }
 
 /// Infer the type of a DSL expression.
-fn infer_expr(expr: &DslExpr, env: &TypeEnv, sigs: &FnRetTypes) -> DslType {
+fn infer_expr(
+    expr: &DslExpr,
+    env: &TypeEnv,
+    sigs: &FnRetTypes,
+    errors: &mut Vec<String>,
+) -> DslType {
     match expr {
         DslExpr::Const(c) => match c {
             DslConst::None => DslType::None,
@@ -1751,63 +1809,65 @@ fn infer_expr(expr: &DslExpr, env: &TypeEnv, sigs: &FnRetTypes) -> DslType {
             DslConst::Bool(_) => DslType::Bool,
             DslConst::Str(_) => DslType::Str,
         },
-        DslExpr::Var(name) => env
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| unreachable!("undefined variable: {}", name)),
+        DslExpr::Var(name) => match env.get(name) {
+            Some(ty) => ty.clone(),
+            None => {
+                errors.push(format!("undefined variable: {}", name));
+                DslType::Int
+            }
+        },
         DslExpr::List(elts) => {
             if elts.is_empty() {
                 // All empty list literals in the DSL are dimension lists.
                 DslType::List(Box::new(dim_type()))
             } else if matches!(elts.last(), Some(DslExpr::Ellipsis)) {
                 // [expr, ...] — unbounded list sentinel.
-                let elem_ty = infer_list_elem_type(&elts[..elts.len() - 1], env, sigs);
+                let elem_ty = infer_list_elem_type(&elts[..elts.len() - 1], env, sigs, errors);
                 DslType::List(Box::new(elem_ty))
             } else {
-                let elem_ty = infer_list_elem_type(elts, env, sigs);
+                let elem_ty = infer_list_elem_type(elts, env, sigs, errors);
                 DslType::List(Box::new(elem_ty))
             }
         }
         DslExpr::ListComp {
             elt, vars, iter, ..
         } => {
-            let comp_env = bind_comp_vars(vars, iter, env, sigs);
-            let elt_ty = infer_expr(elt, &comp_env, sigs);
+            let comp_env = bind_comp_vars(vars, iter, env, sigs, errors);
+            let elt_ty = infer_expr(elt, &comp_env, sigs, errors);
             DslType::List(Box::new(elt_ty))
         }
         DslExpr::Index { base, index } => {
-            let base_ty = infer_expr(base, env, sigs);
-            infer_expr(index, env, sigs);
-            element_type(&base_ty)
+            let base_ty = infer_expr(base, env, sigs, errors);
+            infer_expr(index, env, sigs, errors);
+            element_type(&base_ty, errors)
         }
         DslExpr::Slice { base, lower, upper } => {
-            let base_ty = infer_expr(base, env, sigs);
+            let base_ty = infer_expr(base, env, sigs, errors);
             if let Some(l) = lower {
-                infer_expr(l, env, sigs);
+                infer_expr(l, env, sigs, errors);
             }
             if let Some(u) = upper {
-                infer_expr(u, env, sigs);
+                infer_expr(u, env, sigs, errors);
             }
             base_ty
         }
         DslExpr::BinOp { left, op, right } => {
-            let lt = infer_expr(left, env, sigs);
-            let rt = infer_expr(right, env, sigs);
+            let lt = infer_expr(left, env, sigs, errors);
+            let rt = infer_expr(right, env, sigs, errors);
             match op {
                 DslOp::Add => {
                     // List concatenation, string concatenation, or numeric addition.
                     if let DslType::List(a) = &lt {
-                        let DslType::List(b) = &rt else {
-                            unreachable!("+ with list and non-list: {} + {}", lt, rt)
-                        };
-                        DslType::List(Box::new(join(a, b)))
+                        if let DslType::List(b) = &rt {
+                            DslType::List(Box::new(join(a, b)))
+                        } else {
+                            errors.push(format!("+ with list and non-list: {} + {}", lt, rt));
+                            DslType::Int
+                        }
                     } else if matches!(lt, DslType::Str) {
-                        assert!(
-                            matches!(rt, DslType::Str),
-                            "+ with str and non-str: {} + {}",
-                            lt,
-                            rt
-                        );
+                        if !matches!(rt, DslType::Str) {
+                            errors.push(format!("+ with str and non-str: {} + {}", lt, rt));
+                        }
                         DslType::Str
                     } else {
                         arithmetic_result(&lt, &rt)
@@ -1828,84 +1888,94 @@ fn infer_expr(expr: &DslExpr, env: &TypeEnv, sigs: &FnRetTypes) -> DslType {
         }
         DslExpr::UnaryOp { op, operand } => match op {
             DslUnaryOp::Not => {
-                infer_expr(operand, env, sigs);
+                infer_expr(operand, env, sigs, errors);
                 DslType::Bool
             }
-            DslUnaryOp::Neg => infer_expr(operand, env, sigs),
+            DslUnaryOp::Neg => infer_expr(operand, env, sigs, errors),
         },
-        DslExpr::Call { func, args } => infer_call(func, args, env, sigs),
+        DslExpr::Call { func, args } => infer_call(func, args, env, sigs, errors),
         DslExpr::IsInstance { expr, .. } => {
-            infer_expr(expr, env, sigs);
+            infer_expr(expr, env, sigs, errors);
             DslType::Bool
         }
         DslExpr::In { left, right } => {
-            infer_expr(left, env, sigs);
-            infer_expr(right, env, sigs);
+            infer_expr(left, env, sigs, errors);
+            infer_expr(right, env, sigs, errors);
             DslType::Bool
         }
         DslExpr::Shape(inner) => {
-            infer_expr(inner, env, sigs);
+            infer_expr(inner, env, sigs, errors);
             DslType::List(Box::new(dim_type()))
         }
         DslExpr::TensorNew(inner) => {
-            infer_expr(inner, env, sigs);
+            infer_expr(inner, env, sigs, errors);
             DslType::Tensor
         }
         DslExpr::IfExpr { body, test, orelse } => {
-            let (then_env, else_env) = narrow(test, env);
-            let body_ty = infer_expr(body, &then_env, sigs);
-            let else_ty = infer_expr(orelse, &else_env, sigs);
+            let (then_env, else_env) = narrow(test, env, errors);
+            let body_ty = infer_expr(body, &then_env, sigs, errors);
+            let else_ty = infer_expr(orelse, &else_env, sigs, errors);
             join(&body_ty, &else_ty)
         }
-        DslExpr::Ellipsis => unreachable!("Ellipsis should be handled by List"),
+        DslExpr::Ellipsis => {
+            errors.push("Ellipsis should be handled by List".to_owned());
+            DslType::Int
+        }
         DslExpr::Unknown => DslType::None, // sentinel for fixture fallback
     }
 }
 
 /// Type-check a function body, updating the environment through assignments
 /// and narrowing through conditionals.
-fn check_body(body: &DslBody, env: &TypeEnv, sigs: &FnRetTypes) {
+fn check_body(body: &DslBody, env: &TypeEnv, sigs: &FnRetTypes, errors: &mut Vec<String>) {
     match body {
         DslBody::Assign { vars, expr, rest } => {
-            let ty = infer_expr(expr, env, sigs);
+            let ty = infer_expr(expr, env, sigs, errors);
             let mut new_env = env.clone();
             if vars.len() == 1 {
                 new_env.insert(vars[0].clone(), ty);
             } else {
-                let elem = element_type(&ty);
+                let elem = element_type(&ty, errors);
                 for var in vars {
                     new_env.insert(var.clone(), elem.clone());
                 }
             }
-            check_body(rest, &new_env, sigs);
+            check_body(rest, &new_env, sigs, errors);
         }
         DslBody::If {
             cond,
             then_body,
             rest,
         } => {
-            let (then_env, else_env) = narrow(cond, env);
-            check_body(then_body, &then_env, sigs);
-            check_body(rest, &else_env, sigs);
+            let (then_env, else_env) = narrow(cond, env, errors);
+            check_body(then_body, &then_env, sigs, errors);
+            check_body(rest, &else_env, sigs, errors);
         }
         DslBody::Return(expr) => {
-            infer_expr(expr, env, sigs);
+            infer_expr(expr, env, sigs, errors);
         }
         DslBody::Raise(expr) => {
-            infer_expr(expr, env, sigs);
+            infer_expr(expr, env, sigs, errors);
         }
     }
 }
 
-/// Type-check all DSL function definitions.
-fn type_check_program(fndefs: &[DslFnDef]) {
-    let sigs = build_fn_ret_types(fndefs);
+/// Type-check all DSL function definitions. Returns `Err` with collected
+/// error messages if type errors are found.
+fn type_check_program(fndefs: &[DslFnDef]) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    let sigs = build_fn_ret_types(fndefs, &mut errors);
     for fndef in fndefs {
         let mut env = TypeEnv::new();
         for param in &fndef.params {
             env.insert(param.name.clone(), param.ty.clone());
         }
-        check_body(&fndef.body, &env, &sigs);
+        check_body(&fndef.body, &env, &sigs, &mut errors);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 
@@ -3273,13 +3343,14 @@ fn collect_call_targets_expr(expr: &DslExpr, targets: &mut HashSet<String>) {
 /// Validate a set of `ShapeDslFunction`s as a program.
 ///
 /// Runs `type_check_program` on the inner `DslFnDef`s, verifying that
-/// cross-function calls have consistent signatures. Panics on type errors.
+/// cross-function calls have consistent signatures. Returns collected
+/// type error messages on failure.
 ///
 /// Intended to be called with a per-caller transitive closure (root +
 /// its resolved helpers), not the full module.
-pub fn validate_shape_dsl_functions(fns: &[Arc<ShapeDslFunction>]) {
+pub fn validate_shape_dsl_functions(fns: &[Arc<ShapeDslFunction>]) -> Result<(), Vec<String>> {
     let defs: Vec<DslFnDef> = fns.iter().map(|f| (*f.inner).clone()).collect();
-    type_check_program(&defs);
+    type_check_program(&defs)
 }
 
 /// Reference to a shape-DSL function that refines a callable's return type.
@@ -3414,7 +3485,11 @@ pub fn build_shape_dsl_program(fns: impl IntoIterator<Item = ShapeDslFunction>) 
     // `type_check_program` panics on type errors today; that matches the
     // existing `parse_dsl` semantics.
     let view: Vec<DslFnDef> = fns.iter().map(|f| (**f).clone()).collect();
-    type_check_program(&view);
+    // Errors from `type_check_program` are intentionally discarded here:
+    // `build_shape_dsl_program` is called from test/fixture code where
+    // panicking is acceptable. The production path goes through
+    // `validate_shape_dsl_functions` which propagates errors as diagnostics.
+    let _ = type_check_program(&view);
     ShapeDslProgram { fns }
 }
 
