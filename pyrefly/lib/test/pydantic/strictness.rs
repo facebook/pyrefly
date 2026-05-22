@@ -33,6 +33,22 @@ Model(x='0', y='1') # E: Argument `Literal['1']` is not assignable to parameter 
 );
 
 pydantic_testcase!(
+    test_strict_annotated_types,
+    r#"
+from typing import Annotated
+from pydantic import BaseModel, Strict, StrictInt
+
+class Model(BaseModel):
+    x: StrictInt = 1
+    y: Annotated[int, Strict()]
+
+Model(x=1, y=1)
+Model(x='1', y=1)  # E: Argument `Literal['1']` is not assignable to parameter `x`
+Model(x=1, y='1')  # E: Argument `Literal['1']` is not assignable to parameter `y`
+    "#,
+);
+
+pydantic_testcase!(
     test_class_keyword,
     r#"
 from pydantic import BaseModel, Field
