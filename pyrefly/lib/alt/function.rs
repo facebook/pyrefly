@@ -22,6 +22,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
+use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::type_var::Restriction;
@@ -438,6 +439,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         module_style: ModuleStyle,
         outer_funcs: Option<Name>,
         shape_dsl_def: Option<Arc<ShapeDslFunction>>,
+        uses_shape_dsl_ir_name: Option<(Name, ShortIdentifier)>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
@@ -565,6 +567,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 outer_funcs,
             )
         };
+
+        // Resolve the IR function reference from @uses_shape_dsl(ir_fn) and
+        // populate `flags.shape_transform` with the DSL function it points to.
+        if let Some((_name, ir_identifier)) = uses_shape_dsl_ir_name {
+            let ir_type = self.get(&Key::BoundName(ir_identifier)).arc_clone_ty();
+            if let Type::Function(func) = &ir_type
+                && let FunctionKind::ShapeDsl(_, dsl_fn) = &func.metadata.kind
+            {
+                flags.shape_transform = Some(Arc::new(ShapeTransformRef {
+                    dsl_fn: dsl_fn.clone(),
+                }));
+            }
+        }
+
         let metadata = FuncMetadata { kind, flags };
 
         Arc::new(UndecoratedFunction {
@@ -806,6 +822,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 Some(SpecialDecorator::DataclassTransformCall(&call.keywords))
             }
+            _ if let Type::KwCall(call) = &decorator.ty
+                && call.has_function_kind(FunctionKind::UsesShapeDsl) =>
+            {
+                Some(SpecialDecorator::UsesShapeDsl)
+            }
             Some(CalleeKind::Class(ClassKind::EnumNonmember)) => {
                 Some(SpecialDecorator::EnumNonmember)
             }
@@ -892,6 +913,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             SpecialDecorator::AbstractMethod => {
                 flags.is_abstract_method = true;
+                true
+            }
+            SpecialDecorator::UsesShapeDsl => {
+                // The actual shape_transform flag is populated after the decorator
+                // loop in undecorated_function, where uses_shape_dsl_ir_name is
+                // available. Returning true here just filters the decorator out of
+                // the list so it doesn't go through the generic decorator pipeline.
                 true
             }
             _ => false,
