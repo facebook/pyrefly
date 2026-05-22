@@ -27,6 +27,7 @@ pub enum InstanceKind {
     TypedDict,
     TypeVar(Quantified),
     SelfType,
+    ClassWithSelfType(Type),
     Protocol(Type),
     Metaclass(ClassBase),
     LiteralString,
@@ -83,6 +84,14 @@ impl<'a> Instance<'a> {
         }
     }
 
+    pub fn of_class_with_self_type(cls: &'a ClassType, self_type: Type) -> Self {
+        Self {
+            kind: InstanceKind::ClassWithSelfType(self_type),
+            class: cls.class_object(),
+            targs: cls.targs(),
+        }
+    }
+
     pub fn of_protocol(cls: &'a ClassType, self_type: Type) -> Self {
         Self {
             kind: InstanceKind::Protocol(self_type),
@@ -113,9 +122,16 @@ impl<'a> Instance<'a> {
         self.targs.substitute_into_mut(raw_member)
     }
 
+    pub fn self_return_type_override(&self) -> Option<&Type> {
+        match &self.kind {
+            InstanceKind::ClassWithSelfType(self_type) => Some(self_type),
+            _ => None,
+        }
+    }
+
     pub fn to_type(&self, heap: &TypeHeap) -> Type {
         match &self.kind {
-            InstanceKind::ClassType => {
+            InstanceKind::ClassType | InstanceKind::ClassWithSelfType(_) => {
                 heap.mk_class_type(ClassType::new(self.class.dupe(), self.targs.clone()))
             }
             InstanceKind::TypedDict => {
@@ -161,6 +177,7 @@ impl<'a> Instance<'a> {
                 self.targs.clone(),
             ))),
             InstanceKind::ClassType
+            | InstanceKind::ClassWithSelfType(_)
             | InstanceKind::Protocol(..)
             | InstanceKind::Metaclass(..)
             | InstanceKind::TypeVar(..)

@@ -1549,6 +1549,20 @@ def test[T: ParentModel](value: T) -> T:
 );
 
 testcase!(
+    test_non_self_method_on_generic_typevar_intersection,
+    r#"
+class Mixin[T]:
+    def remove_all_commands(self) -> None: ...
+
+class Command[T]: ...
+
+def test[CogT](command: Command[CogT]) -> None:
+    if isinstance(command, Mixin):
+        command.remove_all_commands()
+    "#,
+);
+
+testcase!(
     test_issubclass_typevar_nondisjoint_classes,
     r#"
 from typing import reveal_type

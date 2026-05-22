@@ -626,9 +626,53 @@ impl ClassField {
 
     fn instantiate_for(&self, heap: &TypeHeap, instance: &Instance) -> Self {
         self.instantiate_helper(&mut |ty| {
-            ty.subst_self_type_mut(&instance.to_type(heap));
+            if let Some(self_type) = instance.self_return_type_override() {
+                Self::subst_callable_return_self_type_mut(ty, self_type, &instance.to_type(heap));
+            } else {
+                ty.subst_self_type_mut(&instance.to_type(heap));
+            }
             instance.instantiate_member(ty)
         })
+    }
+
+    fn subst_callable_return_self_type_mut(
+        ty: &mut Type,
+        self_type: &Type,
+        fallback_self_type: &Type,
+    ) {
+        let subst_callable = |callable: &mut Callable| {
+            callable.ret.subst_self_type_mut(self_type);
+            callable
+                .params
+                .visit_mut(&mut |ty| ty.subst_self_type_mut(fallback_self_type));
+        };
+        match ty {
+            Type::Callable(callable) => subst_callable(callable),
+            Type::Function(func) => subst_callable(&mut func.signature),
+            Type::Forall(forall) => match &mut forall.body {
+                Forallable::Callable(callable) => subst_callable(callable),
+                Forallable::Function(func) => subst_callable(&mut func.signature),
+                _ => ty.subst_self_type_mut(fallback_self_type),
+            },
+            Type::Overload(overload) => {
+                for sig in overload.signatures.iter_mut() {
+                    match sig {
+                        OverloadType::Function(func) => subst_callable(&mut func.signature),
+                        OverloadType::Forall(forall) => subst_callable(&mut forall.body.signature),
+                    }
+                }
+            }
+            Type::Union(union) => {
+                for member in union.members.iter_mut() {
+                    Self::subst_callable_return_self_type_mut(
+                        member,
+                        self_type,
+                        fallback_self_type,
+                    );
+                }
+            }
+            _ => ty.subst_self_type_mut(fallback_self_type),
+        }
     }
 
     fn instantiate_for_class_targs(
@@ -3822,7 +3866,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
             .map(|field| {
-                self.as_instance_attribute(name, &field, &Instance::of_protocol(cls, self_type))
+                self.as_instance_attribute(
+                    name,
+                    &field,
+                    &Instance::of_class_with_self_type(cls, self_type),
+                )
             })
     }
 
