@@ -19,11 +19,16 @@
 //!
 //! The data types mirror the DSL grammar defined in `meta_shape_pythonic.md`.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::BoolOp as RuffBoolOp;
 use ruff_python_ast::CmpOp as RuffCmpOp;
 use ruff_python_ast::Expr;
@@ -35,6 +40,8 @@ use ruff_python_ast::UnaryOp as RuffUnaryOp;
 use crate::dimension::ShapeError;
 use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
+use crate::equality::TypeEq;
+use crate::equality::TypeEqCtx;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::tensor::TensorShape;
@@ -3074,6 +3081,66 @@ impl MetaShapeFunction for DslMetaShapeFunction {
 #[derive(Debug, Clone)]
 pub struct ShapeDslFunction {
     pub(crate) inner: Arc<DslFnDef>,
+}
+
+/// Pointer identity: two `ShapeDslFunction`s are equal iff they point to the
+/// same `DslFnDef` allocation.
+impl PartialEq for ShapeDslFunction {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for ShapeDslFunction {}
+
+impl Hash for ShapeDslFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.inner) as *const () as usize).hash(state);
+    }
+}
+
+impl PartialOrd for ShapeDslFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ShapeDslFunction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_ptr = Arc::as_ptr(&self.inner) as *const () as usize;
+        let other_ptr = Arc::as_ptr(&other.inner) as *const () as usize;
+        self_ptr.cmp(&other_ptr)
+    }
+}
+
+/// DSL IR contains no `Type` values, so visiting is a no-op.
+impl Visit<Type> for ShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+/// DSL IR contains no `Type` values, so visiting is a no-op.
+impl VisitMut<Type> for ShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+/// DSL IR contains no `Type` values, so visiting through `Arc` is also a no-op.
+impl Visit<Type> for Arc<ShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+/// DSL IR contains no `Type` values, so visiting through `Arc` is also a no-op.
+impl VisitMut<Type> for Arc<ShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEq for ShapeDslFunction {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
 }
 
 /// A bundle of DSL functions that have been validated together as a program.
