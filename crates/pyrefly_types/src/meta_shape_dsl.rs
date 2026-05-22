@@ -607,10 +607,12 @@ impl fmt::Display for DslBuiltin {
         match self {
             DslBuiltin::Len => write!(f, "len"),
             DslBuiltin::Range => write!(f, "range"),
-            DslBuiltin::Prod => write!(f, "shape_extensions.prod"),
-            DslBuiltin::Sum => write!(f, "shape_extensions.sum"),
+            DslBuiltin::Prod => write!(f, "shape_extensions.dsl.prod"),
+            DslBuiltin::Sum => write!(f, "shape_extensions.dsl.sum"),
             DslBuiltin::Str => write!(f, "str"),
-            DslBuiltin::ParseEinsumEquation => write!(f, "shape_extensions.parse_einsum_equation"),
+            DslBuiltin::ParseEinsumEquation => {
+                write!(f, "shape_extensions.dsl.parse_einsum_equation")
+            }
             DslBuiltin::Enumerate => write!(f, "enumerate"),
             DslBuiltin::Zip => write!(f, "zip"),
         }
@@ -1240,21 +1242,25 @@ fn convert_expr(expr: &Expr) -> Result<DslExpr, String> {
     }
 }
 
+/// Recursively extract a dotted name from an expression (e.g. `shape_extensions.dsl.prod`).
+fn dotted_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(n) => Some(n.id.to_string()),
+        Expr::Attribute(a) => {
+            let prefix = dotted_name(&a.value)?;
+            Some(format!("{}.{}", prefix, a.attr))
+        }
+        _ => None,
+    }
+}
+
 /// Convert a function call expression, dispatching special forms.
 fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
-    // Extract function name for dispatch. Supports both simple names (`len`)
-    // and dotted names (`shape_extensions.prod`).
-    let func_name = match call.func.as_ref() {
-        Expr::Name(n) => n.id.to_string(),
-        Expr::Attribute(a) => {
-            let prefix = match a.value.as_ref() {
-                Expr::Name(n) => n.id.as_str(),
-                _ => return Err(format!("unsupported call target: {:?}", call.func)),
-            };
-            format!("{}.{}", prefix, a.attr)
-        }
-        _ => return Err(format!("unsupported call target: {:?}", call.func)),
-    };
+    // Extract function name for dispatch. Supports simple names (`len`),
+    // single-dotted names (`Tensor`), and multi-dotted names
+    // (`shape_extensions.dsl.prod`).
+    let func_name = dotted_name(&call.func)
+        .ok_or_else(|| format!("unsupported call target: {:?}", call.func))?;
 
     match func_name.as_str() {
         // Special forms with non-call syntax — keep as dedicated DslExpr variants
@@ -1324,14 +1330,14 @@ fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
         "str"
         | "enumerate"
         | "zip"
-        | "shape_extensions.prod"
-        | "shape_extensions.sum"
-        | "shape_extensions.parse_einsum_equation" => {
+        | "shape_extensions.dsl.prod"
+        | "shape_extensions.dsl.sum"
+        | "shape_extensions.dsl.parse_einsum_equation" => {
             let builtin = match func_name.as_str() {
-                "shape_extensions.prod" => DslBuiltin::Prod,
-                "shape_extensions.sum" => DslBuiltin::Sum,
+                "shape_extensions.dsl.prod" => DslBuiltin::Prod,
+                "shape_extensions.dsl.sum" => DslBuiltin::Sum,
                 "str" => DslBuiltin::Str,
-                "shape_extensions.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
+                "shape_extensions.dsl.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
                 "enumerate" => DslBuiltin::Enumerate,
                 "zip" => DslBuiltin::Zip,
                 _ => unreachable!(),
