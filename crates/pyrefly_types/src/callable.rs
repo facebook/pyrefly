@@ -36,6 +36,7 @@ use crate::display::TypeDisplayContext;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
+use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
 use crate::types::Type;
@@ -810,6 +811,10 @@ pub enum FunctionKind {
     NumbaJit,
     /// `numba.njit()`
     NumbaNjit,
+    /// A function whose return type is computed by a shape DSL definition.
+    /// The `FuncId` provides identity (module, class, name) for display and
+    /// lookup; the `ShapeDslFunction` carries the parsed DSL IR.
+    ShapeDsl(Arc<FuncId>, Arc<ShapeDslFunction>),
 }
 
 impl Callable {
@@ -1218,6 +1223,7 @@ impl FunctionKind {
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
+            Self::ShapeDsl(id, _) => id.module.name().dupe(),
         }
     }
 
@@ -1244,6 +1250,7 @@ impl FunctionKind {
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
+            Self::ShapeDsl(id, _) => Cow::Borrowed(&id.name),
         }
     }
 
@@ -1270,12 +1277,13 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
+            Self::ShapeDsl(id, _) => id.cls.clone(),
         }
     }
 
     pub fn outer_funcs(&self) -> Option<&Name> {
         match self {
-            Self::Def(func_id) => func_id.outer_funcs.as_ref(),
+            Self::Def(func_id) | Self::ShapeDsl(func_id, _) => func_id.outer_funcs.as_ref(),
             _ => None,
         }
     }
