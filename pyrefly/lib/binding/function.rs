@@ -812,6 +812,19 @@ impl<'a> BindingsBuilder<'a> {
             self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
         });
 
+        // Extract the IR function name from @uses_shape_dsl(ir_fn) if present.
+        let uses_shape_dsl_ir_name = x.decorator_list.iter().find_map(|d| {
+            let call = d.expression.as_call_expr()?;
+            if self.as_special_export(&call.func) != Some(SpecialExport::UsesShapeDsl) {
+                return None;
+            }
+            // The first positional argument is the IR function reference.
+            let first_arg = call.arguments.args.first()?;
+            // Must be a simple name (not a dotted path or arbitrary expression).
+            let name_expr = first_arg.as_name_expr()?;
+            Some(name_expr.id.clone())
+        });
+
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
@@ -862,6 +875,7 @@ impl<'a> BindingsBuilder<'a> {
                 module_style: self.module_info.path().style(),
                 outer_funcs,
                 shape_dsl_def,
+                uses_shape_dsl_ir_name,
             },
         );
 

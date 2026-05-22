@@ -131,7 +131,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 19);
+assert_words!(BindingUndecoratedFunction, 22);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1861,6 +1861,10 @@ pub struct BindingUndecoratedFunction {
     /// When the function is decorated with `@shape_dsl_function`, this holds the
     /// parsed DSL IR so the solver can produce `FunctionKind::ShapeDsl`.
     pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,
+    /// Name of the IR function passed as the first positional argument to
+    /// `@uses_shape_dsl(ir_fn)`. Extracted at binding time so the solver can
+    /// resolve it to a `FunctionKind::ShapeDsl` type.
+    pub uses_shape_dsl_ir_name: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
