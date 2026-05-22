@@ -304,8 +304,9 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_compliant_overloads: Option<bool>,
 
-    /// Whether to infer injected pytest fixture parameter types from fixture definitions.
-    /// When false (the default), injected fixture parameters fall back to `Any` unless explicitly annotated.
+    /// Whether recognized pytest fixture parameters get their types from fixture definitions.
+    /// When false (the default), unannotated fixture parameters are explicit `Any`, which
+    /// suppresses missing-annotation noise without changing non-fixture parameters.
     /// Fixture navigation remains enabled either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_pytest_fixture_types: Option<bool>,
