@@ -678,6 +678,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }))
                 .unwrap(),
                 &overload.metadata,
+                None, // no shape_transform for dataclass constructors
                 None,
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
