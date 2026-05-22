@@ -36,10 +36,10 @@ fn wait_for_lsp_event(
         let event = rx.recv_timeout(RECV_TIMEOUT).unwrap_or_else(|_| {
             panic!("timed out waiting for LspEvent containing '{method_substr}'")
         });
-        if let TelemetryEventKind::LspEvent(ref name) = event.event.kind {
-            if name.contains(method_substr) {
-                return event;
-            }
+        if let TelemetryEventKind::LspEvent(ref name) = event.event.kind
+            && name.contains(method_substr)
+        {
+            return event;
         }
     }
 }

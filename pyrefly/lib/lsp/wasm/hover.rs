@@ -611,7 +611,7 @@ pub fn get_hover(
                             &solver.promote_nontypeddict_silently_to_classtype(cls),
                         ))
                     }
-                    Type::Type(box Type::ClassType(ref cls)) => {
+                    Type::Type(ref t) if let Type::ClassType(cls) = &**t => {
                         Some(solver.type_order().constructor_to_callable(cls))
                     }
                     _ => None,

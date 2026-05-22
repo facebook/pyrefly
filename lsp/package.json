@@ -255,6 +255,59 @@
                     "description": "Automatically insert parentheses when completing a function or method.",
                     "scope": "resource"
                 },
+                "python.analysis.diagnosticMode": {
+                    "type": "string",
+                    "default": "openFilesOnly",
+                    "enum": [
+                        "openFilesOnly",
+                        "workspace"
+                    ],
+                    "description": "Controls the scope of diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace. If `python.pyrefly.diagnosticMode` is set, it takes precedence.",
+                    "scope": "resource"
+                },
+                "python.analysis.importFormat": {
+                    "type": "string",
+                    "default": "absolute",
+                    "enum": [
+                        "absolute",
+                        "relative"
+                    ],
+                    "description": "Format used when Pyrefly auto-inserts an import.",
+                    "scope": "resource"
+                },
+                "python.analysis.inlayHints": {
+                    "type": "object",
+                    "default": {},
+                    "description": "Controls which inlay hints Pyrefly displays.",
+                    "scope": "resource",
+                    "properties": {
+                        "callArgumentNames": {
+                            "type": "string",
+                            "default": "off",
+                            "enum": [
+                                "all",
+                                "off",
+                                "partial"
+                            ],
+                            "description": "Show inlay hints for argument names at call sites. 'partial' shows hints only when the argument is a literal."
+                        },
+                        "functionReturnTypes": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show inferred return type as an inlay hint on function definitions."
+                        },
+                        "pytestParameters": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Show inlay hints for pytest fixture parameter types."
+                        },
+                        "variableTypes": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show inferred variable types as inlay hints on assignments."
+                        }
+                    }
+                },
                 "python.pyrefly.syncNotebooks": {
                     "type": "boolean",
                     "default": true,

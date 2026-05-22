@@ -8,8 +8,8 @@
 from typing import assert_type, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 def test_split(x: Tensor[4, 5, 18]):

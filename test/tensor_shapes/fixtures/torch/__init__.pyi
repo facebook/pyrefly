@@ -20,7 +20,7 @@ import builtins
 from typing import Any, overload, Self, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from torch_shapes import Dim as _Dim
+    from shape_extensions import Dim as _Dim
 
 __all__ = ["Tensor"]
 

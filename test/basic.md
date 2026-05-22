@@ -124,7 +124,7 @@ the upward search.
 $ UPSELL_PROJ=$(mktemp -d -p /tmp upsell.XXXXXX) && \
 > echo "x = 1" > $UPSELL_PROJ/a.py && \
 > cd $UPSELL_PROJ && $PYREFLY check; cd / && rm -rf $UPSELL_PROJ
- INFO Checking current directory with default configuration
+ INFO Checking current directory with auto configuration
  INFO 0 errors* (glob)
 No `pyrefly.toml` found — using preset `basic`.
 Run `pyrefly init` to continue setting up Pyrefly.
@@ -185,7 +185,7 @@ $ MYPY_PARENT=$(mktemp -d -p /tmp upsell.XXXXXX) && \
 ---STDOUT---
 ERROR */app/views/bar.py:1:* (glob)
 ---STDERR---
- INFO Found `*/mypy.ini` marking project root, checking root directory with default configuration (glob)
+ INFO Found `*/mypy.ini` marking project root, checking root directory with auto configuration (glob)
  INFO 1 error* (glob)
 No `pyrefly.toml` found — using settings imported from your `mypy.ini` (preset: legacy).
 Run `pyrefly init` to continue setting up Pyrefly.
@@ -254,5 +254,31 @@ $ python3 -m venv $TMPDIR/venv && \
 $ echo "x: str = 0" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
  INFO 0 errors (1 warning not shown)* (glob)
+[0]
+```
+
+## Main help shows `coverage` subcommand and not the hidden `report` alias
+
+```scrut
+$ $PYREFLY --help | grep -E "^ +(coverage|  report)"
+  coverage     Type coverage commands
+[0]
+```
+
+## `pyrefly coverage report --help` shows correct usage
+
+```scrut
+$ $PYREFLY coverage report --help | grep "^Usage:"
+Usage: pyrefly coverage report [OPTIONS] [FILES]...
+[0]
+```
+
+## Deprecated `pyrefly report` alias emits a warning on stderr
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "def f(x: int) -> int: return x" > $TMPDIR/test.py && \
+> $PYREFLY report $TMPDIR/test.py 2>&1 | grep "warning:"
+warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead
 [0]
 ```

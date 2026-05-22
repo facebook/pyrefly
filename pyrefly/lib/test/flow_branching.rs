@@ -1051,6 +1051,144 @@ while E.B:  # E: Enum literal `E.B` used as condition
 );
 
 testcase!(
+    test_redundant_condition_instance_always_truthy,
+    r#"
+class NoBool:
+    pass
+
+class HasBool:
+    def __bool__(self) -> bool: ...
+
+class HasLen:
+    def __len__(self) -> int: ...
+
+class InheritsHasBool(HasBool):
+    pass
+
+class InheritsHasLen(HasLen):
+    pass
+
+def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen) -> None:
+    if x:  # E: Instance of `NoBool` used as condition
+        ...
+    while x:  # E: Instance of `NoBool` used as condition
+        ...
+    [i for i in range(10) if x]  # E: Instance of `NoBool` used as condition
+    if y:
+        ...
+    if z:
+        ...
+    if a:
+        ...
+    if b:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_abstract_types,
+    r#"
+from typing import Hashable, Iterable
+from collections.abc import Sized
+import abc
+
+class MyABC(abc.ABC):
+    pass
+
+# Custom metaclass that mixes ABCMeta with other type-level behavior.
+# Real-world frameworks (e.g. Home Assistant's `ABCCachedProperties`) define
+# such metaclasses, and classes using them should be treated as abstract.
+class MyMixedMeta(abc.ABCMeta):
+    pass
+
+class WithMixedMeta(metaclass=MyMixedMeta):
+    pass
+
+class WithMixedMetaSub(WithMixedMeta):
+    pass
+
+def test(
+    o: object,
+    h: Hashable,
+    it: Iterable[int],
+    sz: Sized,
+    ab: MyABC,
+    mm: WithMixedMeta,
+    mms: WithMixedMetaSub,
+) -> None:
+    # None of these should warn: static type is abstract/protocol/object,
+    # so the concrete runtime instance may define __bool__ or __len__.
+    if o:
+        ...
+    if h:
+        ...
+    if it:
+        ...
+    if sz:
+        ...
+    if ab:
+        ...
+    if mm:
+        ...
+    if mms:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_descriptors_and_special_classes,
+    r#"
+from dataclasses import dataclass
+from datetime import datetime
+import asyncio
+
+class Descriptor:
+    def __get__(self, obj, objtype=None) -> int: ...
+
+class HasGetattr:
+    def __getattr__(self, name: str) -> object: ...
+
+class HasGetattribute:
+    def __getattribute__(self, name: str) -> object: ...
+
+@dataclass
+class MyData:
+    x: int
+    y: str
+
+def test(
+    d: Descriptor,
+    g1: HasGetattr,
+    g2: HasGetattribute,
+    md: MyData,
+    dt: datetime,
+    fut: asyncio.Future[int],
+    lk: asyncio.Lock,
+) -> None:
+    # None of these should warn:
+    # - descriptor classes (with __get__) might intercept attribute access
+    # - classes with __getattr__/__getattribute__ have dynamic attribute behavior
+    # - dataclasses are commonly used with `if obj:` as a defensive guard
+    # - stdlib types come from bundled stubs and often have runtime behavior
+    #   not modeled in the stubs
+    if d:
+        ...
+    if g1:
+        ...
+    if g2:
+        ...
+    if md:
+        ...
+    if dt:
+        ...
+    if fut:
+        ...
+    if lk:
+        ...
+    "#,
+);
+
+testcase!(
     crash_no_try_type,
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/766

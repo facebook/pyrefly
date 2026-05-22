@@ -360,7 +360,8 @@ impl TensorShape {
                         .join(" ")
                 }
             }
-            Self::Unpacked(box (prefix, middle, suffix)) => {
+            Self::Unpacked(unpacked) => {
+                let (prefix, middle, suffix) = &**unpacked;
                 let mut parts: Vec<String> = prefix.iter().map(fmt_jaxtyping_dim).collect();
 
                 // Ellipsis: tuple[Any, ...] middle renders as "..."
@@ -425,7 +426,8 @@ impl Display for TensorShape {
                     write!(f, "{}", commas_iter(|| dims.iter()))
                 }
             }
-            Self::Unpacked(box (prefix, middle, suffix)) => {
+            Self::Unpacked(unpacked) => {
+                let (prefix, middle, suffix) = &**unpacked;
                 let prefix_str = if prefix.is_empty() {
                     "".to_owned()
                 } else {
@@ -444,11 +446,13 @@ impl Display for TensorShape {
 
 /// Check if a shape is shapeless: Unpacked([], tuple[Any,...], [])
 fn is_shapeless(shape: &TensorShape) -> bool {
-    matches!(
-        shape,
-        TensorShape::Unpacked(box (prefix, Type::Tuple(Tuple::Unbounded(box Type::Any(_))), suffix))
-            if prefix.is_empty() && suffix.is_empty()
-    )
+    if let TensorShape::Unpacked(unpacked) = shape {
+        let (prefix, middle, suffix) = &**unpacked;
+        return prefix.is_empty()
+            && suffix.is_empty()
+            && matches!(middle, Type::Tuple(Tuple::Unbounded(t)) if matches!(**t, Type::Any(_)));
+    }
+    false
 }
 
 /// Compute the broadcasted shape of two tensor shapes following NumPy/PyTorch broadcasting rules:
@@ -470,14 +474,16 @@ pub fn broadcast_shapes(a: &TensorShape, b: &TensorShape) -> Result<TensorShape,
         (TensorShape::Concrete(a_dims), TensorShape::Concrete(b_dims)) => {
             broadcast_concrete(a_dims, b_dims)
         }
-        (TensorShape::Concrete(concrete), TensorShape::Unpacked(box (prefix, middle, suffix)))
-        | (TensorShape::Unpacked(box (prefix, middle, suffix)), TensorShape::Concrete(concrete)) => {
+        (TensorShape::Concrete(concrete), TensorShape::Unpacked(u))
+        | (TensorShape::Unpacked(u), TensorShape::Concrete(concrete)) => {
+            let (prefix, middle, suffix) = &**u;
             broadcast_concrete_with_unpacked(concrete, prefix, middle, suffix)
         }
-        (
-            TensorShape::Unpacked(box (ap, am, a_suf)),
-            TensorShape::Unpacked(box (bp, bm, b_suf)),
-        ) => broadcast_unpacked_with_unpacked(ap, am, a_suf, bp, bm, b_suf),
+        (TensorShape::Unpacked(au), TensorShape::Unpacked(bu)) => {
+            let (ap, am, a_suf) = &**au;
+            let (bp, bm, b_suf) = &**bu;
+            broadcast_unpacked_with_unpacked(ap, am, a_suf, bp, bm, b_suf)
+        }
     }
 }
 
@@ -700,7 +706,8 @@ pub fn index_shape_int(shape: &TensorShape) -> Result<TensorShape, ShapeError> {
             }
             Ok(TensorShape::Concrete(dims[1..].to_vec()))
         }
-        TensorShape::Unpacked(box (prefix, middle, suffix)) if !prefix.is_empty() => {
+        TensorShape::Unpacked(unpacked) if !unpacked.0.is_empty() => {
+            let (prefix, middle, suffix) = &**unpacked;
             Ok(TensorShape::Unpacked(Box::new((
                 prefix[1..].to_vec(),
                 middle.clone(),
@@ -737,7 +744,8 @@ pub fn index_shape_slice(
             new_dims.extend_from_slice(&dims[1..]);
             Ok(TensorShape::from_types(new_dims))
         }
-        TensorShape::Unpacked(box (prefix, middle, suffix)) if !prefix.is_empty() => {
+        TensorShape::Unpacked(unpacked) if !unpacked.0.is_empty() => {
+            let (prefix, middle, suffix) = &**unpacked;
             let start = adjust_negative(
                 start.unwrap_or_else(|| Type::Size(SizeExpr::Literal(0))),
                 &prefix[0],
@@ -773,7 +781,8 @@ pub fn index_shape_tensor(
             new_dims.extend_from_slice(&dims[1..]);
             Ok(TensorShape::from_types(new_dims))
         }
-        TensorShape::Unpacked(box (prefix, middle, suffix)) if !prefix.is_empty() => {
+        TensorShape::Unpacked(unpacked) if !unpacked.0.is_empty() => {
+            let (prefix, middle, suffix) = &**unpacked;
             let mut new_prefix = idx_dims.to_vec();
             new_prefix.extend_from_slice(&prefix[1..]);
             Ok(TensorShape::Unpacked(Box::new((
@@ -838,7 +847,8 @@ pub fn index_shape_multi(
 
             Ok(TensorShape::from_types(new_dims))
         }
-        TensorShape::Unpacked(box (prefix, middle, suffix)) => {
+        TensorShape::Unpacked(unpacked) => {
+            let (prefix, middle, suffix) = &**unpacked;
             let pre_consumed = ops_dims_consumed(pre_ops);
             let post_consumed = ops_dims_consumed(post_ops);
             if pre_consumed > prefix.len() || post_consumed > suffix.len() {
@@ -881,7 +891,11 @@ fn adjust_negative(bound: Type, dim_size: &Type) -> Type {
         // Literal negative: -1, -2, etc.
         Type::Size(SizeExpr::Literal(v)) => *v < 0,
         // Symbolic negation: (-1 * X), (-2 * X), etc. from unary negation
-        Type::Size(SizeExpr::Mul(box Type::Size(SizeExpr::Literal(v)), _)) => *v < 0,
+        Type::Size(SizeExpr::Mul(left, _))
+            if let Type::Size(SizeExpr::Literal(v)) = left.as_ref() =>
+        {
+            *v < 0
+        }
         _ => false,
     };
     if is_negative {

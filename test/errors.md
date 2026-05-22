@@ -118,3 +118,12 @@ $ touch $TMPDIR/pyrefly.toml && \
 * (glob+)
 [1]
 ```
+
+## `--min-severity warn` causes nonzero exit on warnings
+
+```scrut
+$ echo "x: str = 0" > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --warn=bad-assignment --min-severity=warn --output-format=min-text
+ WARN */test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
+[1]
+```

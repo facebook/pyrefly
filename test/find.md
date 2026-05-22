@@ -85,7 +85,7 @@ $ mkdir $TMPDIR/relative_ignore && \
 
 ```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_project/src/foo/bar.py && echo "from foo.bar import x" > $TMPDIR/src_project/src/foo/baz.py && cd $TMPDIR/src_project && $PYREFLY check
- INFO Checking current directory with default configuration
+ INFO Checking current directory with auto configuration
  INFO 0 errors
 No `pyrefly.toml` found — using preset `basic`.
 Run `pyrefly init` to continue setting up Pyrefly.

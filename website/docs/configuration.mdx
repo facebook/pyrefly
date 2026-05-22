@@ -28,8 +28,17 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 
 Both absolute and config-relative paths are supported.
 
+## Unconfigured projects
+
+On the command-line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly synthesizes a configuration on the fly:
+
+- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly automatically migrates it and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
+- Otherwise Pyrefly uses the same [**basic preset**](#preset-basic) the IDE uses. This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.). Other diagnostics are silenced.
+
+For the IDE equivalent of this behavior, including how to override it, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
+
 :::info
-Want all type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+Want full type-check squiggles by default? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
 :::
 
 ## Simple Configuration Example
@@ -453,7 +462,9 @@ more details on how baseline files work.
 ### `min-severity`
 
 The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
-below this threshold are hidden from output and do not affect the exit code.
+below this threshold are hidden from output. Diagnostics at or above the threshold are
+displayed and cause a nonzero exit code — for example, `--min-severity warn` makes
+warnings cause a nonzero exit.
 
 ```toml
 # pyrefly.toml — show warnings and errors
@@ -472,7 +483,7 @@ min-severity = "warn"
 - Notes:
     - `min-severity` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
-    - This setting controls CLI display only. To change the severity of individual
+    - This setting only controls CLI display and exit code. To change the severity of individual
       error kinds, use the [`errors`](#errors) table instead.
     - In the IDE, diagnostics below error severity are only shown for files that
       are currently open in the editor, regardless of this setting.
@@ -509,7 +520,7 @@ Silences every error kind. Other settings (scalar flags, behavior settings) are 
 
 #### Preset: `basic`
 
-A minimal-checking preset for unconfigured projects and LSP users. Only the highest-confidence diagnostics — crashes and clearly broken code — are active; every other error kind is silenced.
+A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Only the highest-confidence diagnostics (crashes and clearly broken code) are active. Every other error kind is silenced.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
 - Enables (as errors): [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unknown-name`](./error-kinds.mdx#unknown-name), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`not-async`](./error-kinds.mdx#not-async), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
@@ -538,7 +549,7 @@ Enables additional error codes on top of the default for stricter checking.
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
 
 :::info
-Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+Want full type-check squiggles in your editor? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
 :::
 
 - Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
@@ -688,6 +699,8 @@ See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for mor
 - Equivalent configs:
     - `true` emulates mypy's `check_untyped_defs` flag.
     - `false` emulates mypy's default behavior.
+- Related options:
+    - [`infer-return-types`](#infer-return-types): Controls when Pyrefly infers return types for unannotated functions.
 
 ### `infer-return-types`
 
@@ -699,9 +712,11 @@ unannotated functions are only eligible when `check-unannotated-defs` is `true`.
   completely unannotated ones.
 - `"annotated"`: Infer return types only for functions that have at least one
   parameter or return annotation. This is useful when combined with
-  `check-unannotated-defs = false` to still get return type inference for
+  [`check-unannotated-defs = false`](#check-unannotated-defs) to still get return type inference for
   partially annotated functions.
 - `"never"`: Never infer return types; unannotated returns are treated as `Any`.
+  This is often combined with [`check-unannotated-defs = false`](#check-unannotated-defs)
+  for a more permissive setup.
 
 :::info
 To provide inferred return types with `"checked"` or `"annotated"`, especially
@@ -937,6 +952,26 @@ and values that can be overridden here.
 - Default: `[]`
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
+
+### `pytorch-efficiency-lints`
+
+Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
+in training code. When `true`, all `pytorch-efficiency-lint-*` error kinds are
+enabled at `warn` severity. You can override individual lint severities in
+[`[errors]`](#errors).
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--pytorch-efficiency-lints`
+
+The following lints are enabled by this flag:
+
+| Lint | What it detects |
+|---|---|
+| [`pytorch-efficiency-lint-cuda-call`](./error-kinds.mdx#pytorch-efficiency-lint-cuda-call) | `Tensor.cuda()` — hard-coded device |
+| [`pytorch-efficiency-lint-item-call`](./error-kinds.mdx#pytorch-efficiency-lint-item-call) | `Tensor.item()` — GPU→CPU sync stall |
+| [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
+| [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
 
 ### `tensor-shapes`
 

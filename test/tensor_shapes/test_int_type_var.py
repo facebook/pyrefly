@@ -3,21 +3,21 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Test torch_shapes.TypeVar for tensor shape dimensions.
+"""Test shape_extensions.TypeVar for tensor shape dimensions.
 
-torch_shapes.TypeVar is treated identically to typing.TypeVar in pyrefly.
+shape_extensions.TypeVar is treated identically to typing.TypeVar in pyrefly.
 This test verifies that:
 1. TypeVar("N") works for shape annotations
 2. TypeVarTuple("Ns") works for variadic shapes
-3. Generic works with torch_shapes.TypeVar for class-level type parameters
+3. Generic works with shape_extensions.TypeVar for class-level type parameters
 4. Shape arithmetic (N+1, N*2) works in annotations
 """
 
 from typing import assert_type, Generic, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from shape_extensions import TypeVar, TypeVarTuple
     from torch import Tensor
-    from torch_shapes import TypeVar, TypeVarTuple
 
 N = TypeVar("N")
 M = TypeVar("M")

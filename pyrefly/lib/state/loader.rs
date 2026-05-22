@@ -209,10 +209,11 @@ pub struct LoaderFindCache {
     >,
     // If a python executable module (excludes .pyi) exists and differs from the imported python module, store it here
     executable_cache: LockedMap<(ModuleName, Option<ModulePath>), Option<ModulePath>>,
+    dir_cache: DirEntryCache,
 }
 
 impl LoaderFindCache {
-    pub fn new(config: ArcId<ConfigFile>) -> Self {
+    pub fn new(config: ArcId<ConfigFile>, dir_cache_enabled: bool) -> Self {
         // When no config feature uses origin, all import resolutions produce
         // the same result regardless of which file is importing. We can then
         // cache by ModuleName alone, reducing millions of cache entries
@@ -228,6 +229,7 @@ impl LoaderFindCache {
             is_origin_independent,
             cache: Default::default(),
             executable_cache: Default::default(),
+            dir_cache: DirEntryCache::new(dir_cache_enabled),
         }
     }
 
@@ -247,7 +249,7 @@ impl LoaderFindCache {
                     module,
                     origin,
                     Some(ModuleStyle::Executable),
-                    &DirEntryCache::new(false),
+                    &self.dir_cache,
                     timing,
                 ) {
                     FindingOrError::Finding(import) => {
@@ -291,14 +293,8 @@ impl LoaderFindCache {
             .cache
             .ensure(&(module.dupe(), effective_origin.clone()), || {
                 let phantom_paths = Vec::new();
-                let result = find_import(
-                    &self.config,
-                    module,
-                    origin,
-                    None,
-                    &DirEntryCache::new(false),
-                    timing,
-                );
+                let result =
+                    find_import(&self.config, module, origin, None, &self.dir_cache, timing);
                 (result, Arc::new(phantom_paths))
             })
             .0
@@ -329,14 +325,8 @@ impl LoaderFindCache {
             .cache
             .ensure(&(module.dupe(), origin.cloned()), || {
                 let phantom_paths = Vec::new();
-                let result = find_import(
-                    &self.config,
-                    module,
-                    origin,
-                    None,
-                    &DirEntryCache::new(false),
-                    timing,
-                );
+                let result =
+                    find_import(&self.config, module, origin, None, &self.dir_cache, timing);
                 (result, Arc::new(phantom_paths))
             })
             .0;

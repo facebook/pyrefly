@@ -765,6 +765,42 @@ class Foo:
     &|context: &ModuleContext| {
         vec![
             create_function_definition(
+                "__delattr__",
+                ScopeParent::Class {
+                    class_id: ClassId::from_int(0),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::PosOnly {
+                            name: Some("self".into()),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "Foo", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::PosOnly {
+                            name: Some("name".into()),
+                            annotation: PysaType::from_class_type(
+                                context.answers_context.stdlib.str(),
+                                context,
+                            ),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "Foo", context))
+            .with_overridden_base_method(get_method_ref(
+                "builtins",
+                "object",
+                "__delattr__",
+                context,
+            )),
+            create_function_definition(
                 "__hash__",
                 ScopeParent::Class {
                     class_id: ClassId::from_int(0),
@@ -862,6 +898,47 @@ class Foo:
             )
             .with_is_def_statement(false)
             .with_defining_class(get_class_ref("test", "Foo", context)),
+            create_function_definition(
+                "__setattr__",
+                ScopeParent::Class {
+                    class_id: ClassId::from_int(0),
+                },
+                /* overloads */
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::PosOnly {
+                            name: Some("self".into()),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "Foo", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::PosOnly {
+                            name: Some("name".into()),
+                            annotation: PysaType::from_class_type(
+                                context.answers_context.stdlib.str(),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::PosOnly {
+                            name: Some("value".into()),
+                            annotation: PysaType::any_implicit(),
+                            required: true,
+                        },
+                    ],
+                    PysaType::none(),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "Foo", context))
+            .with_overridden_base_method(get_method_ref(
+                "builtins",
+                "object",
+                "__setattr__",
+                context,
+            )),
         ]
     },
 );

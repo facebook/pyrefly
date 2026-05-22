@@ -2003,10 +2003,86 @@ def foo():
     }
 );
 
+// Verify that implicit __call__ dunder calls are filtered out when the callee
+// already has a matching type annotation. bar(o) in baz() should NOT produce a
+// higher-order parameter for Foo.__call__, since bar declares o: Foo.
+call_graph_testcase!(
+    test_filter_implicit_dunder_calls,
+    TEST_MODULE_NAME,
+    r#"
+class Foo:
+    def __call__(self): pass
+def bar(o: Foo): pass
+def baz(o: Foo): bar(o)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.baz",
+            vec![
+                (
+                    "5:18-5:24",
+                    regular_call_callees(vec![create_call_target(
+                        "test.bar",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    "5:22-5:23|identifier|o",
+                    regular_identifier_callees(vec![
+                        create_call_target("test.Foo.__call__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_implicit_dunder_call(true)
+                            .with_receiver_class_for_test("test.Foo", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+// Verify that filter_implicit_dunder_calls also handles subclasses: passing a
+// B instance (where B extends A and A has __call__) to foo(x: A) should NOT
+// produce a higher-order parameter for B.__call__.
+call_graph_testcase!(
+    test_filter_implicit_dunder_calls_with_subclass,
+    TEST_MODULE_NAME,
+    r#"
+class A:
+    def __call__(self): pass
+class B(A):
+    def __call__(self): pass
+def foo(x: A): pass
+def bar(b: B): foo(b)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.bar",
+            vec![
+                (
+                    "7:16-7:22",
+                    regular_call_callees(vec![create_call_target(
+                        "test.foo",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    "7:20-7:21|identifier|b",
+                    regular_identifier_callees(vec![
+                        create_call_target("test.B.__call__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_implicit_dunder_call(true)
+                            .with_receiver_class_for_test("test.B", context),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
 call_graph_testcase!(
     test_property_access_on_property_decorator_alias,
     TEST_MODULE_NAME,
-    r#" 
+    r#"
 from typing import List, Any
 _magic_enum = property
 class Enum:
@@ -3600,6 +3676,42 @@ def fun(d: dict[str, int]):
                         .with_receiver_class_for_test("builtins.dict", context),
                 ]),
             )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dict_subscript_setitem_with_parenthesized_base,
+    TEST_MODULE_NAME,
+    r#"
+def get_dict() -> dict[str, int]:
+    return {}
+
+def fun():
+    (get_dict())[0] = 1
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.fun",
+            vec![
+                (
+                    "6:6-6:16",
+                    regular_call_callees(vec![create_call_target(
+                        "test.get_dict",
+                        TargetType::Function,
+                    )]),
+                ),
+                (
+                    // The location should start at `(` (column 5), not `g` (column 6),
+                    // because `subscript.range()` includes the opening parenthesis.
+                    "6:5-6:24|artificial-call|subscript-set-item",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.dict.__setitem__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_receiver_class_for_test("builtins.dict", context),
+                    ]),
+                ),
+            ],
         )]
     }
 );
@@ -5811,25 +5923,14 @@ def bar():
                 ),
                 (
                     "9:3-9:9",
-                    call_callees(
-                        vec![create_call_target("test.foo", TargetType::Function)],
-                        /* init_targets */ vec![],
-                        /* new_targets */ vec![],
-                        /* higher_order_parameters */
-                        vec![(0, a_call_target.clone(), Unresolved::False)],
-                        Unresolved::False,
-                    ),
+                    regular_call_callees(vec![create_call_target(
+                        "test.foo",
+                        TargetType::Function,
+                    )]),
                 ),
-                // TODO: Filter the results with `filter_implicit_dunder_calls`
                 (
                     "9:7-9:8|identifier|a",
-                    identifier_callees(
-                        /* call_targets */ a_call_target,
-                        /* init_targets */ vec![],
-                        /* new_targets */ vec![],
-                        /* higher_order_parameters */ vec![],
-                        /* unresolved */ Unresolved::False,
-                    ),
+                    regular_identifier_callees(a_call_target),
                 ),
             ],
         )]
@@ -5875,25 +5976,14 @@ def bar():
                 ),
                 (
                     "10:7-10:8|identifier|a",
-                    identifier_callees(
-                        /* call_targets */ a_call_target.clone(),
-                        /* init_targets */ vec![],
-                        /* new_targets */ vec![],
-                        /* higher_order_parameters */ vec![],
-                        /* unresolved */ Unresolved::False,
-                    ),
+                    regular_identifier_callees(a_call_target),
                 ),
-                // TODO: Filter the results with `filter_implicit_dunder_calls`
                 (
                     "10:3-10:9",
-                    call_callees(
-                        vec![create_call_target("test.foo", TargetType::Function)],
-                        /* init_targets */ vec![],
-                        /* new_targets */ vec![],
-                        /* higher_order_parameters */
-                        vec![(0, a_call_target, Unresolved::False)],
-                        Unresolved::False,
-                    ),
+                    regular_call_callees(vec![create_call_target(
+                        "test.foo",
+                        TargetType::Function,
+                    )]),
                 ),
             ],
         )]
@@ -5942,25 +6032,14 @@ def bar():
                 ),
                 (
                     "13:7-13:8|identifier|a",
-                    identifier_callees(
-                        /* call_targets */ a_call_target.clone(),
-                        /* init_targets */ vec![],
-                        /* new_targets */ vec![],
-                        /* higher_order_parameters */ vec![],
-                        /* unresolved */ Unresolved::False,
-                    ),
+                    regular_identifier_callees(a_call_target),
                 ),
-                // TODO: Filter the results with `filter_implicit_dunder_calls`
                 (
                     "13:3-13:9",
-                    call_callees(
-                        vec![create_call_target("test.foo", TargetType::Function)],
-                        /* init_targets */ vec![],
-                        /* new_targets */ vec![],
-                        /* higher_order_parameters */
-                        vec![(0, a_call_target, Unresolved::False)],
-                        Unresolved::False,
-                    ),
+                    regular_call_callees(vec![create_call_target(
+                        "test.foo",
+                        TargetType::Function,
+                    )]),
                 ),
             ],
         )]

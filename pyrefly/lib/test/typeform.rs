@@ -131,6 +131,16 @@ v: types.UnionType = str | None
 );
 
 testcase!(
+    test_typeform_generic_alias,
+    r#"
+import types
+
+# At runtime, list[int] creates a types.GenericAlias object.
+v: types.GenericAlias = list[int]
+    "#,
+);
+
+testcase!(
     test_typeform_generic_alias_string_type_argument_in_value_context,
     r#"
 from __future__ import annotations

@@ -221,9 +221,14 @@ fn create_intermediate_definition_from(
             // that is the binding the receiver semantics treat as the
             // canonical identity for future writes. (The refined RHS class
             // is still reachable by hovering or jumping from the RHS
-            // expression itself.)
+            // expression itself.) The same applies to receiver-bearing
+            // multi-target and unpacked rebinds.
             Binding::NameAssign(na) if let Some(receiver_idx) = na.receiver_idx => {
                 current_binding = bindings.get(receiver_idx);
+            }
+            Binding::MultiTargetAssign(_, _, _, Some(receiver))
+            | Binding::UnpackedValue(_, _, _, _, Some(receiver)) => {
+                current_binding = bindings.get(receiver.idx);
             }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {

@@ -302,11 +302,9 @@ fn is_final_annotation(annotation: &Expr) -> bool {
     };
     let (base, value) = match target {
         Expr::Name(x) => (None, &x.id),
-        Expr::Attribute(ExprAttribute {
-            value: box Expr::Name(base),
-            attr,
-            ..
-        }) => (Some(&base.id), &attr.id),
+        Expr::Attribute(ExprAttribute { value, attr, .. }) if let Expr::Name(base) = &**value => {
+            (Some(&base.id), &attr.id)
+        }
         _ => return false,
     };
     SpecialExport::new(value).is_some_and(|special| {

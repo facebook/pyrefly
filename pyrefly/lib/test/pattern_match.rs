@@ -97,6 +97,73 @@ def ok_class_pattern(x: int) -> None:
 );
 
 testcase!(
+    test_match_case_unreachable_after_prior_case_exhausts_type,
+    r#"
+from typing import assert_type
+
+def prior_case_exhausts_union_branch(x: int | str) -> None:
+    match x:
+        case int():
+            pass
+        case str():
+            pass
+        case int():  # E: Case pattern can never match subject of type
+            pass
+
+def duplicate_literal(x: bool) -> None:
+    match x:  # E: Missing cases: False
+        case True:
+            pass
+        case True:  # E: Case pattern can never match subject of type `Literal[False]`
+            pass
+"#,
+);
+
+testcase!(
+    test_match_case_unreachable_subclass_shadowing,
+    r#"
+def shadowed_by_parent_class(x: int) -> None:
+    match x:
+        case int():
+            pass
+        case 1:  # E: Case pattern can never match subject of type
+            pass
+
+def ok_subclass_first(x: int) -> None:
+    match x:
+        case bool():
+            pass
+        case int():
+            pass
+
+def class_shadowed_by_parent(x: int | str) -> None:
+    match x:
+        case int():
+            pass
+        case bool():  # E: Case pattern can never match subject of type
+            pass
+        case str():
+            pass
+
+def class_shadowed_by_parent_finite(x: int) -> None:
+    match x:
+        case int():
+            pass
+        case bool():  # E: Case pattern can never match subject of type
+            pass
+
+def no_cascade_after_wildcard(x: int) -> None:
+    match x:
+        case _:  # E: wildcard makes remaining patterns unreachable
+            pass
+        case 1:
+            pass
+        case int():
+            pass
+"#,
+);
+
+testcase!(
     test_pattern_dict_key_enum,
     r#"
 from enum import StrEnum
@@ -188,6 +255,54 @@ def f0(x: A | B):
             assert_type(x, B)
         case _:
             assert_never(x)
+"#,
+);
+
+testcase!(
+    test_match_sequence_pattern_narrows_tuple_out_of_union,
+    r#"
+from typing import assert_never
+
+def f(value: float | tuple[float, float]) -> None:
+    match value:
+        case (_, _):
+            pass
+        case float():
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+"#,
+);
+
+testcase!(
+    test_match_sequence_star_pattern_narrows,
+    r#"
+from typing import assert_never
+
+def f(value: int | list[int]) -> None:
+    match value:
+        case [*_]:
+            pass
+        case int():
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+"#,
+);
+
+testcase!(
+    test_match_sequence_refutable_subpattern_no_strip,
+    r#"
+from typing import assert_type
+
+def f(value: float | tuple[float, float]) -> float | tuple[float, float]:
+    match value:
+        case (1.0, 2.0):
+            return value
+        case _:
+            # The (1.0, 2.0) case is refutable, so tuple[float, float] must still be possible here.
+            assert_type(value, float | tuple[float, float])
+            return value
 "#,
 );
 

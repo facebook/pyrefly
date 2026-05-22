@@ -1435,6 +1435,17 @@ class Pipeline:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1178
+testcase!(
+    test_callable_as_base_class,
+    r#"
+from collections.abc import Callable
+
+class A(Callable):  # E: Invalid base class
+    pass
+"#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/769
 testcase!(
     test_callable_no_args_assignable_to_varargs,

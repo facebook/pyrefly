@@ -190,18 +190,18 @@ fn get_globs_and_config_for_project(
         }
         ConfigSource::FailedParse(path) => {
             warn!(
-                "Config at `{}` failed to parse, checking with default configuration",
+                "Config at `{}` failed to parse, checking with auto configuration",
                 path.display()
             );
         }
         ConfigSource::PythonToolMarker(path) | ConfigSource::Marker(path) => {
             info!(
-                "Found `{}` marking project root, checking root directory with default configuration",
+                "Found `{}` marking project root, checking root directory with auto configuration",
                 path.display(),
             );
         }
         ConfigSource::Synthetic => {
-            info!("Checking current directory with default configuration");
+            info!("Checking current directory with auto configuration");
         }
     }
     let current_dir = std::env::current_dir().ok();

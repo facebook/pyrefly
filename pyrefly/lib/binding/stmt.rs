@@ -22,7 +22,6 @@ use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
-use ruff_python_ast::StmtExpr;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
@@ -59,7 +58,6 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::special::SpecialExport;
 use crate::types::alias::resolve_typeshed_alias;
@@ -203,14 +201,16 @@ impl<'a> BindingsBuilder<'a> {
         for target in targets.iter_mut() {
             let range = target.range();
             self.bind_target_no_expr(target, &|ann| {
-                Binding::MultiTargetAssign(ann, rhs_idx, range)
+                Binding::MultiTargetAssign(ann, rhs_idx, range, None)
             });
         }
     }
 
     fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall) {
         // Type var declarations are static types only; skip them for first-usage type inference.
-        let static_type_usage = &mut Usage::StaticTypeInformation;
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
         self.ensure_expr(&mut call.func, static_type_usage);
         let mut iargs = call.arguments.args.iter_mut();
         if let Some(expr) = iargs.next() {
@@ -241,7 +241,9 @@ impl<'a> BindingsBuilder<'a> {
 
     fn ensure_type_var_tuple_and_param_spec_args(&mut self, call: &mut ExprCall) {
         // Type var declarations are static types only; skip them for first-usage type inference.
-        let static_type_usage = &mut Usage::StaticTypeInformation;
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
         self.ensure_expr(&mut call.func, static_type_usage);
         for arg in call.arguments.args.iter_mut() {
             self.ensure_expr(arg, static_type_usage);
@@ -285,7 +287,9 @@ impl<'a> BindingsBuilder<'a> {
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) {
         // Type var declarations are static types only; skip them for first-usage type inference.
-        let static_type_usage = &mut Usage::StaticTypeInformation;
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
         self.ensure_expr(&mut call.func, static_type_usage);
         let mut iargs = call.arguments.args.iter_mut();
         // The first argument is the name
@@ -331,7 +335,7 @@ impl<'a> BindingsBuilder<'a> {
                 if lit.value.to_str() != name.as_str() {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                        ErrorKind::InvalidTypeAlias,
                         format!(
                             "TypeAliasType must be assigned to a variable named `{}`",
                             lit.value.to_str()
@@ -341,7 +345,7 @@ impl<'a> BindingsBuilder<'a> {
             } else {
                 self.error(
                     arg.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                    ErrorKind::InvalidTypeAlias,
                     "Expected first argument of `TypeAliasType` to be a string literal".to_owned(),
                 );
             }
@@ -356,7 +360,7 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(arg) = x.arguments.args.get(2) {
             self.error(
                 arg.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                ErrorKind::InvalidTypeAlias,
                 "Unexpected positional argument to `TypeAliasType`".to_owned(),
             );
         }
@@ -367,7 +371,7 @@ impl<'a> BindingsBuilder<'a> {
                         if arg_name {
                             self.error(
                                 kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                                ErrorKind::InvalidTypeAlias,
                                 "Multiple values for argument `name`".to_owned(),
                             );
                         } else {
@@ -379,7 +383,7 @@ impl<'a> BindingsBuilder<'a> {
                         if value.is_some() {
                             self.error(
                                 kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                                ErrorKind::InvalidTypeAlias,
                                 "Multiple values for argument `value`".to_owned(),
                             );
                         } else {
@@ -392,7 +396,7 @@ impl<'a> BindingsBuilder<'a> {
                         } else {
                             self.error(
                                 kw.range,
-                                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                                ErrorKind::InvalidTypeAlias,
                                 "Value for argument `type_params` must be a tuple literal"
                                     .to_owned(),
                             );
@@ -401,7 +405,7 @@ impl<'a> BindingsBuilder<'a> {
                     _ => {
                         self.error(
                             kw.range,
-                            ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                            ErrorKind::InvalidTypeAlias,
                             format!("Unexpected keyword argument `{}` to `TypeAliasType`", id.id),
                         );
                     }
@@ -409,7 +413,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         kw.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                        ErrorKind::InvalidTypeAlias,
                         "Cannot pass unpacked keyword arguments to `TypeAliasType`".to_owned(),
                     );
                 }
@@ -418,7 +422,7 @@ impl<'a> BindingsBuilder<'a> {
         if !arg_name {
             self.error(
                 x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                ErrorKind::InvalidTypeAlias,
                 "Missing `name` argument".to_owned(),
             );
         }
@@ -427,7 +431,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             self.error(
                 x.range,
-                ErrorInfo::Kind(ErrorKind::InvalidTypeAlias),
+                ErrorKind::InvalidTypeAlias,
                 "Missing `value` argument".to_owned(),
             );
             (None, type_params.unwrap_or_default())
@@ -499,7 +503,7 @@ impl<'a> BindingsBuilder<'a> {
         if self.sys_info.version().at_least(3, 14) && self.scopes.in_finally() {
             self.error(
                 x.range(),
-                ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                ErrorKind::InvalidSyntax,
                 "`return` in a `finally` block will silence exceptions".to_owned(),
             );
         }
@@ -515,7 +519,7 @@ impl<'a> BindingsBuilder<'a> {
             };
             self.error(
                 oops_top_level.range,
-                ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                ErrorKind::InvalidSyntax,
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
@@ -825,7 +829,7 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         self.error(
                             x.range,
-                            ErrorInfo::Kind(ErrorKind::BadAssignment),
+                            ErrorKind::BadAssignment,
                             format!(
                                 "Cannot annotate non-self attribute `{}.{}`",
                                 self.module_info.display(&attr.value),
@@ -840,7 +844,7 @@ impl<'a> BindingsBuilder<'a> {
                         // but Mypy and Pyright both error here, so let's do the same.
                         self.error(
                             x.annotation.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                            ErrorKind::InvalidSyntax,
                             "Subscripts should not be annotated".to_owned(),
                         );
                     }
@@ -900,10 +904,20 @@ impl<'a> BindingsBuilder<'a> {
                         //
                         // We don't track first-usage in this context, since we won't analyze the usage anyway.
                         let mut e = illegal_target.clone();
-                        self.ensure_expr(&mut e, &mut Usage::StaticTypeInformation);
+                        self.ensure_expr(
+                            &mut e,
+                            &mut Usage::StaticTypeInformation {
+                                is_annotation: false,
+                            },
+                        );
                         // Even though the assignment target is invalid, we still need to analyze the RHS so errors
                         // (like invalid walrus targets) are reported.
-                        self.ensure_expr(&mut x.value, &mut Usage::StaticTypeInformation);
+                        self.ensure_expr(
+                            &mut x.value,
+                            &mut Usage::StaticTypeInformation {
+                                is_annotation: false,
+                            },
+                        );
                     }
                 }
             }
@@ -911,7 +925,7 @@ impl<'a> BindingsBuilder<'a> {
                 if !self.scopes.in_module_or_class_top_level() {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`type` statement is not allowed in this context".to_owned(),
                     );
                 }
@@ -946,7 +960,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "Invalid assignment target".to_owned(),
                     );
                 }
@@ -955,7 +969,7 @@ impl<'a> BindingsBuilder<'a> {
                 if x.is_async && !self.scopes.is_in_async_def() {
                     self.error(
                         x.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`async for` can only be used inside an async function".to_owned(),
                     );
                 }
@@ -1136,7 +1150,7 @@ impl<'a> BindingsBuilder<'a> {
                 if x.is_async && !self.scopes.is_in_async_def() {
                     self.error(
                         x.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`async with` can only be used inside an async function".to_owned(),
                     );
                 }
@@ -1321,7 +1335,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::MissingImport),
+                        ErrorKind::MissingImport,
                         format!(
                             "Could not resolve relative import `{}`",
                             ".".repeat(x.level as usize)
@@ -1340,23 +1354,20 @@ impl<'a> BindingsBuilder<'a> {
                     self.declare_mutable_capture(&name, MutableCaptureKind::Nonlocal);
                 }
             }
-            Stmt::Expr(StmtExpr {
-                range: expr_range,
-                value:
-                    box Expr::Call(ExprCall {
-                        range: call_range,
-                        func: box Expr::Name(name),
-                        arguments:
-                            Arguments {
-                                range: _,
-                                keywords: _,
-                                args,
-                                ..
-                            },
-                        ..
-                    }),
-                ..
-            }) if name.id.as_str() == "prod_assert" && (args.len() == 1 || args.len() == 2) => {
+            Stmt::Expr(stmt_expr)
+                if matches!(&*stmt_expr.value,
+                    Expr::Call(ExprCall { func, arguments: Arguments { args, .. }, .. })
+                    if matches!(&**func, Expr::Name(name) if name.id.as_str() == "prod_assert")
+                    && (args.len() == 1 || args.len() == 2)
+                ) =>
+            {
+                // Destructure in body; the guard already verified the shape.
+                let expr_range = stmt_expr.range;
+                let Expr::Call(call) = *stmt_expr.value else {
+                    unreachable!("guarded by matches! above")
+                };
+                let call_range = call.range;
+                let args = call.arguments.args;
                 let (test, msg) = if args.len() == 1 {
                     (args[0].clone(), None)
                 } else if args.len() == 2 {
@@ -1389,7 +1400,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`break` in a `finally` block will silence exceptions".to_owned(),
                     );
                 }
@@ -1403,7 +1414,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`continue` in a `finally` block will silence exceptions".to_owned(),
                     );
                 }
@@ -1415,7 +1426,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         x.range,
-                        ErrorInfo::Kind(ErrorKind::Unsupported),
+                        ErrorKind::Unsupported,
                         "IPython escapes are not supported".to_owned(),
                     )
                 }
@@ -1461,7 +1472,7 @@ impl<'a> BindingsBuilder<'a> {
                         if !self.scopes.is_unreachable_from_static_test() {
                             self.error(
                                 x.range,
-                                ErrorInfo::Kind(ErrorKind::MissingModuleAttribute),
+                                ErrorKind::MissingModuleAttribute,
                                 format!("Could not import `{name}` from `{m}`"),
                             );
                         }

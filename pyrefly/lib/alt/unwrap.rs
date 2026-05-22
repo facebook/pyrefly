@@ -387,7 +387,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.stdlib.tuple(self.unions(elements))
                 }
             }
-            Tuple::Unpacked(box (prefix, middle, suffix)) => {
+            Tuple::Unpacked(f) => {
+                let (prefix, middle, suffix) = *f;
                 let mut elements = prefix;
                 match middle {
                     Type::Tuple(Tuple::Unbounded(unbounded_middle)) => {

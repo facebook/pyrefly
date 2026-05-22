@@ -655,7 +655,7 @@ impl Workspaces {
         }
     }
 
-    /// Update typeCheckingMode setting for scope_uri, None if default workspace
+    /// Update displayTypeErrors setting for scope_uri, None if default workspace
     fn update_display_type_errors(
         &self,
         modified: &mut bool,

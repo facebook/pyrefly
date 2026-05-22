@@ -5,7 +5,7 @@
 
 # pyre-ignore-all-errors
 
-"""Runtime implementation of shape typing constructs.
+"""Library-agnostic shape typing primitives.
 
 The .pyi stub provides full type information to pyrefly. This .py file
 provides minimal runtime classes so that annotations using these types
@@ -20,7 +20,6 @@ import torch.nn as nn
 # Make torch types subscriptable at runtime so that annotations like
 # Tensor[B, T, N] or nn.Linear[In, Out] evaluate as no-ops instead of
 # crashing with "type is not subscriptable".
-# All nn.Module subclasses and Tensor that need to be subscriptable at runtime.
 _subscriptable_classes = [
     torch.Tensor,
     nn.Embedding,
@@ -70,7 +69,7 @@ class TypeVar:
     __class__ = typing.TypeVar makes isinstance(x, typing.TypeVar)
     return True, so Generic[N] and TypedDict + Generic[N] both work.
 
-    In pyrefly, torch_shapes.TypeVar is treated identically to
+    In pyrefly, shape_extensions.TypeVar is treated identically to
     typing.TypeVar.
     """
 
@@ -121,7 +120,7 @@ class TypeVarTuple:
     Setting __class__ = typing.TypeVarTuple and providing
     __typing_is_unpacked_typevartuple__ makes Generic[*Ns] work.
 
-    In pyrefly, torch_shapes.TypeVarTuple is treated identically to
+    In pyrefly, shape_extensions.TypeVarTuple is treated identically to
     typing.TypeVarTuple.
 
     __iter__ yields self so that *Ns unpacking works in subscripts

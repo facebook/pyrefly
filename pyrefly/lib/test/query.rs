@@ -580,3 +580,67 @@ def f() -> None:
         "Annotated is not callable, expected no callees"
     );
 }
+
+#[test]
+fn test_callees_attribute_narrow_does_not_overwrite_rhs_trace() {
+    // Regression test: narrowing on an attribute facet (e.g. `c.p == k.v`) used to
+    // record the LHS property getter's trace against the narrow expression's range,
+    // which clobbered the legitimate trace for the RHS. As a result, querying callees
+    // on the RHS attribute returned the LHS property getter.
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"
+class C:
+    @property
+    def p(self) -> int:
+        return 0
+
+class K:
+    v: int = 0
+
+def foo(c: C, k: K) -> None:
+    if c.p == k.v:
+        pass
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let callees = query
+        .get_callees_with_location(module_name, path, None)
+        .unwrap();
+
+    // The property getter `C.p` should be reported exactly once, at the `c.p`
+    // access (line 11), not at the `k.v` access on the RHS.
+    let p_getters: Vec<_> = callees
+        .iter()
+        .filter(|(_, c)| c.target == "main.C.p")
+        .collect();
+    assert_eq!(
+        p_getters.len(),
+        1,
+        "Expected exactly one callee for property C.p, got: {p_getters:?}"
+    );
+    let (range, _) = p_getters[0];
+    assert_eq!(
+        range.start_line.get(),
+        11,
+        "C.p getter callee should be on line 11 (the `c.p` access), got: {range:?}"
+    );
+
+    // The RHS `k.v` is a plain attribute, not a property — it should produce no
+    // callees at all. (Pre-fix, it had a spurious C.p property getter trace.)
+    let k_v_callees: Vec<_> = callees
+        .iter()
+        .filter(|(r, _)| r.start_line.get() == 11 && r.start_col >= 13)
+        .collect();
+    assert!(
+        k_v_callees.is_empty(),
+        "Expected no callees on the RHS `k.v`, got: {k_v_callees:?}"
+    );
+}

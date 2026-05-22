@@ -12,7 +12,7 @@ including bare Dim, Dim[Any], or passed to functions with type parameters.
 from typing import Any, assert_type, reveal_type, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from torch_shapes import Dim
+    from shape_extensions import Dim
 
 symint_implicit_any: Dim = 4  # OK: int assignable to bare Dim
 reveal_type(symint_implicit_any)  # Dim

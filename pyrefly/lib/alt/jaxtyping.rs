@@ -61,7 +61,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::class::Class;
 use crate::types::types::AnyStyle;
 use crate::types::types::Type;
@@ -109,7 +108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                ErrorKind::InvalidAnnotation,
                 format!(
                     "jaxtyping annotations require exactly 2 arguments \
                      (array type and shape string), got {}",
@@ -131,7 +130,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return self.error(
                     errors,
                     xs[0].range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    ErrorKind::InvalidAnnotation,
                     format!(
                         "First argument to jaxtyping annotation must be a tensor class, got `{}`",
                         self.for_display(base_type)
@@ -147,7 +146,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return self.error(
                     errors,
                     xs[1].range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    ErrorKind::InvalidAnnotation,
                     "Second argument to jaxtyping annotation must be a string literal".to_owned(),
                 );
             }
@@ -179,7 +178,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return self.error(
                     errors,
                     xs[1].range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    ErrorKind::InvalidAnnotation,
                     "Tensor shape can have at most one variadic dimension".to_owned(),
                 );
             }
@@ -347,7 +346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 name_range,
-                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                ErrorKind::InvalidAnnotation,
                 "Cannot mix native tensor syntax (Tensor[N, M]) and jaxtyping syntax \
                  (Float[Tensor, \"N M\"]) in the same function"
                     .to_owned(),

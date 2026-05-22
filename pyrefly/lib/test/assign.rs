@@ -1482,7 +1482,6 @@ class Container:
 );
 
 testcase!(
-    bug = "Multi-target rebind of a class name bypasses receiver detection",
     test_class_rebind_multi_target,
     r#"
 from typing import reveal_type
@@ -1495,18 +1494,14 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The multi-target form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    other = Real = Dummy
+    other = Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );
 
 testcase!(
-    bug = "Unpacking rebind of a class name bypasses receiver detection",
     test_class_rebind_unpacked,
     r#"
 from typing import reveal_type
@@ -1519,12 +1514,9 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The unpacking form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    Real, _ = (Dummy, 0)
+    Real, _ = (Dummy, 0)  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );

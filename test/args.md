@@ -84,18 +84,38 @@ ERROR * Cannot find type stubs for module `django` * (glob)
 
 ```scrut {output_stream: stderr}
 $ PRESET_DIR=$(mktemp -d -p /tmp preset.XXXXXX) && \
-> echo "x: int = 'hello'" > $PRESET_DIR/foo.py && \
+> echo "x = unknown_name" > $PRESET_DIR/foo.py && \
 > $PYREFLY check $PRESET_DIR/foo.py --preset off; rm -rf $PRESET_DIR
  INFO 0 errors
 [0]
 ```
 
-## The `--preset` flag overrides error mappings in the config file
+## Error mappings in the config file override `--preset`
 
 ```scrut {output_stream: stdout}
-$ echo -e '[errors]\nbad-assignment = "ignore"' > $TMPDIR/pyrefly.toml && \
-> echo "x: int = 'hello'" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --preset default --output-format=min-text
+$ echo -e '[errors]\nimplicit-any = "ignore"' > $TMPDIR/pyrefly.toml && \
+> echo "x = []" > $TMPDIR/foo.py && \
+> $PYREFLY check $TMPDIR/foo.py --preset strict --output-format=min-text
+[0]
+```
+
+## Scalar fields in the config file override `--preset`
+
+```scrut {output_stream: stdout}
+$ echo "check-unannotated-defs = true" > $TMPDIR/pyrefly.toml && \
+> echo -e "def f():\n    x = unknown_name" > $TMPDIR/foo.py && \
+> $PYREFLY check $TMPDIR/foo.py --preset basic --output-format=min-text
+ERROR * [unknown-name] (glob)
+[1]
+```
+
+## `--preset` in a directory with mypy.ini should not inherit migrated values
+
+```scrut {output_stream: stdout}
+$ MYPY_DIR=$(mktemp -d -p /tmp mypy.XXXXXX) && \
+> echo -e "[mypy]\ncheck_untyped_defs = False" > $MYPY_DIR/mypy.ini && \
+> echo -e "def f():\n    x: int = 'hello'" > $MYPY_DIR/foo.py && \
+> $PYREFLY check $MYPY_DIR/foo.py --preset strict --output-format=min-text; rc=$?; rm -rf $MYPY_DIR; exit $rc
 ERROR * [bad-assignment] (glob)
 [1]
 ```

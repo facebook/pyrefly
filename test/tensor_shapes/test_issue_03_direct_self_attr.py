@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from torch_shapes import Dim
+    from shape_extensions import Dim
 
 
 class RMSNorm[D](nn.Module):

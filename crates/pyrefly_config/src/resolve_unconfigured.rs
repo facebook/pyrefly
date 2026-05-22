@@ -56,6 +56,19 @@ impl UnconfiguredOverride {
     }
 }
 
+impl From<Option<Preset>> for UnconfiguredOverride {
+    fn from(preset: Option<Preset>) -> Self {
+        match preset {
+            None => Self::Auto,
+            Some(Preset::Off) => Self::Off,
+            Some(Preset::Basic) => Self::Basic,
+            Some(Preset::Legacy) => Self::Legacy,
+            Some(Preset::Default) => Self::Default,
+            Some(Preset::Strict) => Self::Strict,
+        }
+    }
+}
+
 /// Build a `ConfigFile` for a project root that has no `pyrefly.toml` /
 /// `[tool.pyrefly]`.
 ///

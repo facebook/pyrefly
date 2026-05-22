@@ -7,7 +7,7 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Runnable variant using TypeVar/TypeVarTuple from torch_shapes and Generic instead
+Runnable variant using TypeVar/TypeVarTuple from shape_extensions and Generic instead
 of PEP 695 syntax. All assert_type calls removed for runtime safety.
 """
 
@@ -17,6 +17,7 @@ from typing import Any, Generic, Optional, TypedDict
 
 import torch
 import torch.nn as nn
+from shape_extensions import Dim, TypeVar, TypeVarTuple
 from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import (
@@ -24,7 +25,6 @@ from torch.nn.attention.flex_attention import (
     BlockMask,
     flex_attention,
 )
-from torch_shapes import Dim, TypeVar, TypeVarTuple
 
 # Module-level type variable declarations
 VocabSize = TypeVar("VocabSize")

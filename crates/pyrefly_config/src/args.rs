@@ -41,7 +41,8 @@ fn absolute_path_parser(s: &str) -> Result<PathBuf, String> {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone, Default)]
 pub struct ConfigOverrideArgs {
-    /// Named preset that provides default error severities and behavior settings.
+    /// A named collection of error severities and behavior settings that serves as the base configuration.
+    /// Any explicit settings you specify override the preset.
     #[arg(short, long)]
     preset: Option<Preset>,
 
@@ -198,6 +199,9 @@ pub struct ConfigOverrideArgs {
     /// How to handle when recursion depth limit is exceeded.
     #[arg(long)]
     recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
+    #[arg(long)]
+    pytorch_efficiency_lints: Option<bool>,
     /// (Experimental) Enable tensor shape type inference.
     /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
     #[arg(long)]
@@ -291,14 +295,14 @@ impl ConfigOverrideArgs {
         Ok(())
     }
 
+    pub fn preset(&self) -> Option<Preset> {
+        self.preset
+    }
+
     pub fn override_config(&self, mut config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
         if let Some(x) = self.preset {
             config.preset = Some(x);
             config.synthesized_preset_reason = Some(SynthesizedPresetReason::UserOverride);
-            config.root.errors = None;
-            for sub_config in config.sub_configs.iter_mut() {
-                sub_config.settings.errors = None;
-            }
         }
         if let Some(x) = &self.python_platform {
             config.python_environment.python_platform = Some(x.clone());
@@ -415,6 +419,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.recursion_overflow_handler {
             config.root.recursion_overflow_handler = Some(*x);
+        }
+        if let Some(x) = &self.pytorch_efficiency_lints {
+            config.root.pytorch_efficiency_lints = Some(*x);
         }
         if let Some(x) = &self.tensor_shapes {
             config.root.tensor_shapes = Some(*x);

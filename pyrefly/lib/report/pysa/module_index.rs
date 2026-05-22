@@ -93,8 +93,8 @@ pub(crate) static GRAPHQL_DECORATORS: &[(&GraphQLDecoratorRef, &GraphQLDecorator
 /// the module and name from the function metadata.
 fn decorator_matches_graphql_ref(ty: &Type, graphql_ref: &GraphQLDecoratorRef) -> bool {
     let func_metadata = match ty {
-        Type::Function(box pyrefly_types::callable::Function { metadata, .. }) => Some(metadata),
-        Type::Overload(pyrefly_types::types::Overload { box metadata, .. }) => Some(metadata),
+        Type::Function(f) => Some(&f.metadata),
+        Type::Overload(o) => Some(&*o.metadata),
         _ => None,
     };
     match func_metadata {

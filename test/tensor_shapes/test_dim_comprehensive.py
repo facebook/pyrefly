@@ -11,7 +11,7 @@ This file tests the Size/Dim type system independent of Tensor shapes.
 from typing import Any, assert_type, Literal, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from torch_shapes import Dim
+    from shape_extensions import Dim
 
 
 # ============================================================================

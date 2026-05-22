@@ -49,8 +49,8 @@ impl Serialize for Target {
 
 impl<'de> Deserialize<'de> for Target {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s: &str = Deserialize::deserialize(deserializer)?;
-        Ok(Self::from_string(s.to_owned()))
+        let s: String = Deserialize::deserialize(deserializer)?;
+        Ok(Self::from_string(s))
     }
 }
 

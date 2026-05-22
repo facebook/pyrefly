@@ -11,7 +11,7 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 2) huggingface/transformers PyTorch implementation:
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 
-Runnable variant using TypeVar/TypeVarTuple from torch_shapes and Generic instead
+Runnable variant using TypeVar/TypeVarTuple from shape_extensions and Generic instead
 of PEP 695 syntax. All assert_type calls removed for runtime safety.
 """
 
@@ -24,9 +24,9 @@ import torch
 import torch.nn as nn
 import torch.nn.init
 import torch.optim
+from shape_extensions import Dim, TypeVar, TypeVarTuple
 from torch import Tensor
 from torch.nn import functional as F
-from torch_shapes import Dim, TypeVar, TypeVarTuple
 
 # Module-level type variable declarations
 M = TypeVar("M")

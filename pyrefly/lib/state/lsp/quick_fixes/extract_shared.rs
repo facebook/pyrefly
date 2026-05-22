@@ -7,6 +7,7 @@
 
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::module::Module;
 use pyrefly_python::symbol_kind::SymbolKind;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
@@ -28,6 +29,8 @@ use crate::ModuleInfo;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
+use crate::types::stdlib::Stdlib;
+use crate::types::types::Type;
 
 pub(crate) fn split_selection<'a>(
     selection_text: &'a str,
@@ -368,6 +371,81 @@ pub(crate) fn code_at_range<'a>(source: &'a str, range: TextRange) -> Option<&'a
     } else {
         None
     }
+}
+
+pub(super) fn type_to_annotation(ty: Type, stdlib: &Stdlib) -> Option<String> {
+    let ty = ty.promote_implicit_literals(stdlib);
+    if ty.is_any() {
+        return None;
+    }
+    let parts = ty.get_types_with_locations(Some(stdlib));
+    Some(parts.into_iter().map(|(part, _)| part).collect())
+}
+
+pub(super) fn has_existing_from_import(ast: &ModModule, module_name: &str, name: &str) -> bool {
+    ast.body.iter().any(|stmt| match stmt {
+        Stmt::ImportFrom(import_from) => {
+            if let Some(module) = &import_from.module
+                && module.id.as_str() == module_name
+            {
+                import_from.names.iter().any(|alias| {
+                    if alias.name.id.as_str() != name {
+                        return false;
+                    }
+                    match &alias.asname {
+                        None => true,
+                        Some(asname) => asname.id.as_str() == name,
+                    }
+                })
+            } else {
+                false
+            }
+        }
+        _ => false,
+    })
+}
+
+pub(super) fn build_from_import_line(
+    ast: &ModModule,
+    module_name: &str,
+    names: &[&str],
+) -> Option<String> {
+    let mut missing: Vec<&str> = names.to_vec();
+    for name in names {
+        if has_existing_from_import(ast, module_name, name) {
+            missing.retain(|candidate| candidate != name);
+        }
+    }
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "from {module_name} import {}\n",
+        missing.join(", ")
+    ))
+}
+
+pub(super) fn import_insertion_point(ast: &ModModule) -> TextSize {
+    if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
+        first_stmt.range().start()
+    } else {
+        ast.range.end()
+    }
+}
+
+pub(super) fn build_from_import_edit(
+    module_info: &Module,
+    ast: &ModModule,
+    module_name: &str,
+    names: &[&str],
+) -> Option<(Module, TextRange, String)> {
+    let import_text = build_from_import_line(ast, module_name, names)?;
+    let position = import_insertion_point(ast);
+    Some((
+        module_info.clone(),
+        TextRange::at(position, TextSize::new(0)),
+        import_text,
+    ))
 }
 
 /// Returns true if the function has a @staticmethod or @classmethod decorator.

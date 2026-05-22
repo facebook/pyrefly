@@ -24,7 +24,6 @@ use pyrefly_types::class::Class;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
-use pyrefly_types::types::Union;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
@@ -481,7 +480,8 @@ fn export_signatures_from_type(ty: &Type, context: &ModuleContext) -> Vec<Functi
             BoundMethodType::Overload(overload) => export_overload_signatures(overload, context),
         },
         Type::Overload(overload) => export_overload_signatures(overload, context),
-        Type::Union(box Union { members: union, .. }) => union
+        Type::Union(u) => u
+            .members
             .iter()
             .flat_map(|ty| export_signatures_from_type(ty, context))
             .collect::<Vec<_>>(),

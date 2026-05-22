@@ -11,7 +11,7 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 2) huggingface/transformers PyTorch implementation:
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 
-This variant uses TypeVar and TypeVarTuple from torch_shapes instead of PEP 695
+This variant uses TypeVar and TypeVarTuple from shape_extensions instead of PEP 695
 syntax, providing runtime-safe type variable declarations that support arithmetic.
 """
 
@@ -27,8 +27,8 @@ import torch.optim
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim, TypeVar, TypeVarTuple
     from torch import Tensor
-    from torch_shapes import Dim, TypeVar, TypeVarTuple
 
 # Module-level type variable declarations
 M = TypeVar("M")

@@ -853,7 +853,7 @@ testcase!(
     test_enum_call_uses_metaclass_signature,
     r#"
 from enum import Enum
-from typing import Callable, assert_type
+from typing import Callable, Self, assert_type
 
 class SeFileType(Enum):
     ALL = ("a", "all files")
@@ -867,7 +867,7 @@ class SeFileType(Enum):
 
     @classmethod
     def from_code(cls, code: str) -> "SeFileType":
-        assert_type(cls(code), SeFileType)
+        assert_type(cls(code), Self)
         return cls(code)
 
 assert_type(SeFileType("a"), SeFileType)

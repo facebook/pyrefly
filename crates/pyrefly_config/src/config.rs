@@ -66,6 +66,7 @@ use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
 use crate::error::ErrorConfig;
 use crate::error::ErrorDisplayConfig;
+use crate::error_kind::ErrorKind;
 use crate::error_kind::Severity;
 use crate::finder::ConfigError;
 use crate::migration::run::MigratedFromKind;
@@ -614,9 +615,10 @@ pub struct ConfigFile {
 
     /// Runtime-only metadata. Populated by `resolve_unconfigured_config`
     /// when this `ConfigFile` was synthesized rather than loaded from a
-    /// `pyrefly.toml` / `[tool.pyrefly]` section. Used by the status bar
-    /// (LSP) and the upsell message (CLI) to explain to the user why
-    /// Pyrefly is behaving the way it is. Never serialized.
+    /// `pyrefly.toml` / `[tool.pyrefly]` section, and by the `--preset`
+    /// flag when a user specifies a preset on the command line. Used by
+    /// the status bar (LSP) and the upsell message (CLI) to explain to
+    /// the user why Pyrefly is behaving the way it is. Never serialized.
     #[serde(skip)]
     #[derivative(PartialEq = "ignore")]
     pub synthesized_preset_reason: Option<SynthesizedPresetReason>,
@@ -1238,6 +1240,17 @@ impl ConfigFile {
             sub.settings.resolve_legacy_untyped_def_behavior();
         }
 
+        // Process pytorch-efficiency-lints BEFORE preset merge so the flag
+        // entries behave like user overrides (winning over preset defaults
+        // like Basic's blanket Ignore). Explicit [errors] entries still win
+        // because set_default_severity only inserts when the key is absent.
+        if self.root.pytorch_efficiency_lints == Some(true) {
+            let errors = self.root.errors.get_or_insert_default();
+            for &kind in ErrorKind::pytorch_efficiency_lints() {
+                errors.set_default_severity(kind, Severity::Warn);
+            }
+        }
+
         // Apply preset as defaults: preset values fill in any fields the user
         // didn't explicitly set. For errors, preset errors are the base and user
         // errors merge on top.
@@ -1288,6 +1301,12 @@ impl ConfigFile {
         // semantics at root.
         if let Some(root_errors) = &self.root.errors {
             for sub in &mut self.sub_configs {
+                if sub.settings.pytorch_efficiency_lints == Some(true) {
+                    let sub_errors = sub.settings.errors.get_or_insert_default();
+                    for &kind in ErrorKind::pytorch_efficiency_lints() {
+                        sub_errors.set_default_severity(kind, Severity::Warn);
+                    }
+                }
                 if let Some(sub_errors) = &mut sub.settings.errors {
                     let mut merged = root_errors.clone();
                     merged.merge_user_overrides(sub_errors);
@@ -1694,6 +1713,7 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
@@ -1719,6 +1739,7 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
@@ -2141,6 +2162,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -2917,6 +2939,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -2956,6 +2979,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -3147,5 +3171,74 @@ output-format = "omit-errors"
 
         let handle = config.handle_from_module_path(ModulePath::filesystem(init));
         assert_eq!(handle.module(), ModuleName::from_str("fastapi"));
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_flag_enables_lints() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                pytorch_efficiency_lints: Some(true),
+                ..Default::default()
+            },
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Warn,
+            "pytorch-efficiency-lints = true should enable item-call lint at Warn"
+        );
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_user_override_wins() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                pytorch_efficiency_lints: Some(true),
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::PytorchEfficiencyLintItemCall,
+                    Severity::Error,
+                )]))),
+                ..Default::default()
+            },
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Error,
+            "explicit [errors] override should win over pytorch-efficiency-lints flag"
+        );
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_disabled_by_default() {
+        let mut config = ConfigFile {
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Ignore,
+            "without pytorch-efficiency-lints flag, lints should default to Ignore"
+        );
     }
 }

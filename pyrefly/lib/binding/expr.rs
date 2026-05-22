@@ -33,7 +33,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
-use vec1::vec1;
+use vec1::Vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
@@ -62,7 +62,6 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::binding::scope::is_constant_name;
 use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::callable::unexpected_keyword;
 use crate::types::types::AnyStyle;
@@ -71,6 +70,26 @@ use crate::types::types::AnyStyle;
 /// like reveal_type.
 fn is_special_name(name: &str) -> bool {
     matches!(name, "reveal_type" | "assert_type")
+}
+
+/// Walk a chain of `Expr::Attribute` nodes (e.g. `a.b.c`) and collect the
+/// base `ExprName` and attribute identifiers in order. Returns `None` if the
+/// chain doesn't bottom out in a Name.
+fn chase_static_attr_chain(mut expr: &Expr) -> Option<(ExprName, Vec1<Identifier>)> {
+    let mut attrs = Vec::new();
+    loop {
+        match expr {
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+                attrs.push(attr.clone());
+                expr = value;
+            }
+            Expr::Name(name) => {
+                attrs.reverse();
+                return Some((name.clone(), Vec1::try_from_vec(attrs).ok()?));
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// Looking up names in an expression requires knowing the identity of the binding
@@ -88,7 +107,8 @@ pub enum Usage {
     /// The idx (if present) is used for secondary-read detection.
     Narrowing(Option<Idx<Key>>),
     /// Static type context that should not pin partial types.
-    StaticTypeInformation,
+    /// When `is_annotation` is true, implicit alias validation is applied.
+    StaticTypeInformation { is_annotation: bool },
     /// Type alias RHS context. Like StaticTypeInformation, does not pin
     /// partial types. Additionally signals that names resolving to type
     /// alias bindings should produce Binding::TypeAliasRef instead of
@@ -102,7 +122,7 @@ impl Usage {
         match other {
             Self::CurrentIdx(idx) => Self::Narrowing(Some(*idx)),
             Self::Narrowing(idx) => Self::Narrowing(*idx),
-            Self::StaticTypeInformation | Self::TypeAliasRhs => Self::Narrowing(None),
+            Self::StaticTypeInformation { .. } | Self::TypeAliasRhs => Self::Narrowing(None),
         }
     }
 
@@ -111,7 +131,7 @@ impl Usage {
         match self {
             Usage::CurrentIdx(idx) => Some(*idx),
             Usage::Narrowing(idx) => *idx,
-            Usage::StaticTypeInformation | Usage::TypeAliasRhs => None,
+            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs => None,
         }
     }
 
@@ -277,7 +297,7 @@ impl<'a> BindingsBuilder<'a> {
     fn ensure_simple_attr(
         &mut self,
         value: &Identifier,
-        attr: &Identifier,
+        attrs: Vec1<Identifier>,
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) -> Idx<Key> {
@@ -285,10 +305,7 @@ impl<'a> BindingsBuilder<'a> {
             value,
             usage,
             tparams_builder.as_mut().map(|tparams_builder| {
-                (
-                    tparams_builder,
-                    LegacyTParamId::Attr(value.clone(), attr.clone()),
-                )
+                (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
         )
     }
@@ -332,8 +349,10 @@ impl<'a> BindingsBuilder<'a> {
             // in an IDE setting if we don't ensure this is the case.
             return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
-        let used_in_static_type =
-            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
+        let used_in_static_type = matches!(
+            usage,
+            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
+        );
         let lookup_result =
             if used_in_static_type && let Some((tparams_collector, tparam_id)) = tparams_lookup {
                 self.intercept_lookup(tparams_collector, tparam_id)
@@ -364,11 +383,7 @@ impl<'a> BindingsBuilder<'a> {
                             },
                         );
                     } else if let Some(error_message) = is_initialized.as_error_message(&name.id) {
-                        self.error(
-                            name.range,
-                            ErrorInfo::Kind(ErrorKind::UnboundName),
-                            error_message,
-                        );
+                        self.error(name.range, ErrorKind::UnboundName, error_message);
                     }
                 }
 
@@ -376,7 +391,8 @@ impl<'a> BindingsBuilder<'a> {
 
                 let promote = self.scopes.in_function_scope()
                     && (is_module_scope || self.scopes.is_defined_at_module_scope(&name.id))
-                    && !is_constant_name(&name.id);
+                    && !is_constant_name(&name.id)
+                    && !self.scopes.is_final_at_module_scope(&name.id);
                 if promote {
                     self.promote_ranges.insert(name.range);
                 }
@@ -389,7 +405,7 @@ impl<'a> BindingsBuilder<'a> {
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
-                        ErrorInfo::Kind(ErrorKind::UnimportedDirective),
+                        ErrorKind::UnimportedDirective,
                         format!(
                             "`{}` must be imported from `typing` for runtime usage",
                             name
@@ -405,11 +421,17 @@ impl<'a> BindingsBuilder<'a> {
                     )
                 } else {
                     // Record a type error and fall back to `Any`.
-                    let mut msg = vec1![format!("Could not find name `{name}`")];
+                    let header = format!("Could not find name `{name}`");
                     if let Some(suggestion) = suggestion {
-                        msg.push(format!("Did you mean `{suggestion}`?"));
+                        self.error_with_detail(
+                            name.range,
+                            ErrorKind::UnknownName,
+                            header,
+                            format!("Did you mean `{suggestion}`?"),
+                        );
+                    } else {
+                        self.error(name.range, ErrorKind::UnknownName, header);
                     }
-                    self.error_multiline(name.range, ErrorInfo::Kind(ErrorKind::UnknownName), msg);
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }
@@ -434,7 +456,7 @@ impl<'a> BindingsBuilder<'a> {
                 if comp.is_async && !is_generator && !self.scopes.is_in_async_def() {
                     self.error(
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`async` can only be used inside an async function".to_owned(),
                     );
                 }
@@ -670,7 +692,9 @@ impl<'a> BindingsBuilder<'a> {
                     && special_export.is_static_type_subscript()
                 {
                     self.ensure_expr(&mut *value, usage);
-                    let mut type_usage = Usage::StaticTypeInformation;
+                    let mut type_usage = Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    };
                     if special_export == SpecialExport::Annotated
                         && let Expr::Tuple(tup) = &mut **slice
                         && !tup.is_empty()
@@ -678,7 +702,12 @@ impl<'a> BindingsBuilder<'a> {
                         // Only the first argument to Annotated[...] is a type; the rest are metadata.
                         self.ensure_type_impl(&mut tup.elts[0], &mut None, false, &mut type_usage);
                         for elt in tup.elts[1..].iter_mut() {
-                            self.ensure_expr(elt, &mut Usage::StaticTypeInformation);
+                            self.ensure_expr(
+                                elt,
+                                &mut Usage::StaticTypeInformation {
+                                    is_annotation: false,
+                                },
+                            );
                         }
                     } else {
                         self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
@@ -826,13 +855,7 @@ impl<'a> BindingsBuilder<'a> {
                         for kw in call.arguments.keywords.iter_mut() {
                             self.ensure_expr(&mut kw.value, usage);
                             unexpected_keyword(
-                                &|msg| {
-                                    self.error(
-                                        call_range,
-                                        ErrorInfo::Kind(ErrorKind::UnexpectedKeyword),
-                                        msg,
-                                    )
-                                },
+                                &|msg| self.error(call_range, ErrorKind::UnexpectedKeyword, msg),
                                 "super",
                                 kw,
                             );
@@ -846,7 +869,7 @@ impl<'a> BindingsBuilder<'a> {
                                 None => {
                                     self.error(
                                         call_range,
-                                        ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
+                                        ErrorKind::InvalidSuperCall,
                                         "`super` call with no arguments is valid only inside a method"
                                             .to_owned(),
                                     );
@@ -871,7 +894,7 @@ impl<'a> BindingsBuilder<'a> {
                                 // This is a very niche use case, and we don't support it aside from not erroring.
                                 self.error(
                                     call_range,
-                                    ErrorInfo::Kind(ErrorKind::InvalidSuperCall),
+                                    ErrorKind::InvalidSuperCall,
                                     format!("`super` takes at most 2 arguments, got {nargs}"),
                                 );
                             }
@@ -990,7 +1013,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.error(
                         x.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "`await` can only be used inside an async function".to_owned(),
                     );
                 }
@@ -1029,7 +1052,13 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut Expr,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) {
-        self.ensure_type_with_usage(x, tparams_builder, &mut Usage::StaticTypeInformation);
+        self.ensure_type_with_usage(
+            x,
+            tparams_builder,
+            &mut Usage::StaticTypeInformation {
+                is_annotation: true,
+            },
+        );
     }
 
     /// Like `ensure_type`, but with a specific usage context. Used by type alias
@@ -1069,7 +1098,12 @@ impl<'a> BindingsBuilder<'a> {
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
             {
                 // Don't go inside a literal, since you might find strings which are really strings, not string-types
-                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    x,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
             Expr::Subscript(ExprSubscript { value, slice, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Annotated)
@@ -1077,11 +1111,16 @@ impl<'a> BindingsBuilder<'a> {
             {
                 // Only go inside the first argument to Annotated, the rest are non-type metadata.
                 self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
-                // We can't bind a mut box in the guard (sadly), so force unwrapping it here
+                // We can't destructure a mutable Box in the guard, so force unwrapping it here
                 let tup = slice.as_tuple_expr_mut().unwrap();
                 self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
                 for e in tup.elts[1..].iter_mut() {
-                    self.ensure_expr(e, &mut Usage::StaticTypeInformation);
+                    self.ensure_expr(
+                        e,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
                 }
             }
             // Jaxtyping annotations: Float[Tensor, "batch channels"].
@@ -1094,7 +1133,12 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
                 let tup = slice.as_tuple_expr_mut().unwrap();
                 self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
-                self.ensure_expr(&mut tup.elts[1], &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    &mut tup.elts[1],
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
@@ -1114,40 +1158,79 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             // Bind the lambda so we don't crash on undefined parameter names.
-            Expr::Lambda(_) => self.ensure_expr(x, &mut Usage::StaticTypeInformation),
+            Expr::Lambda(_) => self.ensure_expr(
+                x,
+                &mut Usage::StaticTypeInformation {
+                    is_annotation: false,
+                },
+            ),
             // Bind the call so we generate all expected bindings. See
             // test::class_super::test_super_in_base_classes for an example of a SuperInstance
             // binding that we crash looking for if we don't do this.
-            Expr::Call(_) => self.ensure_expr(x, &mut Usage::StaticTypeInformation),
+            Expr::Call(_) => self.ensure_expr(
+                x,
+                &mut Usage::StaticTypeInformation {
+                    is_annotation: false,
+                },
+            ),
             // Bind walrus so we don't crash when looking up the assigned name later.
             // Named expressions are not allowed inside type aliases (PEP 695).
             Expr::Named(named) => {
                 if self.scopes.in_type_alias() {
                     self.error(
                         named.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                        ErrorKind::InvalidSyntax,
                         "Named expression cannot be used within a type alias".to_owned(),
                     );
                 }
-                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    x,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
             // Bind yield and yield from so we don't crash when checking return type later.
             Expr::Yield(_) => {
-                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    x,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
             Expr::YieldFrom(_) => {
-                self.ensure_expr(x, &mut Usage::StaticTypeInformation);
+                self.ensure_expr(
+                    x,
+                    &mut Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                );
             }
-            Expr::Attribute(ExprAttribute { value, attr, .. })
-                if let Expr::Name(value) = &**value
+            Expr::Attribute(..)
+                if let Some((base, attrs)) = chase_static_attr_chain(x)
                 // We assume "args" and "kwargs" are ParamSpec attributes rather than imported TypeVars.
-                    && attr.id != "args" && attr.id != "kwargs" =>
+                    && attrs.last().id != "args"
+                    && attrs.last().id != "kwargs" =>
             {
-                // We intercept <name>.<name> to check if this is an imported legacy type parameter.
+                // We intercept dotted names (e.g. `mod.T` or `pkg.mod.T`) to check if the
+                // final attribute is an imported legacy type parameter.
+                //
+                // The value part of an attribute access is a module/object reference,
+                // not a type annotation. For example, in `x: pd.DataFrame`, `pd` is a
+                // module access — not a type reference — so it should not trigger
+                // implicit alias validation. We clear `is_annotation` to prevent
+                // `ImplicitAliasCheck` from being inserted for the value name.
+                let mut attr_value_usage = match *usage {
+                    Usage::StaticTypeInformation { .. } => Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                    ref u => u.clone(),
+                };
                 self.ensure_simple_attr(
-                    &Ast::expr_name_identifier(value.clone()),
-                    attr,
-                    usage,
+                    &Ast::expr_name_identifier(base),
+                    attrs,
+                    &mut attr_value_usage,
                     tparams_builder,
                 );
             }
@@ -1165,14 +1248,17 @@ impl<'a> BindingsBuilder<'a> {
                 let resolved = tparams_builder
                     .as_mut()
                     .and_then(|tb| self.try_intercept_lookup(tb, &id));
+                // Same as above: args/kwargs attribute values are not type references.
+                let mut attr_value_usage = match *usage {
+                    Usage::StaticTypeInformation { .. } => Usage::StaticTypeInformation {
+                        is_annotation: false,
+                    },
+                    ref u => u.clone(),
+                };
                 if resolved.is_some() {
-                    // P is already a legacy tparam (from Callable[P, ...]),
-                    // process normally so it resolves to QuantifiedValue.
-                    self.ensure_name(&name, usage, tparams_builder);
+                    self.ensure_name(&name, &mut attr_value_usage, tparams_builder);
                 } else {
-                    // P is not yet in the collector. Process without tparam
-                    // interception so P resolves to its original binding.
-                    self.ensure_name(&name, usage, &mut None);
+                    self.ensure_name(&name, &mut attr_value_usage, &mut None);
                 }
             }
             Expr::BinOp(ExprBinOp {

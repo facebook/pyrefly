@@ -251,6 +251,12 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
 
+    /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
+    /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
+    /// unless individually overridden in `[errors]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pytorch_efficiency_lints: Option<bool>,
+
     /// (Experimental) Enable tensor shape type inference.
     /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
     #[serde(default, skip_serializing_if = "Option::is_none")]

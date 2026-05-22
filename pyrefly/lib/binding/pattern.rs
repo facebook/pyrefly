@@ -39,7 +39,6 @@ use crate::binding::narrow::NarrowingSubject;
 use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::facet::UnresolvedFacetKind;
 
@@ -136,10 +135,16 @@ impl<'a> BindingsBuilder<'a> {
                     .iter()
                     .filter(|x| !matches!(x, Pattern::MatchStar(_)))
                     .count();
+                // If every sub-pattern is irrefutable -- i.e., patterns that always match
+                // like wildcards (`_`), bare names (e.g., `x`), or `*rest` -- the structural
+                // `IsSequence + LenEq/LenGte` narrow on the subject fully captures what the
+                // pattern proves. Spurious Placeholders added by `and_all` for empty
+                // sub-pattern narrow ops would otherwise block negative narrowing
+                // (see equivalent fix in MatchClass below).
                 let all_subpatterns_irrefutable = x
                     .patterns
                     .iter()
-                    .all(|pattern| pattern.is_irrefutable() || pattern.is_wildcard());
+                    .all(|p| p.is_irrefutable() || p.is_wildcard());
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
                     node_index: AtomicNodeIndex::default(),
@@ -191,7 +196,13 @@ impl<'a> BindingsBuilder<'a> {
                                 let position = UnpackedPosition::Slice(i, num_patterns - i - 1);
                                 self.bind_definition(
                                     name,
-                                    Binding::UnpackedValue(None, subject_idx, p.range, position),
+                                    Binding::UnpackedValue(
+                                        None,
+                                        subject_idx,
+                                        p.range,
+                                        position,
+                                        None,
+                                    ),
                                     FlowStyle::Other,
                                 );
                             }
@@ -205,7 +216,13 @@ impl<'a> BindingsBuilder<'a> {
                             };
                             let key_for_subpattern = self.insert_binding(
                                 Key::Anon(x.range()),
-                                Binding::UnpackedValue(None, subject_idx, x.range(), position),
+                                Binding::UnpackedValue(
+                                    None,
+                                    subject_idx,
+                                    x.range(),
+                                    position,
+                                    None,
+                                ),
                             );
                             let subject_for_subpattern = match &match_subject {
                                 // For tuple subjects, map pattern index to the
@@ -481,7 +498,7 @@ impl<'a> BindingsBuilder<'a> {
                     if pattern.is_irrefutable() && idx != n_subpatterns - 1 {
                         self.error(
                             pattern.range(),
-                            ErrorInfo::Kind(ErrorKind::BadMatch),
+                            ErrorKind::BadMatch,
                             "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                         )
                     }
@@ -589,6 +606,9 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
+            // Reachability is checked before the guard is bound (below). This is
+            // intentional: if the pattern itself can never match the subject type,
+            // the case is unreachable regardless of any guard condition.
             if let Some(narrowing_subject) = match_subject.as_single()
                 && let Some((op, range)) = new_narrow_ops.0.get(narrowing_subject.name())
             {

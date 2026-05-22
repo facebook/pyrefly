@@ -14,7 +14,6 @@ use pyrefly_config::base::InferReturnTypes;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
-use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
@@ -265,9 +264,7 @@ fn hint_to_string(
     let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(box Union { members: types, .. }) => {
-            unions_with_literals(types, stdlib, enum_members, heap)
-        }
+        Type::Union(u) => unions_with_literals(u.members, stdlib, enum_members, heap),
         _ => hint,
     };
     let mut ctx = TypeDisplayContext::new(&[&hint]);

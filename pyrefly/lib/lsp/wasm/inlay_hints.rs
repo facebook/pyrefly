@@ -13,8 +13,6 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::literal::LitEnum;
-use pyrefly_types::literal::Literal;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -116,20 +114,19 @@ impl<'a> Transaction<'a> {
                             true
                         }
                     }
-                    Expr::Attribute(ExprAttribute {
-                        box value, attr, ..
-                    }) if let Type::Literal(box Literal {
-                        value: Lit::Enum(box LitEnum { class, member, .. }),
-                        ..
-                    }) = ty =>
+                    Expr::Attribute(ExprAttribute { value, attr, .. })
+                        if let Type::Literal(lit) = ty
+                            && let Lit::Enum(lit_enum) = &lit.value =>
                     {
                         // Exclude enum literals
-                        match value {
+                        match &**value {
                             Expr::Name(object) => {
-                                *object.id() != *class.name() || *attr.id() != *member
+                                *object.id() != *lit_enum.class.name()
+                                    || *attr.id() != *lit_enum.member
                             }
                             Expr::Attribute(ExprAttribute { attr: object, .. }) => {
-                                *object.id() != *class.name() || *attr.id() != *member
+                                *object.id() != *lit_enum.class.name()
+                                    || *attr.id() != *lit_enum.member
                             }
                             _ => true,
                         }
@@ -189,10 +186,11 @@ impl<'a> Transaction<'a> {
                         // authoritatively typed; suggesting an explicit
                         // annotation here would be redundant and, for the
                         // receiver case, could mislead users into
-                        // annotating with the RHS-derived type.
+                        // annotating with the RHS-derived type. The same
+                        // applies to receiver-bearing unpacked rebinds.
                         Binding::NameAssign(x) if !x.is_pinned() => (Some(&*x.expr), false),
                         Binding::Expr(None, e) => (Some(&**e), false),
-                        Binding::UnpackedValue(None, unpack_idx, _, pos) => {
+                        Binding::UnpackedValue(None, unpack_idx, _, pos, None) => {
                             // Try to get the element expression from the unpacked source
                             let element_expr =
                                 Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);

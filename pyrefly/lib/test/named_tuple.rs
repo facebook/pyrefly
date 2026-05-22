@@ -1003,6 +1003,19 @@ assert_type(info.anything, Any)
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2458
+testcase!(
+    test_namedtuple_from_function_missing_attribute,
+    r#"
+from collections import namedtuple
+
+def f():
+    return namedtuple("X", "a b c")
+
+f().d  # E: has no class attribute `d`
+"#,
+);
+
 testcase!(
     test_named_tuple_final_field_name_shadowed,
     r#"

@@ -10,7 +10,7 @@
 Verifies that the runnable models (with assert_type stripped) can be
 instantiated and run forward passes at Python runtime. Tests both the
 future_annotations variants (which use PEP 563 to defer annotation
-evaluation) and the int_type_var variants (which use torch_shapes.TypeVar for
+evaluation) and the int_type_var variants (which use shape_extensions.TypeVar for
 runtime-safe arithmetic without future annotations).
 """
 

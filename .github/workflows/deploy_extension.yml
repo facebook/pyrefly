@@ -3,14 +3,21 @@ on:
   push:
     paths:
       - version.bzl
-    branches: [ main ]
+    branches: [ main, 'release/**' ]
   workflow_dispatch:
 
 jobs:
+    check_publish:
+        uses: ./.github/workflows/check_publish.yml
+
     build:
+        needs: check_publish
+        if: needs.check_publish.outputs.should_publish == 'true'
         uses: ./.github/workflows/build_extension.yml
 
     test:
+        needs: check_publish
+        if: needs.check_publish.outputs.should_publish == 'true'
         uses: ./.github/workflows/pyrefly.yml
 
     publish_code_marketplace:
@@ -23,7 +30,7 @@ jobs:
             - name: upload
               uses: actions/download-artifact@v7
             - name: publish
-              run: npx @vscode/vsce publish --skip-duplicate --packagePath $(find . -iname '*.vsix')
+              run: npx @vscode/vsce publish ${{ needs.build.outputs.prerelease_flag }} --skip-duplicate --packagePath $(find . -iname '*.vsix')
               env:
                 VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
@@ -37,4 +44,4 @@ jobs:
             - name: upload
               uses: actions/download-artifact@v7
             - name: publish
-              run: npx ovsx publish --skip-duplicate --packagePath $(find . -iname '*.vsix') --pat ${{ secrets.OPENVSX_TOKEN }}
+              run: npx ovsx publish ${{ needs.build.outputs.prerelease_flag }} --skip-duplicate --packagePath $(find . -iname '*.vsix') --pat ${{ secrets.OPENVSX_TOKEN }}
