@@ -8,6 +8,7 @@
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 
+use crate::lsp::non_wasm::document_symbols::flatten_to_symbol_information;
 use crate::state::state::State;
 use crate::test::util::get_batched_lsp_operations_report_no_cursor;
 use crate::test::util::get_batched_lsp_operations_report_no_cursor_allow_error;
@@ -16,6 +17,17 @@ fn get_test_report(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
     if let Some(symbols) = transaction.symbols(handle, None) {
         serde_json::to_string_pretty(&symbols).unwrap()
+    } else {
+        "No document symbols found".to_owned()
+    }
+}
+
+fn get_flat_symbol_report(state: &State, handle: &Handle) -> String {
+    let transactions = state.transaction();
+    let uri = lsp_types::Url::parse("file:///main.py").unwrap();
+    if let Some(symbols) = transactions.symbols(handle, None) {
+        let flat = flatten_to_symbol_information(symbols, &uri);
+        serde_json::to_string_pretty(&flat).unwrap()
     } else {
         "No document symbols found".to_owned()
     }
@@ -1168,4 +1180,90 @@ b = 2
     assert_eq!(config_children.len(), 2);
     assert_eq!(config_children[0].name, "DEBUG");
     assert_eq!(config_children[1].name, "b");
+}
+
+#[test]
+fn test_flatten_basic_class() {
+    let code = r#"
+class MyClass:
+  def __init__(self):
+    self.x = 1
+
+  def method1(self):
+    return self.x
+
+  def method2(self, y):
+    return self.x + y
+"#;
+
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_flat_symbol_report);
+    let uri = lsp_types::Url::parse("file:///main.py").unwrap();
+
+    #[allow(deprecated)]
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(&report.split("\n").skip(2).collect::<Vec<_>>().join("\n")).unwrap();
+
+    assert_eq!(flat.len(), 4);
+
+    assert_eq!(flat[0].name, "MyClass");
+    assert_eq!(flat[0].container_name, None);
+    assert_eq!(flat[0].location.uri, uri);
+
+    assert_eq!(flat[1].name, "__init__");
+    assert_eq!(flat[1].container_name, Some("MyClass".to_owned()));
+
+    assert_eq!(flat[2].name, "method1");
+    assert_eq!(flat[2].container_name, Some("MyClass".to_owned()));
+
+    assert_eq!(flat[3].name, "method2");
+    assert_eq!(flat[3].container_name, Some("MyClass".to_owned()));
+}
+
+#[test]
+fn test_flatten_deep_nesting() {
+    let code = r#"
+class Outer:
+  class Inner:
+    def foo(self):
+      pass
+"#;
+
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_flat_symbol_report);
+    let uri = lsp_types::Url::parse("file:///main.py").unwrap();
+
+    #[allow(deprecated)]
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(&report.split("\n").skip(2).collect::<Vec<_>>().join("\n")).unwrap();
+
+    assert_eq!(flat.len(), 3);
+
+    assert_eq!(flat[0].name, "Outer");
+    assert_eq!(flat[0].container_name, None);
+    assert_eq!(flat[0].location.uri, uri);
+
+    assert_eq!(flat[1].name, "Inner");
+    assert_eq!(flat[1].container_name, Some("Outer".to_owned()));
+
+    assert_eq!(flat[2].name, "foo");
+    assert_eq!(flat[2].container_name, Some("Outer.Inner".to_owned()));
+}
+
+#[test]
+fn test_flatten_empty_file() {
+    let code = r#"
+# just a comment, no symbols
+"#;
+
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_flat_symbol_report);
+
+    // The report is either "No document symbols found" or an empty JSON array
+    let body = report.split("\n").skip(2).collect::<Vec<_>>().join("\n");
+    if body.trim() != "No document symbols found" {
+        #[allow(deprecated)]
+        let flat: Vec<lsp_types::SymbolInformation> = serde_json::from_str(body.trim()).unwrap();
+        assert!(flat.is_empty());
+    }
 }
