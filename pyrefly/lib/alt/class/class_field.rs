@@ -2436,6 +2436,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Some(member) = self.get_non_synthesized_dataclass_member_impl(cls, name) else {
             return DataclassMember::NotAField;
         };
+        let metadata = self.get_metadata_for_class(cls);
+        if metadata.is_pydantic_model() && name.as_str().starts_with('_') {
+            return DataclassMember::NotAField;
+        }
         let field = &*member.value;
         // A field with type KW_ONLY is a sentinel value that indicates that the remaining
         // fields should be keyword-only params in the generated `__init__`.
