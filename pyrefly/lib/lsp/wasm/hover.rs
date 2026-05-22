@@ -22,6 +22,7 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
@@ -29,8 +30,10 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::type_var::Variance;
 use pyrefly_types::types::Type;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::lined_buffer::LineNumber;
@@ -45,6 +48,7 @@ use ruff_text_size::TextSize;
 use vec1::Vec1;
 
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::Key;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::module_helpers::to_real_path;
@@ -472,6 +476,61 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
+fn type_parameter_owner_class_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Class> {
+    let module = transaction.get_ast(handle)?;
+    let owner = Ast::locate_node(&module, position)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(class_def)
+                if class_def
+                    .type_params
+                    .as_ref()
+                    .is_some_and(|type_params| type_params.range().contains(position)) =>
+            {
+                Some(class_def.name.clone())
+            }
+            _ => None,
+        });
+    let key = Key::Definition(ShortIdentifier::new(&owner?));
+    match transaction.get_type_for_display(handle, &key)? {
+        Type::ClassDef(class) => Some(class),
+        _ => None,
+    }
+}
+
+fn display_variance_for_hover(variance: Variance) -> &'static str {
+    match variance {
+        Variance::Covariant => "covariant",
+        Variance::Contravariant => "contravariant",
+        // Bivariant is an internal inference result. User-facing behavior
+        // treats it like invariant, matching assignability.
+        Variance::Invariant | Variance::Bivariant => "invariant",
+    }
+}
+
+fn type_parameter_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    owner: &Class,
+) -> Option<String> {
+    let quantified = match type_ {
+        Type::Quantified(q) | Type::QuantifiedValue(q) => q,
+        _ => return None,
+    };
+    let variance = solver.type_order().get_variance_from_class(owner);
+    Some(format!(
+        "{}@{} ({})",
+        quantified.name(),
+        owner.name(),
+        display_variance_for_hover(variance.get(quantified.name()))
+    ))
+}
+
 fn parameter_documentation_for_callee(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -708,6 +767,12 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
+    let type_parameter_owner_class = transaction
+        .identifier_at(handle, position)
+        .is_some_and(|id| matches!(id.context, IdentifierContext::TypeParameter))
+        .then(|| type_parameter_owner_class_at(transaction, handle, position))
+        .flatten();
+    let is_class_type_parameter_hover = type_parameter_owner_class.is_some();
     let show_constructor = kind == Some(SymbolKind::Class)
         && !transaction
             .identifier_at(handle, position)
@@ -715,6 +780,11 @@ pub fn get_hover(
     let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
         let mut cloned = type_.clone();
         move |solver| {
+            if let Some(owner) = &type_parameter_owner_class
+                && let Some(display) = type_parameter_hover_display(&solver, &cloned, owner)
+            {
+                return display;
+            }
             if show_constructor {
                 let constructor = match cloned {
                     Type::ClassDef(ref cls)
@@ -780,8 +850,16 @@ pub fn get_hover(
 
     Some(
         HoverValue {
-            kind,
-            name,
+            kind: if is_class_type_parameter_hover {
+                None
+            } else {
+                kind
+            },
+            name: if is_class_type_parameter_hover {
+                None
+            } else {
+                name
+            },
             type_,
             docstring,
             parameter_doc,

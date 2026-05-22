@@ -1376,6 +1376,24 @@ Box[str]("hello")
 }
 
 #[test]
+fn hover_on_class_type_parameter_shows_inferred_variance() {
+    let code = r#"
+class Foo[T]:
+#         ^
+    def foo(self) -> T: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("T@Foo (covariant)"),
+        "Expected class type parameter hover to show inferred variance, got: {report}"
+    );
+    assert!(
+        !report.contains("(type parameter) T: T"),
+        "Expected class type parameter hover to avoid redundant type display, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_in_keyword_for_membership_in_comprehension() {
     let code = r#"
 result = [x for x in [1, 2, 3] if x in [1]]
