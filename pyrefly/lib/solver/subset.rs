@@ -29,6 +29,7 @@ use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Overload;
+use pyrefly_types::types::OverloadType;
 use pyrefly_types::types::Var;
 use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
@@ -1256,6 +1257,38 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
     }
 
+    /// Like `any(is_subset_eq)` over overload arms, but rolls back any `instantiation_errors` an
+    /// arm recorded against fresh quantified vars. An arm that records errors (even when
+    /// `is_subset_eq` returns `Ok`) is not a clean match; without rollback those errors leak to
+    /// the outer call boundary as spurious `bad-specialization` diagnostics.
+    ///
+    /// Only safe in-call-analysis. Under `with_outside_call_context`, arm probes also leak
+    /// lower bounds onto outer vars; clearing only errors there would union every arm's return
+    /// type into the result.
+    fn try_overload_arms(
+        &mut self,
+        signatures: &[OverloadType],
+        want: &Type,
+    ) -> Result<(), SubsetError> {
+        let mut last_err: Option<SubsetError> = None;
+        for l in signatures {
+            let pre_keys = self.solver.instantiation_error_keys();
+            let result = self.is_subset_eq(&l.as_type(), want);
+            let added_errors = self.solver.discard_new_instantiation_errors(&pre_keys);
+            if result.is_ok() && !added_errors {
+                return Ok(());
+            }
+            if let Err(e) = result {
+                if last_err.is_none() {
+                    last_err = Some(e);
+                }
+            } else if last_err.is_none() {
+                last_err = Some(SubsetError::Other);
+            }
+        }
+        Err(last_err.unwrap_or(SubsetError::Other))
+    }
+
     fn is_subset_overload(&mut self, overload: &Overload, want: &Type) -> Result<(), SubsetError> {
         let initial_is_subset = if let Some((witness, captured_vars)) =
             self.witness_and_captured_vars_for_overload()
@@ -1271,10 +1304,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .filter(|v| self.solver.var_is_quantified(*v))
                     .collect();
                 if eligible_vars.is_empty() {
-                    any(overload.signatures.iter(), |l| {
-                        self.is_subset_eq(&l.as_type(), want)
-                    })
-                    .is_ok()
+                    self.try_overload_arms(&overload.signatures, want).is_ok()
                 } else {
                     let overload_type = Type::Overload(overload.clone());
                     let synthesized =

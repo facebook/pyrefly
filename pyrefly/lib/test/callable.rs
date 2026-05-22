@@ -975,6 +975,26 @@ zoo(partial(bar, b=99))
 );
 
 testcase!(
+    test_callable_class_overloaded_dunder_call_with_bounded_typevar,
+    r#"
+from typing import Callable, Protocol, overload
+
+class Base: ...
+
+class HasCall(Protocol):
+    @overload
+    def __call__[T: Base](self, arg: T) -> T: ...
+    @overload
+    def __call__(self, arg: float) -> float: ...
+
+def takes(f: Callable[[float], float]) -> None: ...
+
+def use_it(p: HasCall) -> None:
+    takes(p)
+"#,
+);
+
+testcase!(
     bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"

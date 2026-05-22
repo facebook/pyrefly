@@ -1764,6 +1764,27 @@ impl Solver {
         vs.0.iter().any(|v| lock.contains_key(v))
     }
 
+    /// Snapshot/restore pair for `instantiation_errors`, used by `try_overload_arms` to drop
+    /// recordings from speculatively-tried overload arms that didn't cleanly match.
+    pub fn instantiation_error_keys(&self) -> SmallSet<Var> {
+        self.instantiation_errors.read().keys().copied().collect()
+    }
+
+    /// Returns whether any entries were removed.
+    pub fn discard_new_instantiation_errors(&self, snapshot: &SmallSet<Var>) -> bool {
+        let mut errors = self.instantiation_errors.write();
+        let to_remove: Vec<Var> = errors
+            .keys()
+            .copied()
+            .filter(|v| !snapshot.contains(v))
+            .collect();
+        let removed = !to_remove.is_empty();
+        for v in to_remove {
+            errors.shift_remove(&v);
+        }
+        removed
+    }
+
     /// Have these vars picked up any new instantiation errors since they were snapshotted?
     pub fn has_new_instantiation_errors(&self, snapshot: &VarSnapshot) -> bool {
         let lock = self.instantiation_errors.read();
