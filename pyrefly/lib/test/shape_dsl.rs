@@ -28,6 +28,8 @@ def times_two(x: int) -> int:
 @shape_dsl_function
 def double_ir(x: int) -> int:
     return times_two(x)
+
+def not_a_dsl_fn(x: int) -> int: ...
 "#,
     );
     env.add_with_path(
@@ -36,7 +38,7 @@ def double_ir(x: int) -> int:
         r#"
 from typing import overload
 from shape_extensions import uses_shape_dsl
-from my_shapes import identity_ir, double_ir
+from my_shapes import identity_ir, double_ir, not_a_dsl_fn
 
 @uses_shape_dsl(identity_ir)
 def plain_fn(x: int) -> int: ...
@@ -56,6 +58,9 @@ def overloaded_no_impl(x: str) -> str: ...
 
 @uses_shape_dsl(double_ir)
 def double_fn(x: int) -> int: ...
+
+@uses_shape_dsl(not_a_dsl_fn)  # E: `@uses_shape_dsl` argument does not resolve to a `@shape_dsl_function`
+def bad_fn(x: int) -> int: ...
 "#,
     );
     env
@@ -107,5 +112,18 @@ from typing import Literal, assert_type
 from my_lib import double_fn
 
 assert_type(double_fn(3), Literal[6])
+"#,
+);
+
+testcase!(
+    test_uses_shape_dsl_not_a_dsl_function,
+    shape_dsl_env(),
+    r#"
+from typing import assert_type
+from my_lib import bad_fn
+
+# The @uses_shape_dsl argument is not a @shape_dsl_function, so no shape
+# transform is applied and the declared return type (int) is used instead.
+assert_type(bad_fn(1), int)
 "#,
 );
