@@ -1468,6 +1468,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
+                let mut annotation_flags = annot.and_then(|annot| {
+                    self.extract_pydantic_field_from_annotation(annot, &metadata)
+                });
                 if metadata.is_protocol()
                     && direct_annotation.is_none()
                     && !is_dunder(name.as_str())
@@ -1486,8 +1489,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
-                    let flags = self.compute_dataclass_field_initialization(call, dm);
-                    ClassFieldInitialization::ClassBody(flags.map(Box::new))
+                    if let Some(mut flags) = self.compute_dataclass_field_initialization(call, dm) {
+                        if let Some(annotation_flags) = annotation_flags.as_ref()
+                            && flags.strict.is_none()
+                        {
+                            flags.strict = annotation_flags.strict;
+                        }
+                        ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
+                    } else if let Some(mut flags) = annotation_flags.take() {
+                        flags.default = Some(self.heap.mk_any_implicit());
+                        ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
+                    } else {
+                        ClassFieldInitialization::ClassBody(None)
+                    }
+                } else if let Some(mut flags) = annotation_flags.take() {
+                    flags.default = Some(self.heap.mk_any_implicit());
+                    ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
                     ClassFieldInitialization::ClassBody(None)
                 };
