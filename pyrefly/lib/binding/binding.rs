@@ -9,6 +9,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
@@ -22,6 +23,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasIndex;
@@ -129,7 +131,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 18);
+assert_words!(BindingUndecoratedFunction, 19);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1856,6 +1858,9 @@ pub struct BindingUndecoratedFunction {
     /// Dot-separated path of enclosing function names (e.g. `"f1"` for `f2` defined inside `f1`,
     /// or `"f1.g1"` for two levels deep). `None` for top-level or class-method functions.
     pub outer_funcs: Option<Name>,
+    /// When the function is decorated with `@shape_dsl_function`, this holds the
+    /// parsed DSL IR so the solver can produce `FunctionKind::ShapeDsl`.
+    pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,
 }
 
 impl DisplayWith<Bindings> for BindingUndecoratedFunction {
