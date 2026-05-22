@@ -72,6 +72,7 @@ pub enum SpecialExport {
     TypingMapping,
     TypeForm,
     UsesShapeDsl,
+    ShapeDslFunction,
 }
 
 impl SpecialExport {
@@ -135,6 +136,7 @@ impl SpecialExport {
             "Mapping" => Some(Self::TypingMapping),
             "TypeForm" => Some(Self::TypeForm),
             "uses_shape_dsl" => Some(Self::UsesShapeDsl),
+            "shape_dsl_function" => Some(Self::ShapeDslFunction),
             _ => None,
         }
     }
@@ -207,6 +209,7 @@ impl SpecialExport {
             ),
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
             Self::UsesShapeDsl => matches!(m.as_str(), "shape_extensions"),
+            Self::ShapeDslFunction => matches!(m.as_str(), "shape_extensions.dsl"),
         }
     }
 
