@@ -3143,6 +3143,66 @@ impl TypeEq for ShapeDslFunction {
     }
 }
 
+/// Reference to a shape-DSL function that refines a callable's return type.
+/// Carried on `FuncFlags` for functions decorated with `@uses_shape_dsl`.
+#[derive(Debug, Clone)]
+pub struct ShapeTransformRef {
+    pub dsl_fn: Arc<ShapeDslFunction>,
+}
+
+/// Pointer identity: delegates to `ShapeDslFunction`'s pointer-identity equality.
+impl PartialEq for ShapeTransformRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.dsl_fn == other.dsl_fn
+    }
+}
+
+impl Eq for ShapeTransformRef {}
+
+impl Hash for ShapeTransformRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dsl_fn.hash(state);
+    }
+}
+
+impl PartialOrd for ShapeTransformRef {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ShapeTransformRef {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.dsl_fn.cmp(&other.dsl_fn)
+    }
+}
+
+impl Visit<Type> for ShapeTransformRef {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for ShapeTransformRef {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for Arc<ShapeTransformRef> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for Arc<ShapeTransformRef> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEq for ShapeTransformRef {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
+}
+
 /// A bundle of DSL functions that have been validated together as a program.
 ///
 /// The functions held by a `ShapeDslProgram` are guaranteed to have passed
