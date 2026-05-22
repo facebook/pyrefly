@@ -142,6 +142,8 @@ struct FunctionParamsResult {
     paramspec: Option<Quantified>,
     /// Maps parameter names to their resolved types for unannotated parameters.
     resolved_param_types: SmallMap<Name, Type>,
+    /// Unannotated parameters that received a framework-provided type.
+    externally_typed_params: SmallMap<Name, ()>,
 }
 
 struct ParentParamHints {
@@ -527,6 +529,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params,
             paramspec,
             resolved_param_types,
+            externally_typed_params,
         } = self.get_params_and_paramspec(
             def,
             stub_or_impl,
@@ -596,6 +599,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             stub_or_impl,
             defining_cls,
             resolved_param_types,
+            externally_typed_params,
         })
     }
 
@@ -633,6 +637,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if p.annotation().is_none() {
                 let name = p.name().as_str();
+                if def.externally_typed_params.contains_key(&p.name().id) {
+                    continue;
+                }
                 self.error(
                     errors,
                     p.name().range(),
@@ -1063,6 +1070,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut paramspec_args = None;
         let mut paramspec_kwargs = None;
         let mut resolved_param_types = SmallMap::new();
+        let mut externally_typed_params = SmallMap::new();
         let mut params = Vec::with_capacity(def.parameters.len());
         let fixture_hint = |name: &Identifier| {
             self.bindings()
@@ -1099,6 +1107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .and_then(|hint| hint.take_posonly())
             };
             let fixture_hint = fixture_hint(&x.parameter.name);
+            let has_external_hint = fixture_hint.is_some();
             let ParamTypeResult {
                 ty,
                 required,
@@ -1113,6 +1122,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if is_unannotated {
                 resolved_param_types.insert(x.parameter.name.id.clone(), ty.clone());
+                if has_external_hint {
+                    externally_typed_params.insert(x.parameter.name.id.clone(), ());
+                }
             }
             Param::PosOnly(Some(x.parameter.name.id.clone()), ty, required)
         }));
@@ -1134,6 +1146,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .and_then(|hint| hint.take_positional())
             };
             let fixture_hint = fixture_hint(&x.parameter.name);
+            let has_external_hint = fixture_hint.is_some();
             let ParamTypeResult {
                 ty,
                 required,
@@ -1148,6 +1161,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if is_unannotated {
                 resolved_param_types.insert(x.parameter.name.id.clone(), ty.clone());
+                if has_external_hint {
+                    externally_typed_params.insert(x.parameter.name.id.clone(), ());
+                }
             }
 
             // If the parameter begins but does not end with "__", it is a positional-only parameter.
@@ -1216,6 +1232,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .as_mut()
                 .and_then(|hint| hint.take_kwonly(&x.parameter.name));
             let fixture_hint = fixture_hint(&x.parameter.name);
+            let has_external_hint = fixture_hint.is_some();
             let ParamTypeResult {
                 ty,
                 required,
@@ -1230,6 +1247,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
             if is_unannotated {
                 resolved_param_types.insert(x.parameter.name.id.clone(), ty.clone());
+                if has_external_hint {
+                    externally_typed_params.insert(x.parameter.name.id.clone(), ());
+                }
             }
             Param::KwOnly(x.parameter.name.id.clone(), ty, required)
         }));
@@ -1328,6 +1348,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params,
             paramspec,
             resolved_param_types,
+            externally_typed_params,
         }
     }
 

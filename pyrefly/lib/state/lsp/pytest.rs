@@ -14,11 +14,15 @@ use ruff_text_size::TextRange;
 
 use super::DefinitionMetadata;
 use super::FindDefinitionItemWithDocstring;
-use crate::state::pytest::pytest_fixture_definitions_for_parameter as pytest_fixture_definitions_for_parameter_in_module;
-use crate::state::pytest::pytest_fixture_parameter_references as pytest_fixture_parameter_references_in_module;
+use crate::state::pytest::find_pytest_fixture_definitions_for_parameter;
+use crate::state::pytest::find_pytest_fixture_parameter_references;
 use crate::state::state::Transaction;
 
 impl<'a> Transaction<'a> {
+    /// Resolve a pytest fixture parameter to the fixture functions that can provide it.
+    ///
+    /// This runs during definition lookup. The common non-pytest path is cheap because we first
+    /// ask bindings for pytest metadata, which is absent in modules that do not import pytest.
     pub(super) fn pytest_fixture_definitions_for_parameter(
         &self,
         handle: &Handle,
@@ -27,7 +31,7 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
         let mod_module = self.get_ast(handle)?;
         let bindings = self.get_bindings(handle)?;
-        let matches = pytest_fixture_definitions_for_parameter_in_module(
+        let matches = find_pytest_fixture_definitions_for_parameter(
             mod_module.as_ref(),
             &bindings,
             identifier,
@@ -48,6 +52,10 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    /// Find local pytest test/fixture parameters that reference a fixture definition.
+    ///
+    /// This is only used after the regular reference path has found a definition. Modules without
+    /// pytest metadata return before walking the AST.
     pub(super) fn local_pytest_fixture_parameter_references(
         &self,
         handle: &Handle,
@@ -56,7 +64,7 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<TextRange>> {
         let mod_module = self.get_ast(handle)?;
         let bindings = self.get_bindings(handle)?;
-        pytest_fixture_parameter_references_in_module(
+        find_pytest_fixture_parameter_references(
             mod_module.as_ref(),
             &bindings,
             definition_range,

@@ -604,6 +604,9 @@ impl Bindings {
         }
         let defs = info.fixture_definitions(&param.id)?;
         if !self.0.infer_pytest_fixture_types {
+            // `None` would mean "not a fixture parameter" and leave the parameter on the
+            // ordinary unannotated fallback path. Returning explicit Any records that pytest
+            // supplies this argument at runtime, which avoids noisy missing-annotation errors.
             return Some(PytestFixtureParamHint::Any);
         }
         let selected = match class_key {
@@ -2440,7 +2443,11 @@ impl<'a> SemanticSyntaxContext for BindingsBuilder<'a> {
 }
 
 impl BindingsBuilder<'_> {
-    pub(crate) fn record_pytest_fixture_definition(
+    /// If this function is decorated as a pytest fixture, record its name and return type key.
+    ///
+    /// Later phases use this binding-time index to type injected fixture parameters and to power
+    /// LSP navigation without reparsing imports or re-resolving pytest decorator aliases.
+    pub(crate) fn maybe_record_pytest_fixture_definition(
         &mut self,
         def: &StmtFunctionDef,
         class_key: Option<Idx<KeyClass>>,

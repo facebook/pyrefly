@@ -41,6 +41,24 @@ def test_foo(my_fixture):
 );
 
 testcase!(
+    test_pytest_fixture_parameter_suppresses_missing_annotation,
+    env_pytest_fixture().enable_implicit_any_parameter_error(),
+    r#"
+import pytest
+
+@pytest.fixture
+def my_fixture() -> int:
+    return 42
+
+def test_foo(my_fixture):
+    pass
+
+def helper(my_fixture):  # E: `helper` is missing an annotation for parameter `my_fixture`
+    pass
+"#,
+);
+
+testcase!(
     test_pytest_fixture_injected_parameter_type,
     env_pytest_fixture().enable_infer_pytest_fixture_types(),
     r#"
