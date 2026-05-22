@@ -708,6 +708,17 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::AnnAssign(mut x) => match *x.target {
                 Expr::Name(name) => {
+                    if Ast::is_synthesized_empty_name(&name) {
+                        self.ensure_type(&mut x.annotation, &mut None);
+                        if let Some(value) = x.value {
+                            self.bind_single_name_assign(
+                                &Ast::expr_name_identifier(name),
+                                value,
+                                None,
+                            );
+                        }
+                        return;
+                    }
                     // Handle annotated legacy TypeVar creation T: TypeVar = TypeVar("T")
                     if let Some(ref mut value) = x.value
                         && let Expr::Call(call) = value.as_mut()
