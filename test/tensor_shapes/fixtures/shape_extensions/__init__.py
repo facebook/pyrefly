@@ -149,3 +149,22 @@ class TypeVarTuple:
     @property
     def __typing_is_unpacked_typevartuple__(self):
         return True
+
+
+def uses_shape_dsl(
+    ir_fn: typing.Callable,
+    *,
+    capture_init: list[str] | None = None,
+) -> typing.Callable[[typing.Callable], typing.Callable]:
+    """Decorator that associates a shape DSL function with an API function.
+
+    At runtime this is a no-op: the decorator arguments are ignored and the
+    decorated function is returned unchanged. Pyrefly uses this decorator
+    at type-checking time to route bound arguments through the shape DSL
+    for return-type refinement.
+    """
+
+    def decorator(fn: typing.Callable) -> typing.Callable:
+        return fn
+
+    return decorator
