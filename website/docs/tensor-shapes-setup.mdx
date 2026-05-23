@@ -48,6 +48,24 @@ your `pyrefly.toml`.
 The fixtures also provide the `shape_extensions` package, which exports `Dim` — the
 bridge between runtime integer values and type-level symbols.
 
+## Python version requirements
+
+The fixture stubs use **PEP 696** syntax (type parameter defaults, e.g.
+`class Conv1d[InC, OutC, K, S = 1]`). PEP 696 was introduced in **Python 3.13**
+([PEP 696](https://peps.python.org/pep-0696/)).
+
+If you are running Python 3.12 or earlier, Pyrefly will report a syntax error:
+
+```
+invalid-syntax: Cannot set default type for a type parameter on Python 3.12
+(syntax was added in Python 3.13)
+```
+
+To use tensor shapes on Python 3.12 or earlier, you will need to either:
+
+- **Upgrade to Python 3.13+** (recommended)
+- **Use a Pyrefly release from before this feature was added** (if available)
+
 ## Imports and runtime considerations
 
 Python evaluates type annotations at runtime by default. This is a problem
