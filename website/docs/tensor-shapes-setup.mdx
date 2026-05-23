@@ -26,6 +26,8 @@ tensor-shapes = true
 search_path = [
     "path/to/fixtures",
 ]
+
+python_version = "3.13"
 ```
 
 **`tensor-shapes = true`** enables shape inference for `Tensor`, including
@@ -44,6 +46,11 @@ The fixtures live in Pyrefly's source tree at
 To use them in your project, copy the `fixtures/` directory into your project
 and set `search_path` to point to it. The path is relative to the location of
 your `pyrefly.toml`.
+
+**`python_version = "3.13"`** tells Pyrefly's parser to accept PEP 696 type
+parameter defaults (`S = 1, P = 0, D = 1`), which the fixture stubs use. This
+only affects how Pyrefly parses the stubs — it does not require your runtime
+Python to be 3.13 or newer.
 
 The fixtures also provide the `torch_shapes` package, which exports `Dim` — the
 bridge between runtime integer values and type-level symbols.
