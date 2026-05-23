@@ -45,6 +45,7 @@ interface SandboxResultsProps {
     pyodideStatus: PyodideStatus;
     activeTab: string;
     setActiveTab: (tab: string) => void;
+    typeCheckingPaused?: boolean;
     height?: number; // Dynamic height in pixels (from resizable splitter)
 }
 
@@ -134,12 +135,22 @@ export default function SandboxResults({
     pyodideStatus,
     activeTab,
     setActiveTab = () => {},
+    typeCheckingPaused = false,
     height,
 }: SandboxResultsProps): React.ReactElement {
     const activeToolbarTab = activeTab;
 
     const hasTypecheckErrors =
         errors !== undefined && errors !== null && errors.length > 0;
+    const emptyErrorsMessage = typeCheckingPaused
+        ? 'Type checking is paused in safe mode.'
+        : internalError
+          ? `Pyrefly encountered an internal error: ${internalError}.`
+          : errors === undefined || errors === null
+            ? 'Pyrefly failed to fetch errors.'
+            : errors?.length === 0
+              ? 'No errors!'
+              : null;
 
     // Use dynamic height if provided, otherwise fall back to default CSS
     const containerStyle = height ? { height: `${height}px` } : undefined;
@@ -196,16 +207,7 @@ export default function SandboxResults({
                                         </li>
                                     ))
                             ) : (
-                                <li>
-                                    {internalError
-                                        ? `Pyrefly encountered an internal error: ${internalError}.`
-                                        : errors === undefined ||
-                                            errors === null
-                                          ? 'Pyrefly failed to fetch errors.'
-                                          : errors?.length === 0
-                                            ? 'No errors!'
-                                            : null}
-                                </li>
+                                <li>{emptyErrorsMessage}</li>
                             )}
                         </ul>
                     </pre>

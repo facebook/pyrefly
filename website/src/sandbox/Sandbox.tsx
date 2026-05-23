@@ -39,6 +39,7 @@ import { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
 import { usePythonWorker } from './usePythonWorker';
+import { disableSandboxSafeMode, isSandboxSafeModeEnabled } from './safeMode';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
@@ -119,6 +120,7 @@ export default function Sandbox({
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
+    const [safeMode, setSafeMode] = useState(isSandboxSafeModeEnabled);
     // Absolute pixel height for the editor pane (null = not yet initialized)
     const [editorHeight, setEditorHeight] = useState<number | null>(null);
     const [isResizing, setIsResizing] = useState(false);
@@ -641,6 +643,14 @@ export default function Sandbox({
             return;
         }
 
+        if (safeMode) {
+            setLoading(false);
+            setPyreService(null);
+            setInternalError('');
+            setErrors([]);
+            return;
+        }
+
         setLoading(true);
         // Initialize the WebAssembly module only when the component is mounted
         if (!pyreflyWasmInitializedPromise) {
@@ -664,7 +674,7 @@ export default function Sandbox({
                 setLoading(false);
                 setInternalError(JSON.stringify(e));
             });
-    }, [isInViewport, pythonVersion]); // Re-run when isInViewport or pythonVersion changes
+    }, [isInViewport, pythonVersion, safeMode]); // Re-run when isInViewport, pythonVersion, or safeMode changes
 
     // Need to add createModel handler in case monaco model was not created at mount time
     monaco.editor.onDidCreateModel((_newModel) => {
@@ -719,6 +729,23 @@ export default function Sandbox({
     }, [models.size, pyreService, model, activeFileName]);
 
     function forceRecheck() {
+        if (safeMode) {
+            if (model !== null) {
+                setAutoCompleteFunction(model, () => []);
+                setGetDefFunction(model, () => null);
+                setHoverFunctionForMonaco(model, () => null);
+                setInlayHintFunctionForMonaco(model, () => []);
+                setSemanticTokensFunctionForMonaco(model, () => null);
+                setSemanticTokensLegendForMonaco(() => ({
+                    tokenTypes: [],
+                    tokenModifiers: [],
+                }));
+            }
+            setLoading(false);
+            setInternalError('');
+            setErrors([]);
+            return;
+        }
         if (model == null || pyreService == null) return;
 
         setAutoCompleteFunction(model, (l: number, c: number) =>
@@ -897,6 +924,12 @@ export default function Sandbox({
         setActiveFileName
     );
 
+    const resumeTypeChecking = () => {
+        disableSandboxSafeMode();
+        setSafeMode(false);
+        setLoading(true);
+    };
+
     // Calculate heights based on stored editor height (only used in sandbox mode)
     // Uses stored pixel value to avoid recalculation on every render
     const getSandboxEditorHeight = () => {
@@ -931,6 +964,21 @@ export default function Sandbox({
                 !isCodeSnippet && !isMobile() && styles.sandboxPadding
             )}
         >
+            {safeMode && !isCodeSnippet && (
+                <div {...stylex.props(styles.safeModeBanner)}>
+                    <span>
+                        Type checking is paused so you can edit the code that
+                        crashed the sandbox.
+                    </span>
+                    <button
+                        type="button"
+                        {...stylex.props(styles.safeModeButton)}
+                        onClick={resumeTypeChecking}
+                    >
+                        Resume type checking
+                    </button>
+                </div>
+            )}
             {!isCodeSnippet && <TabBar />}
             <div
                 ref={sandboxContainerRef}
@@ -997,6 +1045,7 @@ export default function Sandbox({
                             pyodideStatus={pyodideStatus}
                             activeTab={activeTab}
                             setActiveTab={setActiveTab}
+                            typeCheckingPaused={safeMode}
                             height={getResultsHeight()}
                         />
                     </>
@@ -1536,6 +1585,26 @@ const styles = stylex.create({
     },
     sandboxPadding: {
         paddingHorizontal: '10px',
+    },
+    safeModeBanner: {
+        alignItems: 'center',
+        background: 'var(--ifm-alert-background-color-highlight)',
+        border: '1px solid var(--ifm-color-warning-dark)',
+        color: 'var(--ifm-font-color-base)',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '10px',
+        justifyContent: 'space-between',
+        padding: '10px 14px',
+    },
+    safeModeButton: {
+        background: 'var(--ifm-color-primary)',
+        border: '1px solid var(--ifm-color-primary)',
+        borderRadius: '4px',
+        color: '#fff',
+        cursor: 'pointer',
+        fontWeight: 600,
+        padding: '6px 10px',
     },
     codeEditorContainer: {
         position: 'relative',
