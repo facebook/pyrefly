@@ -3079,14 +3079,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | TypeCheckKind::CallVarArgs(..)
             | TypeCheckKind::CallKwArgs(..)
             | TypeCheckKind::CallUnpackKwArg(..) => {
-                let mut call_context = CallContext::outside();
-                call_context.set_argument_side(ArgumentSide::Got);
-                self.solver().is_subset_eq_with_call_context(
-                    got,
-                    want,
-                    self.type_order(),
-                    &call_context,
-                )
+                let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
+                self.solver()
+                    .is_subset_eq(got, want, self.type_order(), Some(&call_context))
             }
             _ => self.is_subset_eq_with_reason(got, want),
         };
@@ -3108,12 +3103,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tcc: &dyn Fn() -> TypeCheckContext,
         call_context: &CallContext,
     ) -> bool {
-        match self.solver().is_subset_eq_with_call_context(
-            got,
-            want,
-            self.type_order(),
-            call_context,
-        ) {
+        match self
+            .solver()
+            .is_subset_eq(got, want, self.type_order(), Some(call_context))
+        {
             Ok(()) => true,
             Err(error) => {
                 self.report_type_error(got, want, errors, loc, tcc, error);

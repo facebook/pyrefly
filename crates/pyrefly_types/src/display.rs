@@ -25,6 +25,7 @@ use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
+use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
@@ -44,7 +45,6 @@ use crate::typed_dict::TypedDict;
 use crate::types::AnyStyle;
 use crate::types::BoundMethod;
 use crate::types::BoundMethodType;
-use crate::types::CallableResidualKind;
 use crate::types::Forall;
 use crate::types::Forallable;
 use crate::types::NeverStyle;

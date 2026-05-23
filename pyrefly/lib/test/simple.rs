@@ -1230,6 +1230,36 @@ testcase!(
 );
 
 testcase!(
+    test_syntax_error_empty_decorator_slice,
+    r#"
+@:[ # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_star,
+    r#"
+x = object()
+match x:
+    case [*]: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_bindings,
+    r#"
+x = object()
+match x:
+    case as: # E: Parse
+        pass
+match x:
+    case {**}: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
     test_mangled_for,
     r#"
 # This has identical Identifiers in the AST, which seems like the right AST.
@@ -1816,6 +1846,14 @@ testcase!(
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/1903
 (:=).:  # E: Cannot annotate non-self attribute `:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Parse error: Expected an expression
+"#,
+);
+
+testcase!(
+    test_crash_on_incomplete_named_walrus_attribute_annotation,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/3344
+(a:=).:b  # E: Cannot annotate non-self attribute `a:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Could not find name `b`
 "#,
 );
 

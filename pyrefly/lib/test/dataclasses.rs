@@ -1735,7 +1735,6 @@ assert_type(c.y, int)
 );
 
 testcase!(
-    bug = "conformance: Dataclass with generic non-data descriptor should work correctly",
     test_dataclass_generic_descriptor_conformance,
     r#"
 from dataclasses import dataclass
@@ -1756,14 +1755,12 @@ class DC2:
     y: Desc2[str]
     z: Desc2[str] = Desc2()  # E: Cannot set field `z` to non-data descriptor `Desc2`
 
-# pyrefly incorrectly returns Desc2[T] instead of list[T] for class attribute access
-assert_type(DC2.x, list[int])  # E: assert_type(Desc2[int], list[int]) failed
-assert_type(DC2.y, list[str])  # E: assert_type(Desc2[str], list[str]) failed
+assert_type(DC2.x, list[int])
+assert_type(DC2.y, list[str])
 
 dc2 = DC2(Desc2(), Desc2(), Desc2())
-# pyrefly incorrectly returns Desc2[T] instead of T for instance attribute access
-assert_type(dc2.x, int)  # E: assert_type(Desc2[int], int) failed
-assert_type(dc2.y, str)  # E: assert_type(Desc2[str], str) failed
+assert_type(dc2.x, int)
+assert_type(dc2.y, str)
 "#,
 );
 

@@ -1322,6 +1322,34 @@ fn redundant_cast_fix_all() {
     );
 }
 
+#[test]
+fn unnecessary_str_call_quickfix() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "def f(x: str) -> None:\n    y = str(x)\n#       ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     y = str(x)
+            ^
+Code Actions Results:
+# Title: Remove unnecessary `str()` call
+
+## Before:
+def f(x: str) -> None:
+    y = str(x)
+#       ^
+## After:
+def f(x: str) -> None:
+    y = x
+#       ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
 fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<String> {
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
     let handle = handles.get("main")?;

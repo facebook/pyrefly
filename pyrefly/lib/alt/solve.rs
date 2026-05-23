@@ -105,6 +105,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NoneIfRecursive;
 use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::RaisedException;
@@ -130,7 +131,9 @@ use crate::error::style::ErrorStyle;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
 use crate::solver::solver::PinError;
+use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
+use crate::solver::solver::TypeVarSpecializationError;
 use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
 use crate::types::annotation::Annotation;
@@ -465,7 +468,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn is_subset_eq_with_reason(&self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        self.solver().is_subset_eq(got, want, self.type_order())
+        self.solver()
+            .is_subset_eq(got, want, self.type_order(), None)
     }
 
     pub fn is_consistent(&self, got: &Type, want: &Type) -> bool {
@@ -478,6 +482,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver()
             .is_equivalent(got, want, self.type_order())
             .is_ok()
+    }
+
+    pub fn finish_quantified(
+        &self,
+        vs: QuantifiedHandle,
+        infer_with_first_use: bool,
+    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
+        self.solver()
+            .finish_quantified(vs, infer_with_first_use, self.type_order(), None)
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -3822,6 +3835,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         to_unpack: Idx<Key>,
         range: TextRange,
         pos: &UnpackedPosition,
+        receiver: Option<&MultiTargetReceiver>,
         errors: &ErrorCollector,
     ) -> Type {
         let iterables = self.iterate(self.get_idx(to_unpack).ty(), range, errors, None);
@@ -3895,6 +3909,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
             }
         }
+        if let Some(receiver) = receiver {
+            return self.check_against_receiver(got, receiver, range, errors);
+        }
         got
     }
 
@@ -3939,6 +3956,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ann: Option<Idx<KeyAnnotation>>,
         idx: Idx<Key>,
         range: TextRange,
+        receiver: Option<&MultiTargetReceiver>,
         errors: &ErrorCollector,
     ) -> Type {
         let type_info = self.get_idx(idx);
@@ -3961,7 +3979,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return annot_ty;
             }
         }
+        if let Some(receiver) = receiver {
+            return self.check_against_receiver(ty.clone(), receiver, range, errors);
+        }
         ty.clone()
+    }
+
+    /// Receiver-constrained class rebind check shared by `MultiTargetAssign`
+    /// and `UnpackedValue`. Mirrors the single-target path in
+    /// `name_assign_infer`: incompatible writes report a standard
+    /// AnnotatedName diagnostic and the visible type stays the receiver's.
+    fn check_against_receiver(
+        &self,
+        got: Type,
+        receiver: &MultiTargetReceiver,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let receiver_ty = self.get_idx(receiver.idx).arc_clone_ty();
+        let tcc: &dyn Fn() -> TypeCheckContext =
+            &|| TypeCheckContext::of_kind(TypeCheckKind::AnnotatedName(receiver.name.clone()));
+        self.check_and_return_type(got, &receiver_ty, range, errors, tcc)
     }
 
     /// Handle `Binding::ClassBodyUnknownName` - resolve unknown name in class body.
@@ -5068,9 +5106,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::StmtExpr(e, special_export) => {
                 self.binding_to_type_stmt_expr(e, *special_export, errors)
             }
-            Binding::MultiTargetAssign(ann, idx, range) => {
-                self.binding_to_type_multi_target_assign(*ann, *idx, *range, errors)
-            }
+            Binding::MultiTargetAssign(ann, idx, range, receiver) => self
+                .binding_to_type_multi_target_assign(
+                    *ann,
+                    *idx,
+                    *range,
+                    receiver.as_deref(),
+                    errors,
+                ),
             Binding::PatternMatchMapping(mapping_key, binding_key) => {
                 // TODO: check that value is a mapping
                 // TODO: check against duplicate keys (optional)
@@ -5172,9 +5215,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::ContextValue(ann, e, range, kind) => {
                 self.binding_to_type_context_value(*ann, *e, *range, *kind, errors)
             }
-            Binding::UnpackedValue(ann, to_unpack, range, pos) => {
-                self.binding_to_type_unpacked_value(*ann, *to_unpack, *range, pos, errors)
-            }
+            Binding::UnpackedValue(ann, to_unpack, range, pos, receiver) => self
+                .binding_to_type_unpacked_value(
+                    *ann,
+                    *to_unpack,
+                    *range,
+                    pos,
+                    receiver.as_deref(),
+                    errors,
+                ),
             &Binding::Function(idx, mut pred, class_meta) => {
                 let def = self.get_decorated_function(idx);
                 self.solve_function_binding(def, &mut pred, class_meta.as_ref(), errors)

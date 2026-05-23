@@ -9,13 +9,13 @@
 //! `StructuredType` representation used in CinderX reports.
 
 use pyrefly_types::callable::Params;
+use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
-use pyrefly_types::types::CallableResidualKind;
 use pyrefly_types::types::Type;
 use pyrefly_types::types::Union;
 use pyrefly_util::display::Fmt;

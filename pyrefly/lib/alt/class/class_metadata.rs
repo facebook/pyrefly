@@ -1693,9 +1693,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return true;
             }
             if let Some(metaclass) = base_metadata.custom_metaclass()
-                && metaclass
-                    .class_object()
-                    .has_toplevel_qname("abc", "ABCMeta")
+                && self.metaclass_extends_abcmeta(metaclass.class_object())
             {
                 return true;
             }
@@ -1704,12 +1702,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if let Some(metaclass) = metaclass
-            && metaclass
-                .class_object()
-                .has_toplevel_qname("abc", "ABCMeta")
+            && self.metaclass_extends_abcmeta(metaclass.class_object())
         {
             return true;
         }
         false
+    }
+
+    /// Check if `metaclass_cls` is `abc.ABCMeta` or has `abc.ABCMeta` anywhere in its
+    /// inheritance chain.
+    fn metaclass_extends_abcmeta(&self, metaclass_cls: &Class) -> bool {
+        if metaclass_cls.has_toplevel_qname("abc", "ABCMeta") {
+            return true;
+        }
+        let metadata = self.get_metadata_for_class(metaclass_cls);
+        metadata
+            .base_class_objects()
+            .iter()
+            .any(|base| self.metaclass_extends_abcmeta(base))
     }
 }

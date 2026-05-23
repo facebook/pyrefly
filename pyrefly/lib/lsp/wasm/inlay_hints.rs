@@ -27,7 +27,10 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
 use crate::state::lsp::AllOffPartial;
@@ -186,10 +189,11 @@ impl<'a> Transaction<'a> {
                         // authoritatively typed; suggesting an explicit
                         // annotation here would be redundant and, for the
                         // receiver case, could mislead users into
-                        // annotating with the RHS-derived type.
+                        // annotating with the RHS-derived type. The same
+                        // applies to receiver-bearing unpacked rebinds.
                         Binding::NameAssign(x) if !x.is_pinned() => (Some(&*x.expr), false),
                         Binding::Expr(None, e) => (Some(&**e), false),
-                        Binding::UnpackedValue(None, unpack_idx, _, pos) => {
+                        Binding::UnpackedValue(None, unpack_idx, _, pos, None) => {
                             // Try to get the element expression from the unpacked source
                             let element_expr =
                                 Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
@@ -235,6 +239,71 @@ impl<'a> Transaction<'a> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // Inlay hints for unannotated class attributes defined in methods (e.g. self.x = value in __init__)
+        if inlay_hint_config.variable_types {
+            let answers = self.get_answers(handle);
+            for field_idx in bindings.keys::<KeyClassField>() {
+                let field = bindings.get(field_idx);
+                if let ClassFieldDefinition::DefinedInMethod {
+                    value,
+                    annotation: None,
+                    ..
+                } = &field.definition
+                {
+                    let class_field = answers
+                        .as_ref()
+                        .and_then(|a| a.get_idx::<KeyClassField>(field_idx));
+                    if let Some(class_field) = class_field {
+                        let ty = answers
+                            .as_ref()
+                            .unwrap()
+                            .solver()
+                            .for_display(class_field.ty());
+                        if ty.is_any() {
+                            continue;
+                        }
+                        let expr = match value.as_ref() {
+                            ExprOrBinding::Expr(e) => Some(e),
+                            ExprOrBinding::Binding(_) => None,
+                        };
+                        // Suppress self.x = x where the RHS is a bare name matching the
+                        // attribute name. The type is already visible at the parameter.
+                        if let Some(Expr::Name(name)) = expr
+                            && *name.id() == *field.name
+                        {
+                            continue;
+                        }
+                        let class_name = if let Type::ClassType(cls) = &ty
+                            && cls.targs().is_empty()
+                        {
+                            Some(cls.name())
+                        } else {
+                            None
+                        };
+                        let should_show = match expr {
+                            Some(e) => is_interesting(e, &ty, class_name),
+                            None => true,
+                        };
+                        if should_show {
+                            let type_parts = ty.get_types_with_locations(Some(&stdlib));
+                            let label_parts = once((": ".to_owned(), None))
+                                .chain(
+                                    type_parts
+                                        .iter()
+                                        .map(|(text, loc)| (text.clone(), loc.clone())),
+                                )
+                                .collect();
+                            res.push(InlayHintData {
+                                position: field.range.end(),
+                                label_parts,
+                                insertable: true,
+                            });
+                        }
+                    }
+                }
             }
         }
 

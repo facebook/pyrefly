@@ -2085,6 +2085,17 @@ impl NameAssign {
     }
 }
 
+/// Carries the canonical class identity for a receiver-constrained class
+/// rebind through `MultiTargetAssign` and `UnpackedValue` bindings. The `name`
+/// is the LHS being assigned to, and `idx` points at the canonical class-object
+/// binding of the original `class` definition. Invariants and semantics match
+/// `NameAssign::receiver_idx`.
+#[derive(Clone, Debug)]
+pub struct MultiTargetReceiver {
+    pub name: Name,
+    pub idx: Idx<Key>,
+}
+
 /// Data for a type alias binding.
 #[derive(Clone, Debug)]
 pub struct TypeAliasBinding {
@@ -2183,7 +2194,15 @@ pub enum Binding {
     StmtExpr(Box<Expr>, Option<SpecialExport>),
     /// Propagate a type to a new binding. Takes an optional annotation to
     /// check against (which will override the computed type if they disagree).
-    MultiTargetAssign(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange),
+    /// The optional `MultiTargetReceiver` carries the canonical class identity
+    /// when this is a receiver-constrained class rebind (`Other = Real = Dummy`),
+    /// so the solver can apply the same checks as a single-target rebind.
+    MultiTargetAssign(
+        Option<Idx<KeyAnnotation>>,
+        Idx<Key>,
+        TextRange,
+        Option<Box<MultiTargetReceiver>>,
+    ),
     /// TypeVar, ParamSpec, or TypeVarTuple
     TypeVar(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     ParamSpec(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
@@ -2206,11 +2225,15 @@ pub enum Binding {
     ContextValue(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange, IsAsync),
     /// A value at a specific position in an unpacked iterable expression.
     /// Example: UnpackedValue(('a', 'b')), 1) represents 'b'.
+    /// The optional `MultiTargetReceiver` carries the canonical class identity
+    /// when this is a receiver-constrained class rebind (`Real, _ = (Dummy, 0)`),
+    /// so the solver can apply the same checks as a single-target rebind.
     UnpackedValue(
         Option<Idx<KeyAnnotation>>,
         Idx<Key>,
         TextRange,
         UnpackedPosition,
+        Option<Box<MultiTargetReceiver>>,
     ),
     /// A type where we have an annotation, but also a type we computed.
     /// If the annotation has a type inside it (e.g. `int` then use the annotation).
@@ -2334,14 +2357,23 @@ impl DisplayWith<Bindings> for Binding {
         match self {
             Self::Expr(a, x) => write!(f, "Expr({}, {})", ann(a), m.display(x)),
             Self::StmtExpr(x, _) => write!(f, "StmtExpr({})", m.display(x)),
-            Self::MultiTargetAssign(a, idx, range) => {
+            Self::MultiTargetAssign(a, idx, range, receiver) => {
                 write!(
                     f,
-                    "MultiTargetAssign({}, {}, {})",
+                    "MultiTargetAssign({}, {}, {}",
                     ann(a),
                     ctx.display(*idx),
                     m.display(range),
-                )
+                )?;
+                if let Some(receiver) = receiver {
+                    write!(
+                        f,
+                        ", receiver={}@{}",
+                        receiver.name,
+                        ctx.display(receiver.idx)
+                    )?;
+                }
+                write!(f, ")")
             }
             Self::TypeVar(x) => {
                 let (a, name, call) = x.as_ref();
@@ -2386,7 +2418,7 @@ impl DisplayWith<Bindings> for Binding {
             Self::ContextValue(a, x, _, kind) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
-            Self::UnpackedValue(a, x, range, pos) => {
+            Self::UnpackedValue(a, x, range, pos, receiver) => {
                 let pos = match pos {
                     UnpackedPosition::Index(i) => i.to_string(),
                     UnpackedPosition::ReverseIndex(i) => format!("-{i}"),
@@ -2400,12 +2432,21 @@ impl DisplayWith<Bindings> for Binding {
                 };
                 write!(
                     f,
-                    "UnpackedValue({}, {}, {}, {})",
+                    "UnpackedValue({}, {}, {}, {}",
                     ann(a),
                     ctx.display(*x),
                     m.display(range),
                     pos
-                )
+                )?;
+                if let Some(receiver) = receiver {
+                    write!(
+                        f,
+                        ", receiver={}@{}",
+                        receiver.name,
+                        ctx.display(receiver.idx)
+                    )?;
+                }
+                write!(f, ")")
             }
             Self::Function(x, _pred, _class) => write!(f, "Function({})", ctx.display(*x)),
             Self::Import(x) => {
@@ -2660,11 +2701,15 @@ impl Binding {
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
-            Binding::UnpackedValue(_, _, _, _) => Some(SymbolKind::Variable),
+            // Receiver-constrained multi-target / unpacked rebinds are
+            // class-shaped — match the `NameAssign` path above.
+            Binding::MultiTargetAssign(_, _, _, Some(_))
+            | Binding::UnpackedValue(_, _, _, _, Some(_)) => Some(SymbolKind::Class),
+            Binding::UnpackedValue(_, _, _, _, None) => Some(SymbolKind::Variable),
             Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
             Binding::Expr(_, _)
             | Binding::StmtExpr(_, _)
-            | Binding::MultiTargetAssign(_, _, _)
+            | Binding::MultiTargetAssign(_, _, _, None)
             | Binding::ReturnExplicit(_)
             | Binding::ReturnImplicit(_)
             | Binding::ReturnType(_)

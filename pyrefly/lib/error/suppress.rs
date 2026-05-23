@@ -459,16 +459,26 @@ fn update_ignore_comment_with_used_codes(
         return None;
     }
 
-    // Some codes are used, some are unused - rebuild the comment with only used codes
-    let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[[^\]]*\]").unwrap();
-    if regex.is_match(comment_part) {
-        let mut sorted_codes: Vec<_> = used_codes.iter().cloned().collect();
-        sorted_codes.sort();
-        let new_comment = format!("# pyrefly: ignore [{}]", sorted_codes.join(", "));
-        let updated = regex.replace(comment_part, new_comment.as_str());
-        return Some(format!("{}{}", code_part, updated));
-    }
-    None
+    // Drop only the unused codes; preserve the user's original whitespace and comma style.
+    let regex = Regex::new(r"#\s*pyrefly:\s*ignore\s*\[([^\]]*)\]").unwrap();
+    let codes = regex.captures(comment_part)?.get(1).unwrap();
+    let separator = if codes.as_str().contains(", ") {
+        ", "
+    } else {
+        ","
+    };
+    let kept = codes
+        .as_str()
+        .split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty() && used_codes.contains(*c))
+        .collect::<Vec<_>>()
+        .join(separator);
+    Some(format!(
+        "{code_part}{}{kept}{}",
+        &comment_part[..codes.start()],
+        &comment_part[codes.end()..],
+    ))
 }
 
 /// Removes unused ignore comments from source files.
@@ -1120,7 +1130,7 @@ def f(x: int) -> int:
 a: int = ""
 "#;
         let after = r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 a: int = ""
 "#;
         assert_remove_ignores(before, after, 1);
@@ -1144,10 +1154,23 @@ def g() -> str:
 a: int = "" # pyrefly: ignore[bad-assignment, bad-override]
 "#;
         let after = r#"
-a: int = "" # pyrefly: ignore [bad-assignment]
+a: int = "" # pyrefly: ignore[bad-assignment]
 "#;
         assert_remove_ignores(before, after, 1);
     }
+
+    #[test]
+    fn test_strip_unused_error_code_preserves_original_formatting() {
+        // Regression: github.com/facebook/pyrefly/issues/3369
+        let before = r#"
+float(object())  # pyrefly:ignore[bad-argument-type,potato]
+"#;
+        let after = r#"
+float(object())  # pyrefly:ignore[bad-argument-type]
+"#;
+        assert_remove_ignores(before, after, 1);
+    }
+
     #[test]
     fn test_parse_ignore_comment() {
         let line = "    # pyrefly: ignore [unsupported-operation]";
@@ -1273,7 +1296,7 @@ def f() -> int:
 a: int = ""
 "#;
         let after = r#"
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 a: int = ""
 "#;
         let errors = vec![SerializedError {

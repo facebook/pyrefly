@@ -1981,7 +1981,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 },
             );
-            if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
+            if let Err(specialization_errors) = self.finish_quantified(vs, false) {
                 let mut builder = errors.error_builder(
                     *range,
                     ErrorKind::InconsistentOverload,

@@ -383,6 +383,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn tuple_membership_type(
+        &self,
+        tuple: &Tuple,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let elements = match tuple {
+            Tuple::Concrete(elts) => elts.clone(),
+            Tuple::Unbounded(elt) => vec![(**elt).clone()],
+            Tuple::Unpacked(unpacked) => {
+                let (prefix, middle, suffix) = &**unpacked;
+                let mut elements = prefix.clone();
+                let middle = if let Type::Var(_) = middle {
+                    self.force_for_narrowing(middle, range, errors)
+                } else {
+                    middle.clone()
+                };
+                match middle {
+                    Type::Tuple(tuple) => {
+                        elements.push(self.tuple_membership_type(&tuple, range, errors)?)
+                    }
+                    Type::TypeVarTuple(_) | Type::Quantified(_) | Type::Unpack(_) => return None,
+                    _ => elements.push(middle),
+                }
+                elements.extend(suffix.clone());
+                elements
+            }
+        };
+        if elements.iter().any(|ty| self.behaves_like_any(ty)) {
+            None
+        } else if elements.is_empty() {
+            Some(self.heap.mk_never())
+        } else {
+            Some(self.unions(elements))
+        }
+    }
+
     /// Unwrap a class object for isinstance narrowing. When the right-hand side is `tuple`
     /// and the left-hand side is a heterogeneous tuple type, creates a TypeVarTuple for
     /// precise narrowing. Otherwise falls back to standard class object unwrapping.
@@ -429,7 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
                     // * If `left` is an invalid specialization, the error has already been reported at its definition site.
                     // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
-                    let _specialization_errors = self.solver().finish_quantified(vs, false);
+                    let _specialization_errors = self.finish_quantified(vs, false);
                     result
                 } else {
                     l.clone()
@@ -447,39 +484,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let force_allow_negative = matches!(source, NarrowSource::Pattern);
-        let mut res = Vec::new();
-        for (right, allows_negative_narrow) in self.expr_as_class_info(right_expr, errors) {
-            res.push(self.distribute_over_union(left, |l| {
-                let allows_negative_narrow = allows_negative_narrow || force_allow_negative;
+        let class_infos = self.expr_as_class_info(right_expr, errors);
+        // Subtract each class info from each union member of `left` in turn,
+        // rather than computing per-target results and intersecting them.
+        // Intersecting `subtract(L, A)` with `subtract(L, B)` reintroduces
+        // any union member that overlaps with both A and B (e.g. `Iterable[Any]`
+        // overlaps with both `str` and `bytes`), so `isinstance(x, (str, bytes))`
+        // would leave the negative branch unchanged. Sequential per-element
+        // subtraction avoids that.
+        self.distribute_over_union(left, |l| {
+            let mut result = l.clone();
+            for (right, allows_negative_narrow) in &class_infos {
+                let allows_negative_narrow = *allows_negative_narrow || force_allow_negative;
                 if !allows_negative_narrow {
-                    return l.clone();
+                    continue;
                 }
-                if let Some((tparams, right)) = self.unwrap_isinstance_target(l, &right) {
+                if let Some((tparams, right)) = self.unwrap_isinstance_target(&result, right) {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
                     // For constrained TypeVars, subtract from the concrete constraints
                     // so that e.g. isinstance(x, (int, float)) with T(int, str, float)
                     // narrows the else branch to str instead of leaving it as T.
-                    let result = if let Type::Quantified(q) = l
+                    result = if let Type::Quantified(q) = &result
                         && let Restriction::Constraints(_) = q.restriction()
                     {
                         let concrete = q.bound_type(self.stdlib, self.heap);
                         self.subtract(&concrete, &right)
                     } else {
-                        self.subtract(l, &right)
+                        self.subtract(&result, &right)
                     };
                     // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
                     // * If `left` is an invalid specialization, the error has already been reported at its definition site.
                     // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
-                    let _specialization_errors = self.solver().finish_quantified(vs, false);
-                    result
-                } else {
-                    l.clone()
+                    let _specialization_errors = self.finish_quantified(vs, false);
                 }
-            }));
-        }
-        self.intersects(&res)
+            }
+            result
+        })
     }
 
     /// Narrow `type(X) != Y`. We can only do negative narrowing if Y is final,
@@ -496,7 +538,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.solver()
                             .fresh_quantified(&tparams, unwrapped, self.uniques);
                     let result = self.subtract(l, &unwrapped);
-                    let _specialization_errors = self.solver().finish_quantified(vs, false);
+                    let _specialization_errors = self.finish_quantified(vs, false);
                     result
                 } else {
                     l.clone()
@@ -624,7 +666,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
                 // * If `left` is an invalid specialization, the error has already been reported at its definition site.
                 // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
-                let _specialization_errors = self.solver().finish_quantified(vs, false);
+                let _specialization_errors = self.finish_quantified(vs, false);
             } else {
                 res.push(left.clone())
             }
@@ -652,7 +694,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // These are safe to ignore, as the only possible specialization errors are handled elsewhere:
                 // * If `left` is an invalid specialization, the error has already been reported at its definition site.
                 // * Unsafe runtime protocol overlaps are separately checked for in special_calls.rs.
-                let _specialization_errors = self.solver().finish_quantified(vs, false);
+                let _specialization_errors = self.finish_quantified(vs, false);
             } else {
                 res.push(left.clone())
             }
@@ -1074,6 +1116,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Check if the right operand is a TypedDict.
                 // If so, we can narrow the left operand to the union of the TypedDict's keys.
                 let right_ty = self.expr_infer(v, errors);
+                if let Type::Tuple(tuple) = &right_ty
+                    && let Some(member_ty) = self.tuple_membership_type(tuple, range, errors)
+                {
+                    return self.intersect(ty, &member_ty);
+                }
                 if let Type::TypedDict(typed_dict) = &right_ty {
                     let fields = self.typed_dict_fields(typed_dict);
                     if fields.is_empty() {

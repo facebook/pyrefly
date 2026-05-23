@@ -812,11 +812,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             //     def f[T](x: T, other: T): ...
             //     f(A(), 0)  # T = A | int
             if let Some(self_qs) = mem::take(&mut self_qs) {
-                let specialization_errors = self.solver().finish_quantified_with_type_order(
-                    self_qs,
-                    self.solver().infer_with_first_use,
-                    self.type_order(),
-                );
+                let specialization_errors =
+                    self.finish_quantified(self_qs, self.solver().infer_with_first_use);
                 if let Err(errors) = specialization_errors {
                     self.add_specialization_errors(errors, arg.range(), call_errors, context);
                 }
@@ -1383,9 +1380,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Vec<TypeVarSpecializationError>,
         HashMap<TextRange, Type>,
     ) {
-        let mut call_context = CallContext::outside();
-        call_context.set_argument_side(ArgumentSide::Got);
-        call_context.require_boundary_consumption();
+        let call_context = CallContext::outside()
+            .with_argument_side(ArgumentSide::Got)
+            .require_boundary_consumption();
 
         // Look up meta-shape early so we can conditionally collect bound args.
         // Only consult the registry when tensor_shapes is enabled to avoid
@@ -1410,11 +1407,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     // Even though these quantifieds aren't used, let's make sure to not leave
                     // unfinished quantifieds around.
-                    let _ = self.solver().finish_quantified_with_type_order(
-                        qs,
-                        false,
-                        self.type_order(),
-                    );
+                    let _ = self.finish_quantified(qs, false);
                     self.instantiate_fresh_callable(tparams, callable)
                 }
             } else {
@@ -1568,18 +1561,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let mut errors = self
             .solver()
-            .finish_quantified_with_type_order_and_call_context(
+            .finish_quantified(
                 remaining_callable_qs,
                 self.solver().infer_with_first_use,
                 self.type_order(),
-                &call_context,
+                Some(&call_context),
             )
             .map_or_else(|e| e.to_vec(), |_| Vec::new());
-        if let Err(e) = self.solver().finish_quantified_with_type_order(
-            ctor_qs,
-            self.solver().infer_with_first_use,
-            self.type_order(),
-        ) {
+        if let Err(e) = self.finish_quantified(ctor_qs, self.solver().infer_with_first_use) {
             errors.extend(e);
         }
 

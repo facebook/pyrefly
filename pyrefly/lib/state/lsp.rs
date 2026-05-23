@@ -2691,6 +2691,20 @@ impl<'a> Transaction<'a> {
                         }
                     }
                 }
+                ErrorKind::UnnecessaryTypeConversion => {
+                    if let Some(action) =
+                        quick_fixes::unnecessary_type_conversion::unnecessary_type_conversion_code_action(
+                            &module_info,
+                            &ast,
+                            error_range,
+                        )
+                    {
+                        let call_range = action.2;
+                        if error_range.contains_range(range) || call_range.contains_range(range) {
+                            other_actions.push(action);
+                        }
+                    }
+                }
                 _ => {}
             }
         }

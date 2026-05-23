@@ -409,9 +409,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     ));
                                 }
                             }
-                            if let Err(specialization_errors) =
-                                self.solver().finish_quantified(vs, false)
-                            {
+                            if let Err(specialization_errors) = self.finish_quantified(vs, false) {
                                 for e in specialization_errors {
                                     unsafe_overlap_errors.push(e.to_error_msg(self))
                                 }

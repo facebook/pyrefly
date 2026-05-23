@@ -953,6 +953,26 @@ and values that can be overridden here.
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
 
+### `pytorch-efficiency-lints`
+
+Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
+in training code. When `true`, all `pytorch-efficiency-lint-*` error kinds are
+enabled at `warn` severity. You can override individual lint severities in
+[`[errors]`](#errors).
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--pytorch-efficiency-lints`
+
+The following lints are enabled by this flag:
+
+| Lint | What it detects |
+|---|---|
+| [`pytorch-efficiency-lint-cuda-call`](./error-kinds.mdx#pytorch-efficiency-lint-cuda-call) | `Tensor.cuda()` — hard-coded device |
+| [`pytorch-efficiency-lint-item-call`](./error-kinds.mdx#pytorch-efficiency-lint-item-call) | `Tensor.item()` — GPU→CPU sync stall |
+| [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
+| [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
+
 ### `tensor-shapes`
 
 :::warning
