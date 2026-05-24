@@ -698,6 +698,30 @@ class B(A):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3062
+testcase!(
+    test_cached_property_overrides_unannotated_class_variable,
+    r#"
+from functools import cached_property
+
+class BaseDatabaseFeatures:
+    can_introspect_fk = True
+    update_can_self_select = True
+
+class MySQLFeatures(BaseDatabaseFeatures):
+    @cached_property
+    def can_introspect_fk(self):
+        return self._check()
+
+    @cached_property
+    def update_can_self_select(self):
+        return True
+
+    def _check(self) -> bool:
+        return False
+    "#,
+);
+
 testcase!(
     test_inherit_type_attribute,
     r#"
