@@ -1759,7 +1759,7 @@ impl Scopes {
     }
 
     /// Return true/false if a control-flow test can be statically evaluated.
-    pub fn evaluate_bool_for_control_flow(&self, sys_info: &SysInfo, x: &Expr) -> Option<bool> {
+    pub fn evaluate_bool_for_control_flow(&self, sys_info: SysInfo, x: &Expr) -> Option<bool> {
         if let Some(value) = sys_info.evaluate_bool(x) {
             return Some(value);
         }

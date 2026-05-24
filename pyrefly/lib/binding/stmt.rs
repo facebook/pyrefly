@@ -1088,7 +1088,7 @@ impl<'a> BindingsBuilder<'a> {
                         Some(x) => {
                             let result = self
                                 .scopes
-                                .evaluate_bool_for_control_flow(&self.sys_info, x);
+                                .evaluate_bool_for_control_flow(self.sys_info, x);
                             if result.is_some() {
                                 contains_static_test_with_no_else = true;
                             }
