@@ -453,6 +453,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut flags = FuncFlags {
             is_staticmethod: is_dunder_new,
             is_classmethod: is_dunder_init_subclass,
+            has_no_type_check: false,
             is_async: def.is_async,
             placeholder_body_kind,
             is_return_inferred,
@@ -568,113 +569,117 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ret = self
             .get(&Key::ReturnType(ShortIdentifier::new(&stmt.name)))
             .arc_clone_ty();
-        // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
-        let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
-        if !has_return_annotation {
-            self.error(
-                errors,
-                stmt.name.range(),
-                ErrorKind::UnannotatedReturn,
-                format!("`{}` is missing a return annotation", stmt.name),
-            );
-        }
-        // The first parameter of a non-static method is the implicit self/cls
-        // parameter and does not require an annotation, regardless of its name.
-        // __new__ is an implicit staticmethod but still takes cls as its first parameter.
-        // If the first parameter is variadic (e.g. *args), self is passed inside it,
-        // so there is no separate implicit parameter to skip.
         let is_dunder_new = def.defining_cls.is_some() && stmt.name.id == dunder::NEW;
         let has_implicit_self_or_cls_param =
             def.defining_cls.is_some() && (!def.metadata.flags.is_staticmethod || is_dunder_new);
-        for (i, p) in stmt.parameters.iter().enumerate() {
-            // Skip first param if it's implicit self/cls and not variadic
-            if i == 0 && has_implicit_self_or_cls_param && !p.is_variadic() {
-                continue;
-            }
-            if p.annotation().is_none() {
-                let name = p.name().as_str();
-                self.error(
-                    errors,
-                    p.name().range(),
-                    ErrorKind::ImplicitAnyParameter,
-                    format!(
-                        "`{}` is missing an annotation for parameter `{name}`",
-                        stmt.name
-                    ),
-                );
-            }
-        }
-        // Only validate TypeGuard/TypeIs functions when they have an explicit return annotation.
-        // Functions that return a TypeGuard value without an explicit annotation should not be
-        // treated as TypeGuard functions.
-        if has_return_annotation {
-            if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
-                self.validate_type_guard_positional_argument_count(
-                    &def.params,
-                    def.id_range(),
-                    &def.defining_cls,
-                    def.metadata.flags.is_staticmethod,
-                    errors,
-                );
-            }
-
-            if let Type::TypeIs(ty_narrow) = &ret {
-                self.validate_type_is_type_narrowing(
-                    &def.params,
-                    stmt,
-                    &def.defining_cls,
-                    def.metadata.flags.is_staticmethod,
-                    ty_narrow,
-                    errors,
-                );
-            }
-        }
-
         let contains_self_type = |ty: &Type| ty.any(|t| matches!(t, Type::SelfType(_)));
 
-        if def.metadata.flags.is_staticmethod && stmt.name.as_str() != dunder::NEW {
-            // For static methods, the use of `Self` is not allowed.
-            let signature_contains_self = contains_self_type(&ret)
-                || def.params.iter().any(|p| contains_self_type(p.as_type()));
-            if signature_contains_self {
+        if !def.metadata.flags.has_no_type_check {
+            // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
+            let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
+            if !has_return_annotation {
                 self.error(
                     errors,
-                    stmt.name.range,
-                    ErrorKind::InvalidAnnotation,
-                    "`Self` cannot be used in a static method".to_owned(),
+                    stmt.name.range(),
+                    ErrorKind::UnannotatedReturn,
+                    format!("`{}` is missing a return annotation", stmt.name),
                 );
             }
-        }
 
-        // When self/cls has an explicit TypeVar annotation, using Self anywhere in the signature
-        // (return type or other parameters) is invalid because the TypeVar and Self create
-        // conflicting type parameterization.
-        // For classmethods, the annotation is `type[TFoo]`, so we also unwrap `Type::Type(...)`.
-        if has_implicit_self_or_cls_param
-            && !def.metadata.flags.is_staticmethod
-            && let Some(first_param) = def.params.first()
-            && {
-                let ty = first_param.as_type();
-                ty.is_explicit_type_variable()
-                    || matches!(ty, Type::Type(inner) if inner.is_explicit_type_variable())
+            // The first parameter of a non-static method is the implicit self/cls
+            // parameter and does not require an annotation, regardless of its name.
+            // __new__ is an implicit staticmethod but still takes cls as its first parameter.
+            // If the first parameter is variadic (e.g. *args), self is passed inside it,
+            // so there is no separate implicit parameter to skip.
+            for (i, p) in stmt.parameters.iter().enumerate() {
+                // Skip first param if it's implicit self/cls and not variadic
+                if i == 0 && has_implicit_self_or_cls_param && !p.is_variadic() {
+                    continue;
+                }
+                if p.annotation().is_none() {
+                    let name = p.name().as_str();
+                    self.error(
+                        errors,
+                        p.name().range(),
+                        ErrorKind::ImplicitAnyParameter,
+                        format!(
+                            "`{}` is missing an annotation for parameter `{name}`",
+                            stmt.name
+                        ),
+                    );
+                }
             }
-        {
-            let signature_contains_self = contains_self_type(&ret)
-                || def
-                    .params
-                    .iter()
-                    .skip(1)
-                    .any(|p| contains_self_type(p.as_type()));
-            if signature_contains_self {
-                self.error(
-                    errors,
-                    stmt.name.range,
-                    ErrorKind::InvalidAnnotation,
-                    format!(
-                        "`Self` cannot be used when `{}` has an explicit TypeVar annotation",
-                        first_param.name().map_or("self", |n| n.as_str())
-                    ),
-                );
+
+            // When self/cls has an explicit TypeVar annotation, using Self anywhere in the signature
+            // (return type or other parameters) is invalid because the TypeVar and Self create
+            // conflicting type parameterization.
+            // For classmethods, the annotation is `type[TFoo]`, so we also unwrap `Type::Type(...)`.
+            if has_implicit_self_or_cls_param
+                && !def.metadata.flags.is_staticmethod
+                && let Some(first_param) = def.params.first()
+                && {
+                    let ty = first_param.as_type();
+                    ty.is_explicit_type_variable()
+                        || matches!(ty, Type::Type(inner) if inner.is_explicit_type_variable())
+                }
+            {
+                let signature_contains_self = contains_self_type(&ret)
+                    || def
+                        .params
+                        .iter()
+                        .skip(1)
+                        .any(|p| contains_self_type(p.as_type()));
+                if signature_contains_self {
+                    self.error(
+                        errors,
+                        stmt.name.range,
+                        ErrorKind::InvalidAnnotation,
+                        format!(
+                            "`Self` cannot be used when `{}` has an explicit TypeVar annotation",
+                            first_param.name().map_or("self", |n| n.as_str())
+                        ),
+                    );
+                }
+            }
+
+            // Only validate TypeGuard/TypeIs functions when they have an explicit return annotation.
+            // Functions that return a TypeGuard value without an explicit annotation should not be
+            // treated as TypeGuard functions.
+            if has_return_annotation {
+                if matches!(&ret, Type::TypeGuard(_) | Type::TypeIs(_)) {
+                    self.validate_type_guard_positional_argument_count(
+                        &def.params,
+                        def.id_range(),
+                        &def.defining_cls,
+                        def.metadata.flags.is_staticmethod,
+                        errors,
+                    );
+                }
+
+                if let Type::TypeIs(ty_narrow) = &ret {
+                    self.validate_type_is_type_narrowing(
+                        &def.params,
+                        stmt,
+                        &def.defining_cls,
+                        def.metadata.flags.is_staticmethod,
+                        ty_narrow,
+                        errors,
+                    );
+                }
+            }
+
+            if def.metadata.flags.is_staticmethod && stmt.name.as_str() != dunder::NEW {
+                // For static methods, the use of `Self` is not allowed.
+                let signature_contains_self = contains_self_type(&ret)
+                    || def.params.iter().any(|p| contains_self_type(p.as_type()));
+                if signature_contains_self {
+                    self.error(
+                        errors,
+                        stmt.name.range,
+                        ErrorKind::InvalidAnnotation,
+                        "`Self` cannot be used in a static method".to_owned(),
+                    );
+                }
             }
         }
 
@@ -760,6 +765,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Some(SpecialDecorator::PropertyDeleter(&decorator.ty));
         }
         match decorator.ty.callee_kind() {
+            Some(CalleeKind::Function(FunctionKind::Def(func_id)))
+                if func_id.name.as_str() == "no_type_check"
+                    && matches!(
+                        func_id.module.name().as_str(),
+                        "typing" | "typing_extensions"
+                    ) =>
+            {
+                Some(SpecialDecorator::NoTypeCheck)
+            }
             Some(CalleeKind::Function(FunctionKind::Overload)) => Some(SpecialDecorator::Overload),
             Some(CalleeKind::Class(ClassKind::StaticMethod(name))) => {
                 Some(SpecialDecorator::StaticMethod(name))
@@ -849,6 +863,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             SpecialDecorator::Final => {
                 flags.has_final_decoration = true;
+                true
+            }
+            SpecialDecorator::NoTypeCheck => {
+                flags.has_no_type_check = true;
                 true
             }
             SpecialDecorator::Deprecated(deprecation) => {

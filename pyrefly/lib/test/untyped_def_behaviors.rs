@@ -493,6 +493,17 @@ assert_type(f(0), Any)
 );
 
 testcase!(
+    test_no_type_check_without_return_annotation,
+    r#"
+from typing import no_type_check
+
+@no_type_check
+def f():
+    pass
+"#,
+);
+
+testcase!(
     test_no_type_check_dunder_new_preserves_self_default,
     r#"
 from typing import no_type_check, assert_type
