@@ -736,7 +736,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         .forall(tparams);
         ty = self.move_return_tparams_of_type(ty);
         for (x, range) in def.decorators.iter().rev() {
-            ty = self.apply_function_decorator(x.clone(), ty, &def.metadata, *range, errors);
+            ty = self.apply_function_decorator(
+                x.clone(),
+                ty,
+                &def.metadata,
+                &stmt.name,
+                *range,
+                errors,
+            );
         }
         Arc::new(ty)
     }
@@ -1596,11 +1603,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn decorator_missing_injected_parameter_message(
+        &self,
+        decorator: &Type,
+        decoratee_name: &Identifier,
+        decoratee: &Type,
+    ) -> Option<String> {
+        let decorator_name = decorator
+            .visit_toplevel_func_metadata(&|meta| Some(meta.kind.function_name().to_string()))?;
+        let expected_decoratee = decorator.callable_first_param(self.heap)?;
+        let expected_signature = expected_decoratee
+            .callable_signatures()
+            .into_iter()
+            .find(|signature| {
+                matches!(&signature.params, Params::ParamSpec(prefix, _) if !prefix.is_empty())
+            })?;
+
+        let actual_signature = match decoratee {
+            Type::Function(func) => &func.signature,
+            Type::Callable(callable) => callable.as_ref(),
+            _ => return None,
+        };
+
+        let Params::ParamSpec(prefix, _) = &expected_signature.params else {
+            return None;
+        };
+        let Params::List(actual_params) = &actual_signature.params else {
+            return None;
+        };
+        if actual_params.len() + 1 != prefix.len() {
+            return None;
+        }
+
+        let missing = prefix.get(actual_params.len())?;
+        Some(format!(
+            "Function `{}` is missing required parameter of type `{}` injected by decorator `{}`",
+            decoratee_name.as_str(),
+            self.for_display(missing.ty().clone()),
+            decorator_name,
+        ))
+    }
+
     fn apply_function_decorator(
         &self,
         decorator: Type,
         decoratee: Type,
         metadata: &FuncMetadata,
+        decoratee_name: &Identifier,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -1610,6 +1659,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return decoratee;
         }
+        let decorator_for_message = decorator.clone();
         let application = self.prepare_decorator_application(decorator, decoratee, range, errors);
         // Run a decorator call, buffering errors so we can decide between the primary
         // and Self-rewritten fallback without double-reporting.
@@ -1638,6 +1688,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && fallback_errors.is_empty()
         {
             fallback_return
+        } else if let Some(message) = self.decorator_missing_injected_parameter_message(
+            &decorator_for_message,
+            decoratee_name,
+            &application.decoratee_arg,
+        ) {
+            self.error(
+                errors,
+                decoratee_name.range(),
+                ErrorKind::InvalidDecorator,
+                message,
+            )
         } else {
             errors.extend(primary_errors);
             primary_return
