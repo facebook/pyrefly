@@ -292,6 +292,67 @@ def f(c: C) -> None:
 );
 
 testcase!(
+    test_cached_property_literal_value_type,
+    r#"
+from functools import cached_property
+from typing import Literal, assert_type
+
+class C:
+    @cached_property
+    def inferred(self):
+        return True
+
+    @cached_property
+    def annotated(self) -> Literal[True]:
+        return True
+
+    @property
+    def readonly(self):
+        return True
+
+def check(value: C) -> None:
+    assert_type(value.inferred, bool)
+    value.inferred = False
+    assert_type(value.inferred, bool)
+    assert_type(value.annotated, Literal[True])
+    value.annotated = False  # E: `Literal[False]` is not assignable to attribute `annotated` with type `Literal[True]`
+    assert_type(value.readonly, Literal[True])
+    "#,
+);
+
+testcase!(
+    test_cached_property_inner_literal_decorator,
+    r#"
+from collections.abc import Callable
+from functools import cached_property
+from typing import Literal, assert_type
+
+def preserve_true[F: Callable[..., Literal[True]]](function: F) -> F:
+    return function
+
+def declare_true[**P](function: Callable[P, Literal[True]]) -> Callable[P, Literal[True]]:
+    return function
+
+class C:
+    @cached_property
+    @preserve_true
+    def inferred(self):
+        return True
+
+    @cached_property
+    @declare_true
+    def declared(self):
+        return True
+
+def check(value: C) -> None:
+    assert_type(value.inferred, bool)
+    value.inferred = False
+    assert_type(value.declared, Literal[True])
+    value.declared = False  # E: `Literal[False]` is not assignable to attribute `declared` with type `Literal[True]`
+    "#,
+);
+
+testcase!(
     test_property_decorated_with_lru_cache,
     r#"
 import functools

@@ -783,6 +783,205 @@ class B(A):
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3062
+testcase!(
+    test_cached_property_overrides_unannotated_class_variable,
+    r#"
+from functools import cached_property
+
+class BaseDatabaseFeatures:
+    can_introspect_fk = True
+    update_can_self_select = True
+
+class MySQLFeatures(BaseDatabaseFeatures):
+    @cached_property
+    def can_introspect_fk(self):
+        return self._check()
+
+    @cached_property
+    def update_can_self_select(self):
+        return True
+
+    def _check(self) -> bool:
+        return False
+    "#,
+);
+
+testcase!(
+    test_cached_property_protocol_write,
+    r#"
+from functools import cached_property
+from typing import Literal, Protocol, assert_type
+
+class Writable(Protocol):
+    x: bool
+
+class Cached:
+    @cached_property
+    def x(self):
+        return True
+
+def write(value: Writable) -> None:
+    value.x = False
+
+def require_true(value: Literal[True]) -> None: ...
+
+def check(value: Cached) -> None:
+    assert_type(value.x, bool)
+    write(value)
+    assert_type(value.x, bool)
+    require_true(value.x)  # E: Argument `bool` is not assignable
+    value.x = False
+    assert_type(value.x, bool)
+    "#,
+);
+
+testcase!(
+    test_cached_property_inherited_write,
+    r#"
+from functools import cached_property
+from typing import Literal, assert_type
+
+class Base:
+    x = True
+
+class Child(Base):
+    @cached_property
+    def x(self):
+        return True
+
+def write(value: Base) -> None:
+    value.x = False
+
+def require_true(value: Literal[True]) -> None: ...
+
+def check(value: Child) -> None:
+    assert_type(value.x, bool)
+    write(value)
+    require_true(value.x)  # E: Argument `bool` is not assignable
+    value.x = False
+    assert_type(value.x, bool)
+    "#,
+);
+
+testcase!(
+    test_cached_property_overload_protocol_write,
+    r#"
+from functools import cached_property
+from typing import Protocol, assert_type, overload
+
+class Broad(Protocol):
+    x: int | str
+
+class Narrow(Protocol):
+    x: int
+
+class NarrowString(Protocol):
+    x: str
+
+class ReadOnly(Protocol):
+    @property
+    def x(self) -> int | str: ...
+
+class C[T: (int, str)]:
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+    @cached_property
+    @overload
+    def x(self: C[int]) -> int: ...
+    @cached_property
+    @overload
+    def x(self: C[str]) -> str: ...
+    @cached_property
+    def x(self) -> int | str:
+        return self.value
+
+def broad_write(value: Broad) -> None:
+    value.x = "unsafe"
+
+def narrow_write(value: Narrow) -> None:
+    value.x = 42
+
+def narrow_string_write(value: NarrowString) -> None:
+    value.x = "safe"
+
+def read(value: ReadOnly) -> int | str:
+    return value.x
+
+def check(value: C[int]) -> None:
+    assert_type(value.x, int)
+    broad_write(value)  # E: Argument `C[int]` is not assignable
+    narrow_write(value)
+    read(value)
+    value.x = "unsafe"  # E: `Literal['unsafe']` is not assignable to attribute `x` with type `int`
+    value.x = 42
+    assert_type(value.x, int)
+
+def check_string(value: C[str]) -> None:
+    assert_type(value.x, str)
+    broad_write(value)  # E: Argument `C[str]` is not assignable
+    narrow_string_write(value)
+    read(value)
+    value.x = 42  # E: `Literal[42]` is not assignable to attribute `x` with type `str`
+    value.x = "safe"
+    assert_type(value.x, str)
+    "#,
+);
+
+testcase!(
+    test_cached_property_literal_override,
+    r#"
+from functools import cached_property
+from typing import Literal, assert_type
+
+class Base:
+    @cached_property
+    def x(self):
+        return True
+
+class Child(Base):
+    @cached_property
+    def x(self):
+        return False
+
+class LiteralParent:
+    @property
+    def x(self) -> Literal[True]:
+        return True
+
+class Incompatible(LiteralParent):
+    @cached_property
+    def x(self):  # E: Class member `Incompatible.x` overrides parent class `LiteralParent` in an inconsistent manner
+        return True
+
+def check(value: Child) -> None:
+    assert_type(value.x, bool)
+    "#,
+);
+
+testcase!(
+    test_cached_property_read_only_parent,
+    r#"
+from dataclasses import dataclass
+from functools import cached_property
+
+@dataclass(frozen=True)
+class Base:
+    x: int
+
+class Compatible(Base):
+    @cached_property
+    def x(self) -> bool:
+        return True
+
+class Incompatible(Base):
+    @cached_property
+    def x(self) -> str:  # pyrefly: ignore[bad-override-mutable-attribute]  # E: Class member `Incompatible.x` overrides parent class `Base` in an inconsistent manner
+        return "wrong"
+    "#,
+);
+
 testcase!(
     test_inherit_type_attribute,
     r#"
