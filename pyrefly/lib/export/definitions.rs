@@ -708,9 +708,7 @@ impl DefinitionsBuilder {
                                 .final_names
                                 .insert(x.id.clone(), final_string_value);
                             if let Some(value) = final_bool_value {
-                                self.inner
-                                    .final_bool_values
-                                    .insert(x.id.clone(), value);
+                                self.inner.final_bool_values.insert(x.id.clone(), value);
                             }
                         }
                     }

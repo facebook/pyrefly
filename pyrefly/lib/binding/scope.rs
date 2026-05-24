@@ -1696,14 +1696,14 @@ impl Scopes {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
             let (implicit_captures, final_names, final_string_values, final_bool_values) =
                 scope.stat.stmts(
-                x,
-                module_info,
-                top_level,
-                lookup,
-                sys_info,
-                get_annotation_idx,
-                myself,
-            );
+                    x,
+                    module_info,
+                    top_level,
+                    lookup,
+                    sys_info,
+                    get_annotation_idx,
+                    myself,
+                );
             scope.implicit_captures = implicit_captures;
             scope.final_names = final_names;
             scope.final_string_values = final_string_values;
