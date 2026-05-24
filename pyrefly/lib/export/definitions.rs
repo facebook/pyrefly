@@ -167,6 +167,9 @@ pub struct Definitions {
     /// The `Option<String>` is `Some` when the RHS is a string literal (e.g. `X: Final = "x"`),
     /// used to resolve Final variable references in synthesized class field names.
     pub final_names: SmallMap<Name, Option<String>>,
+    /// Names marked `Final` with bool literal values, e.g. `FLAG: Final = False`.
+    /// Used to statically evaluate `if FLAG:` / `if not FLAG:` control flow.
+    pub final_bool_values: SmallMap<Name, bool>,
     /// Special exports defined in this module
     pub special_exports: SmallMap<Name, SpecialExport>,
     /// Names that are read (not just defined) in this scope.
@@ -682,6 +685,14 @@ impl DefinitionsBuilder {
                 } else {
                     None
                 };
+                let final_bool_value = if has_final_annotation {
+                    match x.value.as_deref() {
+                        Some(Expr::BooleanLiteral(b)) => Some(b.value),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 match &*x.target {
                     Expr::Name(x) => {
                         self.add_name(
@@ -696,6 +707,11 @@ impl DefinitionsBuilder {
                             self.inner
                                 .final_names
                                 .insert(x.id.clone(), final_string_value);
+                            if let Some(value) = final_bool_value {
+                                self.inner
+                                    .final_bool_values
+                                    .insert(x.id.clone(), value);
+                            }
                         }
                     }
                     _ => self.expr_lvalue(&x.target),

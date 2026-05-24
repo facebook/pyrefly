@@ -223,6 +223,8 @@ impl Exports {
                         // for import variants — others carry positional data
                         || (self_def.style.is_import() && self_def.style != other_def.style)
                         || self_defs.final_names.get(name) != other_defs.final_names.get(name)
+                        || self_defs.final_bool_values.get(name)
+                            != other_defs.final_bool_values.get(name)
                         || self_defs.implicitly_imported_submodules.contains(name)
                             != other_defs.implicitly_imported_submodules.contains(name)
                         || self_defs.deprecated.get(name) != other_defs.deprecated.get(name)

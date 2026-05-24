@@ -108,6 +108,32 @@ def f(x: str | None):
 );
 
 testcase!(
+    test_final_bool_unreachable_if_branch,
+    r#"
+from typing import Final, Literal, reveal_type
+asdf: Final = False
+if asdf:
+    foo = 1
+else:
+    foo = 2
+reveal_type(foo)  # E: revealed type: Literal[2]
+"#,
+);
+
+testcase!(
+    test_final_bool_unreachable_else_branch,
+    r#"
+from typing import Final, Literal, reveal_type
+flag: Final = True
+if flag:
+    bar = 1
+else:
+    bar = 2
+reveal_type(bar)  # E: revealed type: Literal[1]
+"#,
+);
+
+testcase!(
     test_is_subtype,
     r#"
 from typing import assert_type
