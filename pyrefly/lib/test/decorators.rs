@@ -431,7 +431,7 @@ def with_current_tenant_id[T, **P, R](
 
 class Foo:
     @with_current_tenant_id
-    def get(self) -> int:  # E: Function `get` is missing required parameter of type `str` injected by decorator `with_current_tenant_id`
+    def get(self) -> int:  # E: Function `get` is missing parameter of type `str` injected by decorator `with_current_tenant_id`
         return 0
     "#,
 );

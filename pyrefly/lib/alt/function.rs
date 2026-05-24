@@ -1643,7 +1643,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | PrefixParam::Pos(_, _, Required::Optional(_)) => return None,
         };
         Some(format!(
-            "Function `{}` is missing required parameter of type `{}` injected by decorator `{}`",
+            "Function `{}` is missing parameter of type `{}` injected by decorator `{}`",
             decoratee_name.as_str(),
             self.for_display(missing_ty.clone()),
             decorator_name,
