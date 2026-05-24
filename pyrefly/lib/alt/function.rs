@@ -1636,10 +1636,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         let missing = prefix.get(actual_params.len())?;
+        let missing_ty = match missing {
+            PrefixParam::PosOnly(_, ty, Required::Required)
+            | PrefixParam::Pos(_, ty, Required::Required) => ty,
+            PrefixParam::PosOnly(_, _, Required::Optional(_))
+            | PrefixParam::Pos(_, _, Required::Optional(_)) => return None,
+        };
         Some(format!(
             "Function `{}` is missing required parameter of type `{}` injected by decorator `{}`",
             decoratee_name.as_str(),
-            self.for_display(missing.ty().clone()),
+            self.for_display(missing_ty.clone()),
             decorator_name,
         ))
     }
