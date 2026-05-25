@@ -273,6 +273,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let has_pydantic_base_model_base_class =
             bases_with_metadata.iter().any(|(base_class_object, _)| {
                 base_class_object.has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
+                    // Re-exported models (`from pydantic import BaseModel`) may retain qname
+                    // `pydantic.BaseModel` instead of `pydantic.main.BaseModel`.
+                    || base_class_object.has_toplevel_qname("pydantic", "BaseModel")
             });
 
         let has_pydantic_base_settings_base_class =

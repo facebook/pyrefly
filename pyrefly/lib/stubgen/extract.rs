@@ -15,10 +15,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
+use pyrefly_python::dunder;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Param;
+use pyrefly_types::callable::Params;
+use pyrefly_types::callable::Required;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
@@ -32,15 +35,22 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
 use crate::alt::answers::Answers;
+use crate::alt::class::class_field::ClassField;
+use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassField;
+use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
 use crate::export::definitions::DunderAllKind;
 use crate::state::state::Transaction;
+use crate::types::class::Class;
 
 /// A single module's stub content, in source order.
 pub struct ModuleStub {
@@ -136,9 +146,11 @@ pub fn extract_module_stub(
         uses_self: false,
         function_map: &function_map,
         dunder_all: &dunder_all,
+        current_class: None,
     };
 
-    let items = extract_stmts(&ast.body, &mut ctx, false);
+    let mut items = extract_stmts(&ast.body, &mut ctx, false);
+    prune_stub_imports(&mut items);
 
     Some(ModuleStub {
         items,
@@ -158,6 +170,8 @@ struct ExtractionContext<'a> {
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
     dunder_all: &'a Option<HashSet<Name>>,
+    /// Innermost class being extracted (`None` at module scope).
+    current_class: Option<Class>,
 }
 
 fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) -> Vec<StubItem> {
@@ -252,6 +266,7 @@ fn extract_function(
     let decorators: Vec<String> = func_def
         .decorator_list
         .iter()
+        .filter(|d| !(in_class && is_computed_field_decorator(&d.expression)))
         .map(|d| format!("@{}", source_text(ctx.module_info, d.expression.range())))
         .collect();
 
@@ -619,7 +634,14 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
-    let body = extract_stmts(&class_def.body, ctx, true);
+    let resolved_class = resolve_class_for_stub(class_def, ctx);
+    let outer_class = ctx.current_class.clone();
+    ctx.current_class = resolved_class.clone();
+
+    let body = extract_class_body(class_def, ctx, resolved_class.as_ref());
+
+    ctx.current_class = outer_class;
+
     let extra = extract_instance_attr_stubs_from_class_fields(class_def, &body, ctx);
     let body = merge_instance_field_stubs(extra, body);
 
@@ -648,10 +670,18 @@ fn extract_ann_assign(
 
     let annotation = source_text(ctx.module_info, ann_assign.annotation.range()).to_owned();
 
-    let value = ann_assign
-        .value
-        .as_deref()
-        .and_then(|v| simple_value_text(v, ctx.module_info));
+    let value = match ann_assign.value.as_deref() {
+        None => None,
+        Some(v) => {
+            if let Some(simple) = simple_value_text(v, ctx.module_info) {
+                Some(simple)
+            } else if in_class {
+                complex_class_attribute_stub_value(name, ctx)
+            } else {
+                None
+            }
+        }
+    };
 
     Some(StubVariable {
         name: name.to_owned(),
@@ -853,6 +883,458 @@ fn is_type_constructor_or_alias(assign: &ruff_python_ast::StmtAssign) -> bool {
     } else {
         false
     }
+}
+
+fn is_computed_field_decorator(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(n) => n.id.as_str() == "computed_field",
+        Expr::Attribute(a) => a.attr.as_str() == "computed_field",
+        _ => false,
+    }
+}
+
+fn resolve_class_for_stub(class_def: &StmtClassDef, ctx: &ExtractionContext) -> Option<Class> {
+    let key = KeyClass(ShortIdentifier::new(&class_def.name));
+    let idx = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+    let answered = ctx.answers.get_idx(idx)?;
+    answered.0.clone()
+}
+
+fn extract_class_body(
+    class_def: &StmtClassDef,
+    ctx: &mut ExtractionContext,
+    resolved_class: Option<&Class>,
+) -> Vec<StubItem> {
+    let body = &class_def.body;
+    let has_explicit_init = body.iter().any(|s| {
+        matches!(
+            s,
+            Stmt::FunctionDef(f) if f.name.as_str() == "__init__"
+        )
+    });
+
+    if has_explicit_init {
+        return extract_stmts(body, ctx, true);
+    }
+
+    let first_fn = body.iter().position(|s| matches!(s, Stmt::FunctionDef(_)));
+    match first_fn {
+        None => {
+            let mut items = extract_stmts(body, ctx, true);
+            maybe_push_synthetic_init(class_def, &mut items, resolved_class, ctx);
+            items
+        }
+        Some(i) => {
+            let leading = &body[..i];
+            let tail = &body[i..];
+            let mut items = extract_stmts(leading, ctx, true);
+            maybe_push_synthetic_init(class_def, &mut items, resolved_class, ctx);
+            items.extend(extract_stmts(tail, ctx, true));
+            items
+        }
+    }
+}
+
+fn maybe_push_synthetic_init(
+    class_def: &StmtClassDef,
+    items: &mut Vec<StubItem>,
+    resolved_class: Option<&Class>,
+    ctx: &mut ExtractionContext,
+) {
+    if let Some(cls) = resolved_class
+        && let Some(init_fn) = synthetic_init_stub_fn(class_def, cls, ctx)
+    {
+        items.push(StubItem::Function(init_fn));
+    }
+}
+
+fn synthetic_init_stub_fn(
+    class_def: &StmtClassDef,
+    cls: &Class,
+    ctx: &mut ExtractionContext,
+) -> Option<StubFunction> {
+    // NamedTuple's synthesized `__init__` is a `(self, *args, **kwargs)` placeholder; the
+    // field-accurate signature lives on `__new__`. Skip the placeholder rather than emit it.
+    if class_metadata_for(cls, ctx).is_some_and(|m| m.named_tuple_metadata().is_some()) {
+        return None;
+    }
+    let idx = ctx
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&KeyClassSynthesizedFields(cls.index())))?;
+    let synthesized: Arc<ClassSynthesizedFields> = ctx.answers.get_idx(idx)?;
+    let init_field = synthesized.get(&dunder::INIT)?;
+    let ty = init_field.inner.ty();
+    let callable = *ty.callable_signatures().first()?;
+    let Params::List(list) = &callable.params else {
+        return None;
+    };
+    let items = list.items();
+    let ast_defaults = ann_assign_value_exprs_by_name(&class_def.body);
+    let ann_for_init_param = init_param_annotation_overrides_from_class_body(class_def, cls, ctx);
+    let mut params = Vec::new();
+    let mut inserted_kwonly_star = false;
+    let has_explicit_kw_sep = items.iter().any(|p| matches!(p, Param::Varargs(None, _)));
+
+    for p in items {
+        if matches!(p, Param::Kwargs(..)) {
+            continue;
+        }
+        if matches!(p, Param::KwOnly(..)) && !inserted_kwonly_star && !has_explicit_kw_sep {
+            params.push(StubParam {
+                prefix: "",
+                name: "*".to_owned(),
+                annotation: None,
+                default: None,
+            });
+            inserted_kwonly_star = true;
+        }
+        let mut stub = synthesized_param_to_stub(p, ctx);
+        if let Some(text) = ann_for_init_param.get(stub.name.as_str()) {
+            stub.annotation = Some(text.clone());
+        }
+        if stub.default.as_deref() == Some("...")
+            && let Some(expr) = ast_defaults.get(stub.name.as_str())
+        {
+            let fd = format_default(expr, ctx.module_info);
+            if fd != "..." {
+                stub.default = Some(fd);
+            }
+        }
+        params.push(stub);
+    }
+
+    let return_type = format_type(&callable.ret, ctx);
+
+    Some(StubFunction {
+        name: "__init__".to_owned(),
+        is_async: false,
+        type_params: None,
+        decorators: Vec::new(),
+        params,
+        return_type,
+        docstring: None,
+    })
+}
+
+fn class_metadata_for(cls: &Class, ctx: &ExtractionContext) -> Option<Arc<ClassMetadata>> {
+    let idx = ctx
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&KeyClassMetadata(cls.index())))?;
+    ctx.answers.get_idx(idx)
+}
+
+/// Map annotated assignment targets to their RHS expression for class-body field stubs.
+fn ann_assign_value_exprs_by_name(body: &[Stmt]) -> HashMap<String, &Expr> {
+    let mut m = HashMap::new();
+    for stmt in body {
+        let Stmt::AnnAssign(ann) = stmt else {
+            continue;
+        };
+        let Expr::Name(n) = ann.target.as_ref() else {
+            continue;
+        };
+        if let Some(v) = ann.value.as_deref() {
+            m.insert(n.id.to_string(), v);
+        }
+    }
+    m
+}
+
+/// Maps synthesized `__init__` parameter names to annotation source text from the class body.
+///
+/// Pydantic's lax coercion types are wider than the authored annotations; stubs should reflect the
+/// latter. Includes [`validation_alias`](https://docs.pydantic.dev/latest/concepts/alias/)
+/// keywords when they participate in `__init__`.
+fn init_param_annotation_overrides_from_class_body(
+    class_def: &StmtClassDef,
+    cls: &Class,
+    ctx: &ExtractionContext,
+) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    for stmt in &class_def.body {
+        let Stmt::AnnAssign(ann) = stmt else {
+            continue;
+        };
+        let Expr::Name(n) = ann.target.as_ref() else {
+            continue;
+        };
+        let field_name = n.id.clone();
+        let Some(idx) = ctx
+            .bindings
+            .key_to_idx_hashed_opt(Hashed::new(&KeyClassField(cls.index(), field_name.clone())))
+        else {
+            continue;
+        };
+        let Some(class_field): Option<Arc<ClassField>> = ctx.answers.get_idx(idx) else {
+            continue;
+        };
+        if class_field.is_init_var() {
+            continue;
+        }
+        let flags = class_field.dataclass_flags_of(ctx.answers.heap());
+        if !flags.init {
+            continue;
+        }
+        let ann_text = source_text(ctx.module_info, ann.annotation.range()).to_owned();
+        if flags.init_by_name {
+            m.insert(field_name.as_str().to_owned(), ann_text.clone());
+        }
+        if let Some(alias) = &flags.init_by_alias {
+            m.insert(alias.as_str().to_owned(), ann_text);
+        }
+    }
+    m
+}
+
+fn synthesized_param_to_stub(param: &Param, ctx: &mut ExtractionContext) -> StubParam {
+    match param {
+        Param::PosOnly(maybe_name, ty, req) => {
+            let name = maybe_name
+                .as_ref()
+                .map(|n| n.as_str().to_owned())
+                .unwrap_or_else(|| "_".to_owned());
+            StubParam {
+                prefix: "",
+                name,
+                annotation: annotation_for_param(param, ty, ctx),
+                default: required_to_stub_default(req, ctx),
+            }
+        }
+        Param::Pos(name, ty, req) => StubParam {
+            prefix: "",
+            name: name.as_str().to_owned(),
+            annotation: annotation_for_param(param, ty, ctx),
+            default: required_to_stub_default(req, ctx),
+        },
+        Param::Varargs(maybe_name, ty) => {
+            if let Some(name) = maybe_name {
+                StubParam {
+                    prefix: "*",
+                    name: name.as_str().to_owned(),
+                    annotation: format_type(ty, ctx),
+                    default: None,
+                }
+            } else {
+                StubParam {
+                    prefix: "",
+                    name: "*".to_owned(),
+                    annotation: None,
+                    default: None,
+                }
+            }
+        }
+        Param::KwOnly(name, ty, req) => StubParam {
+            prefix: "",
+            name: name.as_str().to_owned(),
+            annotation: annotation_for_param(param, ty, ctx),
+            default: required_to_stub_default(req, ctx),
+        },
+        Param::Kwargs(maybe_name, ty) => StubParam {
+            prefix: "**",
+            name: maybe_name
+                .as_ref()
+                .map(|n| n.as_str().to_owned())
+                .unwrap_or_else(|| "kwargs".to_owned()),
+            annotation: format_type(ty, ctx),
+            default: None,
+        },
+    }
+}
+
+fn annotation_for_param(param: &Param, ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
+    if let Some(n) = param.name()
+        && (n.as_str() == "self" || n.as_str() == "cls")
+    {
+        return None;
+    }
+    format_type(ty, ctx)
+}
+
+fn required_to_stub_default(req: &Required, ctx: &mut ExtractionContext) -> Option<String> {
+    match req {
+        Required::Required => None,
+        Required::Optional(None) => Some("...".to_owned()),
+        Required::Optional(Some(dv)) => dv.display.clone().or_else(|| format_type(&dv.ty, ctx)),
+    }
+}
+
+/// Render the class-body default for a field whose RHS is not a simple literal
+/// (e.g. `field(default=None)`, `Field(default_factory=list)`). We elide to `= ...`
+/// when the dataclass / Pydantic field analysis says the field has a default at all;
+/// otherwise no default is emitted. The AST shape of the RHS is irrelevant — the
+/// checker's `dataclass_flags_of` already reflects whether `default` / `default_factory`
+/// were supplied (and ignores positional `...` per Pydantic's runtime semantics).
+fn complex_class_attribute_stub_value(name: &str, ctx: &mut ExtractionContext) -> Option<String> {
+    let cls = ctx.current_class.as_ref()?;
+    let key = KeyClassField(cls.index(), Name::new(name));
+    let idx = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+    let class_field: Arc<ClassField> = ctx.answers.get_idx(idx)?;
+    let flags = class_field.dataclass_flags_of(ctx.answers.heap());
+    flags.default.as_ref().map(|_| "...".to_owned())
+}
+
+fn prune_stub_imports(items: &mut Vec<StubItem>) {
+    let body = collect_stub_text_for_import_prune(items);
+    prune_imports_in_items(items, &body);
+}
+
+fn collect_stub_text_for_import_prune(items: &[StubItem]) -> String {
+    let mut out = String::new();
+    for item in items {
+        append_stub_item_text(item, &mut out);
+    }
+    out
+}
+
+fn append_stub_item_text(item: &StubItem, out: &mut String) {
+    match item {
+        StubItem::Import(_) => {}
+        StubItem::Function(f) => {
+            for d in &f.decorators {
+                out.push_str(d);
+            }
+            out.push_str(&f.name);
+            for p in &f.params {
+                out.push_str(&p.name);
+                if let Some(a) = &p.annotation {
+                    out.push_str(a);
+                }
+                if let Some(d) = &p.default {
+                    out.push_str(d);
+                }
+            }
+            if let Some(r) = &f.return_type {
+                out.push_str(r);
+            }
+        }
+        StubItem::Class(c) => {
+            out.push_str(&c.name);
+            out.push_str(&c.bases);
+            for d in &c.decorators {
+                out.push_str(d);
+            }
+            append_stub_items_text(&c.body, out);
+        }
+        StubItem::Variable(v) => {
+            out.push_str(&v.name);
+            if let Some(a) = &v.annotation {
+                out.push_str(a);
+            }
+            if let Some(val) = &v.value {
+                out.push_str(val);
+            }
+        }
+        StubItem::TypeAlias(t) => {
+            out.push_str(&t.text);
+        }
+    }
+}
+
+fn append_stub_items_text(items: &[StubItem], out: &mut String) {
+    for item in items {
+        append_stub_item_text(item, out);
+    }
+}
+
+fn prune_imports_in_items(items: &mut Vec<StubItem>, body: &str) {
+    items.retain_mut(|item| {
+        if let StubItem::Import(imp) = item {
+            let new_text = prune_import_line(&imp.text, body);
+            if new_text.is_empty() {
+                return false;
+            }
+            imp.text = new_text;
+        }
+        if let StubItem::Class(c) = item {
+            let class_body = collect_stub_text_for_import_prune(&c.body);
+            prune_imports_in_items(&mut c.body, &class_body);
+        }
+        true
+    });
+}
+
+fn prune_import_line(line: &str, body: &str) -> String {
+    let trimmed = line.trim();
+    let indent_len = line.len() - trimmed.len();
+    let indent = &line[..indent_len];
+
+    if trimmed == "import functools" && !contains_whole_word(body, "functools") {
+        return String::new();
+    }
+    if let Some(rest) = trimmed.strip_prefix("from dataclasses import") {
+        return prune_from_import_rest(indent, "dataclasses", rest, "field", body);
+    }
+    if let Some(rest) = trimmed.strip_prefix("from pydantic import") {
+        let line = prune_from_import_rest(indent, "pydantic", rest, "Field", body);
+        return prune_from_import_rest_line(line, indent, "pydantic", "computed_field", body);
+    }
+    line.to_owned()
+}
+
+fn prune_from_import_rest(
+    indent: &str,
+    module: &str,
+    after_import: &str,
+    symbol: &str,
+    body: &str,
+) -> String {
+    let keep_symbol = contains_whole_word(body, symbol);
+    let names: Vec<String> = after_import
+        .split(',')
+        .filter_map(|raw| {
+            let name = raw.trim();
+            if name.is_empty() {
+                return None;
+            }
+            if !keep_symbol && name == symbol {
+                return None;
+            }
+            Some(name.to_owned())
+        })
+        .collect();
+    if names.is_empty() {
+        return String::new();
+    }
+    format!("{}from {} import {}", indent, module, names.join(", "))
+}
+
+/// Apply [`prune_from_import_rest`] when `line` is a `from module import ...` line.
+fn prune_from_import_rest_line(
+    line: String,
+    indent: &str,
+    module: &str,
+    symbol: &str,
+    body: &str,
+) -> String {
+    if line.trim().is_empty() {
+        return line;
+    }
+    let trimmed = line.trim();
+    let prefix = format!("from {module} import");
+    let Some(rest) = trimmed.strip_prefix(&prefix) else {
+        return line;
+    };
+    prune_from_import_rest(indent, module, rest, symbol, body)
+}
+
+fn contains_whole_word(haystack: &str, word: &str) -> bool {
+    for (idx, _) in haystack.match_indices(word) {
+        let before_ok = idx == 0
+            || !haystack
+                .as_bytes()
+                .get(idx - 1)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        let after = idx + word.len();
+        let after_ok = after >= haystack.len()
+            || !haystack
+                .as_bytes()
+                .get(after)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
 }
 
 fn source_text(module_info: &Module, range: TextRange) -> &str {

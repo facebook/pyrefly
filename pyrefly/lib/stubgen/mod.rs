@@ -39,12 +39,39 @@ mod tests {
     }
 
     fn run_stubgen_with_config(input: &str, config: &ExtractConfig) -> String {
+        // Minimal `pydantic` definitions for stub extraction tests. The real package applies
+        // `@dataclass_transform(kw_only_default=True)`, which makes every field keyword-only and
+        // does not match the constructor shapes these tests assert against.
+        const PYDANTIC_SHIM: &str = r#"from typing import dataclass_transform
+
+def Field(**kwargs): ...
+
+def computed_field(fn=None, **_kw):
+    return fn
+
+@dataclass_transform(
+    kw_only_default=False,
+    field_specifiers=(Field,),
+)
+class BaseModel:
+    pass
+"#;
+
         let tdir = tempfile::tempdir().unwrap();
+        let pydantic_pkg = tdir.path().join("pydantic");
+        fs_anyhow::create_dir_all(&pydantic_pkg).unwrap();
+        fs_anyhow::write(&pydantic_pkg.join("__init__.py"), PYDANTIC_SHIM).unwrap();
+
         let path = tdir.path().join("input.py");
         fs_anyhow::write(&path, input).unwrap();
         let mut t = TestEnv::new();
+        // Real files under `tdir` are picked up by the stubgen glob; registering `pydantic` here
+        // wires the package into `ConfigFinder`'s source DB so imports resolve during checking.
+        t.add_real_path("pydantic", pydantic_pkg.join("__init__.py"));
         t.add(&path.display().to_string(), input);
-        let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display())]).unwrap();
+        // Limit checking to the snippet under test. A sibling `pydantic/` package may live in the
+        // same temp directory for imports; it must not be treated as another stubgen input file.
+        let includes = Globs::new(vec![format!("{}/input.py", tdir.path().display())]).unwrap();
         let f_globs = Box::new(FilteredGlobs::new(
             includes,
             Globs::empty(),
@@ -184,6 +211,16 @@ mod tests {
     }
 
     #[test]
+    fn test_stubgen_dataclasses() {
+        assert_stubgen_snapshot("dataclasses");
+    }
+
+    #[test]
+    fn test_stubgen_pydantic() {
+        assert_stubgen_snapshot("pydantic");
+    }
+
+    #[test]
     fn test_stubgen_docstrings() {
         let input = r#"
 def greet(name: str) -> str:
@@ -303,5 +340,32 @@ class A:
             .trim(),
             actual.trim(),
         );
+    }
+
+    /// `include_docstrings` must not add inline `# ...` Field metadata comments on attributes; stub
+    /// shape stays the same as without doc config for this case (no `Field(...)` on the class body).
+    /// Kept as an inline test because the snapshot fixture runner uses the default
+    /// `ExtractConfig` and cannot exercise `include_docstrings=true`.
+    #[test]
+    fn test_stubgen_pydantic_field_retains_description_with_include_docstrings() {
+        let input = r#"from pydantic import BaseModel, Field
+
+class A(BaseModel):
+    u: int = Field(..., description="required", title="T")
+"#;
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: true,
+        };
+        let actual = run_stubgen_with_config(input, &config);
+        let expected = r#"from pydantic import BaseModel
+
+
+class A(BaseModel):
+    u: int
+
+    def __init__(self, u: int) -> None: ...
+"#;
+        pretty_assertions::assert_str_eq!(expected, &actual);
     }
 }

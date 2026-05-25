@@ -944,11 +944,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ));
                 }
                 if let Some(alias) = &field_flags.init_by_alias {
+                    // Alias-only population (`validate_by_name=False`) still accepts the field via its
+                    // alias keyword at runtime; surface that as a keyword-only parameter (see
+                    // pydantic stub extraction tests).
+                    let alias_kw_only = is_kw_only || !field_flags.init_by_name;
                     params.push(self.as_param(
                         &field,
                         alias,
                         has_default,
-                        is_kw_only,
+                        alias_kw_only,
                         strict,
                         converter_param,
                         param_type_transform,
