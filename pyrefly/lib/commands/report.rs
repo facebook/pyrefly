@@ -608,11 +608,12 @@ impl ReportArgs {
         module.as_str().split('.').all(Self::is_public_name)
     }
 
-    /// True if `fqn` or a class-level prefix is public, and every segment below the module is
-    /// itself a public name (no private nested leaks).
+    /// True if `fqn` is in `public_fqns` directly, or a class-level prefix is and every segment
+    /// below the module is itself a public name (no private nested leaks).
     fn is_public_fqn(fqn: &str, module_prefix: &str, public_fqns: &HashSet<String>) -> bool {
         if let Some(relative) = fqn.strip_prefix(module_prefix)
             && !relative.split('.').all(Self::is_public_name)
+            && !public_fqns.contains(fqn)
         {
             return false;
         }
@@ -815,6 +816,7 @@ impl ReportArgs {
         bindings: &Bindings,
         answers: &Answers,
         exports: &SmallMap<Name, ExportLocation>,
+        dunder_all: &SmallSet<Name>,
         functions: &[Function],
         classes: &[ReportClass],
     ) -> Vec<Variable> {
@@ -841,9 +843,10 @@ impl ReportArgs {
         let mut variables = Vec::new();
         for idx in bindings.keys::<KeyExport>() {
             let KeyExport(name) = bindings.idx_to_key(idx);
-            // Skip non-public module-level names and excluded dunders.
+            // Skip non-public module-level names (unless listed in `__all__`) and excluded dunders.
             let name_str = name.as_str();
-            if !Self::is_public_name(name_str) || Self::EXCLUDED_MODULE_DUNDERS.contains(&name_str)
+            if (!Self::is_public_name(name_str) && !dunder_all.contains(name))
+                || Self::EXCLUDED_MODULE_DUNDERS.contains(&name_str)
             {
                 continue;
             }
@@ -1116,6 +1119,7 @@ impl ReportArgs {
         bindings: &Bindings,
         answers: &Answers,
         exports: &SmallMap<Name, ExportLocation>,
+        dunder_all: &SmallSet<Name>,
         tco_classes: &SmallSet<Idx<KeyClass>>,
     ) -> Vec<Function> {
         let mut functions = Vec::new();
@@ -1180,13 +1184,11 @@ impl ReportArgs {
                         }
                     }
                 } else {
-                    // Skip functions not present in the module's exports
-                    // (e.g. functions nested inside other functions).
-                    if !exports.contains_key(&fun.def.name.id) {
-                        continue;
-                    }
-                    // Skip non-public module-level functions.
-                    if !Self::is_public_name(fun.def.name.as_str()) {
+                    // Skip nested or non-public module-level functions, unless in `__all__`.
+                    if !exports.contains_key(&fun.def.name.id)
+                        || (!Self::is_public_name(fun.def.name.as_str())
+                            && !dunder_all.contains(&fun.def.name.id))
+                    {
                         continue;
                     }
                     format!("{}{}", module_prefix, fun.def.name)
@@ -1524,6 +1526,13 @@ impl ReportArgs {
             let decorator = bindings.get(dec_idx);
             Self::is_decorator_named(&decorator.expr, name)
         })
+    }
+
+    fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> SmallSet<Name> {
+        transaction
+            .get_exports_data(handle)
+            .get_explicit_dunder_all_names_iter()
+            .map_or_else(SmallSet::new, |it| it.cloned().collect())
     }
 
     /// Collect all class keys that have the `@type_check_only` decorator.
@@ -2041,9 +2050,16 @@ impl ReportArgs {
             {
                 let line_count = module.lined_buffer().line_index().line_count();
                 let exports = transaction.get_exports(handle);
+                let dunder_all = Self::collect_dunder_all(transaction, handle);
                 let tco_classes = Self::collect_type_check_only_classes(&bindings);
-                let mut functions =
-                    Self::parse_functions(&module, &bindings, &answers, &exports, &tco_classes);
+                let mut functions = Self::parse_functions(
+                    &module,
+                    &bindings,
+                    &answers,
+                    &exports,
+                    &dunder_all,
+                    &tco_classes,
+                );
                 Self::merge_overloads(&mut functions);
                 let mut classes = Self::parse_classes(
                     &module,
@@ -2054,7 +2070,13 @@ impl ReportArgs {
                     &tco_classes,
                 );
                 let mut variables = Self::parse_variables(
-                    &module, &bindings, &answers, &exports, &functions, &classes,
+                    &module,
+                    &bindings,
+                    &answers,
+                    &exports,
+                    &dunder_all,
+                    &functions,
+                    &classes,
                 );
                 variables.extend(Self::parse_instance_attrs(
                     &module,
@@ -2071,12 +2093,14 @@ impl ReportArgs {
                     && let Some(py_answers) = transaction.get_answers(py_handle)
                 {
                     let py_exports = transaction.get_exports(py_handle);
+                    let py_dunder_all = Self::collect_dunder_all(transaction, py_handle);
                     let py_tco_classes = Self::collect_type_check_only_classes(&py_bindings);
                     let mut py_functions = Self::parse_functions(
                         &py_module,
                         &py_bindings,
                         &py_answers,
                         &py_exports,
+                        &py_dunder_all,
                         &py_tco_classes,
                     );
                     Self::merge_overloads(&mut py_functions);
@@ -2093,6 +2117,7 @@ impl ReportArgs {
                         &py_bindings,
                         &py_answers,
                         &py_exports,
+                        &py_dunder_all,
                         &py_functions,
                         &py_classes,
                     );
@@ -2244,9 +2269,16 @@ mod tests {
         let exports = transaction.get_exports(&handle);
 
         let line_count = module.lined_buffer().line_index().line_count();
+        let dunder_all = ReportArgs::collect_dunder_all(&transaction, &handle);
         let tco_classes = ReportArgs::collect_type_check_only_classes(&bindings);
-        let mut functions =
-            ReportArgs::parse_functions(&module, &bindings, &answers, &exports, &tco_classes);
+        let mut functions = ReportArgs::parse_functions(
+            &module,
+            &bindings,
+            &answers,
+            &exports,
+            &dunder_all,
+            &tco_classes,
+        );
         ReportArgs::merge_overloads(&mut functions);
         let classes = ReportArgs::parse_classes(
             &module,
@@ -2257,7 +2289,13 @@ mod tests {
             &tco_classes,
         );
         let mut variables = ReportArgs::parse_variables(
-            &module, &bindings, &answers, &exports, &functions, &classes,
+            &module,
+            &bindings,
+            &answers,
+            &exports,
+            &dunder_all,
+            &functions,
+            &classes,
         );
         variables.extend(ReportArgs::parse_instance_attrs(
             &module,
@@ -2325,9 +2363,16 @@ mod tests {
         let exports = pyi_txn.get_exports(&pyi_handle);
 
         let line_count = module.lined_buffer().line_index().line_count();
+        let dunder_all = ReportArgs::collect_dunder_all(&pyi_txn, &pyi_handle);
         let tco_classes = ReportArgs::collect_type_check_only_classes(&bindings);
-        let mut functions =
-            ReportArgs::parse_functions(&module, &bindings, &answers, &exports, &tco_classes);
+        let mut functions = ReportArgs::parse_functions(
+            &module,
+            &bindings,
+            &answers,
+            &exports,
+            &dunder_all,
+            &tco_classes,
+        );
         ReportArgs::merge_overloads(&mut functions);
         let mut classes = ReportArgs::parse_classes(
             &module,
@@ -2338,7 +2383,13 @@ mod tests {
             &tco_classes,
         );
         let mut variables = ReportArgs::parse_variables(
-            &module, &bindings, &answers, &exports, &functions, &classes,
+            &module,
+            &bindings,
+            &answers,
+            &exports,
+            &dunder_all,
+            &functions,
+            &classes,
         );
         variables.extend(ReportArgs::parse_instance_attrs(
             &module,
@@ -2361,12 +2412,14 @@ mod tests {
         let py_answers = py_txn.get_answers(&py_handle).unwrap();
         let py_exports = py_txn.get_exports(&py_handle);
 
+        let py_dunder_all = ReportArgs::collect_dunder_all(&py_txn, &py_handle);
         let py_tco_classes = ReportArgs::collect_type_check_only_classes(&py_bindings);
         let mut py_functions = ReportArgs::parse_functions(
             &py_module,
             &py_bindings,
             &py_answers,
             &py_exports,
+            &py_dunder_all,
             &py_tco_classes,
         );
         ReportArgs::merge_overloads(&mut py_functions);
@@ -2383,6 +2436,7 @@ mod tests {
             &py_bindings,
             &py_answers,
             &py_exports,
+            &py_dunder_all,
             &py_functions,
             &py_classes,
         );
@@ -2873,6 +2927,13 @@ mod tests {
         compare_snapshot("private_filtering.expected.json", &report);
     }
 
+    /// Leading-underscore names listed in `__all__` are part of the public API (issue #3578).
+    #[test]
+    fn test_report_private_in_all() {
+        let report = build_module_report_for_test("private_in_all.py");
+        compare_snapshot("private_in_all.expected.json", &report);
+    }
+
     /// CPython-injected module globals are excluded even when control flow
     /// wraps them in Phi bindings (issue #3505).
     #[test]
@@ -3000,9 +3061,16 @@ def g(x: int) -> int:
         let answers = transaction.get_answers(&handle).unwrap();
         let exports = transaction.get_exports(&handle);
 
+        let dunder_all = ReportArgs::collect_dunder_all(&transaction, &handle);
         let tco_classes = ReportArgs::collect_type_check_only_classes(&bindings);
-        let functions =
-            ReportArgs::parse_functions(&module, &bindings, &answers, &exports, &tco_classes);
+        let functions = ReportArgs::parse_functions(
+            &module,
+            &bindings,
+            &answers,
+            &exports,
+            &dunder_all,
+            &tco_classes,
+        );
 
         // Only g should be reported; f is excluded due to @no_type_check.
         assert_eq!(functions.len(), 1);
@@ -3023,7 +3091,7 @@ def g(x: int) -> int:
 
     #[test]
     fn test_is_fqn_public() {
-        let fqns: HashSet<String> = ["pkg.Foo", "pkg.bar"]
+        let fqns: HashSet<String> = ["pkg.Foo", "pkg.bar", "pkg._explicit"]
             .into_iter()
             .map(String::from)
             .collect();
@@ -3032,6 +3100,8 @@ def g(x: int) -> int:
         assert!(public("pkg.bar"));
         assert!(public("pkg.Foo.method")); // class member of a public class
         assert!(public("pkg.Foo.Inner.attr"));
+        // Private name directly listed (e.g. via __all__) is public.
+        assert!(public("pkg._explicit"));
         assert!(!public("other.Foo"));
         assert!(!public("pkg.Baz"));
         assert!(!public("pkg.Baz.method"));
