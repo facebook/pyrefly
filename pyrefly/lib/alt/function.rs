@@ -593,15 +593,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if p.annotation().is_none() {
                 let name = p.name().as_str();
-                self.error(
-                    errors,
-                    p.name().range(),
-                    ErrorKind::ImplicitAnyParameter,
-                    format!(
-                        "`{}` is missing an annotation for parameter `{name}`",
-                        stmt.name
-                    ),
-                );
+                // Skip parameters starting with single `_` that don't end with `_`
+                // as they indicate intentionally unused variables.
+                // `_`, `_abc` → skip; `__abc`, `_abc_`, `__abc__` → don't skip.
+                let is_underscore_unused = {
+                    let b = name.as_bytes();
+                    b.len() >= 1
+                        && b[0] == b'_'
+                        && (b.len() == 1 || b[1] != b'_')
+                        && !name.ends_with('_')
+                };
+                if !is_underscore_unused {
+                    self.error(
+                        errors,
+                        p.name().range(),
+                        ErrorKind::ImplicitAnyParameter,
+                        format!(
+                            "`{}` is missing an annotation for parameter `{name}`",
+                            stmt.name
+                        ),
+                    );
+                }
             }
         }
         // Only validate TypeGuard/TypeIs functions when they have an explicit return annotation.
