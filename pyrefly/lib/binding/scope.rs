@@ -1213,6 +1213,8 @@ pub struct Scope {
     /// Names marked `Final` with string literal values, e.g. `X: Final = "x"`.
     /// Used to resolve Final variable references in synthesized class field names.
     final_string_values: SmallMap<Name, String>,
+    /// Names removed by a `del NAME` statement in this scope.
+    deleted_names: SmallSet<Name>,
 }
 
 impl Scope {
@@ -1233,6 +1235,7 @@ impl Scope {
             implicit_captures: SmallSet::new(),
             final_names: SmallSet::new(),
             final_string_values: SmallMap::new(),
+            deleted_names: SmallSet::new(),
         }
     }
 
@@ -2089,9 +2092,11 @@ impl Scopes {
     /// Don't change the type if one is present - downstream we'll emit
     /// uninitialized local errors but keep using our best guess for the type.
     pub fn mark_as_deleted(&mut self, name: &Name) {
-        if let Some(value) = self.current_mut().flow.get_value_mut(name) {
+        let scope = self.current_mut();
+        if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
         }
+        scope.deleted_names.insert(name.clone());
     }
 
     fn get_flow_info(&self, name: &Name) -> Option<&FlowInfo> {
@@ -3050,6 +3055,11 @@ pub struct ScopeTrace(ScopeTreeNode);
 impl ScopeTrace {
     pub fn toplevel_scope(&self) -> &Scope {
         &self.0.scope
+    }
+
+    /// Names `del`eted at module scope.
+    pub fn module_deletes(&self) -> &SmallSet<Name> {
+        &self.0.scope.deleted_names
     }
 
     pub fn exportables(&self) -> SmallMap<Name, Exportable> {

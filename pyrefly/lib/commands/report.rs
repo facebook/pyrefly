@@ -831,6 +831,7 @@ impl ReportArgs {
         } else {
             String::new()
         };
+        let deleted = bindings.module_deletes();
         // Collect names already reported as functions or classes so we can skip them.
         let reported_names: SmallSet<&str> = functions
             .iter()
@@ -841,9 +842,11 @@ impl ReportArgs {
         let mut variables = Vec::new();
         for idx in bindings.keys::<KeyExport>() {
             let KeyExport(name) = bindings.idx_to_key(idx);
-            // Skip non-public module-level names and excluded dunders.
+            // Skip non-public module-level names, excluded dunders, and `del`eted names.
             let name_str = name.as_str();
-            if !Self::is_public_name(name_str) || Self::EXCLUDED_MODULE_DUNDERS.contains(&name_str)
+            if !Self::is_public_name(name_str)
+                || Self::EXCLUDED_MODULE_DUNDERS.contains(&name_str)
+                || deleted.contains(name)
             {
                 continue;
             }
@@ -1124,6 +1127,7 @@ impl ReportArgs {
         } else {
             String::new()
         };
+        let deleted = bindings.module_deletes();
 
         for idx in bindings.keys::<Key>() {
             if let Key::Definition(id) = bindings.idx_to_key(idx)
@@ -1180,13 +1184,11 @@ impl ReportArgs {
                         }
                     }
                 } else {
-                    // Skip functions not present in the module's exports
-                    // (e.g. functions nested inside other functions).
-                    if !exports.contains_key(&fun.def.name.id) {
-                        continue;
-                    }
-                    // Skip non-public module-level functions.
-                    if !Self::is_public_name(fun.def.name.as_str()) {
+                    // Keep only public, exported, non-deleted module-level functions.
+                    if !exports.contains_key(&fun.def.name.id)
+                        || !Self::is_public_name(fun.def.name.as_str())
+                        || deleted.contains(&fun.def.name.id)
+                    {
                         continue;
                     }
                     format!("{}{}", module_prefix, fun.def.name)
@@ -1600,6 +1602,7 @@ impl ReportArgs {
         } else {
             String::new()
         };
+        let deleted = bindings.module_deletes();
         for class_idx in bindings.keys::<KeyClass>() {
             // Skip @type_check_only classes.
             if tco_classes.contains(&class_idx) {
@@ -1610,8 +1613,14 @@ impl ReportArgs {
                 BindingClass::ClassDef(cls) => cls,
                 BindingClass::FunctionalClassDef(..) => continue,
             };
+            let parent = &cls_binding.parent;
+            let name = &cls_binding.def.name;
             // Skip classes nested inside functions, since they are not public symbols.
-            if Self::has_function_ancestor(&cls_binding.parent) {
+            if Self::has_function_ancestor(parent) {
+                continue;
+            }
+            // Skip top-level classes `del`eted at module scope.
+            if parent.is_toplevel() && deleted.contains(&name.id) {
                 continue;
             }
             let class_type = match answers.get_idx(class_idx) {
@@ -1623,7 +1632,7 @@ impl ReportArgs {
             };
             let class_name = format!(
                 "{module_prefix}{}",
-                Self::class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name)
+                Self::class_qualified_name(module, parent, name)
             );
             let mro = answers
                 .get_idx(bindings.key_to_idx(&KeyClassMro(ClassDefIndex(class_type.index().0))))
@@ -2879,6 +2888,13 @@ mod tests {
     fn test_report_implicit_module_globals() {
         let report = build_module_report_for_test("implicit_module_globals.py");
         compare_snapshot("implicit_module_globals.expected.json", &report);
+    }
+
+    /// Names removed by `del` must not appear in the report (issue #3576).
+    #[test]
+    fn test_report_del_module_level() {
+        let report = build_module_report_for_test("del_module_level.py");
+        compare_snapshot("del_module_level.expected.json", &report);
     }
 
     /// --module name override: entity counts (n_functions vs n_methods) must

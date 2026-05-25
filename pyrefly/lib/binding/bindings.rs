@@ -195,6 +195,8 @@ struct BindingsInner {
     /// here, before the AST is evicted from memory. Used for error suppression.
     module_ranges: Arc<ModuleRanges>,
     scope_trace: Option<ScopeTrace>,
+    /// Names `del`eted at module scope; retained outside the LSP `scope_trace`.
+    module_deletes: SmallSet<Name>,
     unused_parameters: Vec<UnusedParameter>,
     unused_imports: Vec<UnusedImport>,
     unused_variables: Vec<UnusedVariable>,
@@ -347,6 +349,7 @@ impl Bindings {
                 ignore_all: SmallMap::new(),
             }),
             scope_trace: None,
+            module_deletes: SmallSet::new(),
             unused_parameters: Vec::new(),
             unused_imports: Vec::new(),
             unused_variables: Vec::new(),
@@ -435,6 +438,11 @@ impl Bindings {
     /// initialized by a non-annotated assignment (tuple unpacking, walrus, `with … as`).
     pub fn subsequently_initialized(&self, ann: Idx<KeyAnnotation>) -> bool {
         self.0.subsequently_initialized.contains(&ann)
+    }
+
+    /// Names `del`eted at module scope.
+    pub fn module_deletes(&self) -> &SmallSet<Name> {
+        &self.0.module_deletes
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
@@ -708,6 +716,7 @@ impl Bindings {
                 );
             }
         }
+        let module_deletes = scope_trace.module_deletes().clone();
         Self(Arc::new(BindingsInner {
             module_info,
             table: builder.table,
@@ -718,6 +727,7 @@ impl Bindings {
             } else {
                 None
             },
+            module_deletes,
             unused_parameters: builder.unused_parameters,
             unused_imports: builder.unused_imports,
             unused_variables: builder.unused_variables,
