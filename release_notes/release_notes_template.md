@@ -50,7 +50,7 @@ Upgrading the version of Pyrefly you're using or a third-party library you depen
 
 This will add  `# pyrefly: ignore` comments to your code, enabling you to silence errors and return to fix them later. This can make the process of upgrading a large codebase much more manageable.
 
-Read more about error suppressions in the \[Pyefly documentation\](https://pyrefly.org/en/docs/error-suppressions/)
+Read more about error suppressions in the \[Pyrefly documentation\](https://pyrefly.org/en/docs/error-suppressions/)
 
 ---
 
