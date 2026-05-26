@@ -52,6 +52,8 @@ use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
+use serde::de::SeqAccess;
+use serde::de::Visitor;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -79,15 +81,67 @@ pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
 pub struct SubConfig {
-    pub matches: Glob,
+    #[serde(alias = "match", deserialize_with = "deserialize_sub_config_matches")]
+    pub matches: Vec<Glob>,
     #[serde(flatten)]
     pub settings: ConfigBase,
 }
 
 impl SubConfig {
     fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
-        self.matches = self.matches.clone().from_root(config_root);
+        self.matches = self
+            .matches
+            .clone()
+            .into_iter()
+            .map(|glob| glob.from_root(config_root))
+            .collect();
     }
+
+    fn matches_path(&self, path: &Path) -> bool {
+        self.matches.iter().any(|glob| glob.matches(path))
+    }
+}
+
+fn deserialize_sub_config_matches<'de, D>(deserializer: D) -> Result<Vec<Glob>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct GlobListVisitor;
+
+    impl<'de> Visitor<'de> for GlobListVisitor {
+        type Value = Vec<Glob>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a glob string or an array of glob strings")
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![Glob::new(value).map_err(E::custom)?])
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_string(value.to_owned())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut matches = Vec::new();
+            while let Some(pattern) = seq.next_element::<Glob>()? {
+                matches.push(pattern);
+            }
+            Ok(matches)
+        }
+    }
+
+    deserializer.deserialize_any(GlobListVisitor)
 }
 
 /// Why a `ConfigFile` was synthesized rather than loaded from a real config
@@ -1007,7 +1061,7 @@ impl ConfigFile {
         path: &Path,
     ) -> Option<T> {
         self.sub_configs.iter().find_map(|c| {
-            if c.matches.matches(path) {
+            if c.matches_path(path) {
                 return getter(&c.settings);
             }
             None
@@ -1538,9 +1592,13 @@ impl ConfigFile {
             for sub_config in &config.sub_configs {
                 if !sub_config.settings.extras.0.is_empty() {
                     let extra_keys = sub_config.settings.extras.0.keys().join(", ");
+                    let matches = sub_config
+                        .matches
+                        .iter()
+                        .map(|glob| glob.to_string())
+                        .join(", ");
                     errors.push(ConfigError::warn(anyhow!(
-                        "Extra keys found in sub config matching {}: {extra_keys}",
-                        sub_config.matches
+                        "Extra keys found in sub config matching {matches}: {extra_keys}"
                     )));
                 }
             }
@@ -1729,7 +1787,7 @@ mod tests {
                 },
                 source_db: Default::default(),
                 sub_configs: vec![SubConfig {
-                    matches: Glob::new("sub/project/**".to_owned()).unwrap(),
+                    matches: vec![Glob::new("sub/project/**".to_owned()).unwrap()],
                     settings: ConfigBase {
                         extras: Default::default(),
                         errors: Some(ErrorDisplayConfig::new(HashMap::from_iter([
@@ -1822,7 +1880,7 @@ mod tests {
              python_platform = "windows"
 
              [[sub_config]]
-             matches = "abcd"
+             matches = ["abcd", "efgh"]
 
                  atliens = 1
                  "#;
@@ -1835,6 +1893,7 @@ mod tests {
             config.sub_configs[0].settings.extras.0,
             Table::from_iter([("atliens".to_owned(), Value::Integer(1))])
         );
+        assert_eq!(config.sub_configs[0].matches.len(), 2);
     }
 
     #[test]
@@ -1996,7 +2055,7 @@ mod tests {
             source_db: Default::default(),
             build_system: Default::default(),
             sub_configs: vec![SubConfig {
-                matches: Glob::new("sub/project/**".to_owned()).unwrap(),
+                matches: vec![Glob::new("sub/project/**".to_owned()).unwrap()],
                 settings: Default::default(),
             }],
             typeshed_path: Some(PathBuf::from(typeshed)),
@@ -2026,13 +2085,13 @@ mod tests {
         python_environment.site_package_path =
             Some(vec![test_path.join("venv/lib/python1.2.3/site-packages")]);
 
-        let sub_config_matches = Glob::new(
+        let sub_config_matches = vec![Glob::new(
             test_path
                 .join("sub/project/**")
                 .to_string_lossy()
                 .into_owned(),
         )
-        .unwrap();
+        .unwrap()];
 
         config.rewrite_with_path_to_config(&test_path);
 
@@ -2174,7 +2233,10 @@ output-format = "omit-errors"
             },
             sub_configs: vec![
                 SubConfig {
-                    matches: Glob::new("**/highest/**".to_owned()).unwrap(),
+                    matches: vec![
+                        Glob::new("**/highest/**".to_owned()).unwrap(),
+                        Glob::new("**/top/**".to_owned()).unwrap(),
+                    ],
                     settings: ConfigBase {
                         replace_imports_with_any: Some(vec![
                             ModuleWildcard::new("highest").unwrap(),
@@ -2184,7 +2246,7 @@ output-format = "omit-errors"
                     },
                 },
                 SubConfig {
-                    matches: Glob::new("**/priority*".to_owned()).unwrap(),
+                    matches: vec![Glob::new("**/priority*".to_owned()).unwrap()],
                     settings: ConfigBase {
                         replace_imports_with_any: Some(vec![
                             ModuleWildcard::new("second").unwrap(),
@@ -2200,6 +2262,11 @@ output-format = "omit-errors"
         // test precedence (two configs match, one higher priority)
         assert!(config.replace_imports_with_any(
             Some(Path::new("this/is/highest/priority")),
+            ModuleName::from_str("highest")
+        ));
+
+        assert!(config.replace_imports_with_any(
+            Some(Path::new("this/is/top/priority")),
             ModuleName::from_str("highest")
         ));
 
@@ -2233,7 +2300,7 @@ output-format = "omit-errors"
                 ..Default::default()
             },
             sub_configs: vec![SubConfig {
-                matches: Glob::new("sub/**".to_owned()).unwrap(),
+                matches: vec![Glob::new("sub/**".to_owned()).unwrap()],
                 settings: ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                         ErrorKind::BadReturn,
@@ -2282,7 +2349,7 @@ output-format = "omit-errors"
                 ..Default::default()
             },
             sub_configs: vec![SubConfig {
-                matches: Glob::new("strict/**".to_owned()).unwrap(),
+                matches: vec![Glob::new("strict/**".to_owned()).unwrap()],
                 settings: ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                         ErrorKind::BadAssignment,
@@ -2314,7 +2381,7 @@ output-format = "omit-errors"
                 ..Default::default()
             },
             sub_configs: vec![SubConfig {
-                matches: Glob::new("sub/**".to_owned()).unwrap(),
+                matches: vec![Glob::new("sub/**".to_owned()).unwrap()],
                 settings: ConfigBase {
                     check_unannotated_defs: Some(false),
                     ..Default::default()
@@ -2616,7 +2683,7 @@ output-format = "omit-errors"
         let mut config = ConfigFile {
             preset: Some(Preset::Legacy),
             sub_configs: vec![SubConfig {
-                matches: Glob::new("tests/**".to_owned()).unwrap(),
+                matches: vec![Glob::new("tests/**".to_owned()).unwrap()],
                 settings: ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                         ErrorKind::BadOverride,

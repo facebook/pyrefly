@@ -59,24 +59,21 @@ impl ConfigOptionMigrater for SubConfigs {
 
         let sub_configs_vec = sub_configs
             .into_iter()
-            .flat_map(|(section, errors)| {
+            .map(|(section, errors)| -> anyhow::Result<SubConfig> {
                 // Split the section headers into individual modules and pair them with the section's error config.
                 // mypy uses module wildcards for its per-module sections, but we use globs.
                 // A simple translation: turn `.` into `/` and `*` into `**`, e.g. `a.*.b` -> `a/**/b`.
-                section
+                let matches = section
                     .split(",")
                     .map(|x| x.trim())
                     .filter(|x| !x.is_empty())
                     .map(|module| Glob::new(module.replace('.', "/").replace('*', "**")))
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .zip(std::iter::repeat(Some(errors)))
-            })
-            .map(|(matches, errors)| -> anyhow::Result<SubConfig> {
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 Ok(SubConfig {
-                    matches: matches?,
+                    matches,
                     settings: ConfigBase {
-                        errors,
+                        errors: Some(errors),
                         ..Default::default()
                     },
                 })
@@ -140,7 +137,7 @@ mod tests {
         assert_eq!(pyrefly_cfg.sub_configs.len(), 1);
 
         let sub_config = &pyrefly_cfg.sub_configs[0];
-        assert_eq!(sub_config.matches.to_string(), "app/models");
+        assert_eq!(sub_config.matches[0].to_string(), "app/models");
 
         let errors = sub_config.settings.errors.as_ref().unwrap();
         assert_eq!(
@@ -174,7 +171,7 @@ mod tests {
         let models_config = pyrefly_cfg
             .sub_configs
             .iter()
-            .find(|c| c.matches.to_string() == "app/models")
+            .find(|c| c.matches.iter().any(|glob| glob.to_string() == "app/models"))
             .unwrap();
         let models_errors = models_config.settings.errors.as_ref().unwrap();
         assert_eq!(
@@ -186,7 +183,7 @@ mod tests {
         let views_config = pyrefly_cfg
             .sub_configs
             .iter()
-            .find(|c| c.matches.to_string() == "app/views")
+            .find(|c| c.matches.iter().any(|glob| glob.to_string() == "app/views"))
             .unwrap();
         let views_errors = views_config.settings.errors.as_ref().unwrap();
         assert_eq!(
@@ -223,29 +220,24 @@ mod tests {
         let sub_configs = SubConfigs;
         let _ = sub_configs.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
 
-        assert_eq!(pyrefly_cfg.sub_configs.len(), 2);
+        assert_eq!(pyrefly_cfg.sub_configs.len(), 1);
 
-        // Check that both modules have the same error config
+        // Check that both modules share the same error config in one sub-config.
         let models_config = pyrefly_cfg
             .sub_configs
             .iter()
-            .find(|c| c.matches.to_string() == "app/models")
-            .unwrap();
-        let views_config = pyrefly_cfg
-            .sub_configs
-            .iter()
-            .find(|c| c.matches.to_string() == "app/views")
+            .find(|c| c.matches.iter().any(|glob| glob.to_string() == "app/models"))
             .unwrap();
 
+        assert!(models_config
+            .matches
+            .iter()
+            .any(|glob| glob.to_string() == "app/views"));
+
         let models_errors = models_config.settings.errors.as_ref().unwrap();
-        let views_errors = views_config.settings.errors.as_ref().unwrap();
 
         assert_eq!(
             models_errors.severity(ErrorKind::MissingAttribute),
-            Severity::Ignore
-        );
-        assert_eq!(
-            views_errors.severity(ErrorKind::MissingAttribute),
             Severity::Ignore
         );
     }
@@ -268,7 +260,7 @@ mod tests {
 
         let sub_config = &pyrefly_cfg.sub_configs[0];
         // Check that the module wildcard was converted to a glob
-        assert_eq!(sub_config.matches.to_string(), "app/**/models");
+        assert_eq!(sub_config.matches[0].to_string(), "app/**/models");
 
         let errors = sub_config.settings.errors.as_ref().unwrap();
         assert_eq!(
@@ -325,14 +317,14 @@ mod tests {
         let src_config = pyrefly_cfg
             .sub_configs
             .iter()
-            .find(|c| c.matches.to_string() == "src")
+            .find(|c| c.matches.iter().any(|glob| glob.to_string() == "src"))
             .unwrap();
 
         // Find the sub_config for tests
         let tests_config = pyrefly_cfg
             .sub_configs
             .iter()
-            .find(|c| c.matches.to_string() == "tests")
+            .find(|c| c.matches.iter().any(|glob| glob.to_string() == "tests"))
             .unwrap();
 
         // Verify that the error settings were properly migrated
