@@ -45,6 +45,57 @@ mod tests {
         let mut t = TestEnv::new();
         t.add(&path.display().to_string(), input);
         let includes = Globs::new(vec![format!("{}/**/*", tdir.path().display())]).unwrap();
+        run_stubgen_inner(&mut t, includes, config)
+    }
+
+    /// Pydantic shim providing `@dataclass_transform` on `BaseModel` so the
+    /// type checker synthesizes `__init__` for pydantic model subclasses.
+    const PYDANTIC_SHIM: &str = r#"from typing import dataclass_transform
+
+def Field(**kwargs): ...
+
+def computed_field(fn=None, **_kw):
+    return fn
+
+@dataclass_transform(
+    kw_only_default=False,
+    field_specifiers=(Field,),
+)
+class BaseModel:
+    pass
+"#;
+
+    /// Like `run_stubgen`, but injects a minimal pydantic shim so that
+    /// `BaseModel` subclasses get synthesized `__init__` in the stub output.
+    fn run_stubgen_pydantic(input: &str) -> String {
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: false,
+        };
+        let tdir = tempfile::tempdir().unwrap();
+
+        // Write the pydantic shim as a real package on disk.
+        let pydantic_dir = tdir.path().join("pydantic");
+        fs_anyhow::create_dir_all(&pydantic_dir).unwrap();
+        let pydantic_init = pydantic_dir.join("__init__.py");
+        fs_anyhow::write(&pydantic_init, PYDANTIC_SHIM).unwrap();
+
+        // Write the test input alongside the shim.
+        let path = tdir.path().join("input.py");
+        fs_anyhow::write(&path, input).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        t.add_real_path("pydantic", pydantic_init);
+
+        // Only process the input file — not the pydantic shim.
+        let includes = Globs::new(vec![path.display().to_string()]).unwrap();
+        run_stubgen_inner(&mut t, includes, &config)
+    }
+
+    /// Shared stubgen runner: sets up `FilteredGlobs`, `State`, and
+    /// `Transaction`, then extracts and emits stubs for the matched files.
+    fn run_stubgen_inner(t: &mut TestEnv, includes: Globs, config: &ExtractConfig) -> String {
         let f_globs = Box::new(FilteredGlobs::new(
             includes,
             Globs::empty(),
@@ -87,6 +138,18 @@ mod tests {
 
     /// Run a snapshot test for a specific test case directory.
     fn assert_stubgen_snapshot(test_name: &str) {
+        assert_stubgen_snapshot_with(test_name, run_stubgen);
+    }
+
+    /// Like `assert_stubgen_snapshot` but injects the pydantic shim so
+    /// `BaseModel` subclasses get synthesized `__init__` in the output.
+    fn assert_stubgen_pydantic_snapshot(test_name: &str) {
+        assert_stubgen_snapshot_with(test_name, run_stubgen_pydantic);
+    }
+
+    /// Shared snapshot runner: reads `input.py`, produces a stub via
+    /// `stub_fn`, and compares against `expected.pyi`.
+    fn assert_stubgen_snapshot_with(test_name: &str, stub_fn: impl Fn(&str) -> String) {
         let test_dir = get_test_dir().join(test_name);
         let input_path = test_dir.join("input.py");
         let expected_path = test_dir.join("expected.pyi");
@@ -98,7 +161,7 @@ mod tests {
         );
 
         let input = fs_anyhow::read_to_string(&input_path).unwrap();
-        let actual = run_stubgen(&input);
+        let actual = stub_fn(&input);
 
         if std::env::var("STUBGEN_UPDATE_SNAPSHOTS").is_ok() {
             fs_anyhow::create_dir_all(&test_dir).unwrap();
@@ -276,6 +339,16 @@ class A:
             .trim(),
             actual.trim(),
         );
+    }
+
+    #[test]
+    fn test_stubgen_dataclass() {
+        assert_stubgen_snapshot("dataclass");
+    }
+
+    #[test]
+    fn test_stubgen_pydantic() {
+        assert_stubgen_pydantic_snapshot("pydantic");
     }
 
     /// Instance attrs from `__init__` are emitted in alphabetical order by name (not assignment

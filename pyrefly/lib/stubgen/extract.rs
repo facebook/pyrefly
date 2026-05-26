@@ -19,6 +19,8 @@ use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Param;
+use pyrefly_types::callable::Params;
+use pyrefly_types::callable::Required;
 use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
@@ -35,6 +37,8 @@ use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
+use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::export::definitions::Definitions;
@@ -570,6 +574,147 @@ fn merge_instance_field_stubs(
     }
 }
 
+/// Returns `true` when the class is a dataclass or pydantic model, using
+/// the resolved `ClassMetadata` from the type checker rather than fragile
+/// AST pattern matching on decorator/base-class names.
+fn is_dataclass_or_pydantic_model(class_def: &StmtClassDef, ctx: &ExtractionContext) -> bool {
+    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+        return false;
+    };
+    let key = KeyClassMetadata(def_index);
+    let Some(idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+        return false;
+    };
+    let Some(metadata) = ctx.answers.get_idx(idx) else {
+        return false;
+    };
+    metadata.dataclass_metadata().is_some() || metadata.is_pydantic_model()
+}
+
+/// Extract a synthesized `__init__` stub for dataclass and pydantic model
+/// classes that generate `__init__` at type-check time rather than declaring
+/// it in source.
+fn extract_synthesized_init_stub(
+    class_def: &StmtClassDef,
+    ctx: &mut ExtractionContext,
+) -> Option<StubFunction> {
+    let def_index = ctx.bindings.class_def_index(class_def)?;
+    let key = KeyClassSynthesizedFields(def_index);
+    let idx = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+    let synth_fields = ctx.answers.get_idx(idx)?;
+    let init_field = synth_fields.get(&Name::new("__init__"))?;
+    let init_ty = init_field.inner.ty();
+    let func = match &init_ty {
+        Type::Function(f) => f,
+        _ => return None,
+    };
+    let params = match &func.signature.params {
+        Params::List(param_list) => param_list.items(),
+        _ => return None,
+    };
+    Some(StubFunction {
+        name: "__init__".to_owned(),
+        is_async: false,
+        type_params: None,
+        decorators: Vec::new(),
+        params: synthesized_params_to_stub(params, ctx),
+        return_type: Some("None".to_owned()),
+        docstring: None,
+    })
+}
+
+/// Convert resolved `Param`s from a synthesized method into `StubParam`s.
+fn synthesized_params_to_stub(params: &[Param], ctx: &mut ExtractionContext) -> Vec<StubParam> {
+    let mut result = Vec::new();
+    let mut seen_kwonly = false;
+    let mut seen_posonly = false;
+    let has_varargs = params.iter().any(|p| matches!(p, Param::Varargs(..)));
+    for param in params {
+        if seen_posonly && !matches!(param, Param::PosOnly(..)) {
+            result.push(StubParam {
+                prefix: "",
+                name: "/".to_owned(),
+                annotation: None,
+                default: None,
+            });
+            seen_posonly = false;
+        }
+        match param {
+            Param::PosOnly(..) => {
+                seen_posonly = true;
+                result.push(StubParam {
+                    prefix: "",
+                    name: param.name().map_or("_".to_owned(), |n| n.to_string()),
+                    annotation: format_param_type(param, ctx),
+                    default: required_to_default(param),
+                });
+            }
+            Param::Pos(name, ..) => {
+                result.push(StubParam {
+                    prefix: "",
+                    name: name.to_string(),
+                    annotation: format_param_type(param, ctx),
+                    default: required_to_default(param),
+                });
+            }
+            Param::Varargs(..) => {
+                result.push(StubParam {
+                    prefix: "*",
+                    name: param.name().map_or("args".to_owned(), |n| n.to_string()),
+                    annotation: format_param_type(param, ctx),
+                    default: None,
+                });
+            }
+            Param::KwOnly(name, ..) => {
+                if !seen_kwonly && !has_varargs {
+                    result.push(StubParam {
+                        prefix: "",
+                        name: "*".to_owned(),
+                        annotation: None,
+                        default: None,
+                    });
+                }
+                seen_kwonly = true;
+                result.push(StubParam {
+                    prefix: "",
+                    name: name.to_string(),
+                    annotation: format_param_type(param, ctx),
+                    default: required_to_default(param),
+                });
+            }
+            Param::Kwargs(..) => {
+                result.push(StubParam {
+                    prefix: "**",
+                    name: param.name().map_or("kwargs".to_owned(), |n| n.to_string()),
+                    annotation: format_param_type(param, ctx),
+                    default: None,
+                });
+            }
+        }
+    }
+    if seen_posonly {
+        result.push(StubParam {
+            prefix: "",
+            name: "/".to_owned(),
+            annotation: None,
+            default: None,
+        });
+    }
+    result
+}
+
+/// Map a `Param`'s requiredness to a stub default (`= ...` for optional, `None` for required).
+fn required_to_default(param: &Param) -> Option<String> {
+    let required = match param {
+        Param::PosOnly(_, _, r) | Param::Pos(_, _, r) | Param::KwOnly(_, _, r) => r,
+        Param::Varargs(..) | Param::Kwargs(..) => return None,
+    };
+    match required {
+        Required::Required => None,
+        Required::Optional(_) => Some("...".to_owned()),
+    }
+}
+
 fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Option<StubClass> {
     let name = class_def.name.id.as_str();
     if !should_include_name(name, ctx.config, false, ctx.dunder_all) {
@@ -619,7 +764,16 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
-    let body = extract_stmts(&class_def.body, ctx, true);
+    let mut body = extract_stmts(&class_def.body, ctx, true);
+    let has_explicit_init = body
+        .iter()
+        .any(|item| matches!(item, StubItem::Function(f) if f.name == "__init__"));
+    if !has_explicit_init
+        && is_dataclass_or_pydantic_model(class_def, ctx)
+        && let Some(init_stub) = extract_synthesized_init_stub(class_def, ctx)
+    {
+        body.push(StubItem::Function(init_stub));
+    }
     let extra = extract_instance_attr_stubs_from_class_fields(class_def, &body, ctx);
     let body = merge_instance_field_stubs(extra, body);
 
