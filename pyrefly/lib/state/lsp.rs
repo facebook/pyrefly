@@ -3537,8 +3537,8 @@ impl<'a> Transaction<'a> {
     }
 
     /// Find references to an external definition within the given handle's module.
-    /// When the exact byte-range comparison fails (e.g. CRLF/LF differences),
-    /// falls back to comparing line numbers, which are encoding-invariant.
+    /// When the exact byte-range comparison fails (e.g. CRLF/LF differences), fall back to
+    /// comparing symbol names and line numbers, which are encoding-invariant.
     fn local_references_from_external_definition(
         &self,
         handle: &Handle,
@@ -3550,8 +3550,9 @@ impl<'a> Transaction<'a> {
         let index = index.lock();
         let mut references = Vec::new();
 
-        // Lazily computed line number for fallback comparison.
+        // Lazily computed data for fallback comparison.
         let definition_line = || module.to_lsp_position(definition_range.start()).line;
+        let definition_name = || module.code_at(definition_range);
 
         for ((imported_module_name, imported_name), ranges) in index
             .externally_defined_variable_references
@@ -3565,7 +3566,9 @@ impl<'a> Transaction<'a> {
                 FindPreference::default(),
             ) && imported_handle.path().as_path() == module.path().as_path()
                 && (export.location == definition_range
-                    || module.to_lsp_position(export.location.start()).line == definition_line())
+                    || (imported_name.as_str() == definition_name()
+                        && module.to_lsp_position(export.location.start()).line
+                            == definition_line()))
             {
                 references.extend(ranges.iter().copied());
             }
@@ -3576,7 +3579,8 @@ impl<'a> Transaction<'a> {
             if attribute_module_path == module.path() {
                 for (def_range, ref_range) in def_and_ref_ranges {
                     if *def_range == definition_range
-                        || module.to_lsp_position(def_range.start()).line == definition_line()
+                        || (module.code_at(*def_range) == definition_name()
+                            && module.to_lsp_position(def_range.start()).line == definition_line())
                     {
                         references.push(*ref_range);
                     }
@@ -3885,10 +3889,9 @@ impl<'a> Transaction<'a> {
                         definition_ast.as_ref(),
                         callee_def_range,
                         &kw_identifier,
-                    ) {
-                        if param_range == definition_range {
-                            references.push(kw_identifier.range);
-                        }
+                    ) && param_range == definition_range
+                    {
+                        references.push(kw_identifier.range);
                     }
                 }
             }
