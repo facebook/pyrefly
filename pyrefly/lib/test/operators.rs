@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -121,6 +122,49 @@ class CandidateWeight(Generic[Weight]):
     def __add__(self, other: CandidateWeight[Weight]) -> Weight:
         return self.weight + other.weight
     "#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison,
+    TestEnv::new().enable_incompatible_comparison_error(),
+    r#"
+from decimal import Decimal
+
+def compare(
+    x: int,
+    y: str,
+    z: int | str,
+    f: float,
+    b: bytes,
+    ba: bytearray,
+    s: set[int],
+    fs: frozenset[int],
+    d: Decimal,
+    bo: bool,
+    c: complex,
+    mv: memoryview,
+) -> None:
+    x == y  # E: Comparison `==` between incompatible types `int` and `str`
+    x != y  # E: Comparison `!=` between incompatible types `int` and `str`
+    z == y
+    x == f
+    x == d
+    b == ba
+    s == fs
+    x == bo
+    c == f
+    b == mv
+    bo == y  # E: Comparison `==` between incompatible types `bool` and `str`
+    mv == y  # E: Comparison `==` between incompatible types `memoryview` and `str`
+"#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison_default_off,
+    r#"
+def compare(x: int, y: str) -> None:
+    x == y
+"#,
 );
 
 testcase!(
@@ -834,7 +878,6 @@ class ThisClassWorks:
             return ThisClassWorks(self.flag and other)
         return ThisClassWorks(self.flag and other.flag)
 
-
 def _produce_and_func() -> Callable[
     ["ThisClassDoesNotWork", Union["ThisClassDoesNotWork", bool]],
     "ThisClassDoesNotWork",
@@ -847,7 +890,6 @@ def _produce_and_func() -> Callable[
         return ThisClassDoesNotWork(self.flag and other.flag)
 
     return and_func
-
 
 class ThisClassDoesNotWork:
     def __init__(self, flag: bool) -> None:

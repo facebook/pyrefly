@@ -14,8 +14,6 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 
-use lsp_types::DocumentDiagnosticReport;
-use lsp_types::DocumentDiagnosticReportResult;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::request::WorkspaceConfiguration;
@@ -684,10 +682,24 @@ fn test_disable_type_errors_language_services_still_work() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+/// `displayTypeErrors` is the legacy IDE setting; it's deprecated in
+/// favor of `typeCheckingMode` + `disableTypeErrors`. The legacy values
+/// map onto the new model as:
+/// - `force-off` → workspace `disableTypeErrors = true` (kill switch)
+/// - `force-on` → `typeCheckingMode = "default"` (Default preset)
+///
+/// This test pins both dynamic transitions: empty (Basic, errors
+/// silenced) → `force-on` (Default, errors visible) → `force-off`
+/// (kill switch, errors hidden). The recheck after each
+/// `did_change_configuration` is async, so the test waits on streamed
+/// `publishDiagnostics` notifications (push) rather than firing a
+/// synchronous `diagnostic` pull that would race the cache
+/// invalidation.
 #[test]
 fn test_disable_type_errors_workspace_folder() {
     let test_files_root = get_test_files_root();
     let scope_uri = Url::from_file_path(test_files_root.path()).unwrap();
+    let type_errors_path = test_files_root.path().join("type_errors.py");
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction
@@ -700,27 +712,18 @@ fn test_disable_type_errors_workspace_folder() {
 
     interaction.client.did_open("type_errors.py");
 
+    // Initial empty configuration → resolver picks `Basic` preset,
+    // which silences `unsupported-operation` (the only error in
+    // `type_errors.py`).
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}))
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 0)
+        .expect("Failed to receive initial empty diagnostics");
 
+    // Switch to `force-on` → maps to `typeCheckingMode = "default"`,
+    // which routes through the resolver's config-cache invalidation.
+    // Wait for the recheck-driven publish (1 error: unsupported-operation).
     interaction.client.did_change_configuration();
-
-    interaction
-        .client
-        .expect_configuration_request(Some(vec![&scope_uri]))
-        .expect("Failed to receive configuration request")
-        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
-    interaction
-        .client
-        .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}))
-        .expect("Failed to receive expected response");
-
-    interaction.client.did_change_configuration();
-
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
@@ -728,9 +731,22 @@ fn test_disable_type_errors_workspace_folder() {
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result())
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 1)
+        .expect("Failed to receive force-on diagnostics");
+
+    // Switch to `force-off` → maps to `disableTypeErrors = true`
+    // (workspace kill switch). The kill switch silences every
+    // diagnostic; wait for the publish that drops the count back to 0.
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 0)
+        .expect("Failed to receive force-off diagnostics");
 
     interaction.shutdown().expect("Failed to shutdown");
 }
@@ -738,6 +754,7 @@ fn test_disable_type_errors_workspace_folder() {
 #[test]
 fn test_disable_type_errors_default_workspace() {
     let test_files_root = get_test_files_root();
+    let type_errors_path = test_files_root.path().join("type_errors.py");
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction
@@ -749,27 +766,14 @@ fn test_disable_type_errors_default_workspace() {
 
     interaction.client.did_open("type_errors.py");
 
+    // Initial empty configuration → Basic preset → silenced.
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}))
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 0)
+        .expect("Failed to receive initial empty diagnostics");
 
+    // `force-on` → Default preset → 1 error visible.
     interaction.client.did_change_configuration();
-
-    interaction
-        .client
-        .expect_configuration_request(None)
-        .expect("Failed to receive configuration request")
-        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
-    interaction
-        .client
-        .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}))
-        .expect("Failed to receive expected response");
-
-    interaction.client.did_change_configuration();
-
     interaction
         .client
         .expect_configuration_request(None)
@@ -777,15 +781,32 @@ fn test_disable_type_errors_default_workspace() {
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result())
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 1)
+        .expect("Failed to receive force-on diagnostics");
+
+    // `force-off` → kill switch → suppressed.
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .expect("Failed to receive configuration request")
+        .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-off"}}]));
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 0)
+        .expect("Failed to receive force-off diagnostics");
 
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+/// `disable-type-errors-in-ide = true` in `pyrefly.toml` suppresses
+/// IDE diagnostics for files in the project. Legacy `displayTypeErrors
+/// = "force-on"` does NOT pierce this flag — `disableTypeErrors` is a
+/// clean two-state boolean and the project's committed config wins.
+/// This test pins that contract so a future change can't silently
+/// re-introduce a force-show override.
 #[test]
-fn test_disable_type_errors_config() {
+fn test_disable_type_errors_in_config_wins_over_force_on() {
     let root = get_test_files_root();
     let test_files_root = root.path().join("disable_type_error_in_config");
     let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
@@ -801,6 +822,7 @@ fn test_disable_type_errors_config() {
 
     interaction.client.did_open("type_errors.py");
 
+    // Initial: in-config disable suppresses errors.
     interaction
         .client
         .diagnostic("type_errors.py")
@@ -809,6 +831,10 @@ fn test_disable_type_errors_config() {
 
     interaction.client.did_change_configuration();
 
+    // After legacy `force-on`: still suppressed. The legacy mapping
+    // sets `typeCheckingMode = "default"` (which doesn't apply because
+    // the project has a real config) and is a no-op on
+    // `disableTypeErrors`. The in-config disable wins.
     interaction
         .client
         .expect_configuration_request(Some(vec![&scope_uri]))
@@ -817,7 +843,7 @@ fn test_disable_type_errors_config() {
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result())
+        .expect_response(json!({"items": [], "kind": "full"}))
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");
@@ -868,9 +894,17 @@ fn test_parse_pylance_configs() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+/// Dynamic switch from an empty configuration (Basic preset, errors
+/// silenced) to `displayTypeErrors = "force-on"` (legacy mapping →
+/// `typeCheckingMode = "default"`, errors visible) without an explicit
+/// workspace folder. The recheck after `did_change_configuration` is
+/// async, so the test waits on streamed `publishDiagnostics` rather
+/// than firing a synchronous `diagnostic` pull that would race the
+/// cache invalidation.
 #[test]
 fn test_diagnostics_default_workspace() {
     let root = get_test_files_root();
+    let type_errors_path = root.path().join("type_errors.py");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
@@ -882,12 +916,13 @@ fn test_diagnostics_default_workspace() {
 
     interaction.client.did_open("type_errors.py");
 
+    // Empty configuration → Basic preset silences `unsupported-operation`.
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}))
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 0)
+        .expect("Failed to receive initial empty diagnostics");
 
+    // `force-on` → Default preset → 1 error visible.
     interaction.client.did_change_configuration();
     interaction
         .client
@@ -896,9 +931,8 @@ fn test_diagnostics_default_workspace() {
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result())
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 1)
+        .expect("Failed to receive force-on diagnostics");
 
     interaction.shutdown().expect("Failed to shutdown");
 }
@@ -939,10 +973,18 @@ fn test_diagnostics_default_workspace_with_config() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
+/// Dynamic switch from an empty configuration (Basic preset, errors
+/// silenced) to `displayTypeErrors = "force-on"` (legacy mapping →
+/// `typeCheckingMode = "default"`, errors visible) inside an explicit
+/// workspace folder. The recheck after `did_change_configuration` is
+/// async, so the test waits on streamed `publishDiagnostics` rather
+/// than firing a synchronous `diagnostic` pull that would race the
+/// cache invalidation.
 #[test]
 fn test_diagnostics_in_workspace() {
     let root = get_test_files_root();
     let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let type_errors_path = root.path().join("type_errors.py");
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
@@ -955,12 +997,13 @@ fn test_diagnostics_in_workspace() {
 
     interaction.client.did_open("type_errors.py");
 
+    // Empty configuration → Basic preset silences `unsupported-operation`.
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(json!({"items": [], "kind": "full"}))
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 0)
+        .expect("Failed to receive initial empty diagnostics");
 
+    // `force-on` → Default preset → 1 error visible.
     interaction.client.did_change_configuration();
     interaction
         .client
@@ -969,9 +1012,8 @@ fn test_diagnostics_in_workspace() {
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
     interaction
         .client
-        .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result())
-        .expect("Failed to receive expected response");
+        .expect_publish_diagnostics_eventual_error_count(type_errors_path.clone(), 1)
+        .expect("Failed to receive force-on diagnostics");
 
     interaction.shutdown().expect("Failed to shutdown");
 }
@@ -1115,57 +1157,6 @@ fn test_initialization_options_without_workspace_folders() {
         .client
         .definition("foo.py", 6, 16)
         .expect_response(json!(null))
-        .expect("Failed to receive expected response");
-
-    interaction.shutdown().expect("Failed to shutdown");
-}
-
-#[test]
-fn test_error_missing_imports_mode() {
-    let test_files_root = get_test_files_root();
-    let root_path = test_files_root.path().join("error_missing_imports_mode");
-    let mut interaction = LspInteraction::new();
-    interaction.set_root(root_path.clone());
-    interaction
-        .initialize(InitializeSettings {
-            configuration: Some(Some(
-                json!([{"pyrefly": {"displayTypeErrors": "error-missing-imports"}}]),
-            )),
-            ..Default::default()
-        })
-        .expect("Failed to initialize");
-
-    interaction.client.did_open("test_file.py");
-
-    interaction
-        .client
-        .diagnostic("test_file.py")
-        .expect_response_with(|response| {
-            if let DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(
-                full_report,
-            )) = response
-            {
-                let items = &full_report.full_document_diagnostic_report.items;
-
-                let has_missing_import = items.iter().any(|item| {
-                    item.code.as_ref().and_then(|c| match c {
-                        lsp_types::NumberOrString::String(s) => Some(s.as_str()),
-                        _ => None,
-                    }) == Some("missing-import")
-                });
-
-                let has_bad_assignment = items.iter().any(|item| {
-                    item.code.as_ref().and_then(|c| match c {
-                        lsp_types::NumberOrString::String(s) => Some(s.as_str()),
-                        _ => None,
-                    }) == Some("bad-assignment")
-                });
-
-                has_missing_import && !has_bad_assignment
-            } else {
-                false
-            }
-        })
         .expect("Failed to receive expected response");
 
     interaction.shutdown().expect("Failed to shutdown");

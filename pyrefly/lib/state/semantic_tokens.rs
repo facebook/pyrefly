@@ -447,7 +447,7 @@ impl SemanticTokenBuilder {
             }
             Stmt::With(with) => {
                 for with_item in with.items.iter() {
-                    if let Some(box name) = &with_item.optional_vars {
+                    if let Some(name) = &with_item.optional_vars {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
@@ -543,7 +543,7 @@ impl SemanticTokenBuilder {
 
     pub fn all_tokens_sorted(self) -> Vec<SemanticTokenWithFullRange> {
         let mut tokens = self.tokens;
-        tokens.sort_by(|a, b| a.range.start().cmp(&b.range.start()));
+        tokens.sort_by_key(|a| a.range.start());
         tokens
     }
 }

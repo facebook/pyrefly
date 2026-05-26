@@ -15,6 +15,7 @@
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::ValueEnum;
@@ -29,6 +30,146 @@ use crate::migration::mypy::ini::parse_mypy_config;
 use crate::migration::pyright;
 use crate::migration::pyright::PyrightConfig;
 use crate::pyproject::PyProject;
+
+/// Which type checker config we successfully migrated from, plus the
+/// kind of file we read it out of. Used by the LSP/CLI to label the
+/// synthesized config and explain to the user where the imported
+/// settings came from.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MigratedFromKind {
+    Mypy(MigratedConfigSource),
+    Pyright(MigratedConfigSource),
+}
+
+/// Where the migrated mypy / pyright settings physically lived: a
+/// dedicated config file (`mypy.ini` / `pyrightconfig.json`), or a
+/// `[tool.mypy]` / `[tool.pyright]` section of a `pyproject.toml`. The
+/// surfaced wording differs ("`mypy.ini`" vs "`[tool.mypy]` in
+/// `pyproject.toml`"), but the migrated settings themselves don't.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MigratedConfigSource {
+    /// `mypy.ini` or `pyrightconfig.json`.
+    DedicatedFile,
+    /// `[tool.mypy]` or `[tool.pyright]` section of a `pyproject.toml`.
+    PyprojectToml,
+}
+
+/// Search upward from `start` for a mypy or pyright config (`mypy.ini`,
+/// `pyrightconfig.json`, or a `pyproject.toml` with `[tool.mypy]` /
+/// `[tool.pyright]`) and migrate it to a Pyrefly `ConfigFile` entirely in
+/// memory — no files are written. The result is equivalent to what
+/// `pyrefly init` would produce, only without touching disk.
+///
+/// Returns `Ok(None)` if no migrate-able config exists. Returns `Err` if a
+/// candidate config was found but couldn't be parsed; callers that want to
+/// fall back to a plain `Basic` preset on parse failure should catch the
+/// error themselves (see `resolve_unconfigured_config`).
+pub fn find_and_migrate_in_memory(
+    start: &Path,
+) -> anyhow::Result<Option<(ConfigFile, MigratedFromKind)>> {
+    let Some(path) = find_upward_config(start, MigrationSource::Auto) else {
+        return Ok(None);
+    };
+    if path.file_name() == Some("pyrightconfig.json".as_ref()) {
+        let raw_file = fs_anyhow::read_to_string(&path)
+            .with_context(|| format!("While reading pyright config at {}", path.display()))?;
+        let pyr = PyrightConfig::parse(&raw_file)
+            .with_context(|| format!("While parsing pyright config at {}", path.display()))?;
+        Ok(Some((
+            pyr.convert(),
+            MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
+        )))
+    } else if path.file_name() == Some("mypy.ini".as_ref()) {
+        let cfg = parse_mypy_config(&path)?;
+        Ok(Some((
+            cfg,
+            MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile),
+        )))
+    } else if path.file_name() == Some("pyproject.toml".as_ref()) {
+        let raw_file = fs_anyhow::read_to_string(&path)
+            .with_context(|| format!("While reading pyproject.toml at {}", path.display()))?;
+        // Try mypy first, then pyright. Matches the historical Auto order.
+        //
+        // TODO: this falls back to pyright on *any* mypy parse error,
+        // not just "section missing" — so a malformed `[tool.mypy]`
+        // silently becomes a pyright migration when both sections are
+        // present. `Args::load_from_pyproject` (used by `pyrefly init`)
+        // has the same shape. Ideally section presence (not parse
+        // success) would decide which tool migrates; change both
+        // together.
+        match mypy::parse_pyproject_config(&raw_file) {
+            Ok(cfg) => Ok(Some((
+                cfg,
+                MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml),
+            ))),
+            Err(mypy_err) => match pyright::parse_pyproject_toml(&raw_file) {
+                Ok(cfg) => Ok(Some((
+                    cfg,
+                    MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
+                ))),
+                Err(pyright_err) => {
+                    let has_mypy = raw_file.contains("[tool.mypy]");
+                    let has_pyright = raw_file.contains("[tool.pyright]");
+                    if !has_mypy && !has_pyright {
+                        // No tool sections at all — this isn't a
+                        // migrate-able config, not a parse error.
+                        // Treat as "nothing nearby."
+                        Ok(None)
+                    } else if has_pyright && !has_mypy {
+                        // Only `[tool.pyright]` is present, so a mypy
+                        // parse error is "section missing" — surface
+                        // the pyright error instead, since that's
+                        // what the user actually has and needs to
+                        // fix.
+                        Err(pyright_err.context(format!(
+                            "While parsing pyproject.toml at {}",
+                            path.display()
+                        )))
+                    } else {
+                        // `[tool.mypy]` is present (alone or
+                        // alongside pyright). Mypy was tried first;
+                        // surface its error.
+                        Err(mypy_err.context(format!(
+                            "While parsing pyproject.toml at {}",
+                            path.display()
+                        )))
+                    }
+                }
+            },
+        }
+    } else {
+        // `find_upward_config(_, Auto)` only returns one of the three
+        // filenames handled above, so no other filename can reach
+        // here. Panic loudly if a future change adds a new search
+        // candidate without a matching arm.
+        unreachable!(
+            "find_upward_config returned an unexpected filename: {}",
+            path.display()
+        )
+    }
+}
+
+/// Search upward from `start` for the first matching config file. Returns
+/// `None` if nothing is found. Used by both the migration command (which
+/// requires a config to be present) and the in-memory helper (which is
+/// fine with `None`).
+fn find_upward_config(start: &Path, migrate_from: MigrationSource) -> Option<PathBuf> {
+    let filenames = match migrate_from {
+        MigrationSource::MyPy => {
+            vec!["mypy.ini".into(), "pyproject.toml".into()]
+        }
+        MigrationSource::Pyright => {
+            vec!["pyrightconfig.json".into(), "pyproject.toml".into()]
+        }
+        MigrationSource::Auto => vec![
+            "mypy.ini".into(),
+            "pyrightconfig.json".into(),
+            "pyproject.toml".into(),
+        ],
+    };
+    let searcher = UpwardSearch::new(filenames, |p| Arc::new(p.to_path_buf()));
+    searcher.directory(start).map(Arc::unwrap_or_clone)
+}
 
 /// Which type checker config to migrate from.
 ///
@@ -119,30 +260,6 @@ impl Args {
         }
     }
 
-    /// Search upward for a config file. When `migrate_from` is set to a
-    /// specific source, only look for files matching that source (plus
-    /// pyproject.toml). When `Auto`, look for all three in the historical order.
-    fn find_config(start: &Path, migrate_from: MigrationSource) -> anyhow::Result<PathBuf> {
-        let filenames = match migrate_from {
-            MigrationSource::MyPy => {
-                vec!["mypy.ini".into(), "pyproject.toml".into()]
-            }
-            MigrationSource::Pyright => {
-                vec!["pyrightconfig.json".into(), "pyproject.toml".into()]
-            }
-            MigrationSource::Auto => vec![
-                "mypy.ini".into(),
-                "pyrightconfig.json".into(),
-                "pyproject.toml".into(),
-            ],
-        };
-        let searcher = UpwardSearch::new(filenames, |p| std::sync::Arc::new(p.to_path_buf()));
-        searcher.directory(start).map_or_else(
-            || Err(anyhow::anyhow!("Failed to find config")),
-            |p| Ok(std::sync::Arc::unwrap_or_clone(p)),
-        )
-    }
-
     /// Check for certain conditions and warn the user that they may need to edit the config.
     fn check_and_warn(config: &ConfigFile) {
         if toml::to_string(&config).is_ok_and(|s| s.is_empty()) {
@@ -165,7 +282,8 @@ impl Args {
         let original_config_path = if self.original_config_path.is_file() {
             self.original_config_path.clone()
         } else {
-            Self::find_config(&self.original_config_path, self.migrate_from)?
+            find_upward_config(&self.original_config_path, self.migrate_from)
+                .ok_or_else(|| anyhow::anyhow!("Failed to find config"))?
         };
 
         let config = if original_config_path.file_name() == Some("pyrightconfig.json".as_ref()) {
@@ -498,7 +616,8 @@ files = ["mypy.py"]
         std::fs::create_dir_all(&bottom)?;
         fs_anyhow::write(&tmp.path().join("a/mypy.ini"), b"[mypy]\n")?;
         fs_anyhow::write(&tmp.path().join("a/pyproject.toml"), b"")?;
-        let found = Args::find_config(&bottom, MigrationSource::Auto)?;
+        let found =
+            find_upward_config(&bottom, MigrationSource::Auto).expect("config should be found");
         assert!(found.ends_with("mypy.ini"));
         Ok(())
     }
@@ -608,6 +727,176 @@ files = ["mypy.py"]
         config_migration(&original_config_path, MigrationSource::Auto, true, false)?;
         let unchanged = fs_anyhow::read_to_string(&original_config_path)?;
         assert_eq!(unchanged, pyproject);
+        Ok(())
+    }
+
+    /// Tests for the in-memory loader used by `resolve_unconfigured_config`.
+    /// These mirror the on-disk `config_migration` tests but assert that no
+    /// `pyrefly.toml` is written and that the resulting `ConfigFile` carries
+    /// the expected migrated settings.
+    #[test]
+    fn test_in_memory_finds_mypy_ini() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b/c");
+        std::fs::create_dir_all(&bottom)?;
+        fs_anyhow::write(
+            &tmp.path().join("a/mypy.ini"),
+            b"[mypy]\ncheck_untyped_defs = True\n",
+        )?;
+
+        let (cfg, kind) = find_and_migrate_in_memory(&bottom)?.expect("should find mypy.ini");
+        assert_eq!(
+            kind,
+            MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile)
+        );
+        // Mypy migration sets the legacy preset.
+        assert_eq!(cfg.preset, Some(crate::base::Preset::Legacy));
+        // Full migration also sets check_unannotated_defs (mypy's
+        // `check_untyped_defs` maps to pyrefly's `check_unannotated_defs`).
+        assert_eq!(cfg.root.check_unannotated_defs, Some(true));
+        // No file written.
+        assert!(!tmp.path().join("a/pyrefly.toml").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_memory_finds_pyrightconfig() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b");
+        std::fs::create_dir_all(&bottom)?;
+        fs_anyhow::write(
+            &tmp.path().join("a/pyrightconfig.json"),
+            br#"{ "include": ["src/**/*.py"] }"#,
+        )?;
+
+        let (cfg, kind) =
+            find_and_migrate_in_memory(&bottom)?.expect("should find pyrightconfig.json");
+        assert_eq!(
+            kind,
+            MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile)
+        );
+        assert_eq!(
+            cfg.project_includes,
+            Globs::new(vec!["src/**/*.py".to_owned()]).unwrap()
+        );
+        assert!(!tmp.path().join("a/pyrefly.toml").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_memory_finds_pyproject_with_tool_mypy() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b");
+        std::fs::create_dir_all(&bottom)?;
+        fs_anyhow::write(
+            &tmp.path().join("a/pyproject.toml"),
+            b"[tool.mypy]\nfiles = [\"a.py\"]\n",
+        )?;
+
+        let (_cfg, kind) = find_and_migrate_in_memory(&bottom)?.expect("should find pyproject");
+        assert_eq!(
+            kind,
+            MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_memory_finds_pyproject_with_tool_pyright() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b");
+        std::fs::create_dir_all(&bottom)?;
+        fs_anyhow::write(
+            &tmp.path().join("a/pyproject.toml"),
+            b"[tool.pyright]\ninclude = [\"a.py\"]\n",
+        )?;
+
+        let (_cfg, kind) = find_and_migrate_in_memory(&bottom)?.expect("should find pyproject");
+        assert_eq!(
+            kind,
+            MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_memory_returns_none_when_no_config() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b/c");
+        std::fs::create_dir_all(&bottom)?;
+        // No mypy/pyright/pyproject anywhere.
+        let result = find_and_migrate_in_memory(&bottom)?;
+        assert!(result.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_memory_pyproject_without_tool_sections_is_none() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b");
+        std::fs::create_dir_all(&bottom)?;
+        // pyproject.toml exists but has neither [tool.mypy] nor [tool.pyright].
+        fs_anyhow::write(
+            &tmp.path().join("a/pyproject.toml"),
+            b"[project]\nname = \"x\"\n",
+        )?;
+
+        let result = find_and_migrate_in_memory(&bottom)?;
+        assert!(
+            result.is_none(),
+            "bare pyproject.toml without tool sections is not migrate-able"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_memory_malformed_mypy_returns_err() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b");
+        std::fs::create_dir_all(&bottom)?;
+        // mypy.ini with content that confuses the configparser library.
+        fs_anyhow::write(
+            &tmp.path().join("a/mypy.ini"),
+            b"this is not a valid ini file\nno equals signs\n[unclosed",
+        )?;
+
+        let result = find_and_migrate_in_memory(&bottom);
+        assert!(
+            result.is_err(),
+            "malformed mypy.ini should propagate as Err so callers can decide whether to fall back",
+        );
+        Ok(())
+    }
+
+    /// When `pyproject.toml` has only `[tool.pyright]` (no
+    /// `[tool.mypy]`) and the pyright section fails to parse, the
+    /// surfaced error should reference the pyright section's data —
+    /// not the mypy "section missing" failure that happens to be
+    /// tried first. This pins the pyright-vs-mypy error precedence
+    /// rule.
+    #[test]
+    fn test_in_memory_pyright_only_parse_error_surfaces_pyright_error() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b");
+        std::fs::create_dir_all(&bottom)?;
+        // `[tool.pyright]` present but malformed (`include` should be a list).
+        fs_anyhow::write(
+            &tmp.path().join("a/pyproject.toml"),
+            b"[tool.pyright]\ninclude = 42\n",
+        )?;
+
+        let err = find_and_migrate_in_memory(&bottom)
+            .expect_err("malformed [tool.pyright] should propagate as Err");
+        let msg = format!("{err:#}");
+        // The pyright parser fails on `include = 42` (expects a list).
+        // Mypy would have failed earlier with a generic "section
+        // missing" message that doesn't mention `include`. Asserting
+        // the message names the offending field is the cleanest way
+        // to confirm the pyright error is the one being surfaced.
+        assert!(
+            msg.contains("include"),
+            "expected error to reference the pyright `include` field, got: {msg}",
+        );
         Ok(())
     }
 }

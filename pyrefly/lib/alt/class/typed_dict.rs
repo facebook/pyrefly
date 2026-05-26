@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
@@ -34,7 +33,6 @@ use crate::alt::unwrap::HintRef;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
@@ -100,7 +98,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 check_errors,
                                 key.range(),
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                ErrorKind::BadTypedDictKey,
                                 format!("Cannot update read-only field `{key_name}`"),
                             );
                         }
@@ -108,9 +106,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.expr_with_separate_check_errors(
                                 &x.value,
                                 Some((&field.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(Some(
-                                        key_name.clone(),
-                                    )))
+                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                        Some(key_name.clone()),
+                                        false,
+                                    ))
                                 })),
                                 item_errors,
                             );
@@ -119,28 +118,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.expr_with_separate_check_errors(
                                 &x.value,
                                 Some((&extra.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(None))
+                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                        None, false,
+                                    ))
                                 })),
                                 item_errors,
                             );
                         }
                         None => {
-                            let mut msg = vec1![format!(
-                                "Key `{}` is not defined in TypedDict `{}`",
-                                key_name,
-                                typed_dict.name()
-                            )];
+                            let mut builder = check_errors.error_builder(
+                                key.range(),
+                                ErrorKind::BadTypedDictKey,
+                                format!(
+                                    "Key `{}` is not defined in TypedDict `{}`",
+                                    key_name,
+                                    typed_dict.name()
+                                ),
+                            );
                             if let Some(suggestion) = best_suggestion(
                                 &key_name,
                                 fields.keys().map(|candidate| (candidate, 0usize)),
                             ) {
-                                msg.push(format!("Did you mean `{suggestion}`?"));
+                                builder =
+                                    builder.with_detail(format!("Did you mean `{suggestion}`?"));
                             }
-                            check_errors.add(
-                                key.range(),
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
-                                msg,
-                            );
+                            builder.emit();
                         }
                     }
                     keys.insert(key_name);
@@ -148,7 +150,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         check_errors,
                         key.range(),
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "Expected string literal key, got `{}`",
                             self.for_display(key_type)
@@ -177,15 +179,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         } else {
                             &|| TypeCheckContext::of_kind(TypeCheckKind::TypedDictUnpacking)
                         };
-                    self.solver().error(
-                        &item_ty,
-                        &partial_td_ty,
-                        check_errors,
-                        range,
-                        tcc,
-                        subset_error,
-                        None,
-                    );
+                    self.solver()
+                        .error_builder(
+                            &item_ty,
+                            &partial_td_ty,
+                            check_errors,
+                            range,
+                            tcc,
+                            subset_error,
+                        )
+                        .emit();
                 }
             }
         });
@@ -196,7 +199,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         check_errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "Missing required key `{}` for TypedDict `{}`",
                             key,
@@ -347,29 +350,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             signatures: vec1![
                 OverloadType::Function(Function {
                     signature: Callable::list(ParamList::new(kw_params), self.heap.mk_none()),
-                    metadata: FuncMetadata::def(
-                        self.module().dupe(),
-                        cls.dupe(),
-                        dunder::INIT,
-                        None
-                    ),
+                    metadata: FuncMetadata::method(cls, dunder::INIT),
                 }),
                 OverloadType::Function(Function {
                     signature: Callable::list(ParamList::new(map_params), self.heap.mk_none()),
-                    metadata: FuncMetadata::def(
-                        self.module().dupe(),
-                        cls.dupe(),
-                        dunder::INIT,
-                        None
-                    ),
+                    metadata: FuncMetadata::method(cls, dunder::INIT),
                 })
             ],
-            metadata: Box::new(FuncMetadata::def(
-                self.module().dupe(),
-                cls.dupe(),
-                dunder::INIT,
-                None,
-            )),
+            metadata: Box::new(FuncMetadata::method(cls, dunder::INIT)),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -379,7 +367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), UPDATE_METHOD, None);
+        let metadata = FuncMetadata::method(cls, UPDATE_METHOD);
         let self_param = self.class_self_param(cls, true);
         let extra = if let ExtraItems::Extra(extra) = self.typed_dict_extra_items_for_cls(cls) {
             Some(extra.ty)
@@ -516,7 +504,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> ClassSynthesizedField {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), GET_METHOD, None);
+        let metadata = FuncMetadata::method(cls, GET_METHOD);
         // Synthesizes signatures for each field and a fallback `(self, key: str, default: object = ...) -> object` signature.
         let self_param = self.class_self_param(cls, true);
         let object_ty = self.heap.mk_class_type(self.stdlib.object().clone());
@@ -645,7 +633,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         fields: &SmallMap<Name, bool>,
     ) -> Option<ClassSynthesizedField> {
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), POP_METHOD, None);
+        let metadata = FuncMetadata::method(cls, POP_METHOD);
         let self_param = self.class_self_param(cls, true);
         let mut literal_signatures: Vec<OverloadType> = Vec::new();
         for (name, field) in self.names_to_fields(cls, fields) {
@@ -689,7 +677,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Synthesizes a `(self, k: Literal["key"], default: ValueType) -> ValueType` signature for each field.
         let fields_iter = self.names_to_fields(cls, fields);
         let self_param = self.class_self_param(cls, true);
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), SETDEFAULT_METHOD, None);
+        let metadata = FuncMetadata::method(cls, SETDEFAULT_METHOD);
         let make_overload = |name: Option<&Name>, read_only: bool, field_ty: Type| {
             if read_only {
                 None
@@ -741,7 +729,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap.mk_class_type(self.stdlib.object().clone())
                 }
             }
-            TypedDict::Anonymous(inner) => inner.value_type.clone(),
+            TypedDict::Anonymous(inner) => inner.compute_value_type(self.heap),
         }
     }
 
@@ -804,7 +792,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), ITEMS_METHOD, None);
+        let metadata = FuncMetadata::method(cls, ITEMS_METHOD);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -824,7 +812,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.heap.mk_class_type(self.stdlib.str().clone()),
             self.get_typed_dict_value_type_from_fields(cls, fields),
         );
-        let metadata = FuncMetadata::def(self.module().dupe(), cls.dupe(), VALUES_METHOD, None);
+        let metadata = FuncMetadata::method(cls, VALUES_METHOD);
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(
                 ParamList::new(vec![self.class_self_param(cls, false)]),
@@ -858,7 +846,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ParamList::new(vec![self.class_self_param(cls, true)]),
                     self.heap.mk_none(),
                 ),
-                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), CLEAR_METHOD, None),
+                metadata: FuncMetadata::method(cls, CLEAR_METHOD),
             },
         )))
     }
@@ -880,7 +868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.get_typed_dict_value_type_from_fields(cls, fields),
                     ]),
                 ),
-                metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), POPITEM_METHOD, None),
+                metadata: FuncMetadata::method(cls, POPITEM_METHOD),
             },
         )))
     }
@@ -950,7 +938,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                ErrorKind::BadClassDefinition,
                 "TypedDict members must be declared in the form `field: Annotation` with no assignment".to_owned(),
             );
         }
@@ -967,7 +955,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                    ErrorKind::InvalidAnnotation,
                     format!("`{q}` may not be used for TypedDict members",),
                 );
             }
@@ -987,7 +975,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "Cannot extend closed TypedDict `{}` with extra item `{}`",
                             base.name(),
@@ -1001,7 +989,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // The field type needs to be assignable to the extra_items type.
                         if !self.is_subset_eq(field_ty, &ty) {
                             self.error(
-                                errors, range, ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                errors, range, ErrorKind::BadTypedDictKey,
                             format!(
                                 "`{}` is not assignable to `extra_items` type `{}` of TypedDict `{}`",
                                 self.for_display(field_ty.clone()), self.for_display(ty), base.name()));
@@ -1014,14 +1002,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                ErrorKind::BadTypedDictKey,
                                 format!("Cannot add required field `{}` to TypedDict `{}` with non-read-only `extra_items`", name, base.name()),
                             );
                         } else if !self.is_consistent(field_ty, &ty) {
                             self.error(
                                 errors,
                                 range,
-                                ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                                ErrorKind::BadTypedDictKey,
                                 format!(
                                     "`{}` is not consistent with `extra_items` type `{}` of TypedDict `{}`",
                                     self.for_display(field_ty.clone()), self.for_display(ty), base.name()),
@@ -1059,4 +1047,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
 fn name_to_literal_type(name: &Name) -> Type {
     Lit::Str(name.as_str().into()).to_implicit_type()
+}
+
+pub trait TypedDictErrorKind {
+    fn key_error_kind(&self) -> ErrorKind;
+}
+
+impl TypedDictErrorKind for pyrefly_types::typed_dict::TypedDict {
+    fn key_error_kind(&self) -> ErrorKind {
+        if self.is_anonymous() {
+            ErrorKind::BadIndex
+        } else {
+            ErrorKind::BadTypedDictKey
+        }
+    }
 }

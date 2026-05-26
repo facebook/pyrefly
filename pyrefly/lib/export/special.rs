@@ -48,7 +48,6 @@ pub enum SpecialExport {
     Overload,
     Override,
     AbstractMethod,
-    SelfType,
     Generic,
     Protocol,
     PydanticConfigDict,
@@ -91,7 +90,6 @@ impl SpecialExport {
             "TypedDict" => Some(Self::TypedDict),
             "namedtuple" => Some(Self::CollectionsNamedTuple),
             "NamedTuple" => Some(Self::TypingNamedTuple),
-            "Self" => Some(Self::SelfType),
             "assert_type" => Some(Self::AssertType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
@@ -142,7 +140,10 @@ impl SpecialExport {
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
             Self::TypeVar | Self::TypeVarTuple => {
-                matches!(m.as_str(), "typing" | "typing_extensions" | "torch_shapes")
+                matches!(
+                    m.as_str(),
+                    "typing" | "typing_extensions" | "shape_extensions"
+                )
             }
             Self::TypeAlias
             | Self::ParamSpec
@@ -158,7 +159,6 @@ impl SpecialExport {
             | Self::NoTypeCheck
             | Self::Overload
             | Self::Override
-            | Self::SelfType
             | Self::Cast
             | Self::Generic
             | Self::Protocol

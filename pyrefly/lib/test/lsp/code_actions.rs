@@ -248,6 +248,28 @@ fn compute_invert_boolean_actions_allow_errors(
     (module_info, edit_sets, titles)
 }
 
+fn compute_convert_dict_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .convert_dict_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 fn assert_no_invert_boolean_action_allow_errors(code: &str, selection: TextRange) {
     let (_, actions, _) = compute_invert_boolean_actions_allow_errors(code, selection);
     assert!(
@@ -913,6 +935,35 @@ x: int = "hello"
 }
 
 #[test]
+fn quickfix_replace_string_literal_with_enum_member() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from enum import Enum
+
+class AccountStatus(Enum):
+    ACTIVE = "active"
+
+def takes_status(status: AccountStatus) -> None:
+    pass
+
+takes_status("active")
+#             ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Replace with `AccountStatus.ACTIVE`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("takes_status(AccountStatus.ACTIVE)"),
+        "{report}"
+    );
+}
+
+#[test]
 fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
@@ -1274,6 +1325,34 @@ fn redundant_cast_fix_all() {
     assert_eq!(
         "from typing import cast\nx: int = 0\nx = x\ny = x\n",
         updated
+    );
+}
+
+#[test]
+fn unnecessary_str_call_quickfix() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "def f(x: str) -> None:\n    y = str(x)\n#       ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     y = str(x)
+            ^
+Code Actions Results:
+# Title: Remove unnecessary `str()` call
+
+## Before:
+def f(x: str) -> None:
+    y = str(x)
+#       ^
+## After:
+def f(x: str) -> None:
+    y = x
+#       ^
+"#
+        .trim(),
+        report.trim()
     );
 }
 
@@ -2137,6 +2216,121 @@ def foo():
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn convert_dict_code_actions_basic() {
+    let code = r#"def build():
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (module_info, actions, titles) = compute_convert_dict_actions(code, selection);
+    assert_eq!(3, actions.len());
+    assert_eq!(
+        vec![
+            "Create TypedDict `Data`",
+            "Create dataclass `Data`",
+            "Create pydantic model `Data`",
+        ],
+        titles
+    );
+
+    let typed_dict_result = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected_typed_dict = r#"from typing import TypedDict
+def build():
+    class Data(TypedDict):
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_typed_dict.trim(), typed_dict_result.trim());
+
+    let dataclass_result = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected_dataclass = r#"from dataclasses import dataclass
+def build():
+    @dataclass
+    class Data:
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_dataclass.trim(), dataclass_result.trim());
+
+    let pydantic_result = apply_refactor_edits_for_module(&module_info, &actions[2]);
+    let expected_pydantic = r#"from pydantic import BaseModel
+def build():
+    class Data(BaseModel):
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_pydantic.trim(), pydantic_result.trim());
+}
+
+#[test]
+fn convert_dict_includes_any_imports() {
+    let code = r#"def build(value):
+    data = {"a": value}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (module_info, actions, _) = compute_convert_dict_actions(code, selection);
+    assert_eq!(3, actions.len());
+
+    let typed_dict_result = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected_typed_dict = r#"from typing import TypedDict, Any
+def build(value):
+    class Data(TypedDict):
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_typed_dict.trim(), typed_dict_result.trim());
+
+    let dataclass_result = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected_dataclass = r#"from typing import Any
+from dataclasses import dataclass
+def build(value):
+    @dataclass
+    class Data:
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_dataclass.trim(), dataclass_result.trim());
+
+    let pydantic_result = apply_refactor_edits_for_module(&module_info, &actions[2]);
+    let expected_pydantic = r#"from typing import Any
+from pydantic import BaseModel
+def build(value):
+    class Data(BaseModel):
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_pydantic.trim(), pydantic_result.trim());
+}
+
+#[test]
+fn convert_dict_rejects_non_literal_keys() {
+    let code = r#"def build(extra):
+    data = {"a": 1, **extra}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (_, actions, _) = compute_convert_dict_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no dict definition actions, found {}",
+        actions.len()
     );
 }
 

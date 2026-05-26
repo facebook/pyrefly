@@ -16,6 +16,11 @@ In this tutorial, you'll add tensor shape annotations to a simple multi-layer pe
 By the end, you'll understand `Dim`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
+```sandbox
+dir: tensor-shapes-tutorial-basics
+description: Try porting a simple MLP with class-level and method-level type parameters.
+```
+
 ## The model
 
 Here's a simple actor network from a reinforcement learning setup — three
@@ -141,7 +146,7 @@ import TabItem from '@theme/TabItem';
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-    from torch_shapes import Dim
+    from shape_extensions import Dim
 
 
     class BaselineActor[S, A](nn.Module):
@@ -188,8 +193,8 @@ import TabItem from '@theme/TabItem';
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
 hints in your IDE. If you want `assert_type` for runtime regression guards,
-see [Getting Started](./tensor-shapes-setup.mdx#option-2-torch_shapestypevar-runtime-compatible)
-for the `torch_shapes.TypeVar` import style, which requires old-style
+see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionstypevar-runtime-compatible)
+for the `shape_extensions.TypeVar` import style, which requires old-style
 generics.
 :::
 

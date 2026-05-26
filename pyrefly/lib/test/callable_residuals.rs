@@ -602,7 +602,6 @@ reveal_type(result)  # E: revealed type: () -> tuple[int, int]
 );
 
 testcase!(
-    bug = "Constrained type vars can collapse to Answer before finishing, so overload pruning can miss them",
     test_overload_pruning_ignored_for_constrained_tvar_solved_early,
     r#"
 from typing import Callable, overload, reveal_type
@@ -615,7 +614,7 @@ def f(x: float) -> float: ...  # E: Overload return type `float` is not assignab
 def f(x: bytes) -> bytes: ...  # E: Overload return type `bytes` is not assignable to implementation return type `None`
 def f(x): ...
 
-result = project(f, 1)
+result = project(f, 1)  # E: Overload type was not compatible with solved type variables: unknown = int
 reveal_type(result)  # E: revealed type: (int) -> int
 "#,
 );
@@ -861,4 +860,53 @@ def foo(tmpdir):
 def bar(tmpdir):
     shutil.rmtree(tmpdir, ignore_errors=True)
 "#,
+);
+
+// Regression test for a panic when pruning against a residual Variable
+// in the case where overload analysis merged the Quantified with a partial
+// type (behavior for Recursive / Unwrap is the same).
+testcase!(
+    test_overload_residual_with_partial_quantified_var,
+    r#"
+from typing import overload, Callable, assert_type
+
+class C[T]:
+    @overload
+    def method(self, x: T) -> T: ...
+    @overload
+    def method(self, x: str) -> str: ...
+    def method(self, x): return x
+
+def apply[U](fn: Callable[[U], U], default: U) -> U: ...
+
+c = C()
+result = apply(c.method, 42)
+assert_type(result, int)
+    "#,
+);
+
+// Regression test for a panic when converting a residual Variable to a Type
+// in the case where overload analysis merged the Quantified with a partial
+// type (behavior for Recursive / Unwrap is the same).
+testcase!(
+    test_overload_residual_with_partial_contained_var,
+    r#"
+from typing import overload, Any, Callable, assert_type, reveal_type
+
+class C[T]:
+    def __init__(self, items: list[T]) -> None: ...
+    @overload
+    def method(self, x: T) -> T: ...
+    @overload
+    def method(self, x: str) -> str: ...
+    def method(self, x): return x
+
+def apply[U](fn: Callable[[U], U]) -> U: ...
+
+c = C([])
+result = apply(c.method)
+# The partial type for `c` does not get pinned, so it resolves to Unknown
+assert_type(result, str | Any)
+assert_type(c, C[Any])
+    "#,
 );

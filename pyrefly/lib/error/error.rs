@@ -31,7 +31,6 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::Vec1;
 use yansi::Paint;
 
 use crate::config::error_kind::ErrorKind;
@@ -43,6 +42,11 @@ use crate::config::error_kind::Severity;
 pub struct SecondaryAnnotation {
     pub range: TextRange,
     pub label: Box<str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ErrorQuickFix {
+    ReplaceWithEnumMember { replacement: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -59,6 +63,8 @@ pub struct Error {
     msg_details: Option<Box<str>>,
     /// Additional labeled spans in the same file for richer diagnostics.
     secondary_annotations: Vec<SecondaryAnnotation>,
+    /// Structured fixes that can be exposed by editor integrations.
+    quick_fixes: Vec<ErrorQuickFix>,
 }
 
 impl Ranged for Error {
@@ -334,15 +340,25 @@ pub fn print_error_counts(errors: &[Error], limit: usize) {
 }
 
 impl Error {
-    pub fn new(module: Module, range: TextRange, msg: Vec1<String>, error_kind: ErrorKind) -> Self {
+    pub fn new(
+        module: Module,
+        range: TextRange,
+        header: String,
+        details: Vec<String>,
+        error_kind: ErrorKind,
+    ) -> Self {
         let display_range = module.display_range(range);
-        let msg_has_details = msg.len() > 1;
-        let mut msg = msg.into_iter();
-        let msg_header = msg.next().unwrap().into_boxed_str();
-        let msg_details = if msg_has_details {
-            Some(msg.map(|s| format!("  {s}")).join("\n").into_boxed_str())
-        } else {
+        let msg_header = header.into_boxed_str();
+        let msg_details = if details.is_empty() {
             None
+        } else {
+            Some(
+                details
+                    .iter()
+                    .map(|s| format!("  {s}"))
+                    .join("\n")
+                    .into_boxed_str(),
+            )
         };
         Self {
             module,
@@ -353,6 +369,7 @@ impl Error {
             msg_header,
             msg_details,
             secondary_annotations: Vec::new(),
+            quick_fixes: Vec::new(),
         }
     }
 
@@ -363,6 +380,11 @@ impl Error {
             range,
             label: label.into_boxed_str(),
         });
+        self
+    }
+
+    pub fn with_quick_fix(mut self, quick_fix: ErrorQuickFix) -> Self {
+        self.quick_fixes.push(quick_fix);
         self
     }
 
@@ -416,6 +438,10 @@ impl Error {
     pub fn secondary_annotations(&self) -> &[SecondaryAnnotation] {
         &self.secondary_annotations
     }
+
+    pub fn quick_fixes(&self) -> &[ErrorQuickFix] {
+        &self.quick_fixes
+    }
 }
 
 #[cfg(test)]
@@ -426,7 +452,6 @@ mod tests {
 
     use pyrefly_python::module_name::ModuleName;
     use ruff_text_size::TextSize;
-    use vec1::vec1;
 
     use super::*;
     use crate::test::util::TestEnv;
@@ -441,7 +466,8 @@ mod tests {
         let error = Error::new(
             module_info,
             TextRange::new(TextSize::new(26), TextSize::new(34)),
-            vec1!["bad return".to_owned()],
+            "bad return".to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         );
         let root = PathBuf::new();
@@ -481,7 +507,8 @@ mod tests {
         let error = Error::new(
             module_info,
             TextRange::new(TextSize::new(0), TextSize::new(contents.len() as u32)),
-            vec1!["oops".to_owned()],
+            "oops".to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         );
         let mut output = Vec::new();
@@ -525,7 +552,8 @@ mod tests {
             module_info,
             // Primary span covers the whole expression
             TextRange::new(TextSize::new(0), TextSize::new(7)),
-            vec1!["`*` is not supported between `int | str` and `int`".to_owned()],
+            "`*` is not supported between `int | str` and `int`".to_owned(),
+            Vec::new(),
             ErrorKind::UnsupportedOperation,
         )
         .with_annotation(

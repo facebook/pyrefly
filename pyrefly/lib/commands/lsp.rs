@@ -66,10 +66,6 @@ pub struct LspArgs {
     /// an up-to-date source DB. Only useful for benchmarking.
     #[arg(long)]
     pub build_system_blocking: bool,
-
-    /// Enable external references integration for cross-repo go-to-definition.
-    #[arg(long, hide = true)]
-    pub enable_external_references: bool,
 }
 
 /// Drop flags after the `lsp` subcommand that aren't declared on `LspArgs` or
@@ -242,7 +238,7 @@ mod tests {
 
     #[test]
     fn filter_preserves_known_lsp_flags() {
-        let args = os(&["pyrefly", "lsp", "--enable-external-references"]);
+        let args = os(&["pyrefly", "lsp", "--build-system-blocking"]);
         let result = filter_unrecognized_lsp_args(args.clone());
         assert_eq!(result, args);
     }
@@ -259,7 +255,7 @@ mod tests {
         let args = os(&[
             "pyrefly",
             "lsp",
-            "--enable-external-references",
+            "--build-system-blocking",
             "--unknown-flag",
             "--indexing-mode",
             "none",
@@ -270,7 +266,7 @@ mod tests {
             os(&[
                 "pyrefly",
                 "lsp",
-                "--enable-external-references",
+                "--build-system-blocking",
                 "--indexing-mode",
                 "none"
             ])
@@ -283,13 +279,10 @@ mod tests {
             "pyrefly",
             "lsp",
             "--unknown=value",
-            "--enable-external-references",
+            "--build-system-blocking",
         ]);
         let result = filter_unrecognized_lsp_args(args);
-        assert_eq!(
-            result,
-            os(&["pyrefly", "lsp", "--enable-external-references"])
-        );
+        assert_eq!(result, os(&["pyrefly", "lsp", "--build-system-blocking"]));
     }
 
     #[test]

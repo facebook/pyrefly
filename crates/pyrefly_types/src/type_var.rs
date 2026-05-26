@@ -83,10 +83,10 @@ pub enum PreInferenceVariance {
 impl Display for PreInferenceVariance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PreInferenceVariance::Covariant => write!(f, "Covariant"),
-            PreInferenceVariance::Contravariant => write!(f, "Contravariant"),
-            PreInferenceVariance::Invariant => write!(f, "Invariant"),
-            PreInferenceVariance::Undefined => write!(f, "Undefined"),
+            PreInferenceVariance::Covariant => write!(f, "covariant"),
+            PreInferenceVariance::Contravariant => write!(f, "contravariant"),
+            PreInferenceVariance::Invariant => write!(f, "invariant"),
+            PreInferenceVariance::Undefined => write!(f, "undefined"),
         }
     }
 }

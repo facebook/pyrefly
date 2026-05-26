@@ -632,19 +632,18 @@ impl<'a> BindingsBuilder<'a> {
             });
         let placeholder_body_kind = match body_no_docstring {
             // raise NotImplementedError(...)
-            [
-                Stmt::Raise(StmtRaise {
-                    exc: Some(box (Expr::Call(ExprCall { box func, .. }) | func)),
-                    ..
-                }),
-            ] if self.as_special_export(func) == Some(SpecialExport::NotImplementedError) => {
+            [Stmt::Raise(StmtRaise { exc: Some(exc), .. })]
+                if self.as_special_export(match &**exc {
+                    Expr::Call(ExprCall { func, .. }) => func,
+                    other => other,
+                }) == Some(SpecialExport::NotImplementedError) =>
+            {
                 Some(PlaceholderBodyKind::RaiseNotImplementedError)
             }
             // return NotImplemented
             [
                 Stmt::Return(StmtReturn {
-                    value: Some(box val),
-                    ..
+                    value: Some(val), ..
                 }),
             ] if self.as_special_export(val) == Some(SpecialExport::NotImplemented) => {
                 Some(PlaceholderBodyKind::ReturnNotImplemented)
@@ -778,6 +777,10 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
+        // This is to handle "def" with no func name after
+        if x.name.id.is_empty() {
+            return;
+        }
         let func_name = x.name.clone();
         let mut def_idx =
             self.declare_current_idx(Key::Definition(ShortIdentifier::new(&func_name)));

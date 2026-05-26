@@ -22,7 +22,6 @@ use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::type_info::TypeInfo;
-use pyrefly_types::types::BoundMethod;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit;
@@ -309,10 +308,9 @@ fn collect_call_contextual_types(
             // (1 for bound methods to skip `self`, 0 otherwise).
             let (params, skip_count): (&Params, usize) = match &callee_type {
                 Type::Function(f) => (&f.signature.params, 0),
-                Type::BoundMethod(box BoundMethod {
-                    func: BoundMethodType::Function(f),
-                    ..
-                }) => (&f.signature.params, 1),
+                Type::BoundMethod(bm) if let BoundMethodType::Function(f) = &bm.func => {
+                    (&f.signature.params, 1)
+                }
                 _ => return,
             };
 

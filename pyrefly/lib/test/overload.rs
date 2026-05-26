@@ -31,6 +31,22 @@ def anywhere():
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2867
+testcase!(
+    test_urlunparse_prefers_string_overload_for_parse_result,
+    r#"
+from typing import assert_type
+from urllib.parse import urlparse, urlunparse
+
+def sanitize_url(url: str) -> str:
+    parsed = urlparse(url)
+    assert_type(urlunparse(parsed), str)
+    sanitized = parsed._replace(netloc="example.com")
+    assert_type(urlunparse(sanitized), str)
+    return urlunparse(sanitized)
+    "#,
+);
+
 testcase!(
     test_branches,
     r#"
@@ -1555,6 +1571,23 @@ def g(x: str, y: int):
         assert_type(x, str)
     if f(y):
         assert_type(y, bool)
+    "#,
+);
+
+testcase!(
+    test_filter_selects_typeis_overload,
+    r#"
+import ast
+from typing import TypeIs, assert_type
+
+type IsDef = ast.FunctionDef | ast.ClassDef
+
+def is_def(n: object) -> TypeIs[IsDef]:
+    return isinstance(n, ast.FunctionDef | ast.ClassDef)
+
+def f(node: ast.ClassDef):
+    for child in filter(is_def, node.body):
+        assert_type(child, ast.ClassDef | ast.FunctionDef)
     "#,
 );
 

@@ -528,3 +528,81 @@ class A:
 A(x=0)
     "#,
 );
+
+testcase!(
+    test_class_method_field_ignored_by_dataclass,
+    r#"
+from typing import Any, dataclass_transform
+
+@dataclass_transform()
+class ModuleBase: ...
+
+class Module(ModuleBase):
+    @classmethod
+    def foo(cls) -> None:
+        cls.field: Any = None
+
+class SmallModule(Module):
+    x: int
+
+SmallModule(x=1)
+    "#,
+);
+
+testcase!(
+    test_init_subclass_field_ignored_by_dataclass,
+    r#"
+from typing import Any, dataclass_transform
+
+@dataclass_transform()
+class ModuleBase: ...
+
+class Module(ModuleBase):
+    @classmethod
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls.field: Any = None
+
+class SmallModule(Module):
+    x: int
+
+SmallModule(x=1)
+    "#,
+);
+
+testcase!(
+    test_classmethod_shadowing_base_annotation_ignored,
+    r#"
+from typing import Any, dataclass_transform, reveal_type
+
+@dataclass_transform()
+class ModuleBase:
+    field: Any | None
+
+class Module(ModuleBase):
+  @classmethod
+  def foo(cls) -> None:
+    cls.field: Any = None
+
+reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
+Module()
+    "#,
+);
+
+testcase!(
+    test_method_shadowing_base_annotation_ignored,
+    r#"
+from typing import Any, dataclass_transform, reveal_type
+
+@dataclass_transform()
+class ModuleBase:
+    field: Any | None
+
+class Module(ModuleBase):
+  def foo(self) -> None:
+    self.field: Any = None
+
+reveal_type(Module.__init__)  # E: revealed type: (self: Module) -> None
+Module()
+    "#,
+);

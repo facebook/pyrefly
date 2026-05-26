@@ -39,7 +39,6 @@ use crate::binding::narrow::NarrowingSubject;
 use crate::binding::narrow::expr_to_subjects;
 use crate::binding::scope::FlowStyle;
 use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::facet::UnresolvedFacetKind;
 
@@ -104,9 +103,15 @@ impl<'a> BindingsBuilder<'a> {
                 // If there's no name for this pattern, refine the variable being matched
                 // If there is a new name, refine that instead
                 let original_subject = match_subject.clone();
-                let alias_name = p.name.as_ref().map(|name| name.id.clone());
+                let alias_name = p
+                    .name
+                    .as_ref()
+                    .filter(|name| !Ast::is_synthesized_empty_identifier(name))
+                    .map(|name| name.id.clone());
                 let mut subject = match_subject;
-                if let Some(name) = &p.name {
+                if let Some(name) = &p.name
+                    && !Ast::is_synthesized_empty_identifier(name)
+                {
                     self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
                     subject = MatchSubject::Single(NarrowingSubject::Name(name.id.clone()));
                 };
@@ -136,6 +141,16 @@ impl<'a> BindingsBuilder<'a> {
                     .iter()
                     .filter(|x| !matches!(x, Pattern::MatchStar(_)))
                     .count();
+                // If every sub-pattern is irrefutable -- i.e., patterns that always match
+                // like wildcards (`_`), bare names (e.g., `x`), or `*rest` -- the structural
+                // `IsSequence + LenEq/LenGte` narrow on the subject fully captures what the
+                // pattern proves. Spurious Placeholders added by `and_all` for empty
+                // sub-pattern narrow ops would otherwise block negative narrowing
+                // (see equivalent fix in MatchClass below).
+                let all_subpatterns_irrefutable = x
+                    .patterns
+                    .iter()
+                    .all(|p| p.is_irrefutable() || p.is_wildcard());
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
                     node_index: AtomicNodeIndex::default(),
@@ -183,11 +198,19 @@ impl<'a> BindingsBuilder<'a> {
                     // Process each sub-pattern in the sequence pattern
                     match x {
                         Pattern::MatchStar(p) => {
-                            if let Some(name) = &p.name {
+                            if let Some(name) = &p.name
+                                && !Ast::is_synthesized_empty_identifier(name)
+                            {
                                 let position = UnpackedPosition::Slice(i, num_patterns - i - 1);
                                 self.bind_definition(
                                     name,
-                                    Binding::UnpackedValue(None, subject_idx, p.range, position),
+                                    Binding::UnpackedValue(
+                                        None,
+                                        subject_idx,
+                                        p.range,
+                                        position,
+                                        None,
+                                    ),
                                     FlowStyle::Other,
                                 );
                             }
@@ -201,7 +224,13 @@ impl<'a> BindingsBuilder<'a> {
                             };
                             let key_for_subpattern = self.insert_binding(
                                 Key::Anon(x.range()),
-                                Binding::UnpackedValue(None, subject_idx, x.range(), position),
+                                Binding::UnpackedValue(
+                                    None,
+                                    subject_idx,
+                                    x.range(),
+                                    position,
+                                    None,
+                                ),
                             );
                             let subject_for_subpattern = match &match_subject {
                                 // For tuple subjects, map pattern index to the
@@ -255,6 +284,12 @@ impl<'a> BindingsBuilder<'a> {
                     KeyExpect::UnpackedLength(x.range),
                     BindingExpect::UnpackedLength(subject_idx, x.range, expect),
                 );
+                if all_subpatterns_irrefutable
+                    && let Some(subject) = match_subject.as_single()
+                    && let Some((op, _)) = narrow_ops.0.get_mut(subject.name())
+                {
+                    op.strip_placeholders();
+                }
                 narrow_ops
             }
             Pattern::MatchMapping(x) => {
@@ -310,7 +345,9 @@ impl<'a> BindingsBuilder<'a> {
                             match_key_idx,
                         ))
                     });
-                if let Some(rest) = x.rest {
+                if let Some(rest) = x.rest
+                    && !Ast::is_synthesized_empty_identifier(&rest)
+                {
                     self.bind_definition(&rest, Binding::Forward(subject_idx), FlowStyle::Other);
                 }
                 narrow_ops
@@ -471,7 +508,7 @@ impl<'a> BindingsBuilder<'a> {
                     if pattern.is_irrefutable() && idx != n_subpatterns - 1 {
                         self.error(
                             pattern.range(),
-                            ErrorInfo::Kind(ErrorKind::BadMatch),
+                            ErrorKind::BadMatch,
                             "Only the last subpattern in MatchOr may be irrefutable".to_owned(),
                         )
                     }
@@ -488,7 +525,9 @@ impl<'a> BindingsBuilder<'a> {
                 narrow_ops.unwrap_or_default()
             }
             Pattern::MatchStar(p) => {
-                if let Some(name) = &p.name {
+                if let Some(name) = &p.name
+                    && !Ast::is_synthesized_empty_identifier(name)
+                {
                     self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
                 }
                 NarrowOps::new()
@@ -579,6 +618,22 @@ impl<'a> BindingsBuilder<'a> {
                 NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
+            // Reachability is checked before the guard is bound (below). This is
+            // intentional: if the pattern itself can never match the subject type,
+            // the case is unreachable regardless of any guard condition.
+            if let Some(narrowing_subject) = match_subject.as_single()
+                && let Some((op, range)) = new_narrow_ops.0.get(narrowing_subject.name())
+            {
+                self.insert_binding(
+                    KeyExpect::MatchCaseReachability(case_range),
+                    BindingExpect::MatchCaseReachability {
+                        subject_idx: case_subject_idx,
+                        narrowing_subject: narrowing_subject.clone(),
+                        narrow_ops_for_case: (Box::new(op.clone()), *range),
+                        case_range,
+                    },
+                );
+            }
             if let Some(mut guard) = guard {
                 self.ensure_expr(&mut guard, &mut Usage::Narrowing(None));
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));

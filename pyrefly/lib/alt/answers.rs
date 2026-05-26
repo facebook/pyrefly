@@ -53,6 +53,7 @@ use crate::report::cinderx::CinderxSolutions;
 use crate::report::pysa::PysaSolutions;
 use crate::solver::solver::Solver;
 use crate::solver::solver::VarRecurser;
+use crate::state::errors::ModuleRanges;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::state::ModuleChanges;
@@ -92,8 +93,8 @@ pub struct Index {
 
 #[derive(Debug, Clone)]
 pub struct OverloadTrace {
-    pub(crate) callable: Callable,
-    pub(crate) tparams: Option<Arc<TParams>>,
+    callable: Callable,
+    tparams: Option<Arc<TParams>>,
 }
 
 impl OverloadTrace {
@@ -135,7 +136,7 @@ pub struct Traces {
 
 impl Traces {
     /// Merge accumulated side effects into the persisted trace store.
-    pub(crate) fn merge(&mut self, side_effects: TraceSideEffects) {
+    fn merge(&mut self, side_effects: TraceSideEffects) {
         for (k, v) in side_effects.types {
             self.types.insert(k, v);
         }
@@ -224,6 +225,8 @@ pub struct Solutions {
     module_info: ModuleInfo,
     table: SolutionsTable,
     metadata: Arc<BindingsMetadata>,
+    /// Multi-line ranges and ignore-all directives.
+    module_ranges: Arc<ModuleRanges>,
     index: Option<Arc<Mutex<Index>>>,
     /// Per-module pysa data, populated when pysa reporting is enabled.
     pysa_solutions: Option<Arc<PysaSolutions>>,
@@ -298,6 +301,10 @@ impl Display for SolutionsDifference<'_> {
 impl Solutions {
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
         &self.metadata
+    }
+
+    pub fn module_ranges(&self) -> &Arc<ModuleRanges> {
+        &self.module_ranges
     }
 
     /// Access per-module pysa data, if pysa reporting was enabled.
@@ -806,6 +813,7 @@ impl Answers {
             module_info: bindings.module().dupe(),
             table: res,
             metadata: bindings.metadata().dupe(),
+            module_ranges: bindings.module_ranges().dupe(),
             index: self.index.dupe(),
             pysa_solutions,
             cinderx_solutions,

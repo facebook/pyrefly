@@ -335,7 +335,6 @@ pydantic_testcase!(
 from pydantic import BaseModel
 from pydantic import field_validator
 
-
 class MyBaseModel(BaseModel):
     name: str
 

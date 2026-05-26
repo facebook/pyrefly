@@ -13,8 +13,6 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::literal::LitEnum;
-use pyrefly_types::literal::Literal;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -29,7 +27,10 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Binding;
+use crate::binding::binding::ClassFieldDefinition;
+use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
 use crate::binding::binding::UnpackedPosition;
 use crate::binding::bindings::Bindings;
 use crate::state::lsp::AllOffPartial;
@@ -116,20 +117,19 @@ impl<'a> Transaction<'a> {
                             true
                         }
                     }
-                    Expr::Attribute(ExprAttribute {
-                        box value, attr, ..
-                    }) if let Type::Literal(box Literal {
-                        value: Lit::Enum(box LitEnum { class, member, .. }),
-                        ..
-                    }) = ty =>
+                    Expr::Attribute(ExprAttribute { value, attr, .. })
+                        if let Type::Literal(lit) = ty
+                            && let Lit::Enum(lit_enum) = &lit.value =>
                     {
                         // Exclude enum literals
-                        match value {
+                        match &**value {
                             Expr::Name(object) => {
-                                *object.id() != *class.name() || *attr.id() != *member
+                                *object.id() != *lit_enum.class.name()
+                                    || *attr.id() != *lit_enum.member
                             }
                             Expr::Attribute(ExprAttribute { attr: object, .. }) => {
-                                *object.id() != *class.name() || *attr.id() != *member
+                                *object.id() != *lit_enum.class.name()
+                                    || *attr.id() != *lit_enum.member
                             }
                             _ => true,
                         }
@@ -142,42 +142,40 @@ impl<'a> Transaction<'a> {
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
-                key @ Key::ReturnType(id) => {
-                    if inlay_hint_config.function_return_types {
-                        match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
-                            Binding::Function(x, _pred, _class_meta) => {
-                                if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                    && let Some(mut ty) = self.get_type_for_display(handle, key)
-                                    && !ty.is_any()
+                key @ Key::ReturnType(id) if inlay_hint_config.function_return_types => {
+                    match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
+                        Binding::Function(x, _pred, _class_meta) => {
+                            if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
+                                && let Some(mut ty) = self.get_type_for_display(handle, key)
+                                && !ty.is_any()
+                            {
+                                let fun = bindings.get(bindings.get(*x).undecorated_idx);
+                                if fun.def.is_async
+                                    && let Some(Some((_, _, return_ty))) = self.ad_hoc_solve(
+                                        handle,
+                                        "inlay_hint_coroutine",
+                                        |solver| solver.unwrap_coroutine(&ty),
+                                    )
                                 {
-                                    let fun = bindings.get(bindings.get(*x).undecorated_idx);
-                                    if fun.def.is_async
-                                        && let Some(Some((_, _, return_ty))) = self.ad_hoc_solve(
-                                            handle,
-                                            "inlay_hint_coroutine",
-                                            |solver| solver.unwrap_coroutine(&ty),
-                                        )
-                                    {
-                                        ty = return_ty;
-                                    }
-                                    // Use get_types_with_locations to get type parts with location info
-                                    let type_parts = ty.get_types_with_locations(Some(&stdlib));
-                                    let label_parts = once((" -> ".to_owned(), None))
-                                        .chain(
-                                            type_parts
-                                                .iter()
-                                                .map(|(text, loc)| (text.clone(), loc.clone())),
-                                        )
-                                        .collect();
-                                    res.push(InlayHintData {
-                                        position: fun.def.parameters.range.end(),
-                                        label_parts,
-                                        insertable: true,
-                                    });
+                                    ty = return_ty;
                                 }
+                                // Use get_types_with_locations to get type parts with location info
+                                let type_parts = ty.get_types_with_locations(Some(&stdlib));
+                                let label_parts = once((" -> ".to_owned(), None))
+                                    .chain(
+                                        type_parts
+                                            .iter()
+                                            .map(|(text, loc)| (text.clone(), loc.clone())),
+                                    )
+                                    .collect();
+                                res.push(InlayHintData {
+                                    position: fun.def.parameters.range.end(),
+                                    label_parts,
+                                    insertable: true,
+                                });
                             }
-                            _ => {}
                         }
+                        _ => {}
                     }
                 }
                 key @ Key::Definition(_)
@@ -191,10 +189,11 @@ impl<'a> Transaction<'a> {
                         // authoritatively typed; suggesting an explicit
                         // annotation here would be redundant and, for the
                         // receiver case, could mislead users into
-                        // annotating with the RHS-derived type.
+                        // annotating with the RHS-derived type. The same
+                        // applies to receiver-bearing unpacked rebinds.
                         Binding::NameAssign(x) if !x.is_pinned() => (Some(&*x.expr), false),
                         Binding::Expr(None, e) => (Some(&**e), false),
-                        Binding::UnpackedValue(None, unpack_idx, _, pos) => {
+                        Binding::UnpackedValue(None, unpack_idx, _, pos, None) => {
                             // Try to get the element expression from the unpacked source
                             let element_expr =
                                 Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
@@ -240,6 +239,71 @@ impl<'a> Transaction<'a> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // Inlay hints for unannotated class attributes defined in methods (e.g. self.x = value in __init__)
+        if inlay_hint_config.variable_types {
+            let answers = self.get_answers(handle);
+            for field_idx in bindings.keys::<KeyClassField>() {
+                let field = bindings.get(field_idx);
+                if let ClassFieldDefinition::DefinedInMethod {
+                    value,
+                    annotation: None,
+                    ..
+                } = &field.definition
+                {
+                    let class_field = answers
+                        .as_ref()
+                        .and_then(|a| a.get_idx::<KeyClassField>(field_idx));
+                    if let Some(class_field) = class_field {
+                        let ty = answers
+                            .as_ref()
+                            .unwrap()
+                            .solver()
+                            .for_display(class_field.ty());
+                        if ty.is_any() {
+                            continue;
+                        }
+                        let expr = match value.as_ref() {
+                            ExprOrBinding::Expr(e) => Some(e),
+                            ExprOrBinding::Binding(_) => None,
+                        };
+                        // Suppress self.x = x where the RHS is a bare name matching the
+                        // attribute name. The type is already visible at the parameter.
+                        if let Some(Expr::Name(name)) = expr
+                            && *name.id() == *field.name
+                        {
+                            continue;
+                        }
+                        let class_name = if let Type::ClassType(cls) = &ty
+                            && cls.targs().is_empty()
+                        {
+                            Some(cls.name())
+                        } else {
+                            None
+                        };
+                        let should_show = match expr {
+                            Some(e) => is_interesting(e, &ty, class_name),
+                            None => true,
+                        };
+                        if should_show {
+                            let type_parts = ty.get_types_with_locations(Some(&stdlib));
+                            let label_parts = once((": ".to_owned(), None))
+                                .chain(
+                                    type_parts
+                                        .iter()
+                                        .map(|(text, loc)| (text.clone(), loc.clone())),
+                                )
+                                .collect();
+                            res.push(InlayHintData {
+                                position: field.range.end(),
+                                label_parts,
+                                insertable: true,
+                            });
+                        }
+                    }
+                }
             }
         }
 

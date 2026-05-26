@@ -226,11 +226,22 @@ f()  # E: Deprecated
 );
 
 testcase!(
-    bug = "There's a bug in generic overload resolution where we finish too early",
     test_reduce_call,
     r#"
 from functools import reduce
-reduce(max, [1,2])  # E: Overload type was not compatible with solved type variables: _T = int
+reduce(max, [1,2])
+    "#,
+);
+
+testcase!(
+    test_call_arg_lambda_contextual_typing,
+    r#"
+from typing import Callable
+
+def takes(cb: Callable[[int], int]) -> None: ...
+
+# This only errors because we're able to pass down the `int` hint through contextual typing.
+takes(lambda x: x + "")  # E:  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`
     "#,
 );
 
@@ -430,6 +441,29 @@ def f(condition: bool):
     else:
         x = NotImplemented
     x()  # E: `NotImplemented` is not callable. Did you mean `NotImplementedError`?
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2914
+testcase!(
+    test_non_callable_bool_attribute,
+    r#"
+class BadBool:
+    __bool__: int = 3
+
+assert BadBool()  # E: `__bool__` attribute of `BadBool` has type `int`, which is not callable
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3060
+testcase!(
+    test_setdefault_then_index,
+    r#"
+def parse_groups(entries: list[tuple[str, str]]) -> None:
+    groups = {}
+    for group, host in entries:
+        groups.setdefault(group, {})
+        groups[group][host] = True
 "#,
 );
 

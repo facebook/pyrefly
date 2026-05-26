@@ -76,6 +76,12 @@ pyrefly suppress
 
 This is equivalent to `pyrefly check --suppress-errors`.
 
+By default, `pyrefly suppress` places suppression comments on the line before the error. If you use other tools that also add comments on the line before (e.g. linters, other type checkers), their suppression comments may conflict with each other. To reduce conflicts, you can use `--comment-location=same-line` to place Pyrefly's suppression comments as trailing comments on the same line as the error:
+
+```
+pyrefly suppress --comment-location=same-line
+```
+
 ## Baseline Files (Experimental)
 
 Pyrefly also supports storing errors in a baseline file. Any errors matching the baseline will be ignored and only new errors will be reported.
@@ -136,6 +142,10 @@ pyrefly suppress --remove-unused
 Repeat the steps above until you get a clean formatting run and a clean type check.
 
 This will add ` # pyrefly: ignore` comments to your code that will enable you to silence errors, and come back and fix them at a later date. This can make the process of upgrading a large codebase much more manageable.
+
+:::tip
+If your project uses other tools that place suppression comments on the line before the error (e.g. other type checkers or linters), use `pyrefly suppress --comment-location=same-line` in step 1 to avoid conflicts.
+:::
 
 :::note
 `pyrefly suppress` is equivalent to `pyrefly check --suppress-errors`, and `pyrefly suppress --remove-unused` is equivalent to `pyrefly check --remove-unused-ignores`.

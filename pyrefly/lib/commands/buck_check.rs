@@ -73,6 +73,10 @@ pub struct BuckCheckArgs {
     /// `no` (default) disables progress reporting entirely.
     #[arg(long, value_enum)]
     progress_bar: Option<ProgressBarStyle>,
+
+    /// Also check dependency files, which are normally only used for import resolution.
+    #[arg(long)]
+    check_dependencies: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -223,6 +227,7 @@ impl BuckCheckArgs {
             input_file.dependencies.as_slice(),
             input_file.typeshed.as_slice(),
             sys_info.dupe(),
+            self.check_dependencies,
         )?;
         let type_errors = compute_errors(
             sys_info,

@@ -123,7 +123,7 @@ movie: Movie = {'name': 'Blade Runner',
                 "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`"
             );
             expect(typedDictError).toBeDefined();
-            expect(typedDictError.kind).toBe('bad-typed-dict-key');
+            expect(typedDictError.kind).toBe('bad-assignment');
         });
     });
 

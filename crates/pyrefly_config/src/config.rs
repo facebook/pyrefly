@@ -66,8 +66,10 @@ use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
 use crate::error::ErrorConfig;
 use crate::error::ErrorDisplayConfig;
+use crate::error_kind::ErrorKind;
 use crate::error_kind::Severity;
 use crate::finder::ConfigError;
+use crate::migration::run::MigratedFromKind;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
 
@@ -86,6 +88,30 @@ impl SubConfig {
     fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
         self.matches = self.matches.clone().from_root(config_root);
     }
+}
+
+/// Why a `ConfigFile` was synthesized rather than loaded from a real config
+/// on disk. Set by `resolve_unconfigured_config` and read by the LSP status
+/// bar and the CLI upsell to explain to the user how Pyrefly chose its
+/// behavior in the absence of a `pyrefly.toml` / `[tool.pyrefly]` section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SynthesizedPresetReason {
+    /// Nothing migrate-able was found near the source file. Pyrefly fell
+    /// back to the basic preset.
+    NoNearbyConfig,
+    /// A mypy or pyright config was found nearby and its settings
+    /// were migrated in memory. The wrapped `MigratedFromKind`
+    /// records both which type checker (mypy → resulting preset is
+    /// `Legacy`; pyright → `Default`) and which kind of file the
+    /// settings physically lived in (a dedicated `mypy.ini` /
+    /// `pyrightconfig.json` vs. a `[tool.mypy]` / `[tool.pyright]`
+    /// section in `pyproject.toml`). Both axes affect the surfaced
+    /// upsell wording.
+    Migrated(MigratedFromKind),
+    /// The user explicitly chose a preset — either via the IDE
+    /// workspace setting `typeCheckingMode` or the `--preset` CLI
+    /// flag — overriding any auto-detection.
+    UserOverride,
 }
 
 /// Where did this config come from?
@@ -586,6 +612,16 @@ pub struct ConfigFile {
     /// name `foo.cinc`, not `foo`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_file_extensions: Vec<String>,
+
+    /// Runtime-only metadata. Populated by `resolve_unconfigured_config`
+    /// when this `ConfigFile` was synthesized rather than loaded from a
+    /// `pyrefly.toml` / `[tool.pyrefly]` section, and by the `--preset`
+    /// flag when a user specifies a preset on the command line. Used by
+    /// the status bar (LSP) and the upsell message (CLI) to explain to
+    /// the user why Pyrefly is behaving the way it is. Never serialized.
+    #[serde(skip)]
+    #[derivative(PartialEq = "ignore")]
+    pub synthesized_preset_reason: Option<SynthesizedPresetReason>,
 }
 
 impl Default for ConfigFile {
@@ -620,6 +656,7 @@ impl Default for ConfigFile {
             output_format: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            synthesized_preset_reason: None,
         }
     }
 }
@@ -1203,6 +1240,17 @@ impl ConfigFile {
             sub.settings.resolve_legacy_untyped_def_behavior();
         }
 
+        // Process pytorch-efficiency-lints BEFORE preset merge so the flag
+        // entries behave like user overrides (winning over preset defaults
+        // like Basic's blanket Ignore). Explicit [errors] entries still win
+        // because set_default_severity only inserts when the key is absent.
+        if self.root.pytorch_efficiency_lints == Some(true) {
+            let errors = self.root.errors.get_or_insert_default();
+            for &kind in ErrorKind::pytorch_efficiency_lints() {
+                errors.set_default_severity(kind, Severity::Warn);
+            }
+        }
+
         // Apply preset as defaults: preset values fill in any fields the user
         // didn't explicitly set. For errors, preset errors are the base and user
         // errors merge on top.
@@ -1253,6 +1301,12 @@ impl ConfigFile {
         // semantics at root.
         if let Some(root_errors) = &self.root.errors {
             for sub in &mut self.sub_configs {
+                if sub.settings.pytorch_efficiency_lints == Some(true) {
+                    let sub_errors = sub.settings.errors.get_or_insert_default();
+                    for &kind in ErrorKind::pytorch_efficiency_lints() {
+                        sub_errors.set_default_severity(kind, Severity::Warn);
+                    }
+                }
                 if let Some(sub_errors) = &mut sub.settings.errors {
                     let mut merged = root_errors.clone();
                     merged.merge_user_overrides(sub_errors);
@@ -1659,6 +1713,7 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
@@ -1684,6 +1739,7 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
@@ -1703,6 +1759,7 @@ mod tests {
                 min_severity: None,
                 skip_lsp_config_indexing: false,
                 extra_file_extensions: Vec::new(),
+                synthesized_preset_reason: None,
             }
         );
     }
@@ -1947,6 +2004,7 @@ mod tests {
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            synthesized_preset_reason: None,
         };
 
         let current_dir = std::env::current_dir().unwrap();
@@ -2010,6 +2068,7 @@ mod tests {
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            synthesized_preset_reason: None,
         };
         assert_eq!(config, expected_config);
     }
@@ -2103,6 +2162,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -2879,6 +2939,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -2918,6 +2979,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -3052,5 +3114,131 @@ output-format = "omit-errors"
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.
         assert_eq!(config.source.root(), Some(root.path()));
+    }
+
+    #[test]
+    fn test_explicit_search_path_wins_over_site_packages() {
+        // An explicit search path should take priority over a site-package
+        // path when resolving a file path back to a module name, even when
+        // the site-package path would also match.
+        let root = TempDir::new().unwrap();
+        let sp_dir = root.path().join("venv/lib/python3.13/site-packages");
+        let mylib_dir = sp_dir.join("mylib");
+        fs::create_dir_all(&mylib_dir).unwrap();
+        let submod = mylib_dir.join("submod.py");
+        fs::write(&submod, "").unwrap();
+
+        let mut config = ConfigFile {
+            search_path_from_args: vec![mylib_dir.clone()],
+            import_root: Some(root.path().to_path_buf()),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.site_package_path = Some(vec![sp_dir]);
+        config.python_environment.set_empty_to_default();
+
+        let handle = config.handle_from_module_path(ModulePath::filesystem(submod));
+        // The explicit search path points into mylib, so the file resolves
+        // as `submod` rather than `mylib.submod` (from site-packages) or
+        // the full venv-relative path (from import_root).
+        assert_eq!(handle.module(), ModuleName::from_str("submod"));
+    }
+
+    #[test]
+    fn test_site_packages_wins_over_heuristic_import_root() {
+        // A site-package path should take priority over the heuristic
+        // import_root when resolving files in site-packages.
+        let root = TempDir::new().unwrap();
+        let sp_dir = root.path().join("venv/lib/python3.13/site-packages");
+        let fastapi_dir = sp_dir.join("fastapi");
+        fs::create_dir_all(&fastapi_dir).unwrap();
+        let init = fastapi_dir.join("__init__.py");
+        fs::write(&init, "").unwrap();
+
+        let mut config = ConfigFile {
+            import_root: Some(root.path().to_path_buf()),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.site_package_path = Some(vec![sp_dir]);
+        config.python_environment.set_empty_to_default();
+
+        let handle = config.handle_from_module_path(ModulePath::filesystem(init));
+        assert_eq!(handle.module(), ModuleName::from_str("fastapi"));
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_flag_enables_lints() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                pytorch_efficiency_lints: Some(true),
+                ..Default::default()
+            },
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Warn,
+            "pytorch-efficiency-lints = true should enable item-call lint at Warn"
+        );
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_user_override_wins() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                pytorch_efficiency_lints: Some(true),
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::PytorchEfficiencyLintItemCall,
+                    Severity::Error,
+                )]))),
+                ..Default::default()
+            },
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Error,
+            "explicit [errors] override should win over pytorch-efficiency-lints flag"
+        );
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_disabled_by_default() {
+        let mut config = ConfigFile {
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Ignore,
+            "without pytorch-efficiency-lints flag, lints should default to Ignore"
+        );
     }
 }

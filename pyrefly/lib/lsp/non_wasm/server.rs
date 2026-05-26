@@ -11,13 +11,9 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::hash::Hasher;
-use std::io::BufReader;
-use std::io::Stdin;
 use std::io::Write;
 use std::iter::once;
 use std::num::NonZeroUsize;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,11 +21,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
 
-use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
@@ -206,8 +200,8 @@ use lsp_types::request::WillRenameFiles;
 use lsp_types::request::WorkDoneProgressCreate;
 use lsp_types::request::WorkspaceConfiguration;
 use lsp_types::request::WorkspaceSymbolRequest;
-use pyrefly_build::SourceDatabase;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_config::config::ConfigSource;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::PYTHON_EXTENSIONS;
@@ -215,7 +209,6 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
-use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
@@ -226,6 +219,7 @@ use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::stdlib::is_python_stdlib_file;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::telemetry::ActivityKey;
@@ -261,8 +255,6 @@ use vec1::Vec1;
 
 use crate::ModuleInfo;
 use crate::alt::types::class_metadata::ClassMro;
-use crate::binding::binding::BindingClass;
-use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
@@ -296,17 +288,20 @@ use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
-use crate::lsp::non_wasm::protocol::read_lsp_message;
-use crate::lsp::non_wasm::protocol::write_lsp_message;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
-use crate::lsp::non_wasm::stdlib::is_python_stdlib_file;
-use crate::lsp::non_wasm::stdlib::no_config_severity_override;
-use crate::lsp::non_wasm::stdlib::should_show_error_for_display_mode;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatus;
+pub use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusRequest;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusResponse;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusV2;
+use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusVersion;
+use crate::lsp::non_wasm::type_error_display_status::default_v2_response;
+use crate::lsp::non_wasm::type_error_display_status::derive_v2_response;
+use crate::lsp::non_wasm::type_error_display_status::negotiate_type_error_display_status_version;
 use crate::lsp::non_wasm::type_hierarchy::collect_class_defs;
 use crate::lsp::non_wasm::type_hierarchy::find_class_at_position_in_ast;
 use crate::lsp::non_wasm::type_hierarchy::prepare_type_hierarchy_item;
@@ -331,7 +326,6 @@ use crate::lsp::wasm::provide_type::provide_type;
 use crate::module::bundled::BundledStub;
 use crate::state::load::Load;
 use crate::state::load::LspFile;
-use crate::state::lsp::DisplayTypeErrors;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
@@ -371,28 +365,6 @@ pub enum DiagnosticSource {
 pub enum DidCloseKind {
     NotebookDocument,
     TextDocument,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TypeErrorDisplayStatus {
-    DisabledInIdeConfig,
-    EnabledInIdeConfig,
-    DisabledInConfigFile,
-    EnabledInConfigFile,
-    NoConfigFile,
-}
-
-impl TypeErrorDisplayStatus {
-    fn is_enabled(self) -> bool {
-        match self {
-            TypeErrorDisplayStatus::DisabledInIdeConfig
-            | TypeErrorDisplayStatus::DisabledInConfigFile => false,
-            TypeErrorDisplayStatus::EnabledInIdeConfig
-            | TypeErrorDisplayStatus::EnabledInConfigFile
-            | TypeErrorDisplayStatus::NoConfigFile => true,
-        }
-    }
 }
 
 /// Interface exposed for TSP to interact with the LSP server
@@ -501,167 +473,9 @@ pub trait TspInterface: Send + Sync + 'static {
     fn maybe_get_code_cell_index(&self, uri: &Url) -> Option<usize>;
 }
 
-pub struct Connection {
-    pub sender: Sender<Message>,
-    /// Channel receiver, only present for test connections created via
-    /// `Connection::memory()`. The test client reads from this to observe
-    /// messages sent by the server.
-    channel_receiver: Option<Receiver<Message>>,
-}
-
-/// Owns the message source for the LSP/TSP server. Either a crossbeam channel
-/// (used in tests via `Connection::memory()`) or a direct stdin reader (used in
-/// production via `Connection::stdio()`).
-///
-/// This is kept separate from `Connection` so the read side can take `&mut self`
-/// without requiring interior mutability — stdin is only ever read from one
-/// thread.
-pub enum MessageReader {
-    Channel(Receiver<Message>),
-    Stdio(BufReader<Stdin>),
-    /// A generic byte stream, used for IPC transports (Unix domain sockets,
-    /// Windows named pipes).
-    Stream(BufReader<Box<dyn std::io::Read + Send>>),
-}
-
-impl MessageReader {
-    /// Receive the next message, blocking until one is available.
-    /// Returns `None` if the connection is closed (channel disconnected or
-    /// stdin EOF).
-    pub fn recv(&mut self) -> Option<Message> {
-        match self {
-            MessageReader::Channel(r) => r.recv().ok(),
-            MessageReader::Stdio(r) => read_lsp_message(r).ok().flatten(),
-            MessageReader::Stream(r) => read_lsp_message(r).ok().flatten(),
-        }
-    }
-}
-
-pub struct IoThread {
-    writer: JoinHandle<std::io::Result<()>>,
-}
-
-impl IoThread {
-    pub fn join(self) -> std::io::Result<()> {
-        match self.writer.join() {
-            Ok(result) => result,
-            Err(e) => std::panic::panic_any(e),
-        }
-    }
-}
-
-impl Connection {
-    /// Create a connection that reads directly from stdin and writes to stdout.
-    /// Only the writer uses a background thread; reads happen inline in the
-    /// calling thread, eliminating a context switch per LSP message.
-    pub fn stdio() -> (Self, MessageReader, IoThread) {
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
-        let writer = std::thread::spawn(move || {
-            let mut stdout = std::io::stdout().lock();
-            while let Ok(msg) = writer_receiver.recv() {
-                write_lsp_message(&mut stdout, msg)?
-            }
-            Ok(())
-        });
-        (
-            Self {
-                sender: writer_sender,
-                channel_receiver: None,
-            },
-            MessageReader::Stdio(BufReader::new(std::io::stdin())),
-            IoThread { writer },
-        )
-    }
-
-    /// Create a connection over a local IPC mechanism (Unix domain socket on
-    /// Unix, named pipe on Windows). The `pipe_name` is a socket path on Unix
-    /// or a pipe name on Windows (automatically prefixed with `\\.\pipe\`).
-    pub fn ipc(pipe_name: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
-        let (writer_stream, reader_stream) = Self::connect_ipc(pipe_name)?;
-        let (writer_sender, writer_receiver) = crossbeam_channel::unbounded();
-        let writer = std::thread::spawn(move || {
-            let mut output = writer_stream;
-            while let Ok(msg) = writer_receiver.recv() {
-                write_lsp_message(&mut output, msg)?;
-            }
-            Ok(())
-        });
-        Ok((
-            Self {
-                sender: writer_sender,
-                channel_receiver: None,
-            },
-            MessageReader::Stream(BufReader::new(Box::new(reader_stream))),
-            IoThread { writer },
-        ))
-    }
-
-    #[cfg(unix)]
-    fn connect_ipc(
-        pipe_name: &str,
-    ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
-        let stream = UnixStream::connect(pipe_name)?;
-        let reader = stream.try_clone()?;
-        Ok((Box::new(stream), Box::new(reader)))
-    }
-
-    #[cfg(windows)]
-    fn connect_ipc(
-        pipe_name: &str,
-    ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn std::io::Read + Send>)> {
-        use std::fs::OpenOptions;
-        let stream = OpenOptions::new().read(true).write(true).open(&pipe_name)?;
-        let reader = stream.try_clone()?;
-        Ok((Box::new(stream), Box::new(reader)))
-    }
-
-    /// Create a connection from a transport specification string.
-    /// Supported values: `"stdio"` for stdin/stdout, or `"ipc://<name>"` for a
-    /// local socket / named pipe.
-    pub fn from_transport(transport: &str) -> std::io::Result<(Self, MessageReader, IoThread)> {
-        if transport == "stdio" {
-            return Ok(Self::stdio());
-        }
-
-        if let Some(pipe_name) = transport.strip_prefix("ipc://") {
-            return Self::ipc(pipe_name);
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("Unsupported TSP transport: {transport}"),
-        ))
-    }
-
-    pub fn memory() -> ((Self, MessageReader), (Self, MessageReader)) {
-        let (s1, r1) = crossbeam_channel::unbounded();
-        let (s2, r2) = crossbeam_channel::unbounded();
-        (
-            (
-                Self {
-                    sender: s1,
-                    channel_receiver: Some(r2.clone()),
-                },
-                MessageReader::Channel(r2),
-            ),
-            (
-                Self {
-                    sender: s2,
-                    channel_receiver: Some(r1.clone()),
-                },
-                MessageReader::Channel(r1),
-            ),
-        )
-    }
-
-    /// Access the underlying channel receiver. Only available for
-    /// channel-based connections (tests).
-    pub fn channel_receiver(&self) -> &Receiver<Message> {
-        self.channel_receiver
-            .as_ref()
-            .expect("channel_receiver not available for stdio connections")
-    }
-}
+pub use super::connection::Connection;
+pub use super::connection::IoThread;
+pub use super::connection::MessageReader;
 
 struct ServerConnection(Connection);
 
@@ -725,11 +539,9 @@ struct LspProgressState {
 
 impl LspProgressState {
     fn snapshot(&mut self) -> (String, u32) {
-        let mut percentage = if self.started == 0 {
-            0
-        } else {
-            (((self.finished * 100) / self.started) as u32).min(99)
-        };
+        let mut percentage = (self.finished * 100)
+            .checked_div(self.started)
+            .map_or(0, |v| (v as u32).min(99));
         if percentage < self.last_percentage {
             percentage = self.last_percentage;
         }
@@ -1072,6 +884,13 @@ pub struct Server {
     currently_streaming_diagnostics_for_handles: RwLock<Option<SmallSet<Handle>>>,
     /// Whether the client supports markdown in diagnostic messages.
     diagnostic_markdown_support: bool,
+    /// Wire-shape version negotiated for the
+    /// `pyrefly/textDocument/typeErrorDisplayStatus` request, parsed from
+    /// `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`. The
+    /// server clamps unknown future values to
+    /// [`TypeErrorDisplayStatusVersion::LATEST`] (the richest shape this
+    /// server knows about) and a missing field to `V1`.
+    type_error_display_status_version: TypeErrorDisplayStatusVersion,
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
@@ -1134,10 +953,7 @@ pub fn initialize_start(
     sender: &Sender<Message>,
     reader: &mut MessageReader,
 ) -> anyhow::Result<Option<(RequestId, InitializeInfo)>> {
-    loop {
-        let Some(msg) = reader.recv() else {
-            break;
-        };
+    while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
                 if x.method == Initialize::METHOD {
@@ -1224,10 +1040,7 @@ pub fn initialize_finish<C: Serialize>(
     if sender.send(response.into()).is_err() {
         return Ok(false);
     }
-    loop {
-        let Some(msg) = reader.recv() else {
-            break;
-        };
+    while let Some(msg) = reader.recv() {
         match msg {
             Message::Request(x) => {
                 error!("Unexpected request before initialized: {x:?}");
@@ -2077,12 +1890,15 @@ impl Server {
 
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
+                // `TypeErrorDisplayStatusRequest` is in the list because cancelling it leaves the
+                // status-bar item hidden until the next unrelated event; stale data is fine here.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
                     ResolveCompletionItem::METHOD,
                     SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
                     ProvideType::METHOD,
+                    TypeErrorDisplayStatusRequest::METHOD,
                 ];
 
                 let in_cancelled_requests = canceled_requests.remove(&x.id);
@@ -2461,6 +2277,14 @@ impl Server {
                     if let Some(params) = self
                         .extract_request_params_or_send_err_response::<ProvideType>(params, &x.id)
                     {
+                        // provide_type loads unopened files via transaction.run().
+                        // A concurrent config recheck can cancel the transaction,
+                        // silently aborting the load. Prevent this by detaching the
+                        // cancellation handle and resetting it before the handler runs.
+                        self.cancellation_handles
+                            .lock()
+                            .remove(&request_id_for_cancel);
+                        transaction.reset_cancellation();
                         self.send_response(new_response(
                             x.id,
                             Ok(self.provide_type(&mut transaction, params)),
@@ -2600,19 +2424,27 @@ impl Server {
                         .docstring_ranges(&transaction, &text_document)
                         .unwrap_or_default();
                     self.send_response(new_response(x.id, Ok(ranges)));
-                } else if &x.method == "pyrefly/textDocument/typeErrorDisplayStatus" {
+                } else if x.method == TypeErrorDisplayStatusRequest::METHOD {
                     let text_document: TextDocumentIdentifier = serde_json::from_value(x.params)?;
-                    if let Some(path) = self.path_for_uri_or_notebook_cell(&text_document.uri) {
-                        self.send_response(new_response(
-                            x.id,
-                            Ok(self.type_error_display_status(path.as_path())),
-                        ));
+                    let response = if let Some(path) =
+                        self.path_for_uri_or_notebook_cell(&text_document.uri)
+                    {
+                        self.type_error_display_status_response(path.as_path())
                     } else {
-                        self.send_response(new_response(
-                            x.id,
-                            Ok(TypeErrorDisplayStatus::NoConfigFile),
-                        ));
-                    }
+                        // No file — fall back to NoConfigFile in whatever
+                        // shape the client requested.
+                        match self.type_error_display_status_version {
+                            TypeErrorDisplayStatusVersion::V1 => {
+                                TypeErrorDisplayStatusResponse::V1(
+                                    TypeErrorDisplayStatus::NoConfigFile,
+                                )
+                            }
+                            TypeErrorDisplayStatusVersion::V2 => {
+                                TypeErrorDisplayStatusResponse::V2(default_v2_response())
+                            }
+                        }
+                    };
+                    self.send_response(new_response(x.id, Ok(response)));
                 } else if &x.method == "testing/doNotCommitNextRecheck" {
                     self.do_not_commit_recheck.store(true, Ordering::SeqCst);
                     info!("Set do_not_commit_recheck flag to true");
@@ -2680,6 +2512,19 @@ impl Server {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let type_error_display_status_version = negotiate_type_error_display_status_version(
+            initialize_params.initialization_options.as_ref(),
+        );
+
+        let dir_cache_enabled = initialize_params
+            .initialization_options
+            .as_ref()
+            .and_then(|opts| opts.get("pyrefly"))
+            .and_then(|pyrefly| pyrefly.get("experiments"))
+            .and_then(|exp| exp.get("dirEntryCache"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let should_request_workspace_settings = initialize_params
             .capabilities
             .workspace
@@ -2697,7 +2542,7 @@ impl Server {
             indexing_mode,
             workspace_indexing_limit,
             build_system_blocking,
-            state: State::new(config_finder, thread_count),
+            state: State::new_with_options(config_finder, thread_count, dir_cache_enabled),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
             published_workspace_diagnostics: Mutex::new(HashMap::new()),
@@ -2724,6 +2569,7 @@ impl Server {
             comment_folding_ranges,
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
             diagnostic_markdown_support,
+            type_error_display_status_version,
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
@@ -2756,6 +2602,10 @@ impl Server {
     }
 
     pub fn telemetry_state(&self) -> TelemetryServerState {
+        let mut active_experiments = Vec::new();
+        if self.state.dir_cache_enabled() {
+            active_experiments.push("dir_entry_cache".to_owned());
+        }
         TelemetryServerState {
             has_sourcedb: self.workspaces.sourcedb_available(),
             id: self.id,
@@ -2763,6 +2613,7 @@ impl Server {
             server_start_time: self.server_start_time,
             agent_session_id: self.agent_session_id.clone(),
             agent_invocation_id: self.agent_invocation_id.clone(),
+            active_experiments,
         }
     }
 
@@ -2906,26 +2757,10 @@ impl Server {
                 return None;
             }
 
-            // Check if we should filter based on error kind for ErrorMissingImports mode
-            let display_type_errors_mode = self
-                .workspaces
-                .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors)
-                .unwrap_or_default();
-
-            if !should_show_error_for_display_mode(e, display_type_errors_mode, type_error_status) {
-                return None;
-            }
-
-            // In NoConfigFile mode, downgrade certain error kinds to Warn severity
-            // so users without a config file see critical issues as warnings.
-            let overridden;
-            let e = match no_config_severity_override(e, type_error_status) {
-                Some(severity) => {
-                    overridden = e.with_severity(severity);
-                    &overridden
-                }
-                None => e,
-            };
+            // The resolved config's preset (Basic / Off / migrated) is
+            // the single source of truth for which errors are silenced;
+            // the `typeCheckingMode` IDE setting reaches us through the
+            // resolver at config synthesis time, not per-diagnostic.
 
             if let Some(lsp_file) = open_files.get(&path)
                 && config.project_includes.covers(&path)
@@ -2981,34 +2816,66 @@ impl Server {
             .state
             .config_finder()
             .python_file(handle.module_kind(), handle.path());
-        match self
+
+        // Workspace-scoped kill switch is a clean boolean. `true`
+        // suppresses every diagnostic; `false` defers to the resolved
+        // config and any in-config `disable-type-errors-in-ide` flag.
+        // Legacy `displayTypeErrors = "force-off"` is mapped onto
+        // `true` by `apply_client_configuration`.
+        if self
             .workspaces
-            .get_with(path.to_path_buf(), |(_, w)| w.display_type_errors)
+            .get_with(path.to_path_buf(), |(_, w)| w.disable_type_errors)
         {
-            Some(DisplayTypeErrors::ForceOn) => TypeErrorDisplayStatus::EnabledInIdeConfig,
-            Some(DisplayTypeErrors::ErrorMissingImports) => {
-                TypeErrorDisplayStatus::EnabledInIdeConfig
-            }
-            Some(DisplayTypeErrors::ForceOff) => TypeErrorDisplayStatus::DisabledInIdeConfig,
-            Some(DisplayTypeErrors::Default) | None => match &config.source {
-                // In this case, we don't have a config file.
-                ConfigSource::Synthetic => TypeErrorDisplayStatus::NoConfigFile,
-                // In this case, we have a config file like mypy.ini, or a pyproject.toml
-                // with Python tool sections but no [tool.pyrefly]. We don't parse it for
-                // pyrefly config, so treat it as if we don't have any config.
-                ConfigSource::PythonToolMarker(_)
-                | ConfigSource::Marker(_)
-                | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
-                // We actually have a pyrefly.toml, so we can decide based on the config.
-                ConfigSource::File(_) => {
-                    if config.disable_type_errors_in_ide(path) {
-                        TypeErrorDisplayStatus::DisabledInConfigFile
-                    } else {
-                        TypeErrorDisplayStatus::EnabledInConfigFile
-                    }
-                }
-            },
+            return TypeErrorDisplayStatus::DisabledInIdeConfig;
         }
+        match &config.source {
+            ConfigSource::Synthetic
+            | ConfigSource::PythonToolMarker(_)
+            | ConfigSource::Marker(_)
+            | ConfigSource::FailedParse(_) => TypeErrorDisplayStatus::NoConfigFile,
+            ConfigSource::File(_) => {
+                if config.disable_type_errors_in_ide(path) {
+                    TypeErrorDisplayStatus::DisabledInConfigFile
+                } else {
+                    TypeErrorDisplayStatus::EnabledInConfigFile
+                }
+            }
+        }
+    }
+
+    /// Returns the typeErrorDisplayStatus response in whichever wire shape
+    /// the client negotiated at `initialize` time. V1 is the legacy bare
+    /// string; V2 is the rich struct used by the new status-bar UI.
+    fn type_error_display_status_response(&self, path: &Path) -> TypeErrorDisplayStatusResponse {
+        match self.type_error_display_status_version {
+            TypeErrorDisplayStatusVersion::V1 => {
+                TypeErrorDisplayStatusResponse::V1(self.type_error_display_status(path))
+            }
+            TypeErrorDisplayStatusVersion::V2 => {
+                TypeErrorDisplayStatusResponse::V2(self.type_error_display_status_v2(path))
+            }
+        }
+    }
+
+    /// Build the V2 status-bar response from the resolved config and the
+    /// workspace's `typeCheckingMode`.
+    fn type_error_display_status_v2(&self, path: &Path) -> TypeErrorDisplayStatusV2 {
+        let handle = make_open_handle(&self.state, path);
+        let config = self
+            .state
+            .config_finder()
+            .python_file(handle.module_kind(), handle.path());
+        let (workspace_disable_type_errors, workspace_type_checking_mode) =
+            self.workspaces.get_with(path.to_path_buf(), |(_, w)| {
+                (w.disable_type_errors, w.type_checking_mode)
+            });
+        derive_v2_response(
+            config.synthesized_preset_reason,
+            &config.source,
+            config.disable_type_errors_in_ide(path),
+            workspace_disable_type_errors,
+            workspace_type_checking_mode,
+        )
     }
 
     fn validate_in_memory_and_commit_if_possible<'a>(
@@ -4715,6 +4582,10 @@ impl Server {
                 transaction.convert_star_import_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "convert_dict",
+                transaction.convert_dict_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "pytest_fixture_type_annotation",
                 transaction.pytest_fixture_type_annotation_code_actions(
                     &handle,
@@ -4760,18 +4631,11 @@ impl Server {
                 .find_local_references(&handle, position, true)
                 .into_map(|range| DocumentHighlight {
                     range: info.to_lsp_range(range),
-                    kind: Some(
-                        if transaction
-                            .identifier_at(&handle, range.start())
-                            .expect("local references should point at identifiers")
-                            .context
-                            .is_write()
-                        {
-                            DocumentHighlightKind::WRITE
-                        } else {
-                            DocumentHighlightKind::READ
-                        },
-                    ),
+                    kind: Some(match transaction.identifier_at(&handle, range.start()) {
+                        Some(id) if id.context.is_write() => DocumentHighlightKind::WRITE,
+                        Some(_) => DocumentHighlightKind::READ,
+                        None => DocumentHighlightKind::TEXT,
+                    }),
                 }),
         ))
     }
@@ -6028,12 +5892,7 @@ impl Server {
         let ast = transaction.as_ref().get_ast(handle)?;
         let class_def = find_class_at_position_in_ast(&ast, definition.definition_range.start())?;
         let bindings = transaction.as_ref().get_bindings(handle)?;
-        let key = KeyClass(ShortIdentifier::new(&class_def.name));
-        let class_idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let def_index = match bindings.get(class_idx) {
-            BindingClass::ClassDef(class_binding) => class_binding.def_index,
-            BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
-        };
+        let def_index = bindings.class_def_index(class_def)?;
         Some(TypeHierarchyTarget {
             def_index,
             module_path: definition.module.path().dupe(),
@@ -6094,13 +5953,8 @@ impl Server {
             let mut class_defs = Vec::new();
             collect_class_defs(ast.body.as_slice(), &mut class_defs);
             for class_def in class_defs {
-                let key = KeyClass(ShortIdentifier::new(&class_def.name));
-                let Some(class_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+                let Some(class_def_index) = bindings.class_def_index(class_def) else {
                     continue;
-                };
-                let class_def_index = match bindings.get(class_idx) {
-                    BindingClass::ClassDef(class_binding) => class_binding.def_index,
-                    BindingClass::FunctionalClassDef(def_index, ..) => *def_index,
                 };
                 if class_def_index == target.def_index && module_info.path() == &target.module_path
                 {

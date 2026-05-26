@@ -249,6 +249,26 @@ testcase!(
 );
 
 testcase!(
+    test_unpack_tuple_with_never_element,
+    r#"
+from typing import NoReturn
+def never() -> NoReturn: ...
+# Unreachable: should not error.
+a, b, c = (never(), 1)
+    "#,
+);
+
+testcase!(
+    test_unpack_never_rhs,
+    r#"
+from typing import NoReturn
+def never() -> NoReturn: ...
+# Unreachable: should not error.
+a, b, c = never()
+    "#,
+);
+
+testcase!(
     test_splat_back,
     r#"
 from typing import assert_type, Literal
@@ -385,26 +405,6 @@ x = 1
 lit1: Literal[1] = x
 x = "oops"  # E: `Literal['oops']` is not assignable to variable `x` with type `int`
 lit2: Literal["oops"] = x  # E: `int` is not assignable to `Literal['oops']`
-    "#,
-);
-
-testcase!(
-    test_type_alias_simple,
-    r#"
-from typing import assert_type
-type X = int
-def f(x: X):
-    assert_type(x, int)
-    "#,
-);
-
-testcase!(
-    test_type_alias_generic,
-    r#"
-from typing import assert_type
-type X[T] = list[T]
-def f(x: X[int]):
-    assert_type(x, list[int])
     "#,
 );
 
@@ -1482,7 +1482,6 @@ class Container:
 );
 
 testcase!(
-    bug = "Multi-target rebind of a class name bypasses receiver detection",
     test_class_rebind_multi_target,
     r#"
 from typing import reveal_type
@@ -1495,18 +1494,14 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The multi-target form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    other = Real = Dummy
+    other = Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );
 
 testcase!(
-    bug = "Unpacking rebind of a class name bypasses receiver detection",
     test_class_rebind_unpacked,
     r#"
 from typing import reveal_type
@@ -1519,12 +1514,9 @@ class Dummy: ...
 def b() -> bool: ...
 
 if b():
-    # The single-target form errors here. The unpacking form silently
-    # allows the incompatible rebind, which then poisons the call site
-    # below with spurious argument errors against `Dummy.__init__`.
-    Real, _ = (Dummy, 0)
+    Real, _ = (Dummy, 0)  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
 
-Real("example.com", port=443)  # E: Expected 0 positional arguments  # E: Unexpected keyword argument `port`
-reveal_type(Real)  # E: revealed type: type[Dummy] | type[Real]
+Real("example.com", port=443)
+reveal_type(Real)  # E: revealed type: type[Real]
 "#,
 );

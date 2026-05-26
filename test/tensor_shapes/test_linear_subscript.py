@@ -8,8 +8,8 @@
 from typing import assert_type, reveal_type, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch.nn import Linear
-    from torch_shapes import Dim
 
 
 def test_subscript[N](n: Dim[N]):

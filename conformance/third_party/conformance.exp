@@ -325,10 +325,32 @@
     {
       "code": -2,
       "column": 9,
+      "concise_description": "`BadTypeAlias1` is not a valid type alias: Function call cannot be used in annotations",
+      "description": "`BadTypeAlias1` is not a valid type alias: Function call cannot be used in annotations",
+      "line": 106,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 106
+    },
+    {
+      "code": -2,
+      "column": 9,
       "concise_description": "Expected a type form, got instance of `list[type[int] | type[str]]`",
       "description": "Expected a type form, got instance of `list[type[int] | type[str]]`",
       "line": 107,
       "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 107
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`BadTypeAlias2` is not a valid type alias: List literal cannot be used in annotations",
+      "description": "`BadTypeAlias2` is not a valid type alias: List literal cannot be used in annotations",
+      "line": 107,
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 22,
       "stop_line": 107
@@ -347,10 +369,32 @@
     {
       "code": -2,
       "column": 9,
+      "concise_description": "`BadTypeAlias3` is not a valid type alias: Tuple literal cannot be used in annotations",
+      "description": "`BadTypeAlias3` is not a valid type alias: Tuple literal cannot be used in annotations",
+      "line": 108,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 108
+    },
+    {
+      "code": -2,
+      "column": 9,
       "concise_description": "Expected a type form, got instance of `list[type[int]]`",
       "description": "Expected a type form, got instance of `list[type[int]]`",
       "line": 109,
       "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 109
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`BadTypeAlias4` is not a valid type alias: List comprehension cannot be used in annotations",
+      "description": "`BadTypeAlias4` is not a valid type alias: List comprehension cannot be used in annotations",
+      "line": 109,
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 22,
       "stop_line": 109
@@ -365,6 +409,50 @@
       "severity": "error",
       "stop_column": 22,
       "stop_line": 110
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`BadTypeAlias5` is not a valid type alias: Dict literal cannot be used in annotations",
+      "description": "`BadTypeAlias5` is not a valid type alias: Dict literal cannot be used in annotations",
+      "line": 110,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 110
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`BadTypeAlias6` is not a valid type alias: Function call cannot be used in annotations",
+      "description": "`BadTypeAlias6` is not a valid type alias: Function call cannot be used in annotations",
+      "line": 111,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 111
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`BadTypeAlias7` is not a valid type alias: Invalid subscript expression cannot be used in annotations",
+      "description": "`BadTypeAlias7` is not a valid type alias: Invalid subscript expression cannot be used in annotations",
+      "line": 112,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 112
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`BadTypeAlias8` is not a valid type alias: If expression cannot be used in annotations",
+      "description": "`BadTypeAlias8` is not a valid type alias: If expression cannot be used in annotations",
+      "line": 113,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 113
     },
     {
       "code": -2,
@@ -391,6 +479,17 @@
     {
       "code": -2,
       "column": 10,
+      "concise_description": "`BadTypeAlias10` is not a valid type alias: Bool literal cannot be used in annotations",
+      "description": "`BadTypeAlias10` is not a valid type alias: Bool literal cannot be used in annotations",
+      "line": 115,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 115
+    },
+    {
+      "code": -2,
+      "column": 10,
       "concise_description": "Expected a type form, got instance of `Literal[1]`",
       "description": "Expected a type form, got instance of `Literal[1]`",
       "line": 116,
@@ -402,10 +501,43 @@
     {
       "code": -2,
       "column": 10,
+      "concise_description": "`BadTypeAlias11` is not a valid type alias: Number literal cannot be used in annotations",
+      "description": "`BadTypeAlias11` is not a valid type alias: Number literal cannot be used in annotations",
+      "line": 116,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 116
+    },
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "`BadTypeAlias12` is not a valid type alias: Boolean operation cannot be used in annotations",
+      "description": "`BadTypeAlias12` is not a valid type alias: Boolean operation cannot be used in annotations",
+      "line": 117,
+      "name": "invalid-annotation",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 117
+    },
+    {
+      "code": -2,
+      "column": 10,
       "concise_description": "Expected a type form, got instance of `Literal['int']`",
       "description": "Expected a type form, got instance of `Literal['int']`",
       "line": 118,
       "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 24,
+      "stop_line": 118
+    },
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "`BadTypeAlias13` is not a valid type alias: F-string cannot be used in annotations",
+      "description": "`BadTypeAlias13` is not a valid type alias: F-string cannot be used in annotations",
+      "line": 118,
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 24,
       "stop_line": 118
@@ -1325,8 +1457,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
-      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in invariant position",
+      "description": "Type variable `T_co` is covariant but is used in invariant position",
       "line": 24,
       "name": "invalid-variance",
       "severity": "error",
@@ -1336,8 +1468,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
-      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in invariant position",
+      "description": "Type variable `T_co` is covariant but is used in invariant position",
       "line": 28,
       "name": "invalid-variance",
       "severity": "error",
@@ -1347,8 +1479,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
-      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in invariant position",
+      "description": "Type variable `T_co` is covariant but is used in invariant position",
       "line": 32,
       "name": "invalid-variance",
       "severity": "error",
@@ -1358,8 +1490,8 @@
     {
       "code": -2,
       "column": 16,
-      "concise_description": "Type variable `T_contra` is Contravariant but is used in invariant position",
-      "description": "Type variable `T_contra` is Contravariant but is used in invariant position",
+      "concise_description": "Type variable `T_contra` is contravariant but is used in invariant position",
+      "description": "Type variable `T_contra` is contravariant but is used in invariant position",
       "line": 44,
       "name": "invalid-variance",
       "severity": "error",
@@ -1486,6 +1618,17 @@
       "description": "Expected a type form, got instance of `Literal[1]`",
       "line": 49,
       "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 14,
+      "stop_line": 49
+    },
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "`var1` is not a valid type alias: Number literal cannot be used in annotations",
+      "description": "`var1` is not a valid type alias: Number literal cannot be used in annotations",
+      "line": 49,
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 14,
       "stop_line": 49
@@ -1833,6 +1976,17 @@
       "description": "Expected a type form, got instance of `Literal[3]`",
       "line": 96,
       "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 13,
+      "stop_line": 96
+    },
+    {
+      "code": -2,
+      "column": 9,
+      "concise_description": "`var1` is not a valid type alias: Number literal cannot be used in annotations",
+      "description": "`var1` is not a valid type alias: Number literal cannot be used in annotations",
+      "line": 96,
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 13,
       "stop_line": 96
@@ -3654,50 +3808,6 @@
       "severity": "error",
       "stop_column": 6,
       "stop_line": 58
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[int], list[int]) failed",
-      "description": "assert_type(Desc2[int], list[int]) failed",
-      "line": 61,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 61
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[str], list[str]) failed",
-      "description": "assert_type(Desc2[str], list[str]) failed",
-      "line": 62,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 62
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[int], int) failed",
-      "description": "assert_type(Desc2[int], int) failed",
-      "line": 66,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 24,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[str], str) failed",
-      "description": "assert_type(Desc2[str], str) failed",
-      "line": 67,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 24,
-      "stop_line": 67
     }
   ],
   "dataclasses_final.py": [
@@ -6351,11 +6461,33 @@
   "generics_self_basic.py": [
     {
       "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 20,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 20
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "description": "Returned type `Shape` is not assignable to declared return type `Self@Shape`",
+      "line": 33,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 23,
+      "stop_line": 33
+    },
+    {
+      "code": -2,
       "column": 26,
-      "concise_description": "`type[Self@Container]` is not subscriptable",
-      "description": "`type[Self@Container]` is not subscriptable",
+      "concise_description": "`Self` may not be subscripted",
+      "description": "`Self` may not be subscripted",
       "line": 68,
-      "name": "unsupported-operation",
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 35,
       "stop_line": 68
@@ -6429,6 +6561,17 @@
       "severity": "error",
       "stop_column": 37,
       "stop_line": 82
+    },
+    {
+      "code": -2,
+      "column": 16,
+      "concise_description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "description": "Returned type `Foo3` is not assignable to declared return type `Self@Foo3`",
+      "line": 87,
+      "name": "bad-return",
+      "severity": "error",
+      "stop_column": 22,
+      "stop_line": 87
     },
     {
       "code": -2,
@@ -6639,6 +6782,17 @@
       "description": "Expected a type form, got instance of `tuple[type[bytes], type[str]]`",
       "line": 71,
       "name": "not-a-type",
+      "severity": "error",
+      "stop_column": 19,
+      "stop_line": 71
+    },
+    {
+      "code": -2,
+      "column": 17,
+      "concise_description": "`t1` is not a valid type alias: Tuple literal cannot be used in annotations",
+      "description": "`t1` is not a valid type alias: Tuple literal cannot be used in annotations",
+      "line": 71,
+      "name": "invalid-annotation",
       "severity": "error",
       "stop_column": 19,
       "stop_line": 71
@@ -7427,8 +7581,8 @@
     {
       "code": -2,
       "column": 14,
-      "concise_description": "Type variable `T_co` is Covariant but is used in invariant position",
-      "description": "Type variable `T_co` is Covariant but is used in invariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in invariant position",
+      "description": "Type variable `T_co` is covariant but is used in invariant position",
       "line": 77,
       "name": "invalid-variance",
       "severity": "error",
@@ -7438,8 +7592,8 @@
     {
       "code": -2,
       "column": 14,
-      "concise_description": "Type variable `T_contra` is Contravariant but is used in invariant position",
-      "description": "Type variable `T_contra` is Contravariant but is used in invariant position",
+      "concise_description": "Type variable `T_contra` is contravariant but is used in invariant position",
+      "description": "Type variable `T_contra` is contravariant but is used in invariant position",
       "line": 81,
       "name": "invalid-variance",
       "severity": "error",
@@ -7449,8 +7603,8 @@
     {
       "code": -2,
       "column": 17,
-      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
-      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "concise_description": "Type variable `T_contra` is contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is contravariant but is used in covariant position",
       "line": 93,
       "name": "invalid-variance",
       "severity": "error",
@@ -7460,8 +7614,8 @@
     {
       "code": -2,
       "column": 21,
-      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
-      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is covariant but is used in contravariant position",
       "line": 105,
       "name": "invalid-variance",
       "severity": "error",
@@ -7471,8 +7625,8 @@
     {
       "code": -2,
       "column": 21,
-      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
-      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is covariant but is used in contravariant position",
       "line": 113,
       "name": "invalid-variance",
       "severity": "error",
@@ -7482,8 +7636,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
-      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is covariant but is used in contravariant position",
       "line": 126,
       "name": "invalid-variance",
       "severity": "error",
@@ -7493,8 +7647,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
-      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "concise_description": "Type variable `T_contra` is contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is contravariant but is used in covariant position",
       "line": 132,
       "name": "invalid-variance",
       "severity": "error",
@@ -7504,8 +7658,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
-      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is covariant but is used in contravariant position",
       "line": 142,
       "name": "invalid-variance",
       "severity": "error",
@@ -7515,8 +7669,8 @@
     {
       "code": -2,
       "column": 26,
-      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
-      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "concise_description": "Type variable `T_contra` is contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is contravariant but is used in covariant position",
       "line": 163,
       "name": "invalid-variance",
       "severity": "error",
@@ -7526,8 +7680,8 @@
     {
       "code": -2,
       "column": 30,
-      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
-      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is covariant but is used in contravariant position",
       "line": 167,
       "name": "invalid-variance",
       "severity": "error",
@@ -7537,8 +7691,8 @@
     {
       "code": -2,
       "column": 33,
-      "concise_description": "Type variable `T_contra` is Contravariant but is used in covariant position",
-      "description": "Type variable `T_contra` is Contravariant but is used in covariant position",
+      "concise_description": "Type variable `T_contra` is contravariant but is used in covariant position",
+      "description": "Type variable `T_contra` is contravariant but is used in covariant position",
       "line": 191,
       "name": "invalid-variance",
       "severity": "error",
@@ -7548,8 +7702,8 @@
     {
       "code": -2,
       "column": 5,
-      "concise_description": "Type variable `T_co` is Covariant but is used in contravariant position",
-      "description": "Type variable `T_co` is Covariant but is used in contravariant position",
+      "concise_description": "Type variable `T_co` is covariant but is used in contravariant position",
+      "description": "Type variable `T_co` is covariant but is used in contravariant position",
       "line": 196,
       "name": "invalid-variance",
       "severity": "error",
@@ -9855,8 +10009,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Type variable `T1_co` is Covariant but is used in contravariant position",
-      "description": "Type variable `T1_co` is Covariant but is used in contravariant position",
+      "concise_description": "Type variable `T1_co` is covariant but is used in contravariant position",
+      "description": "Type variable `T1_co` is covariant but is used in contravariant position",
       "line": 62,
       "name": "invalid-variance",
       "severity": "error",
@@ -9877,8 +10031,8 @@
     {
       "code": -2,
       "column": 9,
-      "concise_description": "Type variable `T1_contra` is Contravariant but is used in covariant position",
-      "description": "Type variable `T1_contra` is Contravariant but is used in covariant position",
+      "concise_description": "Type variable `T1_contra` is contravariant but is used in covariant position",
+      "description": "Type variable `T1_contra` is contravariant but is used in covariant position",
       "line": 72,
       "name": "invalid-variance",
       "severity": "error",
@@ -11403,7 +11557,7 @@
       "concise_description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "line": 15,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 49,
       "stop_line": 15
@@ -11414,7 +11568,7 @@
       "concise_description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "line": 22,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 59,
       "stop_line": 22
@@ -11425,7 +11579,7 @@
       "concise_description": "`None` is not assignable to TypedDict key `year` with type `int`",
       "description": "`None` is not assignable to TypedDict key `year` with type `int`",
       "line": 39,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 58,
       "stop_line": 39
@@ -11749,7 +11903,7 @@
       "concise_description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
       "description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
       "line": 22,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 21,
       "stop_line": 22
@@ -11760,7 +11914,7 @@
       "concise_description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
       "description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
       "line": 23,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 19,
       "stop_line": 23
@@ -11804,7 +11958,7 @@
       "concise_description": "`float` is not assignable to TypedDict key `year` with type `int`",
       "description": "`float` is not assignable to TypedDict key `year` with type `int`",
       "line": 29,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 48,
       "stop_line": 29
@@ -12063,7 +12217,7 @@
       "concise_description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "line": 82,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 15,
       "stop_line": 82
@@ -12074,7 +12228,7 @@
       "concise_description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "line": 83,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 16,
       "stop_line": 83
@@ -12324,7 +12478,7 @@
       "concise_description": "`Literal[1]` is not assignable to TypedDict key `inner_key` with type `str`",
       "description": "`Literal[1]` is not assignable to TypedDict key `inner_key` with type `str`",
       "line": 126,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 57,
       "stop_line": 126
@@ -12348,7 +12502,7 @@
       "concise_description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
       "description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
       "line": 24,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 23,
       "stop_line": 24
@@ -12423,39 +12577,6 @@
     },
     {
       "code": -2,
-      "column": 33,
-      "concise_description": "`type[list[int]]` is not assignable to `GenericAlias`",
-      "description": "`type[list[int]]` is not assignable to `GenericAlias`",
-      "line": 49,
-      "name": "bad-assignment",
-      "severity": "error",
-      "stop_column": 42,
-      "stop_line": 49
-    },
-    {
-      "code": -2,
-      "column": 33,
-      "concise_description": "Expected `v2_actual` to be a type alias, got `GenericAlias`",
-      "description": "Expected `v2_actual` to be a type alias, got `GenericAlias`",
-      "line": 49,
-      "name": "invalid-type-alias",
-      "severity": "error",
-      "stop_column": 42,
-      "stop_line": 49
-    },
-    {
-      "code": -2,
-      "column": 7,
-      "concise_description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "line": 58,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 12,
-      "stop_line": 58
-    },
-    {
-      "code": -2,
       "column": 7,
       "concise_description": "Argument `Literal['not a type']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
       "description": "Argument `Literal['not a type']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
@@ -12497,17 +12618,6 @@
       "severity": "error",
       "stop_column": 19,
       "stop_line": 69
-    },
-    {
-      "code": -2,
-      "column": 18,
-      "concise_description": "`Self` must appear within a class",
-      "description": "`Self` must appear within a class",
-      "line": 70,
-      "name": "invalid-annotation",
-      "severity": "error",
-      "stop_column": 22,
-      "stop_line": 70
     },
     {
       "code": -2,

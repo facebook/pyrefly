@@ -8,9 +8,11 @@ information.
 
 The Pyrefly extension:
 
-- Adds inline type errors matching the Pyrefly command-line to your editor
-  (note: only shown when a pyrefly configuration is present or
-  `python.pyrefly.displayTypeErrors` is `force-on`)
+- Adds inline type errors matching the Pyrefly command-line to your editor.
+  By default, a project without a Pyrefly configuration uses the
+  [`basic`](https://pyrefly.org/en/docs/configuration/#preset-basic) preset
+  or auto-migrated settings from a nearby `mypy.ini` / `pyrightconfig.json`.
+  Set `python.pyrefly.typeCheckingMode` to choose a different preset.
 - Adds language features from Pyrefly's analysis like go-to definition, hover,
   etc. (full list [here](https://github.com/facebook/pyrefly/issues/344)) and
   disables Pylance completely (VSCode's built-in Python extension)
@@ -24,11 +26,16 @@ to ensure your project is set up properly, see
 The following configuration options are IDE-specific and exposed as VSCode
 settings:
 
-- `python.pyrefly.displayTypeErrors` [enum: default, force-on, force-off]: If
-  `'default'`, Pyrefly will only provide type check squiggles in the IDE if a
-  `pyrefly.toml` is present. If `'force-off'`, Pyrefly will never provide type
-  check squiggles in the IDE. If `'force-on'`, Pyrefly will always provide type
-  check squiggles in the IDE.
+- `python.pyrefly.typeCheckingMode` [enum: auto, off, basic, legacy,
+  default, strict; default: auto]: [Preset](https://pyrefly.org/en/docs/configuration/#preset)
+  to use for files not covered by a `pyrefly.toml`. The default `auto`
+  migrates a nearby mypy/pyright config when present, otherwise uses
+  `basic`.
+- `python.pyrefly.disableTypeErrors` [boolean: false]: If true, Pyrefly
+  will not provide diagnostics for files in this workspace.
+- `python.pyrefly.displayTypeErrors` (deprecated): replaced by
+  `python.pyrefly.typeCheckingMode` and `python.pyrefly.disableTypeErrors`.
+  Still accepted for backwards compatibility.
 - `python.pyrefly.disableLanguageServices` [boolean: false]: by default, Pyrefly
   will provide both type errors and other language features like go-to
   definition, intellisense, hover, etc. Enable this option to keep type errors

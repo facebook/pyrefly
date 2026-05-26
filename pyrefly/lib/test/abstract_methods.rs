@@ -557,3 +557,17 @@ class A(ABC):
             return 0
     "#,
 );
+
+testcase!(
+    test_metaclass_extends_abcmeta,
+    r#"
+from abc import ABCMeta, abstractmethod
+class Meta2(ABCMeta):
+    pass
+class A(metaclass=Meta2):
+    @abstractmethod
+    def f(self) -> None:
+        pass
+A()  # E: Cannot instantiate `A`
+    "#,
+);

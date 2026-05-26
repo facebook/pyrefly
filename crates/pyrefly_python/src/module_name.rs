@@ -715,6 +715,52 @@ mod tests {
     }
 
     #[test]
+    fn test_module_from_path_first_match_wins() {
+        // from_path uses first-match semantics. Callers must pass paths in the
+        // right priority order: explicit search paths, then site-package paths,
+        // then heuristic paths like import_root.
+        let project_root = PathBuf::from("/project");
+        let site_packages = PathBuf::from("/project/venv/lib/python3.13/site-packages");
+
+        // With site-packages before project root, the file resolves correctly.
+        let site_pkg_first = [site_packages.clone(), project_root.clone()];
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/project/venv/lib/python3.13/site-packages/fastapi/__init__.py"),
+                site_pkg_first.iter(),
+                &[]
+            ),
+            Some(ModuleName::from_str("fastapi"))
+        );
+
+        // With project root first, it matches before site-packages and
+        // produces a bogus module name — this is the ordering callers must
+        // avoid for heuristic paths like import_root.
+        let root_first = [project_root.clone(), site_packages.clone()];
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/project/venv/lib/python3.13/site-packages/fastapi/__init__.py"),
+                root_first.iter(),
+                &[]
+            ),
+            Some(ModuleName::from_str(
+                "venv.lib.python3.13.site-packages.fastapi"
+            ))
+        );
+
+        // User's own source still resolves from the project root regardless
+        // of order, since it's not under site-packages.
+        assert_eq!(
+            ModuleName::from_path(
+                Path::new("/project/myapp/main.py"),
+                site_pkg_first.iter(),
+                &[]
+            ),
+            Some(ModuleName::from_str("myapp.main"))
+        );
+    }
+
+    #[test]
     fn test_module_from_path_stubs_suffix() {
         // PEP 561: `-stubs` suffix on the top-level directory should be stripped.
         let includes = [PathBuf::from("/sp")];

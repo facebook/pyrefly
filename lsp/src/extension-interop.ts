@@ -17,7 +17,10 @@ import * as vscode from 'vscode';
  *
  * We then change the setting back so we don't end up messing up the users settings.
  */
-export async function triggerMsPythonRefreshLanguageServers() {
+export async function triggerMsPythonRefreshLanguageServersIfInstalled() {
+  if (!vscode.extensions.getExtension('ms-python.python')) {
+    return;
+  }
   const config = vscode.workspace.getConfiguration('python');
   const setting = 'languageServer';
   let previousSetting = config.get(setting);

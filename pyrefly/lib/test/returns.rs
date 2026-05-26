@@ -10,7 +10,6 @@ use crate::testcase;
 testcase!(
     test_missing_return,
     r#"
-
 def f() -> int:  # E: Function declared to return `int` but is missing an explicit `return`
     pass
 "#,
@@ -829,6 +828,19 @@ def f(value: int | str | float) -> str:
         case str():
             result = f"string: {value}"
     return result
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2894
+testcase!(
+    test_exhaustive_isinstance_no_bad_return,
+    r#"
+class A: ...
+class B: ...
+
+def test(ab: A | B) -> int:
+    if isinstance(ab, A): return 1
+    if isinstance(ab, B): return 2
 "#,
 );
 

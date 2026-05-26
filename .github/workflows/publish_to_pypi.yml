@@ -4,15 +4,22 @@ on:
   push:
     paths:
       - version.bzl
-    branches: [ main ]
+    branches: [ main, 'release/**' ]
   workflow_dispatch:
 
 jobs:
+  check_publish:
+    uses: ./.github/workflows/check_publish.yml
+
   build-binaries:
     name: Build binaries
+    needs: check_publish
+    if: needs.check_publish.outputs.should_publish == 'true'
     uses: ./.github/workflows/build_binaries.yml
   test:
     name: Test
+    needs: check_publish
+    if: needs.check_publish.outputs.should_publish == 'true'
     uses: ./.github/workflows/pyrefly.yml
   pypi-publish:
     name: Upload to PyPI

@@ -20,14 +20,12 @@ f = yielding()
 next_f = next(f)
 assert_type(next_f, int)
 assert_type(f, Generator[Literal[1], Any, None])
-
 "#,
 );
 
 testcase!(
     test_generator_with_return,
     r#"
-
 from typing import assert_type, Generator, Literal, Any
 
 def gen_with_return():
@@ -36,14 +34,12 @@ def gen_with_return():
     return "done"
 
 assert_type(gen_with_return(), Generator[Literal[1, 2], Any, Literal['done']])
-
 "#,
 );
 
 testcase!(
     test_generator_send,
     r#"
-
 from typing import Generator, assert_type
 
 def accumulate(x: int) -> Generator[int, int, None]:
@@ -52,14 +48,12 @@ def accumulate(x: int) -> Generator[int, int, None]:
 gen = accumulate(10)
 assert_type(gen, Generator[int, int, None])
 gen.send(5)
-
 "#,
 );
 
 testcase!(
     test_generator_send_inference,
     r#"
-
 from typing import Generator, assert_type
 
 class Yield: pass
@@ -78,7 +72,6 @@ def my_generator() -> Generator[Yield, Send, Return]:
     assert_type(y, Return)
 
     return Return()
-
 "#,
 );
 
@@ -224,7 +217,6 @@ from typing import Generator
 
 def bare_yield() -> Generator[int, None, None]:
     yield  # E: Expected to yield a value of type `int`
-
 "#,
 );
 
@@ -236,12 +228,10 @@ from typing import AsyncGenerator, assert_type
 class Yield: pass
 class Send: pass
 
-
 async def my_generator() -> AsyncGenerator[Yield, Send]:
     s = yield Yield()
 
     assert_type(s, Send)
-
 "#,
 );
 
@@ -253,11 +243,9 @@ from typing import AsyncGenerator, assert_type
 class Yield: pass
 class Send: pass
 
-
 def my_generator() -> AsyncGenerator[Yield, Send]: # E: Generator function should return `Generator`
     s = yield Yield()
     assert_type(s, Send)
-
 "#,
 );
 

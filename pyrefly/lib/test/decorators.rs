@@ -278,7 +278,6 @@ class decorator:
     ) -> Callable[TParams, TReturn]:
         ...
 
-
 class C:
     @decorator(42)
     def f(self, x: int) -> int:
@@ -527,37 +526,6 @@ reveal_type(A.__le__)  # E: revealed type: (self: A, other: object) -> bool
 # This should give be synthesized via `functools.total_ordering` via `__le__`
 reveal_type(A.__ge__)  # E: revealed type: (self: A, other: object) -> bool
 "#,
-);
-
-testcase!(
-    test_overload_with_docstring,
-    r#"
-from typing import overload, Any
-@overload
-def foo(a: int) -> int: ...
-@overload
-def foo(a: str) -> str:
-    """Docstring"""
-def foo(*args, **kwargs) -> Any:
-    pass
-
-    "#,
-);
-
-testcase!(
-    test_overload_with_docstring2,
-    r#"
-from typing import overload, Any
-@overload
-def foo(a: int) -> int: ...
-@overload
-def foo(a: str) -> str:
-    """Docstring"""
-    return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
-def foo(*args, **kwargs) -> Any:
-    pass
-
-    "#,
 );
 
 testcase!(

@@ -14,8 +14,8 @@ from __future__ import annotations
 from typing import assert_type
 
 import torch
+from shape_extensions import Dim
 from torch import Tensor
-from torch_shapes import Dim
 
 
 def test_reshape_inferred_dim[A, B](x: Tensor[2 * A - 1, B]) -> None:

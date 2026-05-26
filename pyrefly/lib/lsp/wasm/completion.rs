@@ -24,12 +24,12 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::literal::Lit;
-use pyrefly_types::types::Union;
 use pyrefly_util::thread_pool::ThreadPool;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -55,7 +55,7 @@ use crate::types::types::Type;
 
 /// Classification of a completion item's source, used for ranking.
 #[derive(Clone, Copy, Default)]
-pub(crate) enum CompletionSource {
+enum CompletionSource {
     /// Keywords, variables, literals, builtins, dict keys, etc.
     #[default]
     Local,
@@ -69,9 +69,9 @@ pub(crate) enum CompletionSource {
 
 /// A completion item paired with ranking metadata.
 pub(crate) struct RankedCompletion {
-    pub(crate) item: CompletionItem,
-    pub(crate) source: CompletionSource,
-    pub(crate) is_incompatible: bool,
+    item: CompletionItem,
+    source: CompletionSource,
+    is_incompatible: bool,
 }
 
 impl RankedCompletion {
@@ -215,7 +215,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completion items for literal types (e.g., `Literal["foo", "bar"]`).
-    pub(crate) fn add_literal_completions_from_type(
+    fn add_literal_completions_from_type(
         param_type: &Type,
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
@@ -241,8 +241,8 @@ impl Transaction<'_> {
                     ..Default::default()
                 }));
             }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
+            Type::Union(u) => {
+                for member in &u.members {
                     Self::add_literal_completions_from_type(member, completions, in_string_literal);
                 }
             }
@@ -277,8 +277,8 @@ impl Transaction<'_> {
                     }));
                 }
             }
-            Type::Union(box Union { members, .. }) => {
-                for member in members {
+            Type::Union(u) => {
+                for member in &u.members {
                     Self::add_literal_completions_from_type_dedup(
                         member,
                         completions,
@@ -292,7 +292,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completions for magic methods (dunder methods like `__init__`, `__str__`, etc.).
-    pub(crate) fn add_magic_method_completions(
+    fn add_magic_method_completions(
         identifier: &Identifier,
         completions: &mut Vec<RankedCompletion>,
     ) {
@@ -312,10 +312,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completions for Python keywords (e.g., `if`, `for`, `class`, etc.).
-    pub(crate) fn add_keyword_completions(
-        handle: &Handle,
-        completions: &mut Vec<RankedCompletion>,
-    ) {
+    fn add_keyword_completions(handle: &Handle, completions: &mut Vec<RankedCompletion>) {
         get_keywords(handle.sys_info().version())
             .iter()
             .for_each(|name| {
@@ -328,10 +325,7 @@ impl Transaction<'_> {
     }
 
     /// Adds function/method completion inserts with parentheses, using snippets when supported.
-    pub(crate) fn add_function_call_parens(
-        completions: &mut [RankedCompletion],
-        supports_snippets: bool,
-    ) {
+    fn add_function_call_parens(completions: &mut [RankedCompletion], supports_snippets: bool) {
         for ranked in completions {
             let item = &mut ranked.item;
             if item.insert_text.is_some() || item.text_edit.is_some() {
@@ -354,7 +348,7 @@ impl Transaction<'_> {
     }
 
     /// Retrieves documentation for an export to display in completion items.
-    pub(crate) fn get_documentation_from_export(
+    fn get_documentation_from_export(
         &self,
         export_info: Option<(Handle, Export)>,
     ) -> Option<lsp_types::Documentation> {
@@ -370,7 +364,7 @@ impl Transaction<'_> {
     }
 
     /// Adds keyword argument completions (e.g., `arg=`) for function/method calls.
-    pub(crate) fn add_kwargs_completions(
+    fn add_kwargs_completions(
         &self,
         handle: &Handle,
         position: TextSize,
@@ -418,7 +412,7 @@ impl Transaction<'_> {
     }
 
     /// Gets docstring documentation for an attribute to display in completion items.
-    pub(crate) fn get_docstring_for_attribute(
+    fn get_docstring_for_attribute(
         &self,
         handle: &Handle,
         attr_info: &AttrInfo,
@@ -445,7 +439,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completions from the builtins module, optionally filtered by fuzzy match.
-    pub(crate) fn add_builtins_autoimport_completions(
+    fn add_builtins_autoimport_completions(
         &self,
         handle: &Handle,
         identifier: Option<&Identifier>,
@@ -519,7 +513,7 @@ impl Transaction<'_> {
 
     /// Adds completions for local variables and returns true if any were added.
     /// If an identifier is present, filters matches using fuzzy matching.
-    pub(crate) fn add_local_variable_completions(
+    fn add_local_variable_completions(
         &self,
         handle: &Handle,
         identifier: Option<&Identifier>,
@@ -601,7 +595,7 @@ impl Transaction<'_> {
     }
 
     /// Adds literal completions for function call arguments based on parameter types.
-    pub(crate) fn add_literal_completions(
+    fn add_literal_completions(
         &self,
         handle: &Handle,
         position: TextSize,
@@ -636,7 +630,7 @@ impl Transaction<'_> {
     }
 
     /// Adds auto-import completions from exports of other modules using fuzzy matching.
-    pub(crate) fn add_autoimport_completions(
+    fn add_autoimport_completions(
         &self,
         handle: &Handle,
         identifier: &Identifier,
@@ -803,7 +797,7 @@ impl Transaction<'_> {
     /// infer literals from. Instead, we look for a match value/singleton
     /// pattern at the cursor and pull the `match` subject's type to surface
     /// its Literal members.
-    pub(crate) fn add_match_literal_completions(
+    fn add_match_literal_completions(
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
@@ -835,6 +829,129 @@ impl Transaction<'_> {
         if let Some(subject_type) = self.get_type_trace(handle, subject.range()) {
             Self::add_literal_completions_from_type(&subject_type, completions, in_string_literal);
         }
+    }
+
+    /// Detect `from X import |` where the cursor sits in trailing whitespace
+    /// after the `import` keyword and the parser produced empty `names`.
+    /// Returns the `StmtImportFrom` node so the caller can offer export
+    /// completions. Only triggers when there is actual trailing whitespace
+    /// between the import keyword and cursor — `from x import<cursor>` (no
+    /// space) intentionally returns None to preserve existing behavior.
+    fn find_empty_import_from<'a>(
+        mod_module: &'a ModModule,
+        source: &str,
+        position: TextSize,
+    ) -> Option<&'a StmtImportFrom> {
+        let pos = position.to_usize();
+        let line_start = source[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let mut probe = pos;
+        while probe > line_start {
+            match source.as_bytes().get(probe - 1) {
+                Some(b' ' | b'\t') => probe -= 1,
+                _ => break,
+            }
+        }
+        if probe == pos || probe <= line_start {
+            return None;
+        }
+        let probe_nodes = Ast::locate_node(mod_module, TextSize::new((probe - 1) as u32));
+        probe_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtImportFrom(stmt) if stmt.names.is_empty() => Some(*stmt),
+            _ => None,
+        })
+    }
+
+    /// Resolve `module_name` (handling relative imports via `dots`) to a
+    /// module handle.
+    fn resolve_import_module(
+        &self,
+        handle: &Handle,
+        module_name: ModuleName,
+        dots: u32,
+    ) -> Option<Handle> {
+        let resolved = if dots > 0 {
+            let is_init = handle.path().is_init();
+            let suffix = if module_name.as_str().is_empty() {
+                None
+            } else {
+                Some(&Name::new(module_name.as_str()))
+            };
+            handle
+                .module()
+                .new_maybe_relative(is_init, dots, suffix)
+                .unwrap_or(module_name)
+        } else {
+            module_name
+        };
+        self.import_handle(handle, resolved, None).finding()
+    }
+
+    /// Add export completions for a resolved import module.
+    fn add_imported_name_completions(
+        &self,
+        imp_handle: &Handle,
+        result: &mut Vec<RankedCompletion>,
+    ) {
+        let exports = self.get_exports(imp_handle);
+        for (name, export) in exports.iter() {
+            let (is_deprecated, kind) = match export {
+                ExportLocation::ThisModule(export) => (
+                    export.deprecation.is_some(),
+                    export
+                        .symbol_kind
+                        .map_or(CompletionItemKind::VARIABLE, |k| {
+                            k.to_lsp_completion_item_kind()
+                        }),
+                ),
+                ExportLocation::OtherModule(_, _) => (false, CompletionItemKind::VARIABLE),
+            };
+            result.push(RankedCompletion::new(CompletionItem {
+                label: name.to_string(),
+                kind: Some(kind),
+                tags: if is_deprecated {
+                    Some(vec![CompletionItemTag::DEPRECATED])
+                } else {
+                    None
+                },
+                ..Default::default()
+            }));
+        }
+    }
+
+    /// If cursor is in an empty `from X import |` context, add export completions
+    /// for the target module and return `true`. Returns `false` otherwise.
+    fn try_add_empty_import_completions(
+        &self,
+        mod_module: &ModModule,
+        handle: &Handle,
+        covering_nodes: &[AnyNodeRef],
+        position: TextSize,
+        result: &mut Vec<RankedCompletion>,
+    ) -> bool {
+        // When covering_nodes has more than one element the cursor is inside a
+        // specific AST node (e.g. an expression or statement), so it can't be
+        // trailing whitespace after `import`. Skip the probe in that case.
+        if covering_nodes.len() > 1 {
+            return false;
+        }
+        let module_info = self.get_module_info(handle);
+        let source = match &module_info {
+            Some(info) => info.lined_buffer().contents(),
+            None => return false,
+        };
+        let Some(import_from) = Self::find_empty_import_from(mod_module, source, position) else {
+            return false;
+        };
+        let module_name = import_from.module.as_ref().map_or_else(
+            || ModuleName::from_str(""),
+            |m| ModuleName::from_str(m.as_str()),
+        );
+        let Some(imp_handle) = self.resolve_import_module(handle, module_name, import_from.level)
+        else {
+            return false;
+        };
+        self.add_imported_name_completions(&imp_handle, result);
+        true
     }
 
     fn add_attribute_completions_for_type(
@@ -931,22 +1048,7 @@ impl Transaction<'_> {
                         module_name, dots, ..
                     },
             }) => {
-                // For relative imports (dots > 0), resolve to an absolute module name.
-                let resolved = if dots > 0 {
-                    let is_init = handle.path().is_init();
-                    let suffix = if module_name.as_str().is_empty() {
-                        None
-                    } else {
-                        Some(&Name::new(module_name.as_str()))
-                    };
-                    handle
-                        .module()
-                        .new_maybe_relative(is_init, dots, suffix)
-                        .unwrap_or(module_name)
-                } else {
-                    module_name
-                };
-                if let Some(handle) = self.import_handle(handle, resolved, None).finding() {
+                if let Some(imp_handle) = self.resolve_import_module(handle, module_name, dots) {
                     if "import".starts_with(identifier.as_str()) {
                         result.push(RankedCompletion::new(CompletionItem {
                             label: "import".to_owned(),
@@ -954,32 +1056,7 @@ impl Transaction<'_> {
                             ..Default::default()
                         }))
                     }
-                    let exports = self.get_exports(&handle);
-                    for (name, export) in exports.iter() {
-                        let (is_deprecated, kind) = match export {
-                            ExportLocation::ThisModule(export) => (
-                                export.deprecation.is_some(),
-                                export
-                                    .symbol_kind
-                                    .map_or(CompletionItemKind::VARIABLE, |k| {
-                                        k.to_lsp_completion_item_kind()
-                                    }),
-                            ),
-                            ExportLocation::OtherModule(_, _) => {
-                                (false, CompletionItemKind::VARIABLE)
-                            }
-                        };
-                        result.push(RankedCompletion::new(CompletionItem {
-                            label: name.to_string(),
-                            kind: Some(kind),
-                            tags: if is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
-                            },
-                            ..Default::default()
-                        }))
-                    }
+                    self.add_imported_name_completions(&imp_handle, &mut result);
                 }
             }
             Some(IdentifierWithContext {
@@ -1137,49 +1214,61 @@ impl Transaction<'_> {
             None => {
                 // todo(kylei): optimization, avoid duplicate ast walkss
                 if let Some(mod_module) = ast.as_ref() {
-                    let expected_type = self.expected_call_argument_type(handle, position);
                     let nodes = covering_nodes
                         .unwrap_or_else(|| Ast::locate_node(mod_module.as_ref(), position));
-                    if nodes.is_empty() {
-                        Self::add_keyword_completions(handle, &mut result);
-                        self.add_local_variable_completions(
-                            handle,
-                            None,
-                            position,
-                            expected_type.as_ref(),
-                            &mut result,
-                        );
-                        self.add_builtins_autoimport_completions(handle, None, &mut result);
-                    }
-                    let in_string_literal = nodes
-                        .iter()
-                        .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
-                    self.add_match_literal_completions(
+
+                    // Handle `from foo import |` with cursor in trailing whitespace.
+                    if self.try_add_empty_import_completions(
+                        mod_module.as_ref(),
                         handle,
                         &nodes,
-                        &mut result,
-                        in_string_literal,
-                    );
-                    let dict_key_claimed = self.add_dict_key_completions(
-                        handle,
-                        mod_module.as_ref(),
                         position,
                         &mut result,
-                    );
-                    if !dict_key_claimed {
-                        self.add_literal_completions(
+                    ) {
+                        // Skip global completions — we handled the import case.
+                    } else {
+                        let expected_type = self.expected_call_argument_type(handle, position);
+                        if nodes.is_empty() {
+                            Self::add_keyword_completions(handle, &mut result);
+                            self.add_local_variable_completions(
+                                handle,
+                                None,
+                                position,
+                                expected_type.as_ref(),
+                                &mut result,
+                            );
+                            self.add_builtins_autoimport_completions(handle, None, &mut result);
+                        }
+                        let in_string_literal = nodes
+                            .iter()
+                            .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)));
+                        self.add_match_literal_completions(
                             handle,
-                            position,
+                            &nodes,
                             &mut result,
                             in_string_literal,
                         );
-                    }
-                    // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
-                    // in foo(<>), the first containing node is AnyNodeRef::ExprCall
-                    if let Some(first) = nodes.first()
-                        && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
-                    {
-                        self.add_kwargs_completions(handle, position, &mut result);
+                        let dict_key_claimed = self.add_dict_key_completions(
+                            handle,
+                            mod_module.as_ref(),
+                            position,
+                            &mut result,
+                        );
+                        if !dict_key_claimed {
+                            self.add_literal_completions(
+                                handle,
+                                position,
+                                &mut result,
+                                in_string_literal,
+                            );
+                        }
+                        // in foo(x=<>, y=2<>), the first containing node is AnyNodeRef::Arguments(_)
+                        // in foo(<>), the first containing node is AnyNodeRef::ExprCall
+                        if let Some(first) = nodes.first()
+                            && matches!(first, AnyNodeRef::ExprCall(_) | AnyNodeRef::Arguments(_))
+                        {
+                            self.add_kwargs_completions(handle, position, &mut result);
+                        }
                     }
                 }
             }

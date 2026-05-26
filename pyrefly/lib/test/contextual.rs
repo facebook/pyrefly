@@ -837,3 +837,30 @@ def f(x: U) -> None: ...
 f(list())
     "#,
 );
+
+testcase!(
+    // Regression: when a TypeVar's only constraints are upper bounds, multiple
+    // such bounds where one is a subtype of the other must collapse to the
+    // *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider
+    // type for both lower and upper bounds, which is correct for lower bounds
+    // but throws away the tighter constraint for upper bounds.
+    //
+    // Here `f(bar)` against return hint `int | Callable[[], int]` records:
+    //   T <: int                  (from callback contravariance)
+    //   T <: int                  (from `() -> T` arm matching `() -> int`)
+    //   T <: int | Callable[[], int]  (from bare `T` arm matching the hint)
+    // No lower bounds. Without the fix, the wider union wins and the call's
+    // return becomes `(int | () -> int) | () -> (int | () -> int)`, producing a
+    // spurious bad-return. With the fix, T solves to `int` and the return matches.
+    test_typevar_upper_bound_narrowing,
+    r#"
+from typing import Callable, TypeVar
+T = TypeVar('T')
+
+def f(g: Callable[[T], None]) -> T | Callable[[], T]: ...
+def bar(x: int) -> None: ...
+
+def make() -> int | Callable[[], int]:
+    return f(bar)
+    "#,
+);

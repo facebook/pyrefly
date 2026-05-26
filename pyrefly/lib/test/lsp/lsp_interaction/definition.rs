@@ -183,23 +183,6 @@ fn test_go_to_def_relative_path() {
 }
 
 #[test]
-fn test_go_to_def_relative_path_helper() {
-    let root = get_test_files_root();
-    let basic_root = root.path().join("basic");
-    test_go_to_def(
-        basic_root,
-        None,
-        "foo_relative.py",
-        vec![
-            (5, 14, "bar.py", 0, 0, 0, 0),
-            (6, 17, "bar.py", 6, 6, 6, 9),
-            (8, 9, "bar.py", 7, 4, 7, 7),
-            (9, 7, "bar.py", 6, 6, 6, 9),
-        ],
-    );
-}
-
-#[test]
 fn definition_in_builtins() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();

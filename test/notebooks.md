@@ -43,7 +43,8 @@ $ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"o
 ## Notebook Error
 
 ```scrut
-$ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
 > $PYREFLY check $TMPDIR/notebook.ipynb
 ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
  --> */notebook.ipynb#1:1:11 (glob)
@@ -59,7 +60,8 @@ ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
 ## Notebook Error Second Cell
 
 ```scrut
-$ echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = True"]},{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo -e '{"cells":[{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = True"]},{"cell_type":"code","execution_count":null,"metadata":{},"outputs":[],"source":["x: bool = 5"]}],"metadata":{"language_info":{"name":"python"}},"nbformat":4,"nbformat_minor":4}' > $TMPDIR/notebook.ipynb && \
 > $PYREFLY check $TMPDIR/notebook.ipynb
 ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
  --> */notebook.ipynb#2:1:11 (glob)

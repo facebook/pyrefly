@@ -1,0 +1,180 @@
+{
+  "name": "test",
+  "path": "test.py",
+  "names": [
+    "test.Direction.NORTH",
+    "test.Direction.SOUTH",
+    "test.Color.RED",
+    "test.Color.GREEN",
+    "test.Permission.READ",
+    "test.Permission.WRITE",
+    "test.Priority.LOW",
+    "test.Priority.HIGH",
+    "test.Color",
+    "test.Direction",
+    "test.Permission",
+    "test.Priority"
+  ],
+  "line_count": 29,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.Direction.NORTH",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 12,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Direction.SOUTH",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Color.RED",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 17,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Color.GREEN",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 18,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Permission.READ",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 22,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Permission.WRITE",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 23,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Priority.LOW",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 27,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Priority.HIGH",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 28,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Color",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 16,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Direction",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 11,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Permission",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 21,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Priority",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 26,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 4,
+  "n_attrs": 8,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

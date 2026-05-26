@@ -44,8 +44,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 # ============================================================================

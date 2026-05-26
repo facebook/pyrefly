@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
 use pyrefly_types::callable::Function;
@@ -76,9 +75,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(ClassSynthesizedFields::new(fields))
     }
 
-    /// Extract the model type from `class Meta: model = X`.
+    /// Extract the model type from `class Meta: model = X` defined directly on this class.
     fn get_factory_model_type(&self, cls: &Class) -> Option<Type> {
-        let meta_field = self.get_class_member(cls, &META)?;
+        // Factories that inherit `Meta` without overriding it get the parent's
+        // synthesized methods via MRO, so we skip synthesis here.
+        let meta_field = self.get_non_synthesized_field_from_current_class_only(cls, &META)?;
         let meta_class = match meta_field.ty() {
             Type::ClassDef(cls) => cls,
             _ => return None,
@@ -103,7 +104,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         params.push(Param::Kwargs(None, self.heap.mk_any_implicit()));
         ClassSynthesizedField::new_classvar(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), ret_type),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), name.clone(), None),
+            metadata: FuncMetadata::method(cls, name.clone()),
         }))
     }
 }

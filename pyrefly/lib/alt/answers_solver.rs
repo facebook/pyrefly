@@ -36,7 +36,6 @@ use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
-use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
@@ -46,7 +45,6 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
-use vec1::vec1;
 
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
@@ -73,14 +71,16 @@ use crate::config::base::RecursionOverflowHandler;
 use crate::config::error_kind::ErrorKind;
 use crate::dispatch_anyidx;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
+use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::error::error::ErrorQuickFix;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
 use crate::types::class::Class;
@@ -1595,7 +1595,7 @@ impl ThreadState {
 
     /// Install a fresh trace sink for the current calculation, saving any
     /// existing sink for later restoration.
-    pub(crate) fn install_trace_sink(&self) {
+    fn install_trace_sink(&self) {
         let previous = self.trace_sink.borrow_mut().take();
         self.trace_sink_stack.borrow_mut().push(previous);
         *self.trace_sink.borrow_mut() = Some(TraceSideEffects::default());
@@ -1603,7 +1603,7 @@ impl ThreadState {
 
     /// Take the accumulated trace side effects, restoring any saved sink
     /// from an outer calculation.
-    pub(crate) fn take_trace_sink(&self) -> Option<TraceSideEffects> {
+    fn take_trace_sink(&self) -> Option<TraceSideEffects> {
         let result = self.trace_sink.borrow_mut().take();
         let restored = self.trace_sink_stack.borrow_mut().pop().flatten();
         *self.trace_sink.borrow_mut() = restored;
@@ -1845,7 +1845,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .insert((self.module().name(), id), var);
     }
 
-    pub(crate) fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
+    fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
@@ -1853,7 +1853,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .copied()
     }
 
-    pub(crate) fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
+    fn get_or_create_lambda_param_var(&self, id: LambdaParamId) -> Var {
         if let Some(var) = self.get_lambda_param_var(id) {
             var
         } else {
@@ -2841,14 +2841,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         let range = K::range_with(idx, self.bindings());
-        self.base_errors.add(
-            range,
-            ErrorInfo::Kind(ErrorKind::InternalError),
-            vec1![format!(
-                "Recursion depth limit ({}) exceeded; possible stack overflow prevented",
-                limit
-            )],
-        );
+        self.base_errors
+            .error_builder(
+                range,
+                ErrorKind::InternalError,
+                format!(
+                    "Recursion depth limit ({}) exceeded; possible stack overflow prevented",
+                    limit
+                ),
+            )
+            .emit();
         // Return recursive placeholder (same pattern as cycle handling)
         self.attempt_to_unwind_cycle_from_here(current, idx, calculation)
             .unwrap_or_else(|r| Arc::new(K::promote_recursive(self.heap, r)))
@@ -3015,6 +3017,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn check_and_return_type_info_with_call_context(
+        &self,
+        got: TypeInfo,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> TypeInfo {
+        if self.check_type_with_call_context(got.ty(), want, loc, errors, tcc, call_context) {
+            got
+        } else {
+            got.with_ty(want.clone())
+        }
+    }
+
     /// Check if `got` matches `want`, returning `want` if the check fails.
     pub fn check_and_return_type(
         &self,
@@ -3025,6 +3043,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> Type {
         if self.check_type(&got, want, loc, errors, tcc) {
+            got
+        } else {
+            want.clone()
+        }
+    }
+
+    pub fn check_and_return_type_with_call_context(
+        &self,
+        got: Type,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> Type {
+        if self.check_type_with_call_context(&got, want, loc, errors, tcc, call_context) {
             got
         } else {
             want.clone()
@@ -3046,26 +3080,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | TypeCheckKind::CallKwArgs(..)
             | TypeCheckKind::CallUnpackKwArg(..) => {
                 let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
-                self.solver().is_subset_eq_with_call_context(
-                    got,
-                    want,
-                    self.type_order(),
-                    &call_context,
-                )
+                self.solver()
+                    .is_subset_eq(got, want, self.type_order(), Some(&call_context))
             }
             _ => self.is_subset_eq_with_reason(got, want),
         };
         match subset_result {
             Ok(()) => true,
             Err(error) => {
-                let note = self
-                    .suggest_enum_member_for_value(got, want)
-                    .map(|s| format!("Did you mean `{s}`?"));
-                self.solver()
-                    .error(got, want, errors, loc, tcc, error, note);
+                self.report_type_error(got, want, errors, loc, tcc, error);
                 false
             }
         }
+    }
+
+    pub fn check_type_with_call_context(
+        &self,
+        got: &Type,
+        want: &Type,
+        loc: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> bool {
+        match self
+            .solver()
+            .is_subset_eq(got, want, self.type_order(), Some(call_context))
+        {
+            Ok(()) => true,
+            Err(error) => {
+                self.report_type_error(got, want, errors, loc, tcc, error);
+                false
+            }
+        }
+    }
+
+    fn report_type_error(
+        &self,
+        got: &Type,
+        want: &Type,
+        errors: &ErrorCollector,
+        loc: TextRange,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        error: SubsetError,
+    ) {
+        let mut builder = self
+            .solver()
+            .error_builder(got, want, errors, loc, tcc, error);
+        if let Some(replacement) = self.suggest_enum_member_for_value(got, want) {
+            builder = builder
+                .with_detail(format!("Did you mean `{replacement}`?"))
+                .with_quick_fix(ErrorQuickFix::ReplaceWithEnumMember { replacement });
+        }
+        builder.emit();
     }
 
     pub fn distribute_over_union(&self, ty: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {
@@ -3095,12 +3162,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fn go(&mut self, ty: &Type, in_type: bool) {
                 match ty {
                     Type::Never(_) if !in_type => (),
-                    Type::Union(box Union { members, .. }) => {
+                    Type::Union(f) => {
                         self.seen_union = true;
-                        members.iter().for_each(|ty| self.go(ty, in_type))
+                        f.members.iter().for_each(|ty| self.go(ty, in_type))
                     }
-                    Type::Type(box Type::Union(box Union { members, .. })) if !in_type => {
-                        members.iter().for_each(|ty| self.go(ty, true))
+                    Type::Type(f) if !in_type && let Type::Union(u) = &**f => {
+                        u.members.iter().for_each(|ty| self.go(ty, true))
                     }
                     Type::Var(v) if let Some(_guard) = self.me.recurse(*v) => {
                         self.go(&self.me.solver().force_var(*v), in_type)
@@ -3133,14 +3200,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(vec![x, y])
     }
 
+    /// Adds an error and returns Type::Any(Error)
     pub fn error(
         &self,
         errors: &ErrorCollector,
         range: TextRange,
-        info: ErrorInfo,
+        kind: ErrorKind,
         msg: String,
     ) -> Type {
-        errors.add(range, info, vec1![msg]);
+        errors.error_builder(range, kind, msg).emit();
+        self.heap.mk_any_error()
+    }
+
+    /// Adds an error with the given context and returns Type::Any(Error)
+    pub fn error_with_context(
+        &self,
+        errors: &ErrorCollector,
+        range: TextRange,
+        kind: ErrorKind,
+        msg: String,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        errors
+            .error_builder(range, kind, msg)
+            .with_context(context)
+            .emit();
         self.heap.mk_any_error()
     }
 
@@ -3175,14 +3259,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 generic_entity
             )
         };
-        errors.add(
-            range,
-            ErrorInfo::Kind(ErrorKind::ImplicitAnyTypeArgument),
-            vec1![
-                msg,
+        errors
+            .error_builder(range, ErrorKind::ImplicitAnyTypeArgument, msg)
+            .with_detail(
                 "Either specify the type argument explicitly, or specify a default for the type variable.".to_owned(),
-            ],
-        );
+            )
+            .emit();
     }
 
     /// Compare two type-erased answers for equality, dispatching through
@@ -3262,11 +3344,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             "result"
         };
-        let mut messages = vec1![format!(
-            "Fixpoint iteration did not converge. \
-             Inferred {} `{}`. Adding annotations may help.",
-            noun, typed_answer,
-        )];
+        let mut builder = member_errors.error_builder(
+            K::range_with(idx, member_bindings),
+            ErrorKind::NonConvergentRecursion,
+            format!(
+                "Fixpoint iteration did not converge. \
+                 Inferred {} `{}`. Adding annotations may help.",
+                noun, typed_answer,
+            ),
+        );
         // If PYREFLY_FIXPOINT_DETAILS=1 is set, we output much more detailed information useful
         // for explaining or debugging nonconvergence in terms of Pyrefly internals.
         if Self::fixpoint_details_enabled() {
@@ -3279,38 +3365,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     format!("{prev_typed:?}")
                 })
                 .unwrap_or_else(|| "<none>".to_owned());
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] key={:?} key_idx={idx:?}",
-                K::to_anyidx(idx),
-            ));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] module={} path={}",
-                member_bindings.module().name(),
-                member_bindings.module().path(),
-            ));
-            messages.push(format!("[PYREFLY_FIXPOINT_DETAILS] binding={binding:?}",));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] answer_type={}",
-                std::any::type_name::<K::Answer>(),
-            ));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] previous={previous_debug}",
-            ));
-            messages.push(format!(
-                "[PYREFLY_FIXPOINT_DETAILS] current={typed_answer:?}",
-            ));
+            builder = builder.with_details(vec![
+                format!(
+                    "[PYREFLY_FIXPOINT_DETAILS] key={:?} key_idx={idx:?}",
+                    K::to_anyidx(idx),
+                ),
+                format!(
+                    "[PYREFLY_FIXPOINT_DETAILS] module={} path={}",
+                    member_bindings.module().name(),
+                    member_bindings.module().path(),
+                ),
+                format!("[PYREFLY_FIXPOINT_DETAILS] binding={binding:?}"),
+                format!(
+                    "[PYREFLY_FIXPOINT_DETAILS] answer_type={}",
+                    std::any::type_name::<K::Answer>(),
+                ),
+                format!("[PYREFLY_FIXPOINT_DETAILS] previous={previous_debug}"),
+                format!("[PYREFLY_FIXPOINT_DETAILS] current={typed_answer:?}"),
+            ]);
         }
-        let range = K::range_with(idx, member_bindings);
-        member_errors.add(
-            range,
-            ErrorInfo::Kind(ErrorKind::NonConvergentRecursion),
-            messages,
-        );
+        builder.emit();
     }
 }
 
 #[cfg(test)]
 mod scc_tests {
+    use vec1::vec1;
+
     use super::*;
 
     /// Create a dummy `SccNodeState::Done` for testing.

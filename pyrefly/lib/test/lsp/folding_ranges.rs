@@ -300,7 +300,7 @@ finally:
 #[test]
 fn folding_ranges_for_match_statements() {
     let code = r#"
-value = 1
+value: int = 1
 match value:
     case 1:
         print("one")

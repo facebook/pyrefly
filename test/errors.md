@@ -19,10 +19,10 @@ Invalid --search-path: `*/does_not_exist` does not exist (glob)
 ## We do report from nested with --check-all
 
 ```scrut
-$ echo "x: str = 12" > $TMPDIR/shown1.py && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=warn
-*/shown*.py:1:* (glob)
  WARN ast.pyi:1113:10-11: `Constant.n` is deprecated [deprecated]
  WARN ast.pyi:1113:10-18: `Constant.n` is deprecated [deprecated]
  WARN ast.pyi:1123:10-11: `Constant.s` is deprecated [deprecated]
@@ -31,6 +31,7 @@ $ echo "x: str = 12" > $TMPDIR/shown1.py && \
  WARN importlib/resources/__init__.pyi:51:9-29: `contents` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:84:41-73: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
+*/shown*.py:1:* (glob)
 */shown*.py:1:* (glob)
  WARN typing_extensions.pyi:65:5-55: `no_type_check_decorator` is deprecated [deprecated]
 [1]
@@ -49,7 +50,8 @@ No Python files matched pattern `*` (glob)
 ## --output-format controls error verbosity
 
 ```scrut
-$ echo "1 + '2'" > $TMPDIR/bad.py && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "1 + '2'" > $TMPDIR/bad.py && \
 > $PYREFLY check $TMPDIR/bad.py --output-format=full-text
 ERROR `+` is not supported * (glob)
  --> */bad.py:1:1 (glob)
@@ -65,7 +67,8 @@ ERROR `+` is not supported * (glob)
 ```
 
 ```scrut
-$ echo "1 + '2'" > $TMPDIR/bad.py && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "1 + '2'" > $TMPDIR/bad.py && \
 > $PYREFLY check $TMPDIR/bad.py --output-format=min-text
 ERROR */bad.py:1:1-8: `+` is not supported * (glob)
 [1]
@@ -74,7 +77,8 @@ ERROR */bad.py:1:1-8: `+` is not supported * (glob)
 ## Source code snippet
 
 ```scrut
-$ echo -e "def f(x: str): ...\nf(0.0)" > $TMPDIR/bad_call.py && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo -e "def f(x: str): ...\nf(0.0)" > $TMPDIR/bad_call.py && \
 > $PYREFLY check $TMPDIR/bad_call.py
 ERROR Argument `float` is not assignable * (glob)
  --> */bad_call.py:2:3 (glob)
@@ -88,7 +92,8 @@ ERROR Argument `float` is not assignable * (glob)
 ## Source code snippet with multi-byte character
 
 ```scrut
-$ echo -e "def f(x: str): ...\nλ = 0\nf(λ)" > $TMPDIR/bad_call.py && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo -e "def f(x: str): ...\nλ = 0\nf(λ)" > $TMPDIR/bad_call.py && \
 > $PYREFLY check $TMPDIR/bad_call.py
 ERROR Argument `Literal[0]` is not assignable * (glob)
  --> */bad_call.py:3:3 (glob)
@@ -102,7 +107,8 @@ ERROR Argument `Literal[0]` is not assignable * (glob)
 ## We replace compiled modules with Any
 
 ```scrut
-$ mkdir $TMPDIR/compiled && touch $TMPDIR/compiled/a.pyc && \
+$ touch $TMPDIR/pyrefly.toml && \
+> mkdir $TMPDIR/compiled && touch $TMPDIR/compiled/a.pyc && \
 > touch $TMPDIR/compiled/b.pyc && touch $TMPDIR/c.pyc && touch $TMPDIR/d.pyc && \
 > echo "from compiled import a; import compiled.b; import c; from . import d; reveal_type((a, compiled.b, c, d))" > $TMPDIR/compiled_import.py && \
 > $PYREFLY check $TMPDIR/compiled_import.py
@@ -110,5 +116,14 @@ $ mkdir $TMPDIR/compiled && touch $TMPDIR/compiled/a.pyc && \
 * (glob+)
 *INFO revealed type: tuple[Unknown, Module[compiled.b], Module[c], Unknown]* (glob)
 * (glob+)
+[1]
+```
+
+## `--min-severity warn` causes nonzero exit on warnings
+
+```scrut
+$ echo "x: str = 0" > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --warn=bad-assignment --min-severity=warn --output-format=min-text
+ WARN */test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
 [1]
 ```

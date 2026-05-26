@@ -138,19 +138,9 @@ fn create_intermediate_definition_from(
             Binding::Import(x) => {
                 return Some(IntermediateDefinition::NamedImport(
                     def_key.range(),
-                    x.0,
-                    x.1.clone(),
-                    x.2,
-                ));
-            }
-            Binding::ImportViaGetattr(x) => {
-                // For __getattr__ imports, the name doesn't exist directly in the module,
-                // so we point to __getattr__ instead.
-                return Some(IntermediateDefinition::NamedImport(
-                    def_key.range(),
-                    x.0,
-                    pyrefly_python::dunder::GETATTR.clone(),
-                    None,
+                    x.module,
+                    x.name.clone(),
+                    x.original_name_range,
                 ));
             }
             Binding::Module(x) => {
@@ -231,9 +221,14 @@ fn create_intermediate_definition_from(
             // that is the binding the receiver semantics treat as the
             // canonical identity for future writes. (The refined RHS class
             // is still reachable by hovering or jumping from the RHS
-            // expression itself.)
+            // expression itself.) The same applies to receiver-bearing
+            // multi-target and unpacked rebinds.
             Binding::NameAssign(na) if let Some(receiver_idx) = na.receiver_idx => {
                 current_binding = bindings.get(receiver_idx);
+            }
+            Binding::MultiTargetAssign(_, _, _, Some(receiver))
+            | Binding::UnpackedValue(_, _, _, _, Some(receiver)) => {
+                current_binding = bindings.get(receiver.idx);
             }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {

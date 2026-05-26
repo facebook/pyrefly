@@ -8,8 +8,8 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 def test_complex_expression[HeadDim](n_elem: Dim[HeadDim], base: int = 10000) -> None:

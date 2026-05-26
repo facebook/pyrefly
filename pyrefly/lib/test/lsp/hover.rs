@@ -1410,6 +1410,22 @@ f(y=1, x=1.0)
 }
 
 #[test]
+fn hover_preserves_int_default_literal_spelling() {
+    let code = r#"
+def f(mode: int = 0o777) -> None:
+    pass
+
+f(mode=0)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("mode: int = 0o777"),
+        "Expected hover to preserve octal default '0o777', got: {report}"
+    );
+}
+
+#[test]
 fn hover_shows_negative_float_default_value() {
     let code = r#"
 def f(x: float = -1.5) -> None:

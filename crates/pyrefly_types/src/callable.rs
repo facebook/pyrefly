@@ -29,8 +29,6 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
-use vec1::Vec1;
-use vec1::vec1;
 
 use crate::class::Class;
 use crate::class::ClassType;
@@ -447,7 +445,7 @@ impl<To> Visit<To> for DefaultValue
 where
     Type: Visit<To>,
 {
-    const RECURSE_CONTAINS: bool = <Type as Visit<To>>::VISIT_CONTAINS;
+    const RECURSE_CONTAINS: bool = true;
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a To)) {
         self.ty.visit(f);
     }
@@ -457,7 +455,7 @@ impl<To> VisitMut<To> for DefaultValue
 where
     Type: VisitMut<To>,
 {
-    const RECURSE_CONTAINS: bool = <Type as VisitMut<To>>::VISIT_CONTAINS;
+    const RECURSE_CONTAINS: bool = true;
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut To)) {
         self.ty.visit_mut(f);
     }
@@ -506,17 +504,21 @@ pub struct FuncMetadata {
 }
 
 impl FuncMetadata {
-    pub fn def(module: Module, cls: Class, func: Name, def_index: Option<FuncDefIndex>) -> Self {
+    pub fn def(module: &Module, cls: Option<&Class>, name: Name) -> Self {
         Self {
             kind: FunctionKind::Def(Arc::new(FuncId {
-                module,
-                cls: Some(cls),
-                name: func,
-                def_index,
+                module: module.dupe(),
+                cls: cls.map(Dupe::dupe),
+                name,
+                def_index: None,
                 outer_funcs: None,
             })),
             flags: FuncFlags::default(),
         }
+    }
+
+    pub fn method(cls: &Class, name: Name) -> Self {
+        Self::def(cls.module(), Some(cls), name)
     }
 }
 
@@ -533,11 +535,11 @@ impl Deprecation {
         Self { message }
     }
 
-    /// Format a base description using deprecation metadata.
-    pub fn as_error_message(&self, base: String) -> Vec1<String> {
+    /// Format deprecation metadata for error reporting.
+    pub fn as_error_detail(&self) -> Option<String> {
         match self.message.as_ref().map(|s| s.trim()) {
-            Some(msg) if !msg.is_empty() => vec1![base, msg.to_owned()],
-            _ => vec1![base],
+            Some(msg) if !msg.is_empty() => Some(msg.to_owned()),
+            _ => None,
         }
     }
 }
@@ -580,6 +582,23 @@ pub struct PropertyMetadata {
     pub getter: Type,
     pub setter: Option<Type>,
     pub has_deleter: bool,
+}
+
+impl PropertyMetadata {
+    /// Build a PropertyMetadata that stores sanitized (metadata-free) copies of getter/setter.
+    pub fn from_components(
+        role: PropertyRole,
+        getter: &Type,
+        setter: Option<&Type>,
+        has_deleter: bool,
+    ) -> Self {
+        Self {
+            role,
+            getter: getter.without_property_metadata(),
+            setter: setter.map(|s| s.without_property_metadata()),
+            has_deleter,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]

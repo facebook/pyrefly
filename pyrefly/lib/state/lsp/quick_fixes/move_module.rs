@@ -9,7 +9,6 @@ use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
-use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePathDetails;
 use ruff_python_ast::Decorator;
 use ruff_python_ast::ModModule;
@@ -22,6 +21,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use super::extract_shared::decorator_matches_name;
+use super::extract_shared::has_existing_from_import;
 use super::extract_shared::line_end_position;
 use super::extract_shared::line_indent_and_start;
 use super::extract_shared::member_name_from_stmt;
@@ -379,7 +379,7 @@ fn build_import_edit(
     target_handle: &Handle,
     import_format: ImportFormat,
 ) -> Option<(Module, TextRange, String)> {
-    if has_existing_import(ast, target_handle.module(), member_name) {
+    if has_existing_from_import(ast, target_handle.module().as_str(), member_name) {
         return None;
     }
     let (position, insert_text, _) = insert_import_edit(
@@ -392,29 +392,6 @@ fn build_import_edit(
     );
     let range = TextRange::at(position, TextSize::new(0));
     Some((module_info.dupe(), range, insert_text))
-}
-
-fn has_existing_import(ast: &ModModule, module_name: ModuleName, name: &str) -> bool {
-    ast.body.iter().any(|stmt| match stmt {
-        Stmt::ImportFrom(import_from) => {
-            if let Some(module) = &import_from.module
-                && ModuleName::from_name(&module.id) == module_name
-            {
-                import_from.names.iter().any(|alias| {
-                    if alias.name.id.as_str() != name {
-                        return false;
-                    }
-                    match &alias.asname {
-                        None => true,
-                        Some(asname) => asname.id.as_str() == name,
-                    }
-                })
-            } else {
-                false
-            }
-        }
-        _ => false,
-    })
 }
 
 fn build_module_insertion_edit(

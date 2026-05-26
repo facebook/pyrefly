@@ -238,17 +238,6 @@ def update_a(a: A, b: B) -> None:
 );
 
 testcase!(
-    test_update_with_readonly_key,
-    r#"
-from typing import ReadOnly, TypedDict
-class A(TypedDict):
-    x: ReadOnly[int]
-a: A = {'x': 1}
-a.update({'x': 2})  # E: No matching overload found for function `A.update`
-    "#,
-);
-
-testcase!(
     test_typed_dict_readonly_kwargs_tuple_update,
     r#"
 from typing import TypedDict, ReadOnly
@@ -2458,6 +2447,22 @@ original = {"val": "string"}
 updated = {**original, "val": 42}
 assert_type(updated["val"], int)
 assert_type(updated, dict[str, int])
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_error_messages,
+    r#"
+d = {"a": 42}
+d["a"] = "b"  # E: `Literal['b']` is not assignable to dict key `a` with type `int`
+
+from typing import TypedDict
+
+class MyTD(TypedDict):
+    x: int
+
+td: MyTD = {"x": 1}
+td["x"] = "b"  # E: `Literal['b']` is not assignable to TypedDict key `x` with type `int`
 "#,
 );
 

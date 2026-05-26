@@ -8,7 +8,7 @@
 from typing import assert_type, reveal_type, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from torch_shapes import Dim
+    from shape_extensions import Dim
 
 
 # Test 1: Top-level type var unification

@@ -5,10 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#![feature(box_patterns)]
-#![feature(closure_lifetime_binder)]
-#![feature(if_let_guard)]
-
 mod init;
 
 mod basic;

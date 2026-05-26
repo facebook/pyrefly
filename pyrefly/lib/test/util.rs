@@ -29,7 +29,7 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::prelude::SliceExt;
-pub use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::trace::init_tracing;
 use ruff_python_ast::name::Name;
 use ruff_source_file::LineIndex;
@@ -45,6 +45,7 @@ use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
+use crate::module::finder::DirEntryCache;
 use crate::module::finder::find_import;
 use crate::state::errors::Errors;
 use crate::state::load::FileContents;
@@ -106,6 +107,7 @@ pub struct TestEnv {
     infer_with_first_use: bool,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
+    explicit_any_error: bool,
     implicit_any_error: bool,
     unannotated_return_error: bool,
     implicit_any_parameter_error: bool,
@@ -114,6 +116,8 @@ pub struct TestEnv {
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
     not_required_key_access_error: bool,
+    pytorch_efficiency_lint_error: bool,
+    incompatible_comparison_error: bool,
     strict_callable_subtyping: bool,
     spec_compliant_overloads: bool,
     default_require_level: Require,
@@ -136,6 +140,7 @@ impl TestEnv {
             infer_with_first_use: true,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
+            explicit_any_error: false,
             implicit_any_error: false,
             unannotated_return_error: false,
             implicit_any_parameter_error: false,
@@ -144,6 +149,8 @@ impl TestEnv {
             open_unpacking_error: false,
             missing_override_decorator_error: false,
             not_required_key_access_error: false,
+            pytorch_efficiency_lint_error: false,
+            incompatible_comparison_error: false,
             strict_callable_subtyping: false,
             spec_compliant_overloads: false,
             default_require_level: Require::Exports,
@@ -156,6 +163,11 @@ impl TestEnv {
         let mut res = Self::new();
         res.site_package_path = paths.iter().map(PathBuf::from).collect();
         res
+    }
+
+    pub fn with_site_package_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.site_package_path = paths;
+        self
     }
 
     pub fn new_with_version(version: PythonVersion) -> Self {
@@ -238,6 +250,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_explicit_any_error(mut self) -> Self {
+        self.explicit_any_error = true;
+        self
+    }
+
     pub fn enable_implicit_any_error(mut self) -> Self {
         self.implicit_any_error = true;
         self
@@ -275,6 +292,16 @@ impl TestEnv {
 
     pub fn enable_not_required_key_access_error(mut self) -> Self {
         self.not_required_key_access_error = true;
+        self
+    }
+
+    pub fn enable_pytorch_efficiency_lint_error(mut self) -> Self {
+        self.pytorch_efficiency_lint_error = true;
+        self
+    }
+
+    pub fn enable_incompatible_comparison_error(mut self) -> Self {
+        self.incompatible_comparison_error = true;
         self
     }
 
@@ -386,6 +413,9 @@ impl TestEnv {
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
         }
+        if self.explicit_any_error {
+            errors.set_error_severity(ErrorKind::ExplicitAny, Severity::Error);
+        }
         if self.implicit_any_error {
             errors.set_error_severity(ErrorKind::ImplicitAny, Severity::Error);
         }
@@ -409,6 +439,12 @@ impl TestEnv {
         }
         if self.not_required_key_access_error {
             errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
+        }
+        if self.pytorch_efficiency_lint_error {
+            config.root.pytorch_efficiency_lints = Some(true);
+        }
+        if self.incompatible_comparison_error {
+            errors.set_error_severity(ErrorKind::IncompatibleComparison, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -459,9 +495,16 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(&config_file, name, None, None, None)
-                    .finding()
-                    .unwrap(),
+                find_import(
+                    &config_file,
+                    name,
+                    None,
+                    None,
+                    &DirEntryCache::new(true),
+                    None,
+                )
+                .finding()
+                .unwrap(),
                 config.dupe(),
             )
         })

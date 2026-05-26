@@ -34,11 +34,11 @@ use ruff_python_ast::PySourceType;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::UnaryOp as RuffUnaryOp;
 
+use crate::dimension::ShapeError;
+use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
-use crate::tensor::ShapeError;
-use crate::tensor::SizeExpr;
 use crate::tensor::TensorShape;
 use crate::tensor::TensorType;
 use crate::tuple::Tuple;
@@ -52,7 +52,7 @@ use crate::types::Type;
 /// interpreter. Bridges between `Type` (the type-checker's representation)
 /// and the shape computation domain.
 #[derive(Debug, Clone)]
-pub(crate) enum Val {
+enum Val {
     /// Concrete integer (e.g., dim=0, stride=1).
     Int(i64),
     /// Boolean flag (e.g., keepdim=False).
@@ -164,10 +164,9 @@ impl Val {
 ///
 /// These are used in `bind_dsl_params()` to convert bound Python types
 /// to runtime values. Each returns `None` if the type doesn't match.
-pub(crate) mod extract {
+mod extract {
+    use crate::dimension::SizeExpr;
     use crate::literal::Lit;
-    use crate::literal::Literal;
-    use crate::tensor::SizeExpr;
     use crate::tensor::TensorShape;
     use crate::tuple::Tuple;
     use crate::types::Type;
@@ -213,9 +212,7 @@ pub(crate) mod extract {
     /// Extract literal int from Type::Literal(Lit::Int(...)).
     pub fn literal_int(ty: &Type) -> Option<i64> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Int(n), ..
-            }) => n.as_i64(),
+            Type::Literal(lit) if let Lit::Int(n) = &lit.value => n.as_i64(),
             _ => None,
         }
     }
@@ -231,9 +228,9 @@ pub(crate) mod extract {
             // Type variable or quantified
             Type::Quantified(_) | Type::Var(_) => Some(ty.clone()),
             // Literal int -> wrap in SizeExpr
-            Type::Literal(box Literal {
-                value: Lit::Int(n), ..
-            }) => n.as_i64().map(|v| Type::Size(SizeExpr::Literal(v))),
+            Type::Literal(lit) if let Lit::Int(n) = &lit.value => {
+                n.as_i64().map(|v| Type::Size(SizeExpr::Literal(v)))
+            }
             _ => None,
         }
     }
@@ -283,10 +280,7 @@ pub(crate) mod extract {
     /// Extract bool literal from Type::Literal(Lit::Bool(...)).
     pub fn bool_arg(ty: &Type) -> Option<bool> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Bool(b),
-                ..
-            }) => Some(*b),
+            Type::Literal(lit) if let Lit::Bool(b) = &lit.value => Some(*b),
             _ => None,
         }
     }
@@ -294,9 +288,7 @@ pub(crate) mod extract {
     /// Extract string literal from Type::Literal(Lit::Str(...)).
     pub fn string_arg(ty: &Type) -> Option<String> {
         match ty {
-            Type::Literal(box Literal {
-                value: Lit::Str(s), ..
-            }) => Some(s.to_string()),
+            Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(s.to_string()),
             _ => None,
         }
     }
@@ -384,7 +376,7 @@ pub trait MetaShapeFunction: Debug + Send + Sync {
 /// Binary operators: arithmetic, comparison, and logical.
 /// Corresponds to OP in `<expr> OP <expr>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DslOp {
+enum DslOp {
     // Arithmetic
     Add,
     Sub,
@@ -405,7 +397,7 @@ pub(crate) enum DslOp {
 
 /// Unary operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DslUnaryOp {
+enum DslUnaryOp {
     Not,
     Neg,
 }
@@ -414,7 +406,7 @@ pub(crate) enum DslUnaryOp {
 /// A typo in the DSL source (e.g., `prodd`) will be caught immediately
 /// as an undefined user-defined function rather than silently falling through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DslBuiltin {
+enum DslBuiltin {
     Len,
     Range,
     Prod,
@@ -427,7 +419,7 @@ pub(crate) enum DslBuiltin {
 
 /// Target of a function call — either a builtin or a user-defined function.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DslCallTarget {
+enum DslCallTarget {
     Builtin(DslBuiltin),
     UserDefined(String),
 }
@@ -435,7 +427,7 @@ pub(crate) enum DslCallTarget {
 /// Type constructors for `isinstance` checks.
 /// These are nullary: `isinstance(x, list)` checks the constructor, not the element type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DslTypeCon {
+enum DslTypeCon {
     Int,
     Str,
     Bool,
@@ -447,7 +439,7 @@ pub(crate) enum DslTypeCon {
 /// Types in the DSL. Corresponds to `<type>` in the grammar,
 /// extended with Tuple for return type annotations.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DslType {
+enum DslType {
     Int,
     SymInt,
     Bool,
@@ -464,7 +456,7 @@ pub(crate) enum DslType {
 
 /// Constant values. Corresponds to `<const>` in the grammar.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DslConst {
+enum DslConst {
     None,
     Int(i64),
     Bool(bool),
@@ -473,17 +465,17 @@ pub(crate) enum DslConst {
 
 /// Function parameter. Corresponds to `<param>` in the grammar.
 #[derive(Debug, Clone)]
-pub(crate) struct DslParam {
-    pub(crate) name: String,
-    pub(crate) ty: DslType,
-    pub(crate) default: Option<DslConst>,
+struct DslParam {
+    name: String,
+    ty: DslType,
+    default: Option<DslConst>,
 }
 
 /// Function body. Corresponds to `<body>` in the grammar.
 /// This is a recursive (linked-list) structure where Assign and If
 /// have a `rest` continuation, and Return/Raise are terminals.
 #[derive(Debug, Clone)]
-pub(crate) enum DslBody {
+enum DslBody {
     /// `x, ..., x = <expr>; <body>`
     Assign {
         vars: Vec<String>,
@@ -504,7 +496,7 @@ pub(crate) enum DslBody {
 
 /// Expressions. Corresponds to `<expr>` in the grammar.
 #[derive(Debug, Clone)]
-pub(crate) enum DslExpr {
+enum DslExpr {
     /// Literal constant.
     Const(DslConst),
     /// Variable reference.
@@ -572,9 +564,9 @@ pub(crate) enum DslExpr {
 #[derive(Debug, Clone)]
 pub(crate) struct DslFnDef {
     pub(crate) name: String,
-    pub(crate) params: Vec<DslParam>,
-    pub(crate) return_type: Option<DslType>,
-    pub(crate) body: DslBody,
+    params: Vec<DslParam>,
+    return_type: Option<DslType>,
+    body: DslBody,
 }
 
 // ============================================================================
@@ -615,10 +607,10 @@ impl fmt::Display for DslBuiltin {
         match self {
             DslBuiltin::Len => write!(f, "len"),
             DslBuiltin::Range => write!(f, "range"),
-            DslBuiltin::Prod => write!(f, "torch_shapes.prod"),
-            DslBuiltin::Sum => write!(f, "torch_shapes.sum"),
+            DslBuiltin::Prod => write!(f, "shape_extensions.prod"),
+            DslBuiltin::Sum => write!(f, "shape_extensions.sum"),
             DslBuiltin::Str => write!(f, "str"),
-            DslBuiltin::ParseEinsumEquation => write!(f, "torch_shapes.parse_einsum_equation"),
+            DslBuiltin::ParseEinsumEquation => write!(f, "shape_extensions.parse_einsum_equation"),
             DslBuiltin::Enumerate => write!(f, "enumerate"),
             DslBuiltin::Zip => write!(f, "zip"),
         }
@@ -1251,7 +1243,7 @@ fn convert_expr(expr: &Expr) -> Result<DslExpr, String> {
 /// Convert a function call expression, dispatching special forms.
 fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
     // Extract function name for dispatch. Supports both simple names (`len`)
-    // and dotted names (`torch_shapes.prod`).
+    // and dotted names (`shape_extensions.prod`).
     let func_name = match call.func.as_ref() {
         Expr::Name(n) => n.id.to_string(),
         Expr::Attribute(a) => {
@@ -1332,14 +1324,14 @@ fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
         "str"
         | "enumerate"
         | "zip"
-        | "torch_shapes.prod"
-        | "torch_shapes.sum"
-        | "torch_shapes.parse_einsum_equation" => {
+        | "shape_extensions.prod"
+        | "shape_extensions.sum"
+        | "shape_extensions.parse_einsum_equation" => {
             let builtin = match func_name.as_str() {
-                "torch_shapes.prod" => DslBuiltin::Prod,
-                "torch_shapes.sum" => DslBuiltin::Sum,
+                "shape_extensions.prod" => DslBuiltin::Prod,
+                "shape_extensions.sum" => DslBuiltin::Sum,
                 "str" => DslBuiltin::Str,
-                "torch_shapes.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
+                "shape_extensions.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
                 "enumerate" => DslBuiltin::Enumerate,
                 "zip" => DslBuiltin::Zip,
                 _ => unreachable!(),
@@ -2298,11 +2290,14 @@ fn eval_dsl_expr(
                     let vals: Vec<Val> = dims.iter().map(|d| dim_val(d.clone())).collect();
                     Ok(Val::List(vals))
                 }
-                TensorShape::Unpacked(box (prefix, middle, suffix)) => Ok(Val::Unpacked {
-                    prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
-                    middle: middle.clone(),
-                    suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
-                }),
+                TensorShape::Unpacked(unpacked) => {
+                    let (prefix, middle, suffix) = &**unpacked;
+                    Ok(Val::Unpacked {
+                        prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
+                        middle: middle.clone(),
+                        suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
+                    })
+                }
             }
         }
 

@@ -24,8 +24,8 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 def _make_divisible(v: float, divisor: int, min_value: int | None = None) -> int:

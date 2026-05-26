@@ -86,6 +86,5 @@ total_sum_typed = Default.objects.aggregate(
         total=models.Sum("int_field", output_field=models.IntegerField())
 )
 assert_type(total_sum_typed, dict[str, Any]) 
-
 "#,
 );

@@ -1,0 +1,5 @@
+python-version = "3.12"
+tensor-shapes = true
+[errors]
+unimported-directive = 'ignore'
+not-required-key-access = 'warn'

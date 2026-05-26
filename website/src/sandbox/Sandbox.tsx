@@ -878,7 +878,7 @@ export default function Sandbox({
             endColumn,
         };
 
-        editor.revealRange(range);
+        editor.revealRangeInCenterIfOutsideViewport(range);
         editor.setSelection(range);
     };
 

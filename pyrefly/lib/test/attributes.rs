@@ -1215,7 +1215,6 @@ class Namespace:
             return "test"
         return Op()
 x = Namespace().some_op.default # E:  Object of class `str` has no attribute `default
-
 "#,
 );
 
@@ -1749,6 +1748,21 @@ class TD(TypedDict):
 
 ty(TD(x = 0))(x = 0)
 ty(TD).mro() # E: Expr::attr_infer_for_type attribute base undefined
+"#,
+);
+
+testcase!(
+    test_attribute_access_on_type_bare_typeddict_special_form,
+    r#"
+from typing import TypedDict
+# `type[TypedDict]` is invalid as an annotation. After the error is reported,
+# the inner `TypedDict` should be recovered to `Any` so attribute access on
+# `cls` does not trigger an internal error. Value-position access on bare
+# `TypedDict` is unaffected and should still error.
+def f(cls: type[TypedDict]) -> None:  # E: `TypedDict` is not allowed in this context
+    cls.__annotations__
+    cls.__name__
+    cls.__bases__
 "#,
 );
 

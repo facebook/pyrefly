@@ -673,8 +673,8 @@ testcase!(
 from typing import Callable, Iterable
 def reduce[_S](function: Callable[[_S, _S], _S], iterable: Iterable[_S]) -> _S: ...
 def f[_T: str](arg1: _T, arg2: _T) -> _T: ...
-reduce(f, [1])  # E: Argument `list[int]` is not assignable to parameter `iterable` with type `Iterable[GenericResidual@_T]` in function `reduce`
-reduce(f, ["ok"])  # E: Argument `list[str]` is not assignable to parameter `iterable` with type `Iterable[GenericResidual@_T]` in function `reduce`
+reduce(f, [1])  # E: `int` is not assignable to upper bound `str` of type variable `_T`
+reduce(f, ["ok"])
     "#,
 );
 
