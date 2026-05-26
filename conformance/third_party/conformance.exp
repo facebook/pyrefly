@@ -12578,17 +12578,6 @@
     {
       "code": -2,
       "column": 7,
-      "concise_description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "line": 58,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 12,
-      "stop_line": 58
-    },
-    {
-      "code": -2,
-      "column": 7,
       "concise_description": "Argument `Literal['not a type']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
       "description": "Argument `Literal['not a type']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
       "line": 59,

@@ -165,7 +165,5 @@
   "typeddicts_required.py": [],
   "typeddicts_type_consistency.py": [],
   "typeddicts_usage.py": [],
-  "typeforms_typeform.py": [
-    "Line 58: Unexpected errors [\"Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`\"]"
-  ]
+  "typeforms_typeform.py": []
 }

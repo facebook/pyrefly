@@ -379,6 +379,20 @@ impl CallArgPreEval<'_> {
             }
             Self::Expr(x, done) => {
                 *done = true;
+                // PEP 747: when the parameter type is TypeForm, evaluate
+                // string literal arguments as forward-reference type forms.
+                if matches!(hint, Type::TypeForm(_))
+                    && let Some(ty) = solver.try_string_literal_as_typeform(
+                        x,
+                        hint,
+                        range,
+                        call_errors,
+                        tcc,
+                        call_context,
+                    )
+                {
+                    return Some(ty);
+                }
                 Some(solver.expr_with_separate_check_errors_with_call_context(
                     x,
                     Some((hint, call_errors, tcc)),

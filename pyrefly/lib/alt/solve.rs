@@ -130,6 +130,7 @@ use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
+use crate::solver::solver::CallContext;
 use crate::solver::solver::PinError;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
@@ -6148,5 +6149,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.check_explicit_any(&result, x.range(), errors);
         }
         result
+    }
+
+    /// Try to evaluate a string literal as a forward-reference type form
+    /// by resolving the name through the module's exports (PEP 747).
+    /// Returns `Some(TypeForm[T])` for valid type names, `None` otherwise.
+    pub fn try_string_literal_as_typeform(
+        &self,
+        x: &Expr,
+        hint: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> Option<Type> {
+        let lit = x.as_string_literal_expr()?;
+        let value: &str = &lit.as_single_part_string()?.value;
+        // Only handle simple identifiers for now.
+        if value.is_empty() || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        let name = Name::new(value);
+        let module = self.module().name();
+        let (resolve_module, resolve_path) = if self.exports.export_exists(module, &name) {
+            (module, Some(self.module().path()))
+        } else if self.exports.export_exists(ModuleName::builtins(), &name) {
+            (ModuleName::builtins(), None)
+        } else {
+            return None;
+        };
+        let export_ty = self.get_from_export(resolve_module, resolve_path, &KeyExport(name));
+        let silent = ErrorCollector::new(errors.module().dupe(), ErrorStyle::Never);
+        let ty = self.untype_opt((*export_ty).clone(), x.range(), &silent)?;
+        let typeform_ty = self.heap.mk_typeform(ty);
+        self.check_type_with_call_context(&typeform_ty, hint, range, errors, tcc, call_context);
+        Some(typeform_ty)
     }
 }

@@ -1,9 +1,9 @@
 {
   "total": 140,
-  "pass": 132,
-  "fail": 8,
-  "pass_rate": 0.94,
-  "differences": 20,
+  "pass": 133,
+  "fail": 7,
+  "pass_rate": 0.95,
+  "differences": 19,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -136,7 +136,8 @@
     "typeddicts_readonly_update.py",
     "typeddicts_required.py",
     "typeddicts_type_consistency.py",
-    "typeddicts_usage.py"
+    "typeddicts_usage.py",
+    "typeforms_typeform.py"
   ],
   "failing": {
     "annotations_forward_refs.py": 2,
@@ -145,8 +146,7 @@
     "dataclasses_descriptors.py": 2,
     "directives_disjoint_base.py": 6,
     "exceptions_context_managers.py": 2,
-    "generics_scoping.py": 4,
-    "typeforms_typeform.py": 1
+    "generics_scoping.py": 4
   },
   "comment": "@generated"
 }
