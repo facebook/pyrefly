@@ -324,6 +324,64 @@ def f(**kwargs: Unpack[Kwargs]) -> None:
 );
 
 testcase!(
+    test_version_guard_and_short_circuit,
+    r#"
+if False:
+    A = 3
+
+if False:
+    B = 3
+
+if False:
+    C = 3
+
+
+def test_and_basic() -> None:
+    # `and` short-circuits on False: A in the condition and body are unreachable.
+    if False and A:
+        _ = A
+
+def test_and_longer_chain() -> None:
+    # Both B and C are gated: the guard short-circuits before reaching them.
+    if False and B and C:
+        _ = B
+        _ = C
+
+def test_and_three_guards() -> None:
+    # Three consecutive False guards in a single and-chain.
+    if False and A and B and C:
+        _ = A
+        _ = B
+        _ = C
+
+def test_or_basic() -> None:
+    # `or` short-circuits when the left side is *true*. False on the left
+    # means the right side IS evaluated — the name is unknown.
+    if False or A:  # E: Could not find name `A`
+        pass
+
+def test_or_always_true_guard() -> None:
+    # True → right side is unreachable.
+    if True or A:
+        pass
+
+def test_or_longer_chain() -> None:
+    # Chain: first element is always-true, so B and C are never evaluated.
+    if True or B or C:
+        pass
+
+def test_and_body_unreachable() -> None:
+    # An `if False` body is also unreachable; accessing A inside it is fine.
+    if False:
+        _ = A
+
+def test_no_guard_produces_error() -> None:
+    # Baseline: without any guard, accessing A must produce an error.
+    A  # E: Could not find name `A`
+"#,
+);
+
+testcase!(
     test_typechecking_unpack_alias,
     r#"
 import typing

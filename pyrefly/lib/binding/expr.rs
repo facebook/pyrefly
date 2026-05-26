@@ -399,6 +399,9 @@ impl<'a> BindingsBuilder<'a> {
                 self.defer_bound_name(key, lookup_result_idx, usage, promote)
             }
             NameLookupResult::NotFound => {
+                if self.scopes.is_definitely_unreachable() {
+                    return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
+                }
                 let suggestion = self
                     .scopes
                     .suggest_similar_name(&name.id, name.range.start());
@@ -764,6 +767,14 @@ impl<'a> BindingsBuilder<'a> {
                     self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                     self.start_fork_and_branch(*range);
                     let mut narrow_ops = get_narrow_ops(self, value, *op);
+
+                    let short_circuit_trigger: Option<bool> = match op {
+                        BoolOp::And => Some(false),
+                        BoolOp::Or => Some(true),
+                    };
+                    if self.sys_info.evaluate_bool(value) == short_circuit_trigger {
+                        self.scopes.set_definitely_unreachable(true);
+                    }
                     for value in values {
                         self.bind_narrow_ops(
                             &narrow_ops,
@@ -773,6 +784,9 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
+                        if self.sys_info.evaluate_bool(value) == short_circuit_trigger {
+                            self.scopes.set_definitely_unreachable(true);
+                        }
                     }
                     // Negate the narrow ops in the base flow and merge.
                     // TODO(stroxler): We eventually want to drop all narrows but merge values.
