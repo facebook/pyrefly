@@ -5241,6 +5241,9 @@ impl Server {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
+                if unused.name.as_str().starts_with('_') {
+                    continue;
+                }
                 let lsp_range = module_info.to_lsp_range(unused.range);
                 items.push(Diagnostic {
                     range: lsp_range,
@@ -5289,6 +5292,9 @@ impl Server {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
+                if unused.name.as_str().starts_with('_') {
+                    continue;
+                }
                 let lsp_range = module_info.to_lsp_range(unused.range);
                 items.push(Diagnostic {
                     range: lsp_range,
