@@ -21,8 +21,20 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim as _Dim
+    from shape_extensions import Dim as _Dim, uses_shape_dsl
     from torch import Tensor
+    from torch._shapes import (
+        nn_avgpool_forward_ir,
+        nn_flatten_forward_ir,
+        nn_glu_forward_ir,
+        nn_gru_forward_ir,
+        nn_lstm_forward_ir,
+        nn_lstmcell_forward_ir,
+        nn_maxpool_forward_ir,
+        nn_pixel_shuffle_forward_ir,
+        nn_reflectionpad2d_forward_ir,
+        nn_upsample_forward_ir,
+    )
 
 # Re-export submodules
 from . import functional as functional, init as init
@@ -675,6 +687,10 @@ class MaxPool1d(Module):
         return_indices: bool = False,
         ceil_mode: bool = False,
     ) -> None: ...
+    @uses_shape_dsl(
+        nn_maxpool_forward_ir,
+        capture_init=["kernel_size", "stride", "padding", "dilation"],
+    )
     def forward(self, input: Tensor) -> Tensor: ...
 
 class MaxPool2d(Module):
@@ -688,6 +704,10 @@ class MaxPool2d(Module):
         return_indices: bool = False,
         ceil_mode: bool = False,
     ) -> None: ...
+    @uses_shape_dsl(
+        nn_maxpool_forward_ir,
+        capture_init=["kernel_size", "stride", "padding", "dilation"],
+    )
     def forward(self, input: Tensor) -> Tensor: ...
 
 class MaxPool3d(Module):
@@ -701,6 +721,10 @@ class MaxPool3d(Module):
         return_indices: bool = False,
         ceil_mode: bool = False,
     ) -> None: ...
+    @uses_shape_dsl(
+        nn_maxpool_forward_ir,
+        capture_init=["kernel_size", "stride", "padding", "dilation"],
+    )
     def forward(self, input: Tensor) -> Tensor: ...
 
 class AvgPool1d(Module):
@@ -713,6 +737,9 @@ class AvgPool1d(Module):
         ceil_mode: bool = False,
         count_include_pad: bool = True,
     ) -> None: ...
+    @uses_shape_dsl(
+        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
+    )
     def forward(self, input: Tensor) -> Tensor: ...
 
 class AvgPool2d(Module):
@@ -726,6 +753,9 @@ class AvgPool2d(Module):
         count_include_pad: bool = True,
         divisor_override: int | None = None,
     ) -> None: ...
+    @uses_shape_dsl(
+        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
+    )
     def forward(self, input: Tensor) -> Tensor: ...
 
 class AvgPool3d(Module):
@@ -739,6 +769,9 @@ class AvgPool3d(Module):
         count_include_pad: bool = True,
         divisor_override: int | None = None,
     ) -> None: ...
+    @uses_shape_dsl(
+        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
+    )
     def forward(self, input: Tensor) -> Tensor: ...
 
 class AdaptiveAvgPool1d[OL](Module):
@@ -794,6 +827,7 @@ class PixelShuffle(Module):
     """
 
     def __init__(self, upscale_factor: int) -> None: ...
+    @uses_shape_dsl(nn_pixel_shuffle_forward_ir, capture_init=["upscale_factor"])
     def forward(self, input: Tensor) -> Tensor: ...
 
 class GLU(Module):
@@ -806,6 +840,7 @@ class GLU(Module):
     """
 
     def __init__(self, dim: int = 1) -> None: ...
+    @uses_shape_dsl(nn_glu_forward_ir, capture_init=["dim"])
     def forward(self, input: Tensor) -> Tensor: ...
 
 class LSTM(Module):
@@ -834,6 +869,10 @@ class LSTM(Module):
     def flatten_parameters(self) -> None:
         """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
         ...
+    @uses_shape_dsl(
+        nn_lstm_forward_ir,
+        capture_init=["input_size", "hidden_size", "num_layers", "bidirectional"],
+    )
     def forward(self, input: Tensor) -> tuple[Tensor, Tensor, Tensor]: ...
 
 class LSTMCell(Module):
@@ -853,6 +892,7 @@ class LSTMCell(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
+    @uses_shape_dsl(nn_lstmcell_forward_ir, capture_init=["input_size", "hidden_size"])
     def forward(
         self, input: Tensor, hx: tuple[Tensor, Tensor] | None = None
     ) -> tuple[Tensor, Tensor]: ...
@@ -882,6 +922,10 @@ class GRU(Module):
     def flatten_parameters(self) -> None:
         """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
         ...
+    @uses_shape_dsl(
+        nn_gru_forward_ir,
+        capture_init=["input_size", "hidden_size", "num_layers", "bidirectional"],
+    )
     def forward(
         self, input: Tensor, hx: Tensor | None = None
     ) -> tuple[Tensor, Tensor]: ...
@@ -920,6 +964,7 @@ class Upsample(Module):
         mode: str = "nearest",
         align_corners: bool | None = None,
     ) -> None: ...
+    @uses_shape_dsl(nn_upsample_forward_ir, capture_init=["size", "scale_factor"])
     def forward(self, input: Tensor) -> Tensor: ...
 
 # ==============================================================================
@@ -1073,6 +1118,7 @@ class Flatten(Module):
     """
 
     def __init__(self, start_dim: int = 1, end_dim: int = -1) -> None: ...
+    @uses_shape_dsl(nn_flatten_forward_ir, capture_init=["start_dim", "end_dim"])
     def forward(self, input: Tensor) -> Tensor: ...
 
 class Unflatten(Module):
@@ -1087,6 +1133,7 @@ class ReflectionPad2d(Module):
     """
 
     def __init__(self, padding: int) -> None: ...
+    @uses_shape_dsl(nn_reflectionpad2d_forward_ir, capture_init=["padding"])
     def forward(self, input: Tensor) -> Tensor: ...
 
 class ReplicationPad2d(Module):
@@ -1096,6 +1143,7 @@ class ReplicationPad2d(Module):
     """
 
     def __init__(self, padding: int) -> None: ...
+    @uses_shape_dsl(nn_reflectionpad2d_forward_ir, capture_init=["padding"])
     def forward(self, input: Tensor) -> Tensor: ...
 
 # Embedding variants
