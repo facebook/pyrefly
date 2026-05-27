@@ -87,7 +87,7 @@ fn for_each_pytest_function(
     pytest_info: &PytestBindingInfo,
     class_key: Option<Idx<KeyClass>>,
     class_context: Option<bool>,
-    f: &mut impl FnMut(&StmtFunctionDef),
+    f: &mut impl FnMut(&StmtFunctionDef, Option<Idx<KeyClass>>),
 ) {
     for stmt in stmts {
         match stmt {
@@ -95,7 +95,7 @@ fn for_each_pytest_function(
                 if (is_pytest_fixture_function(function_def, class_key, pytest_info)
                     || is_pytest_test_function(function_def, class_context)) =>
             {
-                f(function_def);
+                f(function_def, class_key);
             }
             Stmt::ClassDef(class_def) => {
                 let nested_class_key = class_key_for_definition(bindings, class_def);
@@ -119,6 +119,7 @@ fn collect_pytest_fixture_parameter_ranges(
     bindings: &Bindings,
     pytest_info: &PytestBindingInfo,
     fixture_name: &Name,
+    fixture_class_key: Option<Idx<KeyClass>>,
     references: &mut Vec<TextRange>,
 ) {
     for_each_pytest_function(
@@ -127,12 +128,16 @@ fn collect_pytest_fixture_parameter_ranges(
         pytest_info,
         None,
         None,
-        &mut |function_def| {
-            collect_fixture_param_ranges_from_parameters(
-                &function_def.parameters,
-                fixture_name,
-                references,
-            );
+        &mut |function_def, function_class_key| {
+            if pytest_info.visible_fixture_class_key(fixture_name, function_class_key.as_ref())
+                == Some(fixture_class_key)
+            {
+                collect_fixture_param_ranges_from_parameters(
+                    &function_def.parameters,
+                    fixture_name,
+                    references,
+                );
+            }
         },
     );
 }
@@ -142,6 +147,7 @@ fn collect_pytest_fixture_definitions_for_name(
     bindings: &Bindings,
     pytest_info: &PytestBindingInfo,
     fixture_name: &Name,
+    fixture_class_key: Option<Idx<KeyClass>>,
     out: &mut Vec<PytestFixtureDefinition>,
     class_key: Option<Idx<KeyClass>>,
 ) {
@@ -149,6 +155,7 @@ fn collect_pytest_fixture_definitions_for_name(
         match stmt {
             Stmt::FunctionDef(function_def)
                 if function_def.name.id() == fixture_name
+                    && class_key == fixture_class_key
                     && is_pytest_fixture_function(function_def, class_key, pytest_info) =>
             {
                 out.push(PytestFixtureDefinition {
@@ -164,6 +171,7 @@ fn collect_pytest_fixture_definitions_for_name(
                     bindings,
                     pytest_info,
                     fixture_name,
+                    fixture_class_key,
                     out,
                     nested_class_key,
                 );
@@ -173,18 +181,58 @@ fn collect_pytest_fixture_definitions_for_name(
     }
 }
 
+fn find_pytest_fixture_definition_class_key(
+    stmts: &[Stmt],
+    bindings: &Bindings,
+    pytest_info: &PytestBindingInfo,
+    definition_range: TextRange,
+    expected_name: &Name,
+    class_key: Option<Idx<KeyClass>>,
+) -> Option<Option<Idx<KeyClass>>> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::FunctionDef(function_def)
+                if function_def.name.id() == expected_name
+                    && function_def.name.range == definition_range
+                    && is_pytest_fixture_function(function_def, class_key, pytest_info) =>
+            {
+                return Some(class_key);
+            }
+            Stmt::ClassDef(class_def) => {
+                if let Some(class_key) = find_pytest_fixture_definition_class_key(
+                    &class_def.body,
+                    bindings,
+                    pytest_info,
+                    definition_range,
+                    expected_name,
+                    class_key_for_definition(bindings, class_def),
+                ) {
+                    return Some(class_key);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Returns fixture definitions for a parameter when the cursor is in a pytest test/fixture.
 pub(crate) fn find_pytest_fixture_definitions_for_parameter(
     module: &ModModule,
     bindings: &Bindings,
     identifier: &Identifier,
     covering_nodes: &[AnyNodeRef],
-) -> Option<Vec<PytestFixtureDefinition>> {
-    let pytest_info = bindings.pytest_info()?;
+) -> Vec<PytestFixtureDefinition> {
+    let Some(pytest_info) = bindings.pytest_info() else {
+        return Vec::new();
+    };
     let function_def = covering_nodes.iter().find_map(|node| match node {
         AnyNodeRef::StmtFunctionDef(stmt) => Some(stmt),
         _ => None,
-    })?;
+    });
+    let Some(function_def) = function_def else {
+        return Vec::new();
+    };
     let class_def = covering_nodes.iter().find_map(|node| match node {
         AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
         _ => None,
@@ -195,8 +243,13 @@ pub(crate) fn find_pytest_fixture_definitions_for_parameter(
     if !is_pytest_fixture_function(function_def, class_key, pytest_info)
         && !is_pytest_test_function(function_def, class_is_test)
     {
-        return None;
+        return Vec::new();
     }
+    let Some(fixture_class_key) =
+        pytest_info.visible_fixture_class_key(identifier.id(), class_key.as_ref())
+    else {
+        return Vec::new();
+    };
 
     let mut matches = Vec::new();
     collect_pytest_fixture_definitions_for_name(
@@ -204,13 +257,11 @@ pub(crate) fn find_pytest_fixture_definitions_for_parameter(
         bindings,
         pytest_info,
         identifier.id(),
+        fixture_class_key,
         &mut matches,
         None,
     );
-    if matches.is_empty() {
-        return None;
-    }
-    Some(matches)
+    matches
 }
 
 /// Returns all parameter ranges that reference the fixture definition in this module.
@@ -221,27 +272,21 @@ pub(crate) fn find_pytest_fixture_parameter_references(
     expected_name: &Name,
 ) -> Option<Vec<TextRange>> {
     let pytest_info = bindings.pytest_info()?;
-    let mut definitions = Vec::new();
-    collect_pytest_fixture_definitions_for_name(
+    let fixture_class_key = find_pytest_fixture_definition_class_key(
         &module.body,
         bindings,
         pytest_info,
+        definition_range,
         expected_name,
-        &mut definitions,
         None,
-    );
-    if !definitions
-        .iter()
-        .any(|definition| definition.range == definition_range)
-    {
-        return None;
-    }
+    )?;
     let mut references = Vec::new();
     collect_pytest_fixture_parameter_ranges(
         &module.body,
         bindings,
         pytest_info,
         expected_name,
+        fixture_class_key,
         &mut references,
     );
     Some(references)

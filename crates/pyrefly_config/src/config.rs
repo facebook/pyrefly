@@ -976,14 +976,6 @@ impl ConfigFile {
                  self.root.spec_compliant_overloads.unwrap())
     }
 
-    pub fn infer_pytest_fixture_types(&self, path: &Path) -> bool {
-        self.get_from_sub_configs(ConfigBase::get_infer_pytest_fixture_types, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.infer_pytest_fixture_types.unwrap())
-    }
-
     pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
         self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
             .unwrap_or_else(||
@@ -1359,10 +1351,6 @@ impl ConfigFile {
             self.root.spec_compliant_overloads = Some(false);
         }
 
-        if self.root.infer_pytest_fixture_types.is_none() {
-            self.root.infer_pytest_fixture_types = Some(false);
-        }
-
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
             Some(true) => Some(Tool::all()),
             Some(false) => Some(Tool::default_enabled()),
@@ -1727,7 +1715,6 @@ mod tests {
                     infer_with_first_use: None,
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
-                    infer_pytest_fixture_types: None,
                     tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
@@ -1754,7 +1741,6 @@ mod tests {
                         infer_with_first_use: Some(false),
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
-                        infer_pytest_fixture_types: None,
                         tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
@@ -2178,7 +2164,6 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
-                infer_pytest_fixture_types: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
@@ -2195,7 +2180,6 @@ output-format = "omit-errors"
                             ModuleWildcard::new("highest").unwrap(),
                         ]),
                         ignore_errors_in_generated_code: None,
-                        infer_pytest_fixture_types: Some(true),
                         ..Default::default()
                     },
                 },
@@ -2227,9 +2211,6 @@ output-format = "omit-errors"
 
         // test empty value falls back to next
         assert!(config.ignore_errors_in_generated_code(Path::new("this/is/highest/priority")));
-        assert!(config.infer_pytest_fixture_types(Path::new("this/is/highest/priority")));
-        assert!(!config.infer_pytest_fixture_types(Path::new("this/is/second/priority")));
-
         // test no pattern match
         assert!(config.replace_imports_with_any(
             Some(Path::new("this/does/not/match/any")),
@@ -2959,7 +2940,6 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
-                infer_pytest_fixture_types: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),
@@ -3000,7 +2980,6 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
-                infer_pytest_fixture_types: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
                 permissive_ignores: Some(false),

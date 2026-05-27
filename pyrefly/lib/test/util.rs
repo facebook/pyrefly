@@ -121,7 +121,6 @@ pub struct TestEnv {
     string_as_iterable_warning: bool,
     strict_callable_subtyping: bool,
     spec_compliant_overloads: bool,
-    infer_pytest_fixture_types: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
@@ -156,7 +155,6 @@ impl TestEnv {
             string_as_iterable_warning: false,
             strict_callable_subtyping: false,
             spec_compliant_overloads: false,
-            infer_pytest_fixture_types: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -324,11 +322,6 @@ impl TestEnv {
         self
     }
 
-    pub fn enable_infer_pytest_fixture_types(mut self) -> Self {
-        self.infer_pytest_fixture_types = true;
-        self
-    }
-
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -420,7 +413,6 @@ impl TestEnv {
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
-        config.root.infer_pytest_fixture_types = Some(self.infer_pytest_fixture_types);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

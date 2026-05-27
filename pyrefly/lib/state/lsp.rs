@@ -2303,9 +2303,7 @@ impl<'a> Transaction<'a> {
                     &identifier,
                     &covering_nodes,
                 ) {
-                    Ok(Vec1::try_from_vec(pytest_definitions).expect(
-                        "pytest fixture parameter lookup should produce at least one definition",
-                    ))
+                    Ok(pytest_definitions)
                 } else {
                     let item = self.find_definition_for_simple_def(
                         handle,

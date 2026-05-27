@@ -767,22 +767,6 @@ When set to `true`, parameter list compatibility is checked strictly even when
 - Default: `false`
 - Flag equivalent: `--strict-callable-subtyping`
 
-### `infer-pytest-fixture-types`
-
-Controls whether unannotated pytest fixture parameters get their type from the
-fixture definition with the same name.
-
-When set to `false` (the default), Pyrefly recognizes pytest-injected fixture
-parameters and treats them as `Any`. This avoids noisy missing-annotation errors
-in test functions while keeping fixture navigation support enabled.
-
-When set to `true`, Pyrefly infers the parameter type from the fixture
-definition's return type. Fixtures implemented with `yield` use the yielded type.
-
-- Type: `bool`
-- Default: `false`
-- Flag equivalent: none
-
 ### `untyped-def-behavior` (deprecated)
 
 :::warning
@@ -1200,7 +1184,6 @@ We currently allow the following config options to be overridden in a SubConfig:
 - `replace-imports-with-any`
 - `check-unannotated-defs`
 - `infer-return-types`
-- `infer-pytest-fixture-types`
 - `ignore-errors-in-generated-code`
 
 Most SubConfig overrides _replace_ the values appearing in the 'root' or top-level of the

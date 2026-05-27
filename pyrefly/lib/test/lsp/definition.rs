@@ -188,6 +188,125 @@ Definition Result:
 }
 
 #[test]
+fn pytest_fixture_parameter_without_fixture_definition_uses_parameter_definition() {
+    let code = r#"
+def test_thing(missing_fixture):
+#              ^
+    assert missing_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | def test_thing(missing_fixture):
+                   ^
+Definition Result:
+2 | def test_thing(missing_fixture):
+                   ^^^^^^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_ignores_non_fixture_function() {
+    let code = r#"
+def my_fixture():
+    return 1
+
+def test_thing(my_fixture):
+#              ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 | def test_thing(my_fixture):
+                   ^
+Definition Result:
+5 | def test_thing(my_fixture):
+                   ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_ignores_non_test_function() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+def helper(my_fixture):
+#          ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | def helper(my_fixture):
+               ^
+Definition Result:
+8 | def helper(my_fixture):
+               ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_uses_pytest_fixture_scope() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+class TestThing:
+    @pytest.fixture
+    def my_fixture(self):
+        return 2
+
+    def test_thing(self, my_fixture):
+#                         ^
+        assert my_fixture == 2
+
+class TestOther:
+    def test_other(self, my_fixture):
+#                         ^
+        assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+13 |     def test_thing(self, my_fixture):
+                               ^
+Definition Result:
+10 |     def my_fixture(self):
+             ^^^^^^^^^^
+
+18 |     def test_other(self, my_fixture):
+                               ^
+Definition Result:
+5 | def my_fixture():
+        ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn narrow_test() {
     let code = r#"
 def f(x: int | None) -> int:

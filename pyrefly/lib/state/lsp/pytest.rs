@@ -11,6 +11,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use vec1::Vec1;
 
 use super::DefinitionMetadata;
 use super::FindDefinitionItemWithDocstring;
@@ -28,7 +29,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         identifier: &Identifier,
         covering_nodes: &[AnyNodeRef],
-    ) -> Option<Vec<FindDefinitionItemWithDocstring>> {
+    ) -> Option<Vec1<FindDefinitionItemWithDocstring>> {
         let mod_module = self.get_ast(handle)?;
         let bindings = self.get_bindings(handle)?;
         let matches = find_pytest_fixture_definitions_for_parameter(
@@ -36,20 +37,19 @@ impl<'a> Transaction<'a> {
             &bindings,
             identifier,
             covering_nodes,
-        )?;
+        );
         let module_info = self.get_module_info(handle)?;
-        Some(
-            matches
-                .into_iter()
-                .map(|fixture| FindDefinitionItemWithDocstring {
-                    metadata: DefinitionMetadata::Variable(Some(SymbolKind::Function)),
-                    definition_range: fixture.range,
-                    module: module_info.clone(),
-                    docstring_range: fixture.docstring_range,
-                    display_name: Some(fixture.name.as_str().to_owned()),
-                })
-                .collect(),
-        )
+        let definitions = matches
+            .into_iter()
+            .map(|fixture| FindDefinitionItemWithDocstring {
+                metadata: DefinitionMetadata::Variable(Some(SymbolKind::Function)),
+                definition_range: fixture.range,
+                module: module_info.clone(),
+                docstring_range: fixture.docstring_range,
+                display_name: Some(fixture.name.as_str().to_owned()),
+            })
+            .collect();
+        Vec1::try_from_vec(definitions).ok()
     }
 
     /// Find local pytest test/fixture parameters that reference a fixture definition.

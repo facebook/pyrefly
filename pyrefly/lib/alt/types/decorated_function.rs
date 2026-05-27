@@ -57,9 +57,6 @@ pub struct UndecoratedFunction {
     /// Maps parameter names to their resolved types - used to connect
     /// FunctionParameter and KeyUndecoratedFunction.
     pub resolved_param_types: SmallMap<Name, Type>,
-    /// Unannotated parameters whose type came from framework-specific injection rather than
-    /// from ordinary untyped parameter fallback.
-    pub externally_typed_params: SmallMap<Name, ()>,
 }
 
 /// A value that combines the metadata of a function def and also provides the type of the function
@@ -128,7 +125,6 @@ impl UndecoratedFunction {
             stub_or_impl: FunctionStubOrImpl::Stub,
             defining_cls: None,
             resolved_param_types: SmallMap::new(),
-            externally_typed_params: SmallMap::new(),
         }
     }
 

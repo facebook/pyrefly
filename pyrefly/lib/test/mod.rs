@@ -60,7 +60,6 @@ mod perf;
 mod protocol;
 mod pydantic;
 mod pysa;
-mod pytest;
 mod pytorch_efficiency_lint;
 mod query;
 mod recursive_alias;

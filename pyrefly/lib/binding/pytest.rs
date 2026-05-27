@@ -81,16 +81,15 @@ impl PytestAliases {
 }
 
 #[derive(Clone, Debug)]
-pub struct PytestFixtureDefinition {
-    pub name: Name,
-    pub return_type_key: ShortIdentifier,
-    pub class_key: Option<Idx<KeyClass>>,
+pub struct PytestFixtureDefinitions {
+    module: Option<ShortIdentifier>,
+    classes: SmallMap<Idx<KeyClass>, ShortIdentifier>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PytestBindingInfo {
     aliases: PytestAliases,
-    fixtures: SmallMap<Name, Vec<PytestFixtureDefinition>>,
+    fixtures: SmallMap<Name, PytestFixtureDefinitions>,
 }
 
 impl PytestBindingInfo {
@@ -109,17 +108,42 @@ impl PytestBindingInfo {
         &self.aliases
     }
 
-    pub fn add_fixture_definition(&mut self, definition: PytestFixtureDefinition) {
-        if let Some(existing) = self.fixtures.get_mut(&definition.name) {
-            existing.push(definition);
-        } else {
-            self.fixtures
-                .insert(definition.name.clone(), vec![definition]);
+    pub fn add_fixture_definition(
+        &mut self,
+        name: Name,
+        return_type_key: ShortIdentifier,
+        class_key: Option<Idx<KeyClass>>,
+    ) {
+        let definitions = self
+            .fixtures
+            .entry(name)
+            .or_insert_with(|| PytestFixtureDefinitions {
+                module: None,
+                classes: SmallMap::new(),
+            });
+        match class_key {
+            Some(class_key) => {
+                definitions.classes.insert(class_key, return_type_key);
+            }
+            None => {
+                definitions.module = Some(return_type_key);
+            }
         }
     }
 
-    pub fn fixture_definitions(&self, name: &Name) -> Option<&[PytestFixtureDefinition]> {
-        self.fixtures.get(name).map(|defs| defs.as_slice())
+    pub fn visible_fixture_class_key(
+        &self,
+        name: &Name,
+        class_key: Option<&Idx<KeyClass>>,
+    ) -> Option<Option<Idx<KeyClass>>> {
+        let defs = self.fixtures.get(name)?;
+        if let Some(class_key) = class_key
+            && defs.classes.contains_key(class_key)
+        {
+            return Some(Some(*class_key));
+        }
+        defs.module.as_ref()?;
+        Some(None)
     }
 
     pub fn is_fixture_definition(
@@ -127,13 +151,14 @@ impl PytestBindingInfo {
         func_name: &ruff_python_ast::Identifier,
         class_key: Option<&Idx<KeyClass>>,
     ) -> bool {
-        let defs = match self.fixtures.get(&func_name.id) {
-            Some(defs) => defs,
-            None => return false,
+        let Some(defs) = self.fixtures.get(&func_name.id) else {
+            return false;
         };
         let func_id = ShortIdentifier::new(func_name);
-        defs.iter()
-            .any(|def| def.return_type_key == func_id && def.class_key.as_ref() == class_key)
+        match class_key {
+            Some(class_key) => defs.classes.get(class_key) == Some(&func_id),
+            None => defs.module.as_ref() == Some(&func_id),
+        }
     }
 }
 
