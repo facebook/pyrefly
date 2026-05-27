@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -551,18 +552,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 def_index: Some(def_index),
                 outer_funcs,
             });
-            // Collect all same-module @shape_dsl_function siblings for fn_lookup.
-            // TODO: Replace all-siblings snapshot with per-caller transitive-callee
-            // resolution.
-            let siblings: Arc<Vec<Arc<ShapeDslFunction>>> = Arc::new(
-                self.bindings()
-                    .metadata()
-                    .shape_dsl_functions()
-                    .iter()
-                    .map(|(_, dsl)| Arc::clone(dsl))
-                    .collect(),
-            );
-            FunctionKind::ShapeDsl(func_id, dsl_fn, Derived(siblings))
+            // Build the transitive closure of helper functions this DSL function calls.
+            let module_dsl_fns = self.bindings().metadata().shape_dsl_functions();
+            let helpers = compute_transitive_helpers(&dsl_fn, module_dsl_fns);
+            FunctionKind::ShapeDsl(func_id, dsl_fn, Derived(helpers))
         } else {
             FunctionKind::from_name(
                 self.module().dupe(),
@@ -2550,4 +2543,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
     }
+}
+
+/// Compute the transitive closure of DSL helper functions called by `root`.
+///
+/// Starting from `root`, follows `call_targets()` through `module_dsl_fns`
+/// to collect every user-defined function reachable from `root`. The result
+/// always includes `root` itself as the first element.
+fn compute_transitive_helpers(
+    root: &Arc<ShapeDslFunction>,
+    module_dsl_fns: &[(Name, Arc<ShapeDslFunction>)],
+) -> Arc<Vec<Arc<ShapeDslFunction>>> {
+    let mut closure: Vec<Arc<ShapeDslFunction>> = vec![Arc::clone(root)];
+    let mut visited: HashSet<String> = HashSet::new();
+    visited.insert(root.name().to_owned());
+
+    let mut queue: Vec<String> = root.call_targets().into_iter().collect();
+    while let Some(name) = queue.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        if let Some((_, dsl_fn)) = module_dsl_fns.iter().find(|(n, _)| n.as_str() == name) {
+            closure.push(Arc::clone(dsl_fn));
+            for target in dsl_fn.call_targets() {
+                if !visited.contains(&target) {
+                    queue.push(target);
+                }
+            }
+        }
+    }
+
+    Arc::new(closure)
 }

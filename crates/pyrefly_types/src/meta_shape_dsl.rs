@@ -21,6 +21,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -3163,12 +3164,118 @@ impl TypeEq for ShapeDslFunction {
     }
 }
 
+impl ShapeDslFunction {
+    /// The function name from the DSL definition.
+    pub fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    /// Returns the set of user-defined function names called in this function's body.
+    pub fn call_targets(&self) -> HashSet<String> {
+        let mut targets = HashSet::new();
+        collect_call_targets_body(&self.inner.body, &mut targets);
+        targets
+    }
+}
+
+/// Walk a `DslBody` and collect all `DslCallTarget::UserDefined` names.
+fn collect_call_targets_body(body: &DslBody, targets: &mut HashSet<String>) {
+    match body {
+        DslBody::Assign { expr, rest, .. } => {
+            collect_call_targets_expr(expr, targets);
+            collect_call_targets_body(rest, targets);
+        }
+        DslBody::If {
+            cond,
+            then_body,
+            rest,
+        } => {
+            collect_call_targets_expr(cond, targets);
+            collect_call_targets_body(then_body, targets);
+            collect_call_targets_body(rest, targets);
+        }
+        DslBody::Return(expr) | DslBody::Raise(expr) => {
+            collect_call_targets_expr(expr, targets);
+        }
+    }
+}
+
+/// Walk a `DslExpr` and collect all `DslCallTarget::UserDefined` names.
+fn collect_call_targets_expr(expr: &DslExpr, targets: &mut HashSet<String>) {
+    match expr {
+        DslExpr::Call {
+            func: DslCallTarget::UserDefined(name),
+            args,
+        } => {
+            targets.insert(name.clone());
+            for arg in args {
+                collect_call_targets_expr(arg, targets);
+            }
+        }
+        DslExpr::Call { args, .. } => {
+            for arg in args {
+                collect_call_targets_expr(arg, targets);
+            }
+        }
+        DslExpr::List(items) => {
+            for item in items {
+                collect_call_targets_expr(item, targets);
+            }
+        }
+        DslExpr::ListComp {
+            elt, iter, cond, ..
+        } => {
+            collect_call_targets_expr(elt, targets);
+            collect_call_targets_expr(iter, targets);
+            if let Some(c) = cond {
+                collect_call_targets_expr(c, targets);
+            }
+        }
+        DslExpr::Index { base, index } => {
+            collect_call_targets_expr(base, targets);
+            collect_call_targets_expr(index, targets);
+        }
+        DslExpr::Slice { base, lower, upper } => {
+            collect_call_targets_expr(base, targets);
+            if let Some(l) = lower {
+                collect_call_targets_expr(l, targets);
+            }
+            if let Some(u) = upper {
+                collect_call_targets_expr(u, targets);
+            }
+        }
+        DslExpr::BinOp { left, right, .. } => {
+            collect_call_targets_expr(left, targets);
+            collect_call_targets_expr(right, targets);
+        }
+        DslExpr::UnaryOp { operand, .. } => {
+            collect_call_targets_expr(operand, targets);
+        }
+        DslExpr::IsInstance { expr, .. } => {
+            collect_call_targets_expr(expr, targets);
+        }
+        DslExpr::In { left, right } => {
+            collect_call_targets_expr(left, targets);
+            collect_call_targets_expr(right, targets);
+        }
+        DslExpr::Shape(expr) | DslExpr::TensorNew(expr) => {
+            collect_call_targets_expr(expr, targets);
+        }
+        DslExpr::IfExpr { body, test, orelse } => {
+            collect_call_targets_expr(body, targets);
+            collect_call_targets_expr(test, targets);
+            collect_call_targets_expr(orelse, targets);
+        }
+        DslExpr::Const(_) | DslExpr::Var(_) | DslExpr::Ellipsis | DslExpr::Unknown => {}
+    }
+}
+
 /// Reference to a shape-DSL function that refines a callable's return type.
 /// Carried on `FuncFlags` for functions decorated with `@uses_shape_dsl`.
 #[derive(Debug, Clone)]
 pub struct ShapeTransformRef {
     pub dsl_fn: Arc<ShapeDslFunction>,
-    // TODO: Replace all-siblings snapshot with resolved transitive callees.
+    /// Transitive closure of user-defined helpers called by `dsl_fn`.
     pub helpers: Derived<Arc<Vec<Arc<ShapeDslFunction>>>>,
 }
 
@@ -3227,10 +3334,10 @@ impl TypeEq for ShapeTransformRef {
 
 impl ShapeTransformRef {
     /// Build a `MetaShapeFunction` evaluator from this shape transform reference.
-    /// Populates `fn_lookup` with this function and all same-module siblings
+    /// Populates `fn_lookup` with this function and its transitive callees
     /// so that cross-function DSL calls resolve correctly.
     pub fn to_meta_shape_function(&self) -> Box<dyn MetaShapeFunction> {
-        // helpers already includes self (it's all same-module siblings).
+        // helpers contains self and its transitive callees.
         let fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>> = Arc::new(
             self.helpers
                 .iter()
@@ -3333,4 +3440,87 @@ pub fn make_meta_shape_function(
             .collect(),
     );
     Some(Box::new(DslMetaShapeFunction { fn_def, fn_lookup }))
+}
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_python::ast::Ast;
+    use ruff_python_ast::PySourceType;
+    use ruff_python_ast::Stmt;
+
+    use super::*;
+
+    fn parse_dsl_functions(source: &str) -> Vec<ShapeDslFunction> {
+        let (module, _, _) = Ast::parse(source, PySourceType::Stub);
+        module
+            .body
+            .iter()
+            .filter_map(|stmt| {
+                if let Stmt::FunctionDef(func) = stmt {
+                    Some(convert_shape_dsl_function(func).unwrap())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_call_targets_disjoint_closures() {
+        let fns = parse_dsl_functions(
+            r#"
+def helper_a(x: int) -> int:
+    return x + 1
+
+def helper_b(x: int) -> int:
+    return x + 2
+
+def calls_a(x: int) -> int:
+    return helper_a(x)
+
+def calls_b(x: int) -> int:
+    return helper_b(x)
+
+def leaf(x: int) -> int:
+    return x
+"#,
+        );
+        assert_eq!(fns.len(), 5);
+
+        let calls_a = fns.iter().find(|f| f.name() == "calls_a").unwrap();
+        let calls_b = fns.iter().find(|f| f.name() == "calls_b").unwrap();
+        let leaf = fns.iter().find(|f| f.name() == "leaf").unwrap();
+
+        assert_eq!(
+            calls_a.call_targets(),
+            HashSet::from(["helper_a".to_owned()])
+        );
+        assert_eq!(
+            calls_b.call_targets(),
+            HashSet::from(["helper_b".to_owned()])
+        );
+        assert!(leaf.call_targets().is_empty());
+    }
+
+    #[test]
+    fn test_call_targets_transitive() {
+        let fns = parse_dsl_functions(
+            r#"
+def deep(x: int) -> int:
+    return x
+
+def mid(x: int) -> int:
+    return deep(x)
+
+def top(x: int) -> int:
+    return mid(x)
+"#,
+        );
+        let top = fns.iter().find(|f| f.name() == "top").unwrap();
+        let mid = fns.iter().find(|f| f.name() == "mid").unwrap();
+
+        // call_targets is direct only, not transitive
+        assert_eq!(top.call_targets(), HashSet::from(["mid".to_owned()]));
+        assert_eq!(mid.call_targets(), HashSet::from(["deep".to_owned()]));
+    }
 }
