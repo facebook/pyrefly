@@ -1571,8 +1571,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         if let Some(targs) = ctor_targs {
-            let mut residual_vars = call_context.overload_captured_vars();
-            residual_vars.extend(call_context.generic_captured_vars());
+            let residual_vars = call_context.captured_vars();
             self.solver().generalize_class_targs(targs, &residual_vars);
         }
         let mut errors = self
