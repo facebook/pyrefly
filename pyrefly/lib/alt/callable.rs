@@ -13,7 +13,6 @@ use pyrefly_python::dunder;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
-use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
@@ -1402,20 +1401,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .with_argument_side(ArgumentSide::Got)
             .require_boundary_consumption();
 
-        // Prefer decorator-based shape_transform over the legacy registry.
-        // Fall back to lookup_meta_shape only when shape_transform is None.
-        // The decorator path is not gated by tensor_shapes — @uses_shape_dsl
-        // is itself the opt-in. The registry applies implicitly by qualified
-        // name and needs the feature gate to avoid unnecessary DSL parsing
-        // and per-call HashMap lookups.
         let shape_transform_func = shape_transform.map(|t| t.to_meta_shape_function());
-        let registry_func = if shape_transform_func.is_none() && self.solver().tensor_shapes {
-            Self::lookup_meta_shape(callable_name)
-        } else {
-            None
-        };
-        let meta_shape_func: Option<&dyn MetaShapeFunction> =
-            shape_transform_func.as_deref().or(registry_func);
+        let meta_shape_func: Option<&dyn MetaShapeFunction> = shape_transform_func.as_deref();
         let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func.map(|_| HashMap::new());
 
         let (callable_qs, mut callable) = if let Some(tparams) = tparams {
@@ -1632,26 +1619,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             errors,
             expected_types,
         )
-    }
-
-    /// Look up whether a callable has a registered meta-shape function.
-    fn lookup_meta_shape(callable_name: Option<&FunctionKind>) -> Option<&dyn MetaShapeFunction> {
-        use std::sync::OnceLock;
-        static TENSOR_OPS_REGISTRY: OnceLock<TensorOpsRegistry> = OnceLock::new();
-
-        let func_id = callable_name.and_then(|fk| match fk {
-            FunctionKind::Def(box_func_id) => Some(box_func_id.as_ref()),
-            _ => None,
-        })?;
-
-        let qualified_name = if let Some(cls) = &func_id.cls {
-            format!("{}.{}.{}", func_id.module.name(), cls.name(), func_id.name)
-        } else {
-            format!("{}.{}", func_id.module.name(), func_id.name)
-        };
-
-        let registry = TENSOR_OPS_REGISTRY.get_or_init(TensorOpsRegistry::new);
-        registry.get(&qualified_name)
     }
 
     /// Auto-inject module field values into `bound_args` for DSL parameters
