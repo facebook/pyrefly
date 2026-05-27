@@ -105,6 +105,7 @@ use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LinkedKey;
+use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NoneIfRecursive;
 use crate::binding::binding::PrivateAttributeAccessCheck;
 use crate::binding::binding::RaisedException;
@@ -129,8 +130,11 @@ use crate::error::context::TypeCheckKind;
 use crate::error::style::ErrorStyle;
 use crate::export::deprecation::parse_deprecation;
 use crate::export::special::SpecialExport;
+use crate::solver::solver::CallContext;
 use crate::solver::solver::PinError;
+use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
+use crate::solver::solver::TypeVarSpecializationError;
 use crate::state::loader::FindError;
 use crate::state::loader::FindingOrError;
 use crate::types::annotation::Annotation;
@@ -343,6 +347,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             pydantic_config_dict,
             pydantic_before_validator_fields,
             django_field_info,
+            capture_init,
         } = binding;
         let metadata = match &self.get_idx(*k).0 {
             None => ClassMetadata::recursive(),
@@ -355,6 +360,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 pydantic_config_dict,
                 pydantic_before_validator_fields,
                 django_field_info,
+                capture_init.as_deref(),
                 errors,
             ),
         };
@@ -465,7 +471,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn is_subset_eq_with_reason(&self, got: &Type, want: &Type) -> Result<(), SubsetError> {
-        self.solver().is_subset_eq(got, want, self.type_order())
+        self.solver()
+            .is_subset_eq(got, want, self.type_order(), None)
     }
 
     pub fn is_consistent(&self, got: &Type, want: &Type) -> bool {
@@ -478,6 +485,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver()
             .is_equivalent(got, want, self.type_order())
             .is_ok()
+    }
+
+    pub fn finish_quantified(
+        &self,
+        vs: QuantifiedHandle,
+        infer_with_first_use: bool,
+    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
+        self.solver()
+            .finish_quantified(vs, infer_with_first_use, self.type_order(), None)
     }
 
     pub fn expr_class_keyword(&self, x: &Expr, errors: &ErrorCollector) -> Annotation {
@@ -2053,7 +2069,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         type_info.visit_mut(&mut |ty| {
             self.pin_all_placeholder_types(ty, true, range, errors);
-            self.expand_vars_mut(ty);
+            self.expand_mut(ty);
         });
         Arc::new(type_info)
     }
@@ -2137,9 +2153,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn expand_vars_mut(&self, ty: &mut Type) {
+    pub fn expand_mut(&self, ty: &mut Type) {
         // Replace any solved recursive variables with their answers.
-        self.solver().expand_vars_mut(ty);
+        self.solver().expand_mut(ty);
     }
 
     fn check_del_typed_dict_field(
@@ -3158,7 +3174,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 None => narrowed.ty().clone(),
             };
-            self.expand_vars_mut(&mut remaining_ty);
+            self.expand_mut(&mut remaining_ty);
             if remaining_ty.is_never() {
                 return self.heap.mk_never();
             }
@@ -3822,6 +3838,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         to_unpack: Idx<Key>,
         range: TextRange,
         pos: &UnpackedPosition,
+        receiver: Option<&MultiTargetReceiver>,
         errors: &ErrorCollector,
     ) -> Type {
         let iterables = self.iterate(self.get_idx(to_unpack).ty(), range, errors, None);
@@ -3895,6 +3912,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
             }
         }
+        if let Some(receiver) = receiver {
+            return self.check_against_receiver(got, receiver, range, errors);
+        }
         got
     }
 
@@ -3939,6 +3959,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ann: Option<Idx<KeyAnnotation>>,
         idx: Idx<Key>,
         range: TextRange,
+        receiver: Option<&MultiTargetReceiver>,
         errors: &ErrorCollector,
     ) -> Type {
         let type_info = self.get_idx(idx);
@@ -3961,7 +3982,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return annot_ty;
             }
         }
+        if let Some(receiver) = receiver {
+            return self.check_against_receiver(ty.clone(), receiver, range, errors);
+        }
         ty.clone()
+    }
+
+    /// Receiver-constrained class rebind check shared by `MultiTargetAssign`
+    /// and `UnpackedValue`. Mirrors the single-target path in
+    /// `name_assign_infer`: incompatible writes report a standard
+    /// AnnotatedName diagnostic and the visible type stays the receiver's.
+    fn check_against_receiver(
+        &self,
+        got: Type,
+        receiver: &MultiTargetReceiver,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let receiver_ty = self.get_idx(receiver.idx).arc_clone_ty();
+        let tcc: &dyn Fn() -> TypeCheckContext =
+            &|| TypeCheckContext::of_kind(TypeCheckKind::AnnotatedName(receiver.name.clone()));
+        self.check_and_return_type(got, &receiver_ty, range, errors, tcc)
     }
 
     /// Handle `Binding::ClassBodyUnknownName` - resolve unknown name in class body.
@@ -4664,7 +4705,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut value_ty = self.expr_infer(&item.value, &swallower);
                 // Swallow errors when pinning inner placeholder types.
                 self.pin_all_placeholder_types(&mut value_ty, true, item.value.range(), &swallower);
-                self.expand_vars_mut(&mut value_ty);
+                self.expand_mut(&mut value_ty);
                 info.record_key_completion(&chain, Some(value_ty.clone()));
                 self.populate_dict_literal_facets(info, prefix, &item.value);
             }
@@ -5003,7 +5044,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         // Expand the type, in case unexpanded `Vars` are hiding further `Var`s that
         // need to be pinned.
-        self.solver().expand_vars_mut(ty);
+        self.solver().expand_mut(ty);
         let vars = ty.collect_all_vars();
         // Pin all relevant vars and collect ranges of PartialContained vars
         for var in vars {
@@ -5068,9 +5109,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::StmtExpr(e, special_export) => {
                 self.binding_to_type_stmt_expr(e, *special_export, errors)
             }
-            Binding::MultiTargetAssign(ann, idx, range) => {
-                self.binding_to_type_multi_target_assign(*ann, *idx, *range, errors)
-            }
+            Binding::MultiTargetAssign(ann, idx, range, receiver) => self
+                .binding_to_type_multi_target_assign(
+                    *ann,
+                    *idx,
+                    *range,
+                    receiver.as_deref(),
+                    errors,
+                ),
             Binding::PatternMatchMapping(mapping_key, binding_key) => {
                 // TODO: check that value is a mapping
                 // TODO: check against duplicate keys (optional)
@@ -5172,9 +5218,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Binding::ContextValue(ann, e, range, kind) => {
                 self.binding_to_type_context_value(*ann, *e, *range, *kind, errors)
             }
-            Binding::UnpackedValue(ann, to_unpack, range, pos) => {
-                self.binding_to_type_unpacked_value(*ann, *to_unpack, *range, pos, errors)
-            }
+            Binding::UnpackedValue(ann, to_unpack, range, pos, receiver) => self
+                .binding_to_type_unpacked_value(
+                    *ann,
+                    *to_unpack,
+                    *range,
+                    pos,
+                    receiver.as_deref(),
+                    errors,
+                ),
             &Binding::Function(idx, mut pred, class_meta) => {
                 let def = self.get_decorated_function(idx);
                 self.solve_function_binding(def, &mut pred, class_meta.as_ref(), errors)
@@ -5281,7 +5333,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn solve_decorator(&self, x: &BindingDecorator, errors: &ErrorCollector) -> Arc<Decorator> {
         let mut ty = self.expr_infer(&x.expr, errors);
         self.pin_all_placeholder_types(&mut ty, true, x.expr.range(), errors);
-        self.expand_vars_mut(&mut ty);
+        self.expand_mut(&mut ty);
         let deprecation = parse_deprecation(&x.expr);
         Arc::new(Decorator { ty, deprecation })
     }
@@ -5312,6 +5364,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &x.legacy_tparams,
             x.module_style,
             x.outer_funcs.clone(),
+            x.shape_dsl_def.clone(),
+            x.uses_shape_dsl_ir_name.clone(),
             errors,
         )
     }
@@ -6099,5 +6153,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.check_explicit_any(&result, x.range(), errors);
         }
         result
+    }
+
+    /// Try to evaluate a string literal as a forward-reference type form
+    /// by resolving the name through the module's exports (PEP 747).
+    /// Returns `Some(TypeForm[T])` for valid type names, `None` otherwise.
+    pub fn try_string_literal_as_typeform(
+        &self,
+        x: &Expr,
+        hint: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+        tcc: &dyn Fn() -> TypeCheckContext,
+        call_context: &CallContext,
+    ) -> Option<Type> {
+        let lit = x.as_string_literal_expr()?;
+        let value: &str = &lit.as_single_part_string()?.value;
+        // Only handle simple identifiers for now.
+        if value.is_empty() || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        let name = Name::new(value);
+        let module = self.module().name();
+        let (resolve_module, resolve_path) = if self.exports.export_exists(module, &name) {
+            (module, Some(self.module().path()))
+        } else if self.exports.export_exists(ModuleName::builtins(), &name) {
+            (ModuleName::builtins(), None)
+        } else {
+            return None;
+        };
+        let export_ty = self.get_from_export(resolve_module, resolve_path, &KeyExport(name));
+        let silent = ErrorCollector::new(errors.module().dupe(), ErrorStyle::Never);
+        let ty = self.untype_opt((*export_ty).clone(), x.range(), &silent)?;
+        let typeform_ty = self.heap.mk_typeform(ty);
+        self.check_type_with_call_context(&typeform_ty, hint, range, errors, tcc, call_context);
+        Some(typeform_ty)
     }
 }

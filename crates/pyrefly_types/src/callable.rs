@@ -36,6 +36,8 @@ use crate::display::TypeDisplayContext;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::keywords::DataclassTransformMetadata;
+use crate::meta_shape_dsl::ShapeDslFunction;
+use crate::meta_shape_dsl::ShapeTransformRef;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
 use crate::types::Type;
@@ -645,6 +647,9 @@ pub struct FuncFlags {
     /// `dataclass_transform` call. See
     /// https://typing.python.org/en/latest/spec/dataclasses.html#specification.
     pub dataclass_transform_metadata: Option<DataclassTransformMetadata>,
+    /// A function decorated with `@uses_shape_dsl`, whose return type should be
+    /// refined by evaluating the referenced shape-DSL function at call sites.
+    pub shape_transform: Option<Arc<ShapeTransformRef>>,
 }
 
 impl FuncFlags {
@@ -810,6 +815,12 @@ pub enum FunctionKind {
     NumbaJit,
     /// `numba.njit()`
     NumbaNjit,
+    /// A function whose return type is computed by a shape DSL definition.
+    /// The `FuncId` provides identity (module, class, name) for display and
+    /// lookup; the `ShapeDslFunction` carries the parsed DSL IR.
+    ShapeDsl(Arc<FuncId>, Arc<ShapeDslFunction>),
+    /// The `shape_extensions.uses_shape_dsl` decorator function itself.
+    UsesShapeDsl,
 }
 
 impl Callable {
@@ -1185,6 +1196,7 @@ impl FunctionKind {
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
             ("numba.core.decorators", None, "njit") => Self::NumbaNjit,
+            ("shape_extensions", None, "uses_shape_dsl") => Self::UsesShapeDsl,
             _ => Self::Def(Arc::new(FuncId {
                 module,
                 cls,
@@ -1218,6 +1230,8 @@ impl FunctionKind {
             Self::NumbaJit => ModuleName::from_str("numba"),
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Def(func_id) => func_id.module.name().dupe(),
+            Self::ShapeDsl(id, _) => id.module.name().dupe(),
+            Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
         }
     }
 
@@ -1244,6 +1258,8 @@ impl FunctionKind {
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Def(func_id) => Cow::Borrowed(&func_id.name),
+            Self::ShapeDsl(id, _) => Cow::Borrowed(&id.name),
+            Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
         }
     }
 
@@ -1270,12 +1286,14 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
+            Self::ShapeDsl(id, _) => id.cls.clone(),
+            Self::UsesShapeDsl => None,
         }
     }
 
     pub fn outer_funcs(&self) -> Option<&Name> {
         match self {
-            Self::Def(func_id) => func_id.outer_funcs.as_ref(),
+            Self::Def(func_id) | Self::ShapeDsl(func_id, _) => func_id.outer_funcs.as_ref(),
             _ => None,
         }
     }

@@ -25,6 +25,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::ClassDefIndex;
+use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
@@ -625,8 +626,26 @@ impl ReportArgs {
     }
 
     /// Module-level dunders that typestats always excludes from the report.
-    const EXCLUDED_MODULE_DUNDERS: &'static [&'static str] =
-        &["__all__", "__dir__", "__doc__", "__getattr__"];
+    const EXCLUDED_MODULE_DUNDERS: &'static [&'static str] = &[
+        // User-level module hooks.
+        "__all__",
+        "__dir__",
+        "__doc__",
+        "__getattr__",
+        // CPython-injected globals.
+        // Keep in sync with `IMPLICIT_GLOBALS` in `crates/pyrefly_types/src/globals.rs`.
+        "__annotations__",
+        "__builtins__",
+        "__cached__",
+        "__debug__",
+        "__dict__",
+        "__file__",
+        "__loader__",
+        "__name__",
+        "__package__",
+        "__path__",
+        "__spec__",
+    ];
 
     /// Walk re-exports to the defining module's FQN, `None` on cycle/miss.
     fn trace_export_origin(
@@ -799,6 +818,14 @@ impl ReportArgs {
         functions: &[Function],
         classes: &[ReportClass],
     ) -> Vec<Variable> {
+        fn untyped_if_call(expr: &Expr) -> SlotCounts {
+            if let Expr::Call(_) = expr {
+                SlotCounts::untyped()
+            } else {
+                SlotCounts::default()
+            }
+        }
+
         let module_prefix = if module.name() != ModuleName::unknown() {
             format!("{}.", module.name())
         } else {
@@ -888,17 +915,30 @@ impl ReportArgs {
                         // IMPLICIT: non-call assignments have 0 slots;
                         // call assignments are untyped (1 slot)
                         Binding::NameAssign(na) => {
-                            let slots = if matches!(na.expr.as_ref(), Expr::Call(_)) {
-                                SlotCounts::untyped()
-                            } else {
-                                SlotCounts::default()
-                            };
                             variables.push(Variable {
                                 name: qualified_name,
                                 annotation: None,
-                                slots,
+                                slots: untyped_if_call(na.expr.as_ref()),
                                 location,
                             });
+                        }
+                        Binding::MultiTargetAssign(_, rhs_idx, _, _) => {
+                            match bindings.get(*rhs_idx) {
+                                Binding::Function(..) | Binding::ClassDef(..) => {}
+                                Binding::Expr(_, expr) => {
+                                    variables.push(Variable {
+                                        name: qualified_name,
+                                        annotation: None,
+                                        slots: untyped_if_call(expr.as_ref()),
+                                        location,
+                                    });
+                                }
+                                _ => {
+                                    unreachable!(
+                                        "MultiTargetAssign RHS should be Expr, Function, or ClassDef"
+                                    );
+                                }
+                            }
                         }
                         _ => {
                             variables.push(Variable {
@@ -999,8 +1039,9 @@ impl ReportArgs {
                         }
                         continue;
                     }
-                    // Non-schema fields only count when initialized in a recognized method.
-                    if !initialized_in_recognized_method {
+                    // Non-schema fields only count when initialized in a recognized method,
+                    // or declared in a stub.
+                    if !initialized_in_recognized_method && !module.path().is_interface() {
                         continue;
                     }
                     Some(*annotation)
@@ -1690,6 +1731,60 @@ impl ReportArgs {
             .collect()
     }
 
+    /// `module.Cls.member` names for each public class, including MRO-inherited ones.
+    fn collect_class_members(
+        module: &Module,
+        bindings: &Bindings,
+        answers: &Answers,
+        transaction: &Transaction,
+        handle: &Handle,
+        tco_classes: &SmallSet<Idx<KeyClass>>,
+    ) -> SmallSet<String> {
+        let fqname_prefix = if module.name() != ModuleName::unknown() {
+            format!("{}.", module.name())
+        } else {
+            String::new()
+        };
+
+        let mut members = SmallSet::new();
+        for idx in bindings.keys::<KeyClass>() {
+            if tco_classes.contains(&idx) {
+                continue;
+            }
+            let BindingClass::ClassDef(binding) = bindings.get(idx) else {
+                continue;
+            };
+            if Self::has_function_ancestor(&binding.parent) {
+                continue;
+            }
+            let Some(cls) = answers.get_idx(idx).and_then(|r| r.0.clone()) else {
+                continue;
+            };
+
+            let qname = Self::class_qualified_name(module, &binding.parent, &binding.def.name);
+            let fqname = format!("{fqname_prefix}{qname}");
+
+            let mro = answers
+                .get_idx(bindings.key_to_idx(&KeyClassMro(cls.index())))
+                .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
+            let mro: &[_] = match mro.as_ref() {
+                ClassMro::Resolved(a) => a,
+                ClassMro::Cyclic => &[],
+            };
+            for obj in std::iter::once(&cls).chain(mro.iter().map(ClassType::class_object)) {
+                if obj.module_name().as_str() == "builtins" {
+                    continue;
+                }
+                if let Some(fields) = transaction.get_class_fields(handle, obj) {
+                    for name in fields.names() {
+                        members.insert(format!("{fqname}.{name}"));
+                    }
+                }
+            }
+        }
+        members
+    }
+
     /// When a `.pyi` stub only covers a subset of a `.py` file's public
     /// symbols, add the uncovered symbols from the `.py` so that completeness
     /// metrics reflect the full module interface.
@@ -1700,27 +1795,29 @@ impl ReportArgs {
         py_functions: Vec<Function>,
         py_variables: Vec<Variable>,
         py_classes: Vec<ReportClass>,
+        stub_class_members: &SmallSet<String>,
     ) {
-        let stub_func_names: SmallSet<String> =
-            stub_functions.iter().map(|f| f.name.clone()).collect();
+        // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
+        // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
+        let stub_names: SmallSet<String> = stub_functions
+            .iter()
+            .map(|f| &f.name)
+            .chain(stub_variables.iter().map(|v| &v.name))
+            .chain(stub_classes.iter().map(|c| &c.name))
+            .cloned()
+            .collect();
         for py_func in py_functions {
-            if !stub_func_names.contains(&py_func.name) {
+            if !stub_names.contains(&py_func.name) && !stub_class_members.contains(&py_func.name) {
                 stub_functions.push(py_func);
             }
         }
-
-        let stub_var_names: SmallSet<String> =
-            stub_variables.iter().map(|v| v.name.clone()).collect();
         for py_var in py_variables {
-            if !stub_var_names.contains(&py_var.name) {
+            if !stub_names.contains(&py_var.name) && !stub_class_members.contains(&py_var.name) {
                 stub_variables.push(py_var);
             }
         }
-
-        let stub_class_names: SmallSet<String> =
-            stub_classes.iter().map(|c| c.name.clone()).collect();
         for py_class in py_classes {
-            if !stub_class_names.contains(&py_class.name) {
+            if !stub_names.contains(&py_class.name) {
                 stub_classes.push(py_class);
             }
         }
@@ -2005,6 +2102,14 @@ impl ReportArgs {
                         &py_answers,
                         &py_tco_classes,
                     ));
+                    let stub_class_members = Self::collect_class_members(
+                        &module,
+                        &bindings,
+                        &answers,
+                        transaction,
+                        handle,
+                        &tco_classes,
+                    );
                     Self::merge_uncovered_py_symbols(
                         &mut functions,
                         &mut variables,
@@ -2012,6 +2117,7 @@ impl ReportArgs {
                         py_functions,
                         py_variables,
                         py_classes,
+                        &stub_class_members,
                     );
                 }
 
@@ -2118,9 +2224,14 @@ mod tests {
 
     /// Build a `ModuleReport` from a checked-in Python test file using a custom `TestEnv`,
     /// mirroring the production pipeline in `run_inner`.
-    fn build_module_report_for_test_with_env(py_file: &str, mut env: TestEnv) -> ModuleReport {
-        let code = load_test_file(py_file);
-        env.add("test", &code);
+    fn build_module_report_for_test_with_env(file: &str, mut env: TestEnv) -> ModuleReport {
+        let code = load_test_file(file);
+        let module_path = format!(
+            "test.{}",
+            file.rsplit_once('.').map_or("py", |(_, ext)| ext)
+        );
+        env.add_with_path("test", &module_path, &code);
+
         let (state, handle_fn) = env
             .with_default_require_level(Require::Everything)
             .to_state();
@@ -2158,7 +2269,7 @@ mod tests {
 
         ReportArgs::build_module_report(
             "test".to_owned(),
-            "test.py".to_owned(),
+            module_path,
             "test",
             line_count,
             &functions,
@@ -2283,6 +2394,14 @@ mod tests {
         ));
 
         // Merge uncovered symbols from .py into the stub report
+        let stub_class_members = ReportArgs::collect_class_members(
+            &module,
+            &bindings,
+            &answers,
+            &pyi_txn,
+            &pyi_handle,
+            &tco_classes,
+        );
         ReportArgs::merge_uncovered_py_symbols(
             &mut functions,
             &mut variables,
@@ -2290,6 +2409,7 @@ mod tests {
             py_functions,
             py_variables,
             py_classes,
+            &stub_class_members,
         );
 
         ReportArgs::build_module_report(
@@ -2314,6 +2434,12 @@ mod tests {
     fn test_report_variables() {
         let report = build_module_report_for_test("variables.py");
         compare_snapshot("variables.expected.json", &report);
+    }
+
+    #[test]
+    fn test_report_multi_target_aliases() {
+        let report = build_module_report_for_test("multi_target_aliases.py");
+        compare_snapshot("multi_target_aliases.expected.json", &report);
     }
 
     #[test]
@@ -2352,6 +2478,27 @@ mod tests {
     fn test_report_partial_stub() {
         let report = build_stub_module_report("partial_stub.pyi", "partial_stub.py");
         compare_snapshot("partial_stub.expected.json", &report);
+    }
+
+    /// gh-3524: stub functions/classes must not be re-added as untyped attrs by .py re-exports.
+    #[test]
+    fn test_report_stub_reexport() {
+        let report = build_stub_module_report("stub_reexport.pyi", "stub_reexport.py");
+        compare_snapshot("stub_reexport.expected.json", &report);
+    }
+
+    /// gh-3519: don't double-count methods whose stub coverage is inherited.
+    #[test]
+    fn test_report_inherited_method_via_stub() {
+        let report =
+            build_stub_module_report("stub_inherited_methods.pyi", "stub_inherited_methods.py");
+        compare_snapshot("stub_inherited_methods.expected.json", &report);
+    }
+
+    #[test]
+    fn test_report_stub_class_attrs() {
+        let report = build_module_report_for_test("stub_class_attrs.pyi");
+        compare_snapshot("stub_class_attrs.expected.json", &report);
     }
 
     /// Stubs-only packages: .py discovered via site-package-path, merged like co-located stubs.
@@ -2724,6 +2871,14 @@ mod tests {
     fn test_report_private_filtering() {
         let report = build_module_report_for_test("private_filtering.py");
         compare_snapshot("private_filtering.expected.json", &report);
+    }
+
+    /// CPython-injected module globals are excluded even when control flow
+    /// wraps them in Phi bindings (issue #3505).
+    #[test]
+    fn test_report_implicit_module_globals() {
+        let report = build_module_report_for_test("implicit_module_globals.py");
+        compare_snapshot("implicit_module_globals.expected.json", &report);
     }
 
     /// --module name override: entity counts (n_functions vs n_methods) must

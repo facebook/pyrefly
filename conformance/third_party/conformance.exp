@@ -3808,50 +3808,6 @@
       "severity": "error",
       "stop_column": 6,
       "stop_line": 58
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[int], list[int]) failed",
-      "description": "assert_type(Desc2[int], list[int]) failed",
-      "line": 61,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 61
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[str], list[str]) failed",
-      "description": "assert_type(Desc2[str], list[str]) failed",
-      "line": 62,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 62
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[int], int) failed",
-      "description": "assert_type(Desc2[int], int) failed",
-      "line": 66,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 24,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[str], str) failed",
-      "description": "assert_type(Desc2[str], str) failed",
-      "line": 67,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 24,
-      "stop_line": 67
     }
   ],
   "dataclasses_final.py": [
@@ -12618,17 +12574,6 @@
       "severity": "error",
       "stop_column": 46,
       "stop_line": 24
-    },
-    {
-      "code": -2,
-      "column": 7,
-      "concise_description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "line": 58,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 12,
-      "stop_line": 58
     },
     {
       "code": -2,

@@ -1039,7 +1039,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Pin any vars in the type: leaking a var in a class field is particularly
         // likely to lead to data races where downstream uses can pin inconsistently.
-        let ty = self.solver().deep_force(ty);
+        let ty = self.solver().force(ty);
 
         ClassField::typed_dict_field(ty, annotation, read_only_reason)
     }

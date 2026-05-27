@@ -19,24 +19,29 @@
 //!
 //! The data types mirror the DSL grammar defined in `meta_shape_pythonic.md`.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 
-use pyrefly_python::ast::Ast;
+use pyrefly_util::visit::Visit;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::BoolOp as RuffBoolOp;
 use ruff_python_ast::CmpOp as RuffCmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator as RuffOperator;
-use ruff_python_ast::PySourceType;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::UnaryOp as RuffUnaryOp;
 
 use crate::dimension::ShapeError;
 use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
+use crate::equality::TypeEq;
+use crate::equality::TypeEqCtx;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::tensor::TensorShape;
@@ -44,9 +49,7 @@ use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::types::Type;
 
-// ============================================================================
-// Runtime Values
-// ============================================================================
+// Section: Runtime Values
 
 /// Runtime value produced by parameter extraction and manipulated by the
 /// interpreter. Bridges between `Type` (the type-checker's representation)
@@ -156,9 +159,7 @@ impl Val {
     }
 }
 
-// ============================================================================
-// Extraction Helpers
-// ============================================================================
+// Section: Extraction Helpers
 
 /// Helper functions for extracting typed values from `Type`.
 ///
@@ -332,9 +333,7 @@ mod extract {
     }
 }
 
-// ============================================================================
-// Meta-Shape Function Trait
-// ============================================================================
+// Section: Meta-Shape Function Trait
 
 /// A function that computes output shapes from input shapes.
 ///
@@ -369,9 +368,7 @@ pub trait MetaShapeFunction: Debug + Send + Sync {
     }
 }
 
-// ============================================================================
-// Grammar-aligned data types
-// ============================================================================
+// Section: Grammar-aligned data types
 
 /// Binary operators: arithmetic, comparison, and logical.
 /// Corresponds to OP in `<expr> OP <expr>`.
@@ -563,15 +560,13 @@ enum DslExpr {
 /// Function definition. Corresponds to `<fndef>` in the grammar.
 #[derive(Debug, Clone)]
 pub(crate) struct DslFnDef {
-    pub(crate) name: String,
+    name: String,
     params: Vec<DslParam>,
     return_type: Option<DslType>,
     body: DslBody,
 }
 
-// ============================================================================
-// Display implementations
-// ============================================================================
+// Section: Display implementations
 
 impl fmt::Display for DslOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -607,10 +602,12 @@ impl fmt::Display for DslBuiltin {
         match self {
             DslBuiltin::Len => write!(f, "len"),
             DslBuiltin::Range => write!(f, "range"),
-            DslBuiltin::Prod => write!(f, "shape_extensions.prod"),
-            DslBuiltin::Sum => write!(f, "shape_extensions.sum"),
+            DslBuiltin::Prod => write!(f, "shape_extensions.dsl.prod"),
+            DslBuiltin::Sum => write!(f, "shape_extensions.dsl.sum"),
             DslBuiltin::Str => write!(f, "str"),
-            DslBuiltin::ParseEinsumEquation => write!(f, "shape_extensions.parse_einsum_equation"),
+            DslBuiltin::ParseEinsumEquation => {
+                write!(f, "shape_extensions.dsl.parse_einsum_equation")
+            }
             DslBuiltin::Enumerate => write!(f, "enumerate"),
             DslBuiltin::Zip => write!(f, "zip"),
         }
@@ -765,9 +762,7 @@ impl fmt::Display for DslParam {
     }
 }
 
-// ============================================================================
-// AST conversion: ruff Python AST → DSL grammar types
-// ============================================================================
+// Section: AST conversion: ruff Python AST → DSL grammar types
 
 /// Convert an isinstance type argument to a DslTypeCon.
 fn convert_type_constructor(expr: &Expr) -> Result<DslTypeCon, String> {
@@ -1240,21 +1235,25 @@ fn convert_expr(expr: &Expr) -> Result<DslExpr, String> {
     }
 }
 
+/// Recursively extract a dotted name from an expression (e.g. `shape_extensions.dsl.prod`).
+fn dotted_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(n) => Some(n.id.to_string()),
+        Expr::Attribute(a) => {
+            let prefix = dotted_name(&a.value)?;
+            Some(format!("{}.{}", prefix, a.attr))
+        }
+        _ => None,
+    }
+}
+
 /// Convert a function call expression, dispatching special forms.
 fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
-    // Extract function name for dispatch. Supports both simple names (`len`)
-    // and dotted names (`shape_extensions.prod`).
-    let func_name = match call.func.as_ref() {
-        Expr::Name(n) => n.id.to_string(),
-        Expr::Attribute(a) => {
-            let prefix = match a.value.as_ref() {
-                Expr::Name(n) => n.id.as_str(),
-                _ => return Err(format!("unsupported call target: {:?}", call.func)),
-            };
-            format!("{}.{}", prefix, a.attr)
-        }
-        _ => return Err(format!("unsupported call target: {:?}", call.func)),
-    };
+    // Extract function name for dispatch. Supports simple names (`len`),
+    // single-dotted names (`Tensor`), and multi-dotted names
+    // (`shape_extensions.dsl.prod`).
+    let func_name = dotted_name(&call.func)
+        .ok_or_else(|| format!("unsupported call target: {:?}", call.func))?;
 
     match func_name.as_str() {
         // Special forms with non-call syntax — keep as dedicated DslExpr variants
@@ -1324,14 +1323,14 @@ fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, String> {
         "str"
         | "enumerate"
         | "zip"
-        | "shape_extensions.prod"
-        | "shape_extensions.sum"
-        | "shape_extensions.parse_einsum_equation" => {
+        | "shape_extensions.dsl.prod"
+        | "shape_extensions.dsl.sum"
+        | "shape_extensions.dsl.parse_einsum_equation" => {
             let builtin = match func_name.as_str() {
-                "shape_extensions.prod" => DslBuiltin::Prod,
-                "shape_extensions.sum" => DslBuiltin::Sum,
+                "shape_extensions.dsl.prod" => DslBuiltin::Prod,
+                "shape_extensions.dsl.sum" => DslBuiltin::Sum,
                 "str" => DslBuiltin::Str,
-                "shape_extensions.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
+                "shape_extensions.dsl.parse_einsum_equation" => DslBuiltin::ParseEinsumEquation,
                 "enumerate" => DslBuiltin::Enumerate,
                 "zip" => DslBuiltin::Zip,
                 _ => unreachable!(),
@@ -1411,9 +1410,7 @@ fn convert_fndef(func: &ruff_python_ast::StmtFunctionDef) -> Result<DslFnDef, St
     })
 }
 
-// ============================================================================
-// Type Inference
-// ============================================================================
+// Section: Type Inference
 //
 // Infers types for all expressions and variables in the DSL. The key function
 // is `infer_expr`, which the type checker uses to resolve overloaded operations
@@ -1910,45 +1907,7 @@ fn type_check_program(fndefs: &[DslFnDef]) {
     }
 }
 
-// ============================================================================
-// Entry point
-// ============================================================================
-
-/// Parse DSL source code, convert to grammar-aligned types, and return the
-/// list of function definitions.
-pub(crate) fn parse_dsl(source: &str) -> Result<Vec<DslFnDef>, String> {
-    let (module, errors, _unsupported) = Ast::parse(source, PySourceType::Python);
-    if !errors.is_empty() {
-        return Err(format!(
-            "DSL syntax errors:\n{}",
-            errors
-                .iter()
-                .map(|e| format!("  {}", e))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
-
-    let fndefs: Vec<DslFnDef> = module
-        .body
-        .iter()
-        .filter_map(|stmt| {
-            if let Stmt::FunctionDef(f) = stmt {
-                Some(convert_fndef(f))
-            } else {
-                None // skip comments, blank lines (not in AST anyway)
-            }
-        })
-        .collect::<Result<_, _>>()?;
-
-    type_check_program(&fndefs);
-
-    Ok(fndefs)
-}
-
-// ============================================================================
-// Interpreter — evaluate DSL directly against runtime Val values
-// ============================================================================
+// Section: Interpreter — evaluate DSL directly against runtime Val values
 
 /// Extract a runtime `Val` from a type-checker `Type` based on the declared `DslType`.
 /// `actual_arg_type` is the type the user passed; `expected_param_type` is the DSL
@@ -2945,6 +2904,21 @@ fn val_to_type(
             ),
         },
 
+        // Int and Bool synthesize Literal[n] / Literal[bool] from the DSL's
+        // traced runtime value, just like SymInt does via `val_to_scalar_type`.
+        // This is intentionally load-bearing: functions like `dim_ir`,
+        // `numel_ir`, and `size_ir(dim=N)` trace exact integer results, and
+        // downstream consumers (assert_type, reshape validation, shape
+        // inference) rely on the literal precision. Returning
+        // `expected_return_type` here would discard the traced value and
+        // produce `int` instead of e.g. `Literal[3]`.
+        //
+        // This differs from the Tensor/List/Tuple/None/Str branches, which
+        // return `expected_return_type.clone()`. Those branches are correct
+        // because their `expected_return_type` already carries the refined
+        // structure (e.g. `Tensor[B, C, H, W]` with shape injected). For
+        // scalars, the fixture return type is just `int` — the literal value
+        // comes solely from DSL evaluation.
         DslType::Int => match val {
             Val::Int(n) => Lit::Int(LitInt::new(n)).to_implicit_type(),
             _ => panic!(
@@ -2953,6 +2927,10 @@ fn val_to_type(
             ),
         },
 
+        // SymInt synthesizes a type from the traced `Val`: `val_to_scalar_type`
+        // returns `Type::Dim` for `Val::Dim` and `Literal[n]` for `Val::Int`.
+        // The trace value is load-bearing for shape inference — downstream
+        // tensor shape types are built from these dimension representations.
         DslType::SymInt => val_to_scalar_type(&val),
 
         DslType::Bool => match val {
@@ -3043,12 +3021,12 @@ fn val_to_type(
 /// A `MetaShapeFunction` backed by a parsed DSL function definition.
 /// The DSL is interpreted directly — no IR conversion.
 #[derive(Debug)]
-pub(crate) struct DslMetaShapeFunction {
+struct DslMetaShapeFunction {
     /// The primary function to evaluate.
-    pub(crate) fn_def: Arc<DslFnDef>,
+    fn_def: Arc<DslFnDef>,
     /// Precomputed lookup table mapping function names to definitions.
     /// Shared across all instances — built once at registry init.
-    pub(crate) fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>>,
+    fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>>,
 }
 
 impl MetaShapeFunction for DslMetaShapeFunction {
@@ -3101,5 +3079,279 @@ impl MetaShapeFunction for DslMetaShapeFunction {
             Err(ShapeError::Unsupported { .. }) => None,
             Err(e) => Some(Err(e)),
         }
+    }
+}
+// Section: Public wrapper API
+//
+// These wrappers form the public surface of
+// `pyrefly_types::meta_shape_dsl`. They let callers outside this module (the
+// binder and solver in `pyrefly/lib`) drive the DSL pipeline without exposing
+// the grammar-aligned `DslFnDef` internals.
+//
+// Constraint: the public surface never returns `Arc<DslFnDef>`. Callers store
+// `ShapeDslFunction` / `ShapeDslProgram` opaquely; only code inside
+// `pyrefly_types` (e.g. `tensor_ops_registry`) may reach the underlying
+// `DslFnDef` via the `pub(crate)` fields.
+
+/// A single DSL function that has been lowered from its Python AST.
+///
+/// This is a cheap (one `Arc`) opaque handle. It is the unit produced by
+/// [`convert_shape_dsl_function`] and consumed by [`build_shape_dsl_program`].
+#[derive(Debug, Clone)]
+pub struct ShapeDslFunction {
+    pub(crate) inner: Arc<DslFnDef>,
+}
+
+/// Pointer identity: two `ShapeDslFunction`s are equal iff they point to the
+/// same `DslFnDef` allocation.
+impl PartialEq for ShapeDslFunction {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for ShapeDslFunction {}
+
+impl Hash for ShapeDslFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.inner) as *const () as usize).hash(state);
+    }
+}
+
+impl PartialOrd for ShapeDslFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ShapeDslFunction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_ptr = Arc::as_ptr(&self.inner) as *const () as usize;
+        let other_ptr = Arc::as_ptr(&other.inner) as *const () as usize;
+        self_ptr.cmp(&other_ptr)
+    }
+}
+
+/// DSL IR contains no `Type` values, so visiting is a no-op.
+impl Visit<Type> for ShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+/// DSL IR contains no `Type` values, so visiting is a no-op.
+impl VisitMut<Type> for ShapeDslFunction {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+/// DSL IR contains no `Type` values, so visiting through `Arc` is also a no-op.
+impl Visit<Type> for Arc<ShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+/// DSL IR contains no `Type` values, so visiting through `Arc` is also a no-op.
+impl VisitMut<Type> for Arc<ShapeDslFunction> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEq for ShapeDslFunction {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
+}
+
+/// Reference to a shape-DSL function that refines a callable's return type.
+/// Carried on `FuncFlags` for functions decorated with `@uses_shape_dsl`.
+#[derive(Debug, Clone)]
+pub struct ShapeTransformRef {
+    pub dsl_fn: Arc<ShapeDslFunction>,
+}
+
+/// Pointer identity: delegates to `ShapeDslFunction`'s pointer-identity equality.
+impl PartialEq for ShapeTransformRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.dsl_fn == other.dsl_fn
+    }
+}
+
+impl Eq for ShapeTransformRef {}
+
+impl Hash for ShapeTransformRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dsl_fn.hash(state);
+    }
+}
+
+impl PartialOrd for ShapeTransformRef {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ShapeTransformRef {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.dsl_fn.cmp(&other.dsl_fn)
+    }
+}
+
+impl Visit<Type> for ShapeTransformRef {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for ShapeTransformRef {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl Visit<Type> for Arc<ShapeTransformRef> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+}
+
+impl VisitMut<Type> for Arc<ShapeTransformRef> {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+}
+
+impl TypeEq for ShapeTransformRef {
+    fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
+        self == other
+    }
+}
+
+/// A bundle of DSL functions that have been validated together as a program.
+///
+/// The functions held by a `ShapeDslProgram` are guaranteed to have passed
+/// `type_check_program` against the program's own signature set. The factory
+/// [`make_meta_shape_function`] takes a `&ShapeDslProgram` (not raw pieces)
+/// precisely to enforce that callers can only build a `MetaShapeFunction`
+/// from validated DSL.
+///
+/// The names used as keys for helper resolution are the *local* names a
+/// caller's body refers to. Programs are populated with
+/// `[self_dsl_fn, ...resolved_callees]` where each callee's `name` field
+/// has already been rewritten (or annotated) to its caller-local form. This
+/// API does not perform that rewriting itself — it accepts programs that
+/// already satisfy that constraint.
+#[derive(Debug, Clone)]
+pub struct ShapeDslProgram {
+    pub(crate) fns: Vec<Arc<DslFnDef>>,
+}
+
+/// Convert a single Python function definition into a [`ShapeDslFunction`].
+///
+/// This is pure AST-to-IR lowering — it does not parse source text or run
+/// the type checker. The output is a single opaque handle; the caller is
+/// expected to combine handles from this function (and possibly other
+/// modules) into a [`ShapeDslProgram`] via [`build_shape_dsl_program`].
+///
+/// Returns `Err` with a terse description if the function body uses Python
+/// syntax outside the DSL subset.
+pub fn convert_shape_dsl_function(
+    func: &ruff_python_ast::StmtFunctionDef,
+) -> Result<ShapeDslFunction, String> {
+    let fndef = convert_fndef(func)?;
+    Ok(ShapeDslFunction {
+        inner: Arc::new(fndef),
+    })
+}
+
+/// Bundle a set of [`ShapeDslFunction`]s into a validated [`ShapeDslProgram`].
+///
+/// Type-checks the bundle as a whole, building the global signature map that
+/// `infer_call` needs in order to resolve cross-function calls. Today this
+/// step *panics* on type errors (undefined variable, unknown call target,
+/// etc.), matching the existing `parse_dsl` behavior.
+pub fn build_shape_dsl_program(fns: impl IntoIterator<Item = ShapeDslFunction>) -> ShapeDslProgram {
+    let fns: Vec<Arc<DslFnDef>> = fns.into_iter().map(|f| f.inner).collect();
+    // `type_check_program` borrows a `&[DslFnDef]`; clone the Arc'd defs into
+    // a temporary slice for the call. The clone is one-time per program build
+    // and avoids changing the internal `type_check_program` signature.
+    // `type_check_program` panics on type errors today; that matches the
+    // existing `parse_dsl` semantics.
+    let view: Vec<DslFnDef> = fns.iter().map(|f| (**f).clone()).collect();
+    type_check_program(&view);
+    ShapeDslProgram { fns }
+}
+
+/// Construct a [`MetaShapeFunction`] keyed at `root_name` from a validated
+/// [`ShapeDslProgram`].
+///
+/// The factory takes a `&ShapeDslProgram` (not raw pieces) so that a caller
+/// cannot build a `MetaShapeFunction` from un-type-checked DSL — the only
+/// way to obtain a `ShapeDslProgram` is via [`build_shape_dsl_program`],
+/// which runs the type checker.
+///
+/// `root_name` selects which function inside the program is the entry point
+/// (the one whose parameters get bound from call-site arguments). All
+/// functions in the program — including `root_name` — become part of the
+/// resulting `fn_lookup`, which the interpreter consults for cross-function
+/// calls. The lookup is keyed by each function's `name`, which the caller
+/// is responsible for setting to the caller-local name; see
+/// [`ShapeDslProgram`] for that invariant.
+///
+/// Returns `None` if no function in the program has `name == root_name`.
+pub fn make_meta_shape_function(
+    program: &ShapeDslProgram,
+    root_name: &str,
+) -> Option<Box<dyn MetaShapeFunction>> {
+    let fn_def = program
+        .fns
+        .iter()
+        .find(|f| f.name == root_name)
+        .map(Arc::clone)?;
+    let fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>> = Arc::new(
+        program
+            .fns
+            .iter()
+            .map(|f| (f.name.clone(), Arc::clone(f)))
+            .collect(),
+    );
+    Some(Box::new(DslMetaShapeFunction { fn_def, fn_lookup }))
+}
+
+// TODO: Remove this unit test once the DSL is fully in stubs.
+// The e2e tests in pyrefly/test/tensor_shapes will exercise the same code
+// paths more thoroughly, making this redundant.
+#[cfg(test)]
+mod tests {
+    use pyrefly_python::ast::Ast;
+    use ruff_python_ast::PySourceType;
+    use ruff_python_ast::Stmt;
+
+    use super::*;
+
+    /// Sanity check: the public wrapper API composes from AST through to a
+    /// `MetaShapeFunction` without panicking on a trivial well-formed DSL
+    /// function. Does not evaluate the DSL — only verifies the surface
+    /// composes.
+    #[test]
+    fn wrapper_api_composes_on_trivial_function() {
+        let source = "def add_one(x: int) -> int:\n    return x + 1\n";
+        let (module, errors, _unsupported) = Ast::parse(source, PySourceType::Python);
+        assert!(errors.is_empty(), "test DSL fixture should parse cleanly");
+        let func = module
+            .body
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::FunctionDef(f) => Some(f),
+                _ => None,
+            })
+            .expect("test source contains exactly one function def");
+
+        let shape_fn = convert_shape_dsl_function(func).expect("lowering succeeds");
+        let program = build_shape_dsl_program(std::iter::once(shape_fn));
+        let meta_fn = make_meta_shape_function(&program, "add_one");
+        assert!(
+            meta_fn.is_some(),
+            "factory should resolve a function whose name matches the program"
+        );
+        assert!(
+            make_meta_shape_function(&program, "no_such_function").is_none(),
+            "factory should return None for an unknown name"
+        );
     }
 }

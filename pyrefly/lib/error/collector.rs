@@ -82,6 +82,19 @@ impl ModuleErrors {
         self.items.len()
     }
 
+    fn len_hard(&mut self) -> usize {
+        self.cleanup();
+        self.items
+            .iter()
+            .filter(|err| !err.error_kind().is_soft())
+            .count()
+    }
+
+    fn has_hard(&mut self) -> bool {
+        self.cleanup();
+        self.items.iter().any(|err| !err.error_kind().is_soft())
+    }
+
     /// Iterates over all errors, including ignored ones.
     fn iter(&mut self) -> impl ExactSizeIterator<Item = &Error> {
         self.cleanup();
@@ -187,6 +200,17 @@ impl ErrorCollector {
 
     pub fn len(&self) -> usize {
         self.errors.lock().len()
+    }
+
+    /// Count of errors excluding soft diagnostics (which should not
+    /// influence overload selection or type-inference decisions).
+    pub fn len_hard(&self) -> usize {
+        self.errors.lock().len_hard()
+    }
+
+    /// Whether any hard (non-soft) errors exist. Short-circuits on the first match.
+    pub fn has_hard(&self) -> bool {
+        self.errors.lock().has_hard()
     }
 
     /// Checks whether an error is suppressed, considering ignore-all directives,

@@ -1045,6 +1045,23 @@ def f(x: str | int | None):
 );
 
 testcase!(
+    test_isinstance_tuple_negative_with_overlap,
+    r#"
+from typing import Any, Iterable, assert_type
+
+# `Iterable[Any]` overlaps with both `str` and `bytes` (both are iterable).
+# In the negative branch of `isinstance(a, (str, bytes))` we should still
+# remove the `str` and `bytes` alternatives from the remaining union.
+# Regression test for facebook/pyrefly#3412.
+def f(a: float | str | bytes | Iterable[Any]) -> None:
+    if isinstance(a, (str, bytes)):
+        pass
+    else:
+        assert_type(a, float | Iterable[Any])
+    "#,
+);
+
+testcase!(
     test_isinstance_unbounded_tuple,
     r#"
 from typing import assert_type
@@ -2013,6 +2030,14 @@ def test_type_objects_mixed_with_literals(x: type[int] | type[float] | None, y: 
         assert_type(y, Literal[1] | type[int])
     else:
         assert_type(y, type[int] | type[str])
+
+def test_tuple_of_literal_alias(severity: str) -> None:
+    from typing import cast, get_args
+
+    SeverityLevel = Literal["light", "minor", "major"]
+    SEVERITY_LEVELS = cast(tuple[SeverityLevel, ...], get_args(SeverityLevel))
+    if severity in SEVERITY_LEVELS:
+        assert_type(severity, SeverityLevel)
 "#,
 );
 

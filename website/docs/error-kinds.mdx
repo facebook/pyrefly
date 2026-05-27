@@ -634,6 +634,22 @@ class C:
         self.y = 0  # error, `y` may be undefined if `f` does not execute
 ```
 
+## incompatible-comparison
+
+Default severity: `ignore`
+
+This error is raised when Pyrefly can prove that an equality (`==`) or inequality
+(`!=`) comparison is made between incompatible built-in types (for example, `int`
+versus `str`). This check is currently limited to a small allowlist: numeric
+types (including `decimal.Decimal`), bytes-like types, set-like types, and `str`.
+It does not analyze unions, `None`, or user-defined classes.
+
+```python
+x: int = 1
+y: str = ""
+if x == y: ...  # Comparison `==` between incompatible types `int` and `str` [incompatible-comparison]
+```
+
 ## incompatible-overload-residual
 
 This error is raised when we match an overloaded function against a type containing a type variable and cannot find a consistent type for that variable.
@@ -1317,6 +1333,69 @@ class Template(Protocol):
         self.temp: list[int] = []  # protocol-implicitly-defined-attribute
 ```
 
+## pytorch-efficiency-lint-cuda-call
+
+Default severity: `ignore`
+
+Calling `.cuda()` on a `torch.Tensor` hard-codes the target device to CUDA. Use `.to(device)` instead so your code works on any accelerator (CUDA, XPU, MPS, etc.).
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+def f(x: torch.Tensor) -> None:
+    y = x.cuda()  # pytorch-efficiency-lint-cuda-call
+    # Fix: y = x.to(device)
+```
+
+## pytorch-efficiency-lint-item-call
+
+Default severity: `ignore`
+
+Calling `.item()` on a `torch.Tensor` forces GPU-to-CPU synchronization, blocking the training loop until all pending GPU operations complete. This can reduce GPU utilization from over 90% to under 50%. Prefer `tensor[0]` for scalar tensors, accumulate values on the GPU with `torch.sum()`, or defer `.item()` to outside the training loop.
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+def f(x: torch.Tensor) -> None:
+    v = x.item()  # pytorch-efficiency-lint-item-call
+```
+
+## pytorch-efficiency-lint-print-tensor
+
+Default severity: `ignore`
+
+Passing a `torch.Tensor` to `print()` triggers `Tensor.__repr__()`, which forces GPU-to-CPU synchronization and blocks until all pending GPU operations complete. Use `print(tensor.shape)` to inspect metadata without synchronizing, or guard with `if DEBUG: print(tensor)`.
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+def f(x: torch.Tensor) -> None:
+    print(x)  # pytorch-efficiency-lint-print-tensor
+    # Fix: print(x.shape) or print(x.dtype)
+```
+
+## pytorch-efficiency-lint-redundant-to-call
+
+Default severity: `ignore`
+
+Calling `.to(device)` on a tensor returned by a factory function like `torch.zeros()` allocates the tensor on CPU first, then copies it to the target device. Pass `device=` directly to the factory function instead to avoid the redundant allocation and copy.
+
+Enable this lint with [`pytorch-efficiency-lints = true`](./configuration.mdx#pytorch-efficiency-lints) in your `pyrefly.toml`.
+
+```python
+import torch
+
+device = torch.device("cuda")
+x = torch.zeros(3, 4).to(device)  # pytorch-efficiency-lint-redundant-to-call
+# Fix: x = torch.zeros(3, 4, device=device)
+```
+
 ## read-only
 
 This error indicates that the attribute being accessed does exist but cannot be modified.
@@ -1387,6 +1466,23 @@ Default severity: `info`
 Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](https://typing.python.org/en/latest/spec/directives.html#reveal-type) function.
 
 `reveal_type` is a *directive* — it is always shown in CLI output regardless of the [`min-severity`](../configuration#min-severity) threshold, and is never subject to suppression or baseline exclusion. To hide it, set `reveal-type = "ignore"` in the [`errors`](../configuration#errors) table.
+
+## string-as-iterable
+
+Default severity: `ignore`
+
+This warning is raised when a string is passed to a parameter expecting an `Iterable[str]` or
+`Sequence[str]`. While `str` is technically iterable, it iterates by individual characters, which
+is often not what you intended.
+
+```python
+from typing import Iterable
+
+def takes_items(xs: Iterable[str]) -> None:
+    ...
+
+takes_items("hello")  # Passing `str` treats it as an iterable of characters
+```
 
 ## unannotated-attribute
 

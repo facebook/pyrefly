@@ -140,7 +140,8 @@
                         "basic",
                         "legacy",
                         "default",
-                        "strict"
+                        "strict",
+                        "all"
                     ],
                     "scope": "resource"
                 },

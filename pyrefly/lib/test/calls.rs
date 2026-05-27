@@ -160,6 +160,48 @@ f(0)  # E: `f` is deprecated
     "#,
 );
 
+fn test_env_string_as_iterable() -> TestEnv {
+    TestEnv::new().enable_string_as_iterable_warning()
+}
+
+testcase!(
+    test_string_as_iterable_warning,
+    test_env_string_as_iterable(),
+    r#"
+from typing import Iterable, Sequence
+
+def takes_iter(xs: Iterable[str]) -> None: ...
+def takes_seq(xs: Sequence[str]) -> None: ...
+def takes_iter_or_str(xs: Iterable[str] | str) -> None: ...
+
+s: str = "hello"
+takes_iter(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+takes_seq(s)  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+takes_iter_or_str(s)
+takes_iter(["hello"])
+
+x: Iterable[str] = s  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+y: Sequence[str] = s  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+
+takes_iter("hello")  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+z: Iterable[str] = "hello"  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
+testcase!(
+    test_string_as_iterable_warning_does_not_break_overload_matching,
+    test_env_string_as_iterable(),
+    r#"
+from traceback import format_exception
+
+def f(exc: BaseException) -> None:
+    "".join(format_exception(exc))
+
+s: str = "hello"
+"".join(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
 testcase!(
     test_deprecated_overloaded_signature,
     r#"

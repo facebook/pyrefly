@@ -2830,3 +2830,118 @@ Definition Result:
         report.trim(),
     );
 }
+
+#[test]
+fn goto_def_constructor_dataclass_synthesized_init() {
+    // Dataclass with no inherited explicit __init__: gotodef correctly falls
+    // back to the class definition since the synthesized __init__ has no
+    // source location.
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+    y: int
+
+Point(1, 2)
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | Point(1, 2)
+       ^
+Definition Result:
+5 | class Point:
+          ^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_basemodel_subclass() {
+    // BUG: Gotodef on a subclass constructor call jumps to the inherited
+    // BaseModel.__init__ instead of the subclass class definition. When a
+    // class has synthesized fields (like pydantic models), the user expects
+    // gotodef to navigate to the class definition, not to the base __init__.
+    let basemodel_code = r#"
+class BaseModel:
+    def __init__(self, **kwargs: object) -> None: ...
+"#;
+    let code = r#"
+from .models import BaseModel
+
+class UserConfig(BaseModel):
+    name: str
+    age: int
+
+UserConfig(name="test", age=1)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("models", basemodel_code)],
+        get_test_report,
+    );
+    // Currently jumps to BaseModel.__init__ — should jump to `class UserConfig`.
+    assert_eq!(
+        r#"
+# main.py
+8 | UserConfig(name="test", age=1)
+          ^
+Definition Result:
+3 |     def __init__(self, **kwargs: object) -> None: ...
+            ^^^^^^^^
+
+
+# models.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_dataclass_inheriting_init() {
+    // Dataclass inheriting from a base with explicit __init__: gotodef
+    // should jump to the class definition because the dataclass synthesizes
+    // its own __init__ which takes precedence over the inherited one.
+    let base_code = r#"
+class Base:
+    def __init__(self, **kwargs: object) -> None: ...
+"#;
+    let code = r#"
+from dataclasses import dataclass
+from .base_mod import Base
+
+@dataclass
+class Config(Base):
+    name: str
+    value: int
+
+Config(name="x", value=1)
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("base_mod", base_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+10 | Config(name="x", value=1)
+         ^
+Definition Result:
+6 | class Config(Base):
+          ^^^^^^
+
+
+# base_mod.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}

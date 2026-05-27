@@ -379,6 +379,20 @@ impl CallArgPreEval<'_> {
             }
             Self::Expr(x, done) => {
                 *done = true;
+                // PEP 747: when the parameter type is TypeForm, evaluate
+                // string literal arguments as forward-reference type forms.
+                if matches!(hint, Type::TypeForm(_))
+                    && let Some(ty) = solver.try_string_literal_as_typeform(
+                        x,
+                        hint,
+                        range,
+                        call_errors,
+                        tcc,
+                        call_context,
+                    )
+                {
+                    return Some(ty);
+                }
                 Some(solver.expr_with_separate_check_errors_with_call_context(
                     x,
                     Some((hint, call_errors, tcc)),
@@ -502,7 +516,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match x {
             CallArg::Star(x, _) => {
                 let mut ty = x.infer(self, errors);
-                self.expand_vars_mut(&mut ty);
+                self.expand_mut(&mut ty);
                 // This can either be `P.args` or `tuple[Any, ...]`
                 matches!(&ty, Type::Args(q2) if &**q2 == q)
                     || self.is_subset_eq(&ty, &self.heap.mk_unbounded_tuple(self.heap.mk_never()))
@@ -518,7 +532,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> bool {
         let mut ty = x.value.infer(self, errors);
-        self.expand_vars_mut(&mut ty);
+        self.expand_mut(&mut ty);
         // This can either be `P.kwargs` or `dict[str, Any]`
         matches!(&ty, Type::Kwargs(q2) if &**q2 == q)
             || self.is_subset_eq(
@@ -812,11 +826,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             //     def f[T](x: T, other: T): ...
             //     f(A(), 0)  # T = A | int
             if let Some(self_qs) = mem::take(&mut self_qs) {
-                let specialization_errors = self.solver().finish_quantified_with_type_order(
-                    self_qs,
-                    self.solver().infer_with_first_use,
-                    self.type_order(),
-                );
+                let specialization_errors =
+                    self.finish_quantified(self_qs, self.solver().infer_with_first_use);
                 if let Err(errors) = specialization_errors {
                     self.add_specialization_errors(errors, arg.range(), call_errors, context);
                 }
@@ -1383,9 +1394,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Vec<TypeVarSpecializationError>,
         HashMap<TextRange, Type>,
     ) {
-        let mut call_context = CallContext::outside();
-        call_context.set_argument_side(ArgumentSide::Got);
-        call_context.require_boundary_consumption();
+        let call_context = CallContext::outside()
+            .with_argument_side(ArgumentSide::Got)
+            .require_boundary_consumption();
 
         // Look up meta-shape early so we can conditionally collect bound args.
         // Only consult the registry when tensor_shapes is enabled to avoid
@@ -1410,11 +1421,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     // Even though these quantifieds aren't used, let's make sure to not leave
                     // unfinished quantifieds around.
-                    let _ = self.solver().finish_quantified_with_type_order(
-                        qs,
-                        false,
-                        self.type_order(),
-                    );
+                    let _ = self.finish_quantified(qs, false);
                     self.instantiate_fresh_callable(tparams, callable)
                 }
             } else {
@@ -1482,7 +1489,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 HashMap::new()
             }
             Params::ParamSpec(concatenate, p) => {
-                let p = self.solver().expand_vars(p);
+                let p = self.solver().expand(p);
                 match p {
                     Type::ParamSpecValue(params) => self.callable_infer_params(
                         callable_name,
@@ -1564,22 +1571,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         if let Some(targs) = ctor_targs {
-            self.solver().generalize_class_targs(targs);
+            let overload_capture_vars = call_context.overload_captured_vars();
+            self.solver()
+                .generalize_class_targs(targs, &overload_capture_vars);
         }
         let mut errors = self
             .solver()
-            .finish_quantified_with_type_order_and_call_context(
+            .finish_quantified(
                 remaining_callable_qs,
                 self.solver().infer_with_first_use,
                 self.type_order(),
-                &call_context,
+                Some(&call_context),
             )
             .map_or_else(|e| e.to_vec(), |_| Vec::new());
-        if let Err(e) = self.solver().finish_quantified_with_type_order(
-            ctor_qs,
-            self.solver().infer_with_first_use,
-            self.type_order(),
-        ) {
+        if let Err(e) = self.finish_quantified(ctor_qs, self.solver().infer_with_first_use) {
             errors.extend(e);
         }
 
@@ -1613,7 +1618,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         (
-            self.solver().finish_function_return(ret),
+            self.solver().for_return_boundary(ret),
             errors,
             expected_types,
         )

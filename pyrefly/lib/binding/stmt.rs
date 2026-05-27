@@ -201,7 +201,7 @@ impl<'a> BindingsBuilder<'a> {
         for target in targets.iter_mut() {
             let range = target.range();
             self.bind_target_no_expr(target, &|ann| {
-                Binding::MultiTargetAssign(ann, rhs_idx, range)
+                Binding::MultiTargetAssign(ann, rhs_idx, range, None)
             });
         }
     }
@@ -708,6 +708,17 @@ impl<'a> BindingsBuilder<'a> {
             }
             Stmt::AnnAssign(mut x) => match *x.target {
                 Expr::Name(name) => {
+                    if Ast::is_synthesized_empty_name(&name) {
+                        self.ensure_type(&mut x.annotation, &mut None);
+                        if let Some(value) = x.value {
+                            self.bind_single_name_assign(
+                                &Ast::expr_name_identifier(name),
+                                value,
+                                None,
+                            );
+                        }
+                        return;
+                    }
                     // Handle annotated legacy TypeVar creation T: TypeVar = TypeVar("T")
                     if let Some(ref mut value) = x.value
                         && let Expr::Call(call) = value.as_mut()
@@ -805,6 +816,7 @@ impl<'a> BindingsBuilder<'a> {
                     }
                 }
                 Expr::Attribute(attr) => {
+                    let mut attr = attr;
                     let attr_name = attr.attr.id.clone();
                     self.ensure_type(&mut x.annotation, &mut None);
                     let ann_key = self.insert_binding(
@@ -821,7 +833,15 @@ impl<'a> BindingsBuilder<'a> {
                                 ExprOrBinding::Expr(v.clone())
                             })
                         }
-                        _ => ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                        _ => {
+                            self.ensure_expr(
+                                &mut attr.value,
+                                &mut Usage::StaticTypeInformation {
+                                    is_annotation: false,
+                                },
+                            );
+                            ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))
+                        }
                     };
                     if !self
                         .scopes
@@ -966,7 +986,10 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::For(mut x) => {
-                if x.is_async && !self.scopes.is_in_async_def() {
+                if x.is_async
+                    && !self.scopes.is_in_async_def()
+                    && !self.module_info.path().is_notebook()
+                {
                     self.error(
                         x.range(),
                         ErrorKind::InvalidSyntax,
@@ -1147,7 +1170,10 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Stmt::With(x) => {
-                if x.is_async && !self.scopes.is_in_async_def() {
+                if x.is_async
+                    && !self.scopes.is_in_async_def()
+                    && !self.module_info.path().is_notebook()
+                {
                     self.error(
                         x.range(),
                         ErrorKind::InvalidSyntax,

@@ -162,14 +162,16 @@ enum ConditionRedundantReason {
     EnumLiteral(Name, Name),
     Function(ModuleName, FunctionKind),
     Class(Name),
+    /// Instance of a class that defines neither `__bool__` nor `__len__`, so always truthy
+    InstanceAlwaysTruthy(Name),
 }
 
 impl ConditionRedundantReason {
     fn equivalent_boolean(&self) -> Option<bool> {
         match self {
-            ConditionRedundantReason::Function(..) | ConditionRedundantReason::Class(..) => {
-                Some(true)
-            }
+            ConditionRedundantReason::Function(..)
+            | ConditionRedundantReason::Class(..)
+            | ConditionRedundantReason::InstanceAlwaysTruthy(..) => Some(true),
             ConditionRedundantReason::IntLiteral(b)
             | ConditionRedundantReason::StrLiteral(b)
             | ConditionRedundantReason::BytesLiteral(b) => Some(*b),
@@ -199,6 +201,9 @@ impl ConditionRedundantReason {
             }
             ConditionRedundantReason::Class(name) => {
                 format!("Class name `{name}` used as condition")
+            }
+            ConditionRedundantReason::InstanceAlwaysTruthy(name) => {
+                format!("Instance of `{name}` used as condition")
             }
         }
     }
@@ -506,7 +511,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         if let Some(hint) = cur_hint {
                             // Ensure no param vars are pinned to unfinished Variable::Quantified.
                             // Since lambda parameters are unannotated, the specialization errors can be ignored.
-                            let _specialization_errors = self.solver().finish_all_quantified(hint);
+                            let _specialization_errors =
+                                self.solver().finish_all_quantified(hint, self.type_order());
                         }
                         let ret = self.expr_infer_type_no_trace(
                             &lambda.body,
@@ -679,6 +685,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return ty;
                 }
                 let callee_ty = self.expr_infer(&x.func, errors);
+                self.check_pytorch_tensor_item_call(x, &callee_ty, errors);
+                self.check_pytorch_tensor_cuda_call(x, &callee_ty, errors);
+                self.check_pytorch_print_tensor(x, &callee_ty, errors);
+                self.check_pytorch_redundant_to_call(x, &callee_ty, errors);
                 if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
                     self.dict_infer(&d, hint, x.range, errors)
                 } else if let Some((obj_ty, key)) =
@@ -802,6 +812,217 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             builder.emit();
         }
+    }
+
+    /// Warn when `.item()` is called on a `torch.Tensor`. This forces GPU→CPU
+    /// synchronization, stalling the training loop until all pending GPU ops finish.
+    fn check_pytorch_tensor_item_call(
+        &self,
+        x: &ExprCall,
+        callee_ty: &Type,
+        errors: &ErrorCollector,
+    ) {
+        let Expr::Attribute(attr_expr) = &*x.func else {
+            return;
+        };
+        if attr_expr.attr.id.as_str() != "item" {
+            return;
+        }
+        if !x.arguments.is_empty() {
+            return;
+        }
+        // Extract the receiver type from the already-resolved BoundMethod
+        // rather than re-inferring the base expression.
+        let is_tensor = if let Type::BoundMethod(bm) = callee_ty {
+            matches!(&bm.obj, Type::Tensor(_))
+                || matches!(&bm.obj, Type::ClassType(ct) if ct.has_qname("torch", "Tensor"))
+        } else {
+            false
+        };
+        if is_tensor {
+            errors
+                .error_builder(
+                    x.range(),
+                    ErrorKind::PytorchEfficiencyLintItemCall,
+                    "`Tensor.item()` causes implicit GPU-to-CPU synchronization".to_owned(),
+                )
+                .with_detail(
+                    "This call blocks until all pending GPU operations complete, \
+                     which can reduce GPU utilization from >90% to under 50%. \
+                     Consider `tensor[0]` for scalar tensors, accumulate values \
+                     on the GPU with `torch.sum()`, or defer `.item()` to outside \
+                     the training loop."
+                        .to_owned(),
+                )
+                .emit();
+        }
+    }
+
+    /// Warn when `.cuda()` is called on a `torch.Tensor`. This hard-codes the
+    /// target device; `.to(device)` is preferred for device-agnostic code.
+    fn check_pytorch_tensor_cuda_call(
+        &self,
+        x: &ExprCall,
+        callee_ty: &Type,
+        errors: &ErrorCollector,
+    ) {
+        let Expr::Attribute(attr_expr) = &*x.func else {
+            return;
+        };
+        if attr_expr.attr.id.as_str() != "cuda" {
+            return;
+        }
+        if !x.arguments.is_empty() {
+            return;
+        }
+        let is_tensor = if let Type::BoundMethod(bm) = callee_ty {
+            matches!(&bm.obj, Type::Tensor(_))
+                || matches!(&bm.obj, Type::ClassType(ct) if ct.has_qname("torch", "Tensor"))
+        } else {
+            false
+        };
+        if is_tensor {
+            errors
+                .error_builder(
+                    x.range(),
+                    ErrorKind::PytorchEfficiencyLintCudaCall,
+                    "`Tensor.cuda()` hard-codes the target device".to_owned(),
+                )
+                .with_detail(
+                    "Use `.to(device)` instead so your code works on any \
+                     accelerator (CUDA, XPU, MPS, etc.). For example: \
+                     `tensor.to(device)` where `device` is set at the top of \
+                     your script."
+                        .to_owned(),
+                )
+                .emit();
+        }
+    }
+
+    /// Warn when a `torch.Tensor` is passed to `print()`. This triggers
+    /// `__repr__`, which forces GPU→CPU synchronization.
+    fn check_pytorch_print_tensor(&self, x: &ExprCall, _callee_ty: &Type, errors: &ErrorCollector) {
+        let Expr::Name(name) = &*x.func else {
+            return;
+        };
+        if name.id.as_str() != "print" {
+            return;
+        }
+        for arg in &x.arguments.args {
+            // Only check simple name references to avoid re-inferring complex
+            // expressions (which could produce duplicate diagnostics).
+            let Expr::Name(_) = arg else {
+                continue;
+            };
+            let arg_ty = self.expr_infer(arg, errors);
+            let is_tensor = matches!(&arg_ty, Type::Tensor(_))
+                || matches!(&arg_ty, Type::ClassType(ct) if ct.has_qname("torch", "Tensor"));
+            if is_tensor {
+                errors
+                    .error_builder(
+                        arg.range(),
+                        ErrorKind::PytorchEfficiencyLintPrintTensor,
+                        "printing a `Tensor` causes implicit GPU-to-CPU synchronization".to_owned(),
+                    )
+                    .with_detail(
+                        "The `print()` call triggers `Tensor.__repr__()`, which \
+                         transfers data from GPU to CPU and blocks until all pending \
+                         GPU operations complete. Use `print(tensor.shape)` to inspect \
+                         metadata without synchronizing, or guard with \
+                         `if DEBUG: print(tensor)`."
+                            .to_owned(),
+                    )
+                    .emit();
+            }
+        }
+    }
+
+    /// Warn when `.to(device)` is called on a tensor returned by a factory function
+    /// like `torch.zeros()` that already accepts a `device=` parameter. Passing
+    /// `device=` directly avoids allocating on CPU and then copying to the target device.
+    fn check_pytorch_redundant_to_call(
+        &self,
+        x: &ExprCall,
+        callee_ty: &Type,
+        errors: &ErrorCollector,
+    ) {
+        let Expr::Attribute(attr_expr) = &*x.func else {
+            return;
+        };
+        if attr_expr.attr.id.as_str() != "to" {
+            return;
+        }
+        if x.arguments.is_empty() {
+            return;
+        }
+        let is_tensor = if let Type::BoundMethod(bm) = callee_ty {
+            matches!(&bm.obj, Type::Tensor(_))
+                || matches!(&bm.obj, Type::ClassType(ct) if ct.has_qname("torch", "Tensor"))
+        } else {
+            false
+        };
+        if !is_tensor {
+            return;
+        }
+        let Expr::Call(base_call) = &*attr_expr.value else {
+            return;
+        };
+        let Expr::Attribute(factory_attr) = &*base_call.func else {
+            return;
+        };
+        let factory_name = factory_attr.attr.id.as_str();
+        const TENSOR_FACTORIES: &[&str] = &[
+            "zeros",
+            "ones",
+            "empty",
+            "randn",
+            "rand",
+            "full",
+            "arange",
+            "linspace",
+            "logspace",
+            "eye",
+            "zeros_like",
+            "ones_like",
+            "empty_like",
+            "randn_like",
+            "rand_like",
+            "full_like",
+        ];
+        if !TENSOR_FACTORIES.contains(&factory_name) {
+            return;
+        }
+        let Expr::Name(module_name) = &*factory_attr.value else {
+            return;
+        };
+        if module_name.id.as_str() != "torch" {
+            return;
+        }
+        // Don't fire if the factory already has `device=` — the `.to()` is
+        // likely a dtype cast (e.g., `torch.randn(..., device="cuda").to(torch.bfloat16)`).
+        let factory_has_device = base_call
+            .arguments
+            .keywords
+            .iter()
+            .any(|kw| kw.arg.as_ref().is_some_and(|id| id.as_str() == "device"));
+        if factory_has_device {
+            return;
+        }
+        errors
+            .error_builder(
+                x.range(),
+                ErrorKind::PytorchEfficiencyLintRedundantToCall,
+                format!(
+                    "`torch.{factory_name}(...).to(device)` creates the tensor on CPU \
+                     first, then copies it"
+                ),
+            )
+            .with_detail(format!(
+                "Pass `device=` directly to `torch.{factory_name}()` \
+                 to create the tensor on the target device and avoid a redundant copy. \
+                 For example: `torch.{factory_name}(..., device=device)`"
+            ))
+            .emit();
     }
 
     fn tuple_infer(&self, x: &ExprTuple, hint: Option<HintRef>, errors: &ErrorCollector) -> Type {
@@ -1378,7 +1599,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // for the next one. Most useful for expressions like `optional_list or []`.
             let hint = hint.or_else(|| hint_acc.as_ref().map(HintRef::soft));
             let mut t = self.expr_infer_with_hint(value, hint, errors);
-            self.expand_vars_mut(&mut t);
+            self.expand_mut(&mut t);
             // If this is not the last entry, we have to make a type-dependent decision and also narrow the
             // result; both operations require us to force `Var` first or they become unpredictable.
             if i < last_index {
@@ -2986,6 +3207,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 kind.clone(),
             )),
             Type::ClassDef(cls) => Some(ConditionRedundantReason::Class(cls.name().clone())),
+            Type::ClassType(ct) => {
+                let cls = ct.class_object();
+                // Skip warning for `object` itself and for abstract/protocol types:
+                // a variable typed as `Hashable`, `Iterable`, etc. may hold a concrete
+                // instance that defines `__bool__` or `__len__` at runtime.
+                let metadata = self.get_metadata_for_class(cls);
+                let is_abstract =
+                    cls.is_builtin("object") || metadata.is_protocol() || metadata.extends_abc();
+                // Skip warning for classes coming from stubs. Stub-only classes often have
+                // dynamic runtime behavior (e.g. `datetime`, `asyncio.Future`, `Lock`,
+                // sqlalchemy `Session`) that the stubs don't model, and the idiomatic
+                // `if x:` None-guard pattern is widespread in real-world code.
+                let is_from_stub = cls.module_path().is_interface();
+                // Skip warning for dataclasses. These are commonly used as plain data
+                // containers and `if obj:` is frequently a defensive pattern; the
+                // warning would create excessive noise for little benefit.
+                let is_dataclass = metadata.dataclass_metadata().is_some();
+                if !is_abstract
+                    && !is_from_stub
+                    && !is_dataclass
+                    && self.class_instances_always_truthy(cls)
+                {
+                    Some(ConditionRedundantReason::InstanceAlwaysTruthy(
+                        cls.name().clone(),
+                    ))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

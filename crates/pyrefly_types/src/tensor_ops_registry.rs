@@ -12,36 +12,29 @@
 //! interpreted directly — no IR layer.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use crate::meta_shape_dsl::DslFnDef;
-use crate::meta_shape_dsl::DslMetaShapeFunction;
+use pyrefly_python::ast::Ast;
+use ruff_python_ast::PySourceType;
+use ruff_python_ast::Stmt;
+
 use crate::meta_shape_dsl::MetaShapeFunction;
-use crate::meta_shape_dsl::parse_dsl;
+use crate::meta_shape_dsl::ShapeDslProgram;
+use crate::meta_shape_dsl::build_shape_dsl_program;
+use crate::meta_shape_dsl::convert_shape_dsl_function;
+use crate::meta_shape_dsl::make_meta_shape_function;
 
-// ============================================================================
-// DSL-based MetaShapeFunction construction
-// ============================================================================
+// Section: DSL-based MetaShapeFunction construction
 
-/// Look up a DSL function by name and create a `DslMetaShapeFunction`.
-fn dsl_fn(
-    fn_lookup: &Arc<HashMap<String, Arc<DslFnDef>>>,
-    name: &str,
-) -> Box<dyn MetaShapeFunction> {
-    let fn_def = Arc::clone(
-        fn_lookup
-            .get(name)
-            .unwrap_or_else(|| panic!("DSL function `{name}` not found")),
-    );
-    Box::new(DslMetaShapeFunction {
-        fn_def,
-        fn_lookup: Arc::clone(fn_lookup),
-    })
+/// Look up a DSL function by name in the shared program and wrap it as a
+/// `MetaShapeFunction` suitable for registration. Panics if the program does
+/// not contain a function with that name — the bundled `DSL_SOURCE` is
+/// fixed, so a missing name is a programming error in this file.
+fn dsl_fn(program: &ShapeDslProgram, name: &str) -> Box<dyn MetaShapeFunction> {
+    make_meta_shape_function(program, name)
+        .unwrap_or_else(|| panic!("DSL function `{name}` not found"))
 }
 
-// ============================================================================
-// Meta-Shape Registry
-// ============================================================================
+// Section: Meta-Shape Registry
 
 /// Registry mapping PyTorch op names to their shape functions.
 ///
@@ -62,369 +55,357 @@ pub struct TensorOpsRegistry {
 impl TensorOpsRegistry {
     /// Create a new registry with built-in meta-shape functions.
     pub fn new() -> Self {
-        // Parse DSL once; definitions are shared via Arc across all instances.
-        let dsl_fns: Vec<Arc<DslFnDef>> = parse_dsl(DSL_SOURCE)
-            .expect("DSL source in tensor_ops_registry.rs has errors")
-            .into_iter()
-            .map(Arc::new)
-            .collect();
-        // Build function lookup table once, shared by all DslMetaShapeFunctions.
-        let fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>> = Arc::new(
-            dsl_fns
-                .iter()
-                .map(|f| (f.name.clone(), Arc::clone(f)))
-                .collect(),
+        // Parse DSL_SOURCE to AST, then lower each function via the public
+        // `convert_shape_dsl_function` wrapper and bundle the results into a
+        // type-checked `ShapeDslProgram`. Sharing one `ShapeDslProgram`
+        // across all registrations means the underlying `Arc<DslFnDef>`
+        // graph is built once and re-used (each `make_meta_shape_function`
+        // call just clones a couple of `Arc`s).
+        let (module, errors, _unsupported) = Ast::parse(DSL_SOURCE, PySourceType::Python);
+        assert!(
+            errors.is_empty(),
+            "DSL source in tensor_ops_registry.rs has parse errors: {errors:?}"
         );
+        let shape_fns = module.body.iter().filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(f) => Some(
+                convert_shape_dsl_function(f)
+                    .expect("DSL source in tensor_ops_registry.rs has errors"),
+            ),
+            _ => None,
+        });
+        let program = build_shape_dsl_program(shape_fns);
         let mut registry = Self {
             functions: HashMap::new(),
             init_captures: HashMap::new(),
         };
 
         // Shape manipulation
-        registry.register_dual("reshape", || dsl_fn(&fn_lookup, "reshape_ir"));
-        registry.register("torch.cat", dsl_fn(&fn_lookup, "cat_ir"));
-        registry.register("torch.broadcast_to", dsl_fn(&fn_lookup, "broadcast_to_ir"));
-        registry.register_dual("squeeze", || dsl_fn(&fn_lookup, "squeeze_ir"));
-        registry.register_dual("unsqueeze", || dsl_fn(&fn_lookup, "unsqueeze_ir"));
-        registry.register_dual("transpose", || dsl_fn(&fn_lookup, "transpose_ir"));
+        registry.register_dual("reshape", || dsl_fn(&program, "reshape_ir"));
+        registry.register("torch.cat", dsl_fn(&program, "cat_ir"));
+        registry.register("torch.broadcast_to", dsl_fn(&program, "broadcast_to_ir"));
+        registry.register_dual("squeeze", || dsl_fn(&program, "squeeze_ir"));
+        registry.register_dual("unsqueeze", || dsl_fn(&program, "unsqueeze_ir"));
+        registry.register_dual("transpose", || dsl_fn(&program, "transpose_ir"));
         // torch.permute takes dims as a tuple; Tensor.permute takes *dims (variadic).
         // Both use the same DSL function; parameter binding matches by name.
-        registry.register("torch.permute", dsl_fn(&fn_lookup, "permute_ir"));
-        registry.register("torch.Tensor.permute", dsl_fn(&fn_lookup, "permute_ir"));
-        registry.register("torch.flatten", dsl_fn(&fn_lookup, "flatten_ir"));
-        registry.register("torch.stack", dsl_fn(&fn_lookup, "stack_ir"));
-        registry.register("torch.tile", dsl_fn(&fn_lookup, "tile_ir"));
-        registry.register("torch.view", dsl_fn(&fn_lookup, "reshape_ir"));
-        registry.register("torch.unbind", dsl_fn(&fn_lookup, "unbind_ir"));
-        registry.register("torch.Tensor.unbind", dsl_fn(&fn_lookup, "unbind_ir"));
-        registry.register("torch.movedim", dsl_fn(&fn_lookup, "movedim_ir"));
-        registry.register("torch.moveaxis", dsl_fn(&fn_lookup, "movedim_ir"));
-        registry.register("torch.Tensor.movedim", dsl_fn(&fn_lookup, "movedim_ir"));
-        registry.register("torch.Tensor.moveaxis", dsl_fn(&fn_lookup, "movedim_ir"));
-        registry.register("torch.unfold", dsl_fn(&fn_lookup, "unfold_ir"));
-        registry.register("torch.Tensor.unfold", dsl_fn(&fn_lookup, "unfold_ir"));
+        registry.register("torch.permute", dsl_fn(&program, "permute_ir"));
+        registry.register("torch.Tensor.permute", dsl_fn(&program, "permute_ir"));
+        registry.register("torch.flatten", dsl_fn(&program, "flatten_ir"));
+        registry.register("torch.stack", dsl_fn(&program, "stack_ir"));
+        registry.register("torch.tile", dsl_fn(&program, "tile_ir"));
+        registry.register("torch.view", dsl_fn(&program, "reshape_ir"));
+        registry.register("torch.unbind", dsl_fn(&program, "unbind_ir"));
+        registry.register("torch.Tensor.unbind", dsl_fn(&program, "unbind_ir"));
+        registry.register("torch.movedim", dsl_fn(&program, "movedim_ir"));
+        registry.register("torch.moveaxis", dsl_fn(&program, "movedim_ir"));
+        registry.register("torch.Tensor.movedim", dsl_fn(&program, "movedim_ir"));
+        registry.register("torch.Tensor.moveaxis", dsl_fn(&program, "movedim_ir"));
+        registry.register("torch.unfold", dsl_fn(&program, "unfold_ir"));
+        registry.register("torch.Tensor.unfold", dsl_fn(&program, "unfold_ir"));
 
         // Method-only shape manipulation
-        registry.register("torch.Tensor.reshape", dsl_fn(&fn_lookup, "reshape_ir"));
-        registry.register("torch.Tensor.view", dsl_fn(&fn_lookup, "reshape_ir"));
-        registry.register("torch.Tensor.squeeze", dsl_fn(&fn_lookup, "squeeze_ir"));
-        registry.register("torch.Tensor.flatten", dsl_fn(&fn_lookup, "flatten_ir"));
-        registry.register("torch.Tensor.tile", dsl_fn(&fn_lookup, "tile_ir"));
-        registry.register(
-            "torch.Tensor.diag_embed",
-            dsl_fn(&fn_lookup, "diag_embed_ir"),
-        );
-        registry.register("torch.Tensor.repeat", dsl_fn(&fn_lookup, "repeat_ir"));
-        registry.register("torch.Tensor.expand", dsl_fn(&fn_lookup, "expand_ir"));
+        registry.register("torch.Tensor.reshape", dsl_fn(&program, "reshape_ir"));
+        registry.register("torch.Tensor.view", dsl_fn(&program, "reshape_ir"));
+        registry.register("torch.Tensor.squeeze", dsl_fn(&program, "squeeze_ir"));
+        registry.register("torch.Tensor.flatten", dsl_fn(&program, "flatten_ir"));
+        registry.register("torch.Tensor.tile", dsl_fn(&program, "tile_ir"));
+        registry.register("torch.Tensor.diag_embed", dsl_fn(&program, "diag_embed_ir"));
+        registry.register("torch.Tensor.repeat", dsl_fn(&program, "repeat_ir"));
+        registry.register("torch.Tensor.expand", dsl_fn(&program, "expand_ir"));
 
         // Reduction operations
-        registry.register_dual("sum", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("mean", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("prod", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("min", || dsl_fn(&fn_lookup, "min_max_median_ir"));
-        registry.register_dual("max", || dsl_fn(&fn_lookup, "min_max_median_ir"));
-        registry.register_dual("all", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("any", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("std", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("var", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("argmax", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register_dual("argmin", || dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register("torch.median", dsl_fn(&fn_lookup, "min_max_median_ir"));
-        registry.register("torch.logsumexp", dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register("torch.count_nonzero", dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register("torch.aminmax", dsl_fn(&fn_lookup, "aminmax_ir"));
-        registry.register("torch.norm", dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register("torch.mode", dsl_fn(&fn_lookup, "tuple_reduce_ir"));
-        registry.register("torch.topk", dsl_fn(&fn_lookup, "topk_ir"));
-        registry.register("torch.kthvalue", dsl_fn(&fn_lookup, "tuple_reduce_ir"));
-        registry.register("torch.var_mean", dsl_fn(&fn_lookup, "aminmax_ir"));
-        registry.register("torch.std_mean", dsl_fn(&fn_lookup, "aminmax_ir"));
+        registry.register_dual("sum", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("mean", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("prod", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("min", || dsl_fn(&program, "min_max_median_ir"));
+        registry.register_dual("max", || dsl_fn(&program, "min_max_median_ir"));
+        registry.register_dual("all", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("any", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("std", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("var", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("argmax", || dsl_fn(&program, "reduce_ir"));
+        registry.register_dual("argmin", || dsl_fn(&program, "reduce_ir"));
+        registry.register("torch.median", dsl_fn(&program, "min_max_median_ir"));
+        registry.register("torch.logsumexp", dsl_fn(&program, "reduce_ir"));
+        registry.register("torch.count_nonzero", dsl_fn(&program, "reduce_ir"));
+        registry.register("torch.aminmax", dsl_fn(&program, "aminmax_ir"));
+        registry.register("torch.norm", dsl_fn(&program, "reduce_ir"));
+        registry.register("torch.mode", dsl_fn(&program, "tuple_reduce_ir"));
+        registry.register("torch.topk", dsl_fn(&program, "topk_ir"));
+        registry.register("torch.kthvalue", dsl_fn(&program, "tuple_reduce_ir"));
+        registry.register("torch.var_mean", dsl_fn(&program, "aminmax_ir"));
+        registry.register("torch.std_mean", dsl_fn(&program, "aminmax_ir"));
 
         // Reduction method versions
-        registry.register(
-            "torch.Tensor.median",
-            dsl_fn(&fn_lookup, "min_max_median_ir"),
-        );
-        registry.register("torch.Tensor.logsumexp", dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register(
-            "torch.Tensor.count_nonzero",
-            dsl_fn(&fn_lookup, "reduce_ir"),
-        );
-        registry.register("torch.Tensor.aminmax", dsl_fn(&fn_lookup, "aminmax_ir"));
-        registry.register("torch.Tensor.norm", dsl_fn(&fn_lookup, "reduce_ir"));
-        registry.register("torch.Tensor.mode", dsl_fn(&fn_lookup, "tuple_reduce_ir"));
-        registry.register("torch.Tensor.topk", dsl_fn(&fn_lookup, "topk_ir"));
-        registry.register(
-            "torch.Tensor.kthvalue",
-            dsl_fn(&fn_lookup, "tuple_reduce_ir"),
-        );
+        registry.register("torch.Tensor.median", dsl_fn(&program, "min_max_median_ir"));
+        registry.register("torch.Tensor.logsumexp", dsl_fn(&program, "reduce_ir"));
+        registry.register("torch.Tensor.count_nonzero", dsl_fn(&program, "reduce_ir"));
+        registry.register("torch.Tensor.aminmax", dsl_fn(&program, "aminmax_ir"));
+        registry.register("torch.Tensor.norm", dsl_fn(&program, "reduce_ir"));
+        registry.register("torch.Tensor.mode", dsl_fn(&program, "tuple_reduce_ir"));
+        registry.register("torch.Tensor.topk", dsl_fn(&program, "topk_ir"));
+        registry.register("torch.Tensor.kthvalue", dsl_fn(&program, "tuple_reduce_ir"));
 
         // Repeat interleave
         registry.register(
             "torch.Tensor.repeat_interleave",
-            dsl_fn(&fn_lookup, "repeat_interleave_ir"),
+            dsl_fn(&program, "repeat_interleave_ir"),
         );
         registry.register(
             "torch.repeat_interleave",
-            dsl_fn(&fn_lookup, "repeat_interleave_ir"),
+            dsl_fn(&program, "repeat_interleave_ir"),
         );
 
         // Cosine similarity (reduces one dim)
         registry.register(
             "torch.nn.functional.cosine_similarity",
-            dsl_fn(&fn_lookup, "cosine_similarity_ir"),
+            dsl_fn(&program, "cosine_similarity_ir"),
         );
 
         // Indexing/slicing
-        registry.register("torch.select", dsl_fn(&fn_lookup, "select_ir"));
-        registry.register("torch.narrow", dsl_fn(&fn_lookup, "narrow_ir"));
-        registry.register("torch.split", dsl_fn(&fn_lookup, "split_ir"));
-        registry.register("torch.chunk", dsl_fn(&fn_lookup, "chunk_ir"));
-        registry.register("torch.index_select", dsl_fn(&fn_lookup, "index_select_ir"));
-        registry.register("torch.Tensor.select", dsl_fn(&fn_lookup, "select_ir"));
-        registry.register("torch.Tensor.narrow", dsl_fn(&fn_lookup, "narrow_ir"));
-        registry.register("torch.Tensor.split", dsl_fn(&fn_lookup, "split_ir"));
-        registry.register("torch.Tensor.chunk", dsl_fn(&fn_lookup, "chunk_ir"));
+        registry.register("torch.select", dsl_fn(&program, "select_ir"));
+        registry.register("torch.narrow", dsl_fn(&program, "narrow_ir"));
+        registry.register("torch.split", dsl_fn(&program, "split_ir"));
+        registry.register("torch.chunk", dsl_fn(&program, "chunk_ir"));
+        registry.register("torch.index_select", dsl_fn(&program, "index_select_ir"));
+        registry.register("torch.Tensor.select", dsl_fn(&program, "select_ir"));
+        registry.register("torch.Tensor.narrow", dsl_fn(&program, "narrow_ir"));
+        registry.register("torch.Tensor.split", dsl_fn(&program, "split_ir"));
+        registry.register("torch.Tensor.chunk", dsl_fn(&program, "chunk_ir"));
         registry.register(
             "torch.Tensor.index_select",
-            dsl_fn(&fn_lookup, "index_select_ir"),
+            dsl_fn(&program, "index_select_ir"),
         );
 
         // Tensor creation
-        registry.register("torch.randn", dsl_fn(&fn_lookup, "randn_ir"));
-        registry.register("torch.rand", dsl_fn(&fn_lookup, "randn_ir"));
-        registry.register("torch.zeros", dsl_fn(&fn_lookup, "randn_ir"));
-        registry.register("torch.ones", dsl_fn(&fn_lookup, "randn_ir"));
-        registry.register("torch.empty", dsl_fn(&fn_lookup, "randn_ir"));
-        registry.register("torch.full", dsl_fn(&fn_lookup, "randn_ir"));
-        registry.register("torch.randint", dsl_fn(&fn_lookup, "randint_ir"));
-        registry.register("torch.arange", dsl_fn(&fn_lookup, "arange_ir"));
-        registry.register("torch.linspace", dsl_fn(&fn_lookup, "linspace_ir"));
-        registry.register("torch.eye", dsl_fn(&fn_lookup, "eye_ir"));
-        registry.register("torch.diag_embed", dsl_fn(&fn_lookup, "diag_embed_ir"));
-        registry.register("torch.tril_indices", dsl_fn(&fn_lookup, "tri_indices_ir"));
-        registry.register("torch.triu_indices", dsl_fn(&fn_lookup, "tri_indices_ir"));
+        registry.register("torch.randn", dsl_fn(&program, "randn_ir"));
+        registry.register("torch.rand", dsl_fn(&program, "randn_ir"));
+        registry.register("torch.zeros", dsl_fn(&program, "randn_ir"));
+        registry.register("torch.ones", dsl_fn(&program, "randn_ir"));
+        registry.register("torch.empty", dsl_fn(&program, "randn_ir"));
+        registry.register("torch.full", dsl_fn(&program, "randn_ir"));
+        registry.register("torch.randint", dsl_fn(&program, "randint_ir"));
+        registry.register("torch.arange", dsl_fn(&program, "arange_ir"));
+        registry.register("torch.linspace", dsl_fn(&program, "linspace_ir"));
+        registry.register("torch.eye", dsl_fn(&program, "eye_ir"));
+        registry.register("torch.diag_embed", dsl_fn(&program, "diag_embed_ir"));
+        registry.register("torch.tril_indices", dsl_fn(&program, "tri_indices_ir"));
+        registry.register("torch.triu_indices", dsl_fn(&program, "tri_indices_ir"));
 
         // Linear algebra
-        registry.register("torch.matmul", dsl_fn(&fn_lookup, "matmul_ir"));
-        registry.register("torch.mv", dsl_fn(&fn_lookup, "mv_ir"));
-        registry.register("torch.outer", dsl_fn(&fn_lookup, "outer_ir"));
-        registry.register("torch.tensordot", dsl_fn(&fn_lookup, "tensordot_ir"));
-        registry.register("torch.einsum", dsl_fn(&fn_lookup, "einsum_ir"));
-        registry.register("torch.Tensor.matmul", dsl_fn(&fn_lookup, "matmul_ir"));
-        registry.register("torch.Tensor.__matmul__", dsl_fn(&fn_lookup, "matmul_ir"));
-        registry.register("torch.Tensor.mv", dsl_fn(&fn_lookup, "mv_ir"));
+        registry.register("torch.matmul", dsl_fn(&program, "matmul_ir"));
+        registry.register("torch.mv", dsl_fn(&program, "mv_ir"));
+        registry.register("torch.outer", dsl_fn(&program, "outer_ir"));
+        registry.register("torch.tensordot", dsl_fn(&program, "tensordot_ir"));
+        registry.register("torch.einsum", dsl_fn(&program, "einsum_ir"));
+        registry.register("torch.Tensor.matmul", dsl_fn(&program, "matmul_ir"));
+        registry.register("torch.Tensor.__matmul__", dsl_fn(&program, "matmul_ir"));
+        registry.register("torch.Tensor.mv", dsl_fn(&program, "mv_ir"));
 
         // Eigenvalue decomposition
-        registry.register("torch.linalg.eig", dsl_fn(&fn_lookup, "eig_ir"));
-        registry.register("torch.eig", dsl_fn(&fn_lookup, "eig_ir"));
-        registry.register("torch.linalg.eigh", dsl_fn(&fn_lookup, "eig_ir"));
-        registry.register("torch.eigh", dsl_fn(&fn_lookup, "eig_ir"));
-        registry.register("torch.linalg.eigvals", dsl_fn(&fn_lookup, "eigvals_ir"));
-        registry.register("torch.linalg.eigvalsh", dsl_fn(&fn_lookup, "eigvals_ir"));
+        registry.register("torch.linalg.eig", dsl_fn(&program, "eig_ir"));
+        registry.register("torch.eig", dsl_fn(&program, "eig_ir"));
+        registry.register("torch.linalg.eigh", dsl_fn(&program, "eig_ir"));
+        registry.register("torch.eigh", dsl_fn(&program, "eig_ir"));
+        registry.register("torch.linalg.eigvals", dsl_fn(&program, "eigvals_ir"));
+        registry.register("torch.linalg.eigvalsh", dsl_fn(&program, "eigvals_ir"));
 
         // Linear solvers
-        registry.register("torch.linalg.solve", dsl_fn(&fn_lookup, "solve_ir"));
-        registry.register("torch.solve", dsl_fn(&fn_lookup, "solve_ir"));
+        registry.register("torch.linalg.solve", dsl_fn(&program, "solve_ir"));
+        registry.register("torch.solve", dsl_fn(&program, "solve_ir"));
         registry.register(
             "torch.linalg.solve_triangular",
-            dsl_fn(&fn_lookup, "solve_ir"),
+            dsl_fn(&program, "solve_ir"),
         );
         registry.register(
             "torch.triangular_solve",
-            dsl_fn(&fn_lookup, "solve_reversed_ir"),
+            dsl_fn(&program, "solve_reversed_ir"),
         );
         registry.register(
             "torch.linalg.cholesky_solve",
-            dsl_fn(&fn_lookup, "solve_reversed_ir"),
+            dsl_fn(&program, "solve_reversed_ir"),
         );
         registry.register(
             "torch.cholesky_solve",
-            dsl_fn(&fn_lookup, "solve_reversed_ir"),
+            dsl_fn(&program, "solve_reversed_ir"),
         );
-        registry.register("torch.lu_solve", dsl_fn(&fn_lookup, "solve_ir"));
+        registry.register("torch.lu_solve", dsl_fn(&program, "solve_ir"));
 
         // Determinant
-        registry.register("torch.linalg.slogdet", dsl_fn(&fn_lookup, "slogdet_ir"));
-        registry.register("torch.slogdet", dsl_fn(&fn_lookup, "slogdet_ir"));
-        registry.register("torch.Tensor.slogdet", dsl_fn(&fn_lookup, "slogdet_ir"));
+        registry.register("torch.linalg.slogdet", dsl_fn(&program, "slogdet_ir"));
+        registry.register("torch.slogdet", dsl_fn(&program, "slogdet_ir"));
+        registry.register("torch.Tensor.slogdet", dsl_fn(&program, "slogdet_ir"));
 
         // Convolution
-        registry.register("torch.nn.functional.conv1d", dsl_fn(&fn_lookup, "conv_ir"));
-        registry.register("torch.nn.functional.conv2d", dsl_fn(&fn_lookup, "conv_ir"));
-        registry.register("torch.nn.functional.conv3d", dsl_fn(&fn_lookup, "conv_ir"));
+        registry.register("torch.nn.functional.conv1d", dsl_fn(&program, "conv_ir"));
+        registry.register("torch.nn.functional.conv2d", dsl_fn(&program, "conv_ir"));
+        registry.register("torch.nn.functional.conv3d", dsl_fn(&program, "conv_ir"));
         registry.register(
             "torch.nn.functional.conv_transpose1d",
-            dsl_fn(&fn_lookup, "conv_transpose_ir"),
+            dsl_fn(&program, "conv_transpose_ir"),
         );
         registry.register(
             "torch.nn.functional.conv_transpose2d",
-            dsl_fn(&fn_lookup, "conv_transpose_ir"),
+            dsl_fn(&program, "conv_transpose_ir"),
         );
         registry.register(
             "torch.nn.functional.conv_transpose3d",
-            dsl_fn(&fn_lookup, "conv_transpose_ir"),
+            dsl_fn(&program, "conv_transpose_ir"),
         );
 
         // Pooling
         registry.register(
             "torch.nn.functional.max_pool1d",
-            dsl_fn(&fn_lookup, "pool_ir"),
+            dsl_fn(&program, "pool_ir"),
         );
         registry.register(
             "torch.nn.functional.max_pool2d",
-            dsl_fn(&fn_lookup, "pool_ir"),
+            dsl_fn(&program, "pool_ir"),
         );
         registry.register(
             "torch.nn.functional.max_pool3d",
-            dsl_fn(&fn_lookup, "pool_ir"),
+            dsl_fn(&program, "pool_ir"),
         );
         registry.register(
             "torch.nn.functional.avg_pool1d",
-            dsl_fn(&fn_lookup, "pool_ir"),
+            dsl_fn(&program, "pool_ir"),
         );
         registry.register(
             "torch.nn.functional.avg_pool2d",
-            dsl_fn(&fn_lookup, "pool_ir"),
+            dsl_fn(&program, "pool_ir"),
         );
         registry.register(
             "torch.nn.functional.avg_pool3d",
-            dsl_fn(&fn_lookup, "pool_ir"),
+            dsl_fn(&program, "pool_ir"),
         );
         registry.register(
             "torch.nn.functional.adaptive_max_pool1d",
-            dsl_fn(&fn_lookup, "adaptive_pool_ir"),
+            dsl_fn(&program, "adaptive_pool_ir"),
         );
         registry.register(
             "torch.nn.functional.adaptive_max_pool2d",
-            dsl_fn(&fn_lookup, "adaptive_pool_ir"),
+            dsl_fn(&program, "adaptive_pool_ir"),
         );
         registry.register(
             "torch.nn.functional.adaptive_max_pool3d",
-            dsl_fn(&fn_lookup, "adaptive_pool_ir"),
+            dsl_fn(&program, "adaptive_pool_ir"),
         );
         registry.register(
             "torch.nn.functional.adaptive_avg_pool1d",
-            dsl_fn(&fn_lookup, "adaptive_pool_ir"),
+            dsl_fn(&program, "adaptive_pool_ir"),
         );
         registry.register(
             "torch.nn.functional.adaptive_avg_pool2d",
-            dsl_fn(&fn_lookup, "adaptive_pool_ir"),
+            dsl_fn(&program, "adaptive_pool_ir"),
         );
         registry.register(
             "torch.nn.functional.adaptive_avg_pool3d",
-            dsl_fn(&fn_lookup, "adaptive_pool_ir"),
+            dsl_fn(&program, "adaptive_pool_ir"),
         );
 
         // Interpolation
         registry.register(
             "torch.nn.functional.interpolate",
-            dsl_fn(&fn_lookup, "interpolate_ir"),
+            dsl_fn(&program, "interpolate_ir"),
         );
         registry.register(
             "torch.nn.functional.upsample",
-            dsl_fn(&fn_lookup, "interpolate_ir"),
+            dsl_fn(&program, "interpolate_ir"),
         );
 
         // Conditional operations
-        registry.register("torch.where", dsl_fn(&fn_lookup, "where_ir"));
+        registry.register("torch.where", dsl_fn(&program, "where_ir"));
         registry.register(
             "torch.take_along_dim",
-            dsl_fn(&fn_lookup, "take_along_dim_ir"),
+            dsl_fn(&program, "take_along_dim_ir"),
         );
         registry.register(
             "torch.Tensor.take_along_dim",
-            dsl_fn(&fn_lookup, "take_along_dim_ir"),
+            dsl_fn(&program, "take_along_dim_ir"),
         );
 
         // Loss functions
-        registry.register(
-            "torch.nn.functional.mse_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
-        );
-        registry.register("torch.nn.functional.l1_loss", dsl_fn(&fn_lookup, "loss_ir"));
-        registry.register(
-            "torch.nn.functional.nll_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
-        );
+        registry.register("torch.nn.functional.mse_loss", dsl_fn(&program, "loss_ir"));
+        registry.register("torch.nn.functional.l1_loss", dsl_fn(&program, "loss_ir"));
+        registry.register("torch.nn.functional.nll_loss", dsl_fn(&program, "loss_ir"));
         registry.register(
             "torch.nn.functional.cross_entropy",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.binary_cross_entropy",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.binary_cross_entropy_with_logits",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
-        registry.register("torch.nn.functional.kl_div", dsl_fn(&fn_lookup, "loss_ir"));
+        registry.register("torch.nn.functional.kl_div", dsl_fn(&program, "loss_ir"));
         registry.register(
             "torch.nn.functional.smooth_l1_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.huber_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.poisson_nll_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.cosine_embedding_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.margin_ranking_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.triplet_margin_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
         registry.register(
             "torch.nn.functional.hinge_embedding_loss",
-            dsl_fn(&fn_lookup, "loss_ir"),
+            dsl_fn(&program, "loss_ir"),
         );
 
         // Padding
-        registry.register("torch.nn.functional.pad", dsl_fn(&fn_lookup, "pad_ir"));
+        registry.register("torch.nn.functional.pad", dsl_fn(&program, "pad_ir"));
 
         // FFT
-        registry.register("torch.fft.rfft", dsl_fn(&fn_lookup, "rfft_ir"));
-        registry.register("torch.fft.irfft", dsl_fn(&fn_lookup, "irfft_ir"));
-        registry.register("torch.fft.hfft", dsl_fn(&fn_lookup, "irfft_ir"));
-        registry.register("torch.fft.ihfft", dsl_fn(&fn_lookup, "rfft_ir"));
+        registry.register("torch.fft.rfft", dsl_fn(&program, "rfft_ir"));
+        registry.register("torch.fft.irfft", dsl_fn(&program, "irfft_ir"));
+        registry.register("torch.fft.hfft", dsl_fn(&program, "irfft_ir"));
+        registry.register("torch.fft.ihfft", dsl_fn(&program, "rfft_ir"));
 
         // Tensor properties
-        registry.register("torch.Tensor.size", dsl_fn(&fn_lookup, "size_ir"));
-        registry.register("torch.Tensor.numel", dsl_fn(&fn_lookup, "numel_ir"));
-        registry.register("torch.Tensor.dim", dsl_fn(&fn_lookup, "dim_ir"));
-        registry.register("torch.Tensor.nelement", dsl_fn(&fn_lookup, "numel_ir"));
-        registry.register("torch.Tensor.item", dsl_fn(&fn_lookup, "item_ir"));
-        registry.register("torch.Tensor.tolist", dsl_fn(&fn_lookup, "tolist_ir"));
-        registry.register("torch.numel", dsl_fn(&fn_lookup, "numel_ir"));
+        registry.register("torch.Tensor.size", dsl_fn(&program, "size_ir"));
+        registry.register("torch.Tensor.numel", dsl_fn(&program, "numel_ir"));
+        registry.register("torch.Tensor.dim", dsl_fn(&program, "dim_ir"));
+        registry.register("torch.Tensor.nelement", dsl_fn(&program, "numel_ir"));
+        registry.register("torch.Tensor.item", dsl_fn(&program, "item_ir"));
+        registry.register("torch.Tensor.tolist", dsl_fn(&program, "tolist_ir"));
+        registry.register("torch.numel", dsl_fn(&program, "numel_ir"));
 
         // nn.Module forward methods with init capture.
         // register_init_forward registers both the forward DSL function and the
         // list of __init__ params to capture in the NNModule type.
         let maxpool_captures = &["kernel_size", "stride", "padding", "dilation"];
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.MaxPool1d",
             "nn_maxpool_forward_ir",
             maxpool_captures,
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.MaxPool2d",
             "nn_maxpool_forward_ir",
             maxpool_captures,
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.MaxPool3d",
             "nn_maxpool_forward_ir",
             maxpool_captures,
@@ -432,81 +413,81 @@ impl TensorOpsRegistry {
 
         let avgpool_captures = &["kernel_size", "stride", "padding"];
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.AvgPool1d",
             "nn_avgpool_forward_ir",
             avgpool_captures,
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.AvgPool2d",
             "nn_avgpool_forward_ir",
             avgpool_captures,
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.AvgPool3d",
             "nn_avgpool_forward_ir",
             avgpool_captures,
         );
 
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.Flatten",
             "nn_flatten_forward_ir",
             &["start_dim", "end_dim"],
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.PixelShuffle",
             "nn_pixel_shuffle_forward_ir",
             &["upscale_factor"],
         );
-        registry.register_init_forward(&fn_lookup, "torch.nn.GLU", "nn_glu_forward_ir", &["dim"]);
+        registry.register_init_forward(&program, "torch.nn.GLU", "nn_glu_forward_ir", &["dim"]);
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.LSTM",
             "nn_lstm_forward_ir",
             &["input_size", "hidden_size", "num_layers", "bidirectional"],
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.Upsample",
             "nn_upsample_forward_ir",
             &["size", "scale_factor"],
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.GRU",
             "nn_gru_forward_ir",
             &["input_size", "hidden_size", "num_layers", "bidirectional"],
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.LSTMCell",
             "nn_lstmcell_forward_ir",
             &["input_size", "hidden_size"],
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.ReflectionPad2d",
             "nn_reflectionpad2d_forward_ir",
             &["padding"],
         );
         registry.register_init_forward(
-            &fn_lookup,
+            &program,
             "torch.nn.ReplicationPad2d",
             "nn_reflectionpad2d_forward_ir",
             &["padding"],
         );
 
         // Random sampling
-        registry.register("torch.multinomial", dsl_fn(&fn_lookup, "multinomial_ir"));
+        registry.register("torch.multinomial", dsl_fn(&program, "multinomial_ir"));
         registry.register(
             "torch.Tensor.multinomial",
-            dsl_fn(&fn_lookup, "multinomial_ir"),
+            dsl_fn(&program, "multinomial_ir"),
         );
-        registry.register("torch.normal", dsl_fn(&fn_lookup, "normal_ir"));
+        registry.register("torch.normal", dsl_fn(&program, "normal_ir"));
 
         registry
     }
@@ -541,14 +522,14 @@ impl TensorOpsRegistry {
     /// the init captures under `"{class_name}"`.
     fn register_init_forward(
         &mut self,
-        fn_lookup: &Arc<HashMap<String, Arc<DslFnDef>>>,
+        program: &ShapeDslProgram,
         class_name: &str,
         dsl_fn_name: &str,
         capture_params: &[&str],
     ) {
         self.functions.insert(
             format!("{class_name}.forward"),
-            dsl_fn(fn_lookup, dsl_fn_name),
+            dsl_fn(program, dsl_fn_name),
         );
         self.init_captures.insert(
             class_name.to_owned(),
@@ -569,13 +550,13 @@ impl Default for TensorOpsRegistry {
     }
 }
 
-// ============================================================================
-// DSL source code
-// ============================================================================
+// Section: DSL source code
 
 /// The full DSL source defining all tensor shape ops and utility functions.
 /// This is valid Python syntax (a strict subset) that we parse with Pyrefly's parser.
 const DSL_SOURCE: &str = r#"
+import shape_extensions.dsl
+
 def normalize_dim(rank: int, dim: int) -> int:
     if dim < 0:
         return dim + rank
@@ -646,8 +627,8 @@ def reshape_ir(self: Tensor, shape: list[int | symint]) -> Tensor:
     if has_zero:
         raise Error("reshape dimensions cannot contain 0")
     if minus_one_count > 0:
-        known = shape_extensions.prod([d for d in shape if d != -1])
-        total = shape_extensions.prod(self.shape)
+        known = shape_extensions.dsl.prod([d for d in shape if d != -1])
+        total = shape_extensions.dsl.prod(self.shape)
         if isinstance(total, int) and isinstance(known, int) and total % known != 0:
             raise Error("could not infer size for dimension -1: expected " + str(total) + " to be divisible by " + str(known))
         return Tensor(shape=[total // known if d == -1 else d for d in shape])
@@ -679,7 +660,7 @@ def flatten_ir(self: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
     rank = len(self.shape)
     s = normalize_dim(rank, start_dim)
     e = normalize_dim(rank, end_dim)
-    return Tensor(shape=self.shape[:s] + [shape_extensions.prod(self.shape[s:e + 1])] + self.shape[e + 1:])
+    return Tensor(shape=self.shape[:s] + [shape_extensions.dsl.prod(self.shape[s:e + 1])] + self.shape[e + 1:])
 
 def expand_ir(self: Tensor, sizes: list[int | symint]) -> Tensor:
     return Tensor(shape=[d if t == -1 else t for d, t in zip(self.shape, sizes)])
@@ -702,7 +683,7 @@ def unfold_ir(self: Tensor, dimension: int, size: int | symint, step: int = 1) -
 def cat_ir(tensors: list[Tensor], dim: int = 0) -> Tensor:
     first = tensors[0]
     d = normalize_dim(len(first.shape), dim)
-    return Tensor(shape=[shape_extensions.sum([t.shape[i] for t in tensors]) if i == d else dim_val for i, dim_val in enumerate(first.shape)])
+    return Tensor(shape=[shape_extensions.dsl.sum([t.shape[i] for t in tensors]) if i == d else dim_val for i, dim_val in enumerate(first.shape)])
 
 def stack_ir(tensors: list[Tensor], dim: int = 0) -> Tensor:
     first = tensors[0]
@@ -792,7 +773,7 @@ def topk_ir(self: Tensor, k: int | symint, dim: int = -1) -> [Tensor, Tensor]:
 
 def repeat_interleave_ir(self: Tensor, repeats: int | symint, dim: int | None = None) -> Tensor:
     if dim == None:
-        return Tensor(shape=[shape_extensions.prod(self.shape) * repeats])
+        return Tensor(shape=[shape_extensions.dsl.prod(self.shape) * repeats])
     d = normalize_dim(len(self.shape), dim)
     return Tensor(shape=replace_dim(self.shape, d, self.shape[d] * repeats))
 
@@ -883,7 +864,7 @@ def apply_einsum(output_map: list[list[int]], check_pairs: list[list[int]], inpu
 
 def einsum_ir(spec: str, operands: list[Tensor] | None = None) -> Tensor:
     if operands != None:
-        output_map, check_pairs = shape_extensions.parse_einsum_equation(spec)
+        output_map, check_pairs = shape_extensions.dsl.parse_einsum_equation(spec)
         return apply_einsum(output_map, check_pairs, operands)
     return Unknown
 
@@ -975,7 +956,7 @@ def size_ir(self: Tensor, dim: int | None = None) -> int | symint:
     return [d for d in self.shape]
 
 def numel_ir(self: Tensor) -> int | symint:
-    return shape_extensions.prod(self.shape)
+    return shape_extensions.dsl.prod(self.shape)
 
 def dim_ir(self: Tensor) -> int:
     return len(self.shape)

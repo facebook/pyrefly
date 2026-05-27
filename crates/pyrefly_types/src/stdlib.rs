@@ -430,6 +430,10 @@ impl Stdlib {
         Some(Self::apply(self.exception_group.as_ref()?, vec![x]))
     }
 
+    pub fn exception_group_object(&self) -> Option<&Class> {
+        Some(&Self::unwrap(self.exception_group.as_ref()?).0)
+    }
+
     pub fn union_type(&self) -> Option<&ClassType> {
         Some(Self::primitive(self.union_type.as_ref()?))
     }

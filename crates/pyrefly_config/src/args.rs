@@ -199,6 +199,9 @@ pub struct ConfigOverrideArgs {
     /// How to handle when recursion depth limit is exceeded.
     #[arg(long)]
     recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
+    #[arg(long)]
+    pytorch_efficiency_lints: Option<bool>,
     /// (Experimental) Enable tensor shape type inference.
     /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
     #[arg(long)]
@@ -416,6 +419,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.recursion_overflow_handler {
             config.root.recursion_overflow_handler = Some(*x);
+        }
+        if let Some(x) = &self.pytorch_efficiency_lints {
+            config.root.pytorch_efficiency_lints = Some(*x);
         }
         if let Some(x) = &self.tensor_shapes {
             config.root.tensor_shapes = Some(*x);

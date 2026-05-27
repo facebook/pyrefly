@@ -1208,6 +1208,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         false
     }
 
+    /// Returns `false` if `cls` or any of its non-object ancestors defines a dunder that
+    /// could affect truthiness or attribute resolution at runtime: `__bool__`, `__len__`,
+    /// `__getattr__`, `__getattribute__` (which can intercept `__bool__` dynamically), or
+    /// `__get__` (descriptor classes whose instances are typically used via the descriptor
+    /// protocol rather than as standalone values).
+    /// Used to detect class instances that are always truthy.
+    pub fn class_instances_always_truthy(&self, cls: &Class) -> bool {
+        let relevant_dunders = [
+            &dunder::BOOL,
+            &dunder::LEN,
+            &dunder::GETATTR,
+            &dunder::GETATTRIBUTE,
+            &dunder::GET,
+        ];
+        !relevant_dunders.iter().any(|dunder: &&Name| {
+            let field = self.get_class_member_with_defining_class(cls, dunder);
+            field.is_some_and(|field| !field.defining_class.is_builtin("object"))
+        })
+    }
+
     fn has_custom_setattr(&self, cls: &Class) -> bool {
         if self
             .get_class_fields(cls)

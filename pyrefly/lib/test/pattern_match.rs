@@ -259,6 +259,54 @@ def f0(x: A | B):
 );
 
 testcase!(
+    test_match_sequence_pattern_narrows_tuple_out_of_union,
+    r#"
+from typing import assert_never
+
+def f(value: float | tuple[float, float]) -> None:
+    match value:
+        case (_, _):
+            pass
+        case float():
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+"#,
+);
+
+testcase!(
+    test_match_sequence_star_pattern_narrows,
+    r#"
+from typing import assert_never
+
+def f(value: int | list[int]) -> None:
+    match value:
+        case [*_]:
+            pass
+        case int():
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+"#,
+);
+
+testcase!(
+    test_match_sequence_refutable_subpattern_no_strip,
+    r#"
+from typing import assert_type
+
+def f(value: float | tuple[float, float]) -> float | tuple[float, float]:
+    match value:
+        case (1.0, 2.0):
+            return value
+        case _:
+            # The (1.0, 2.0) case is refutable, so tuple[float, float] must still be possible here.
+            assert_type(value, float | tuple[float, float])
+            return value
+"#,
+);
+
+testcase!(
     test_match_exhaustive_enum_assign,
     r#"
 from enum import IntEnum

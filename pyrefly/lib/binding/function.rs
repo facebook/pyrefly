@@ -6,6 +6,7 @@
  */
 
 use std::mem;
+use std::sync::Arc;
 
 use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
@@ -16,6 +17,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::PlaceholderBodyKind;
+use pyrefly_types::meta_shape_dsl::convert_shape_dsl_function;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Decorator;
@@ -804,6 +806,25 @@ impl<'a> BindingsBuilder<'a> {
             _ => (None, None),
         };
 
+        // Check whether this function is decorated with `@shape_dsl_function`
+        // before `decorators()` takes the decorator list.
+        let is_shape_dsl = x.decorator_list.iter().any(|d| {
+            self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
+        });
+
+        // Extract the IR function name from @uses_shape_dsl(ir_fn) if present.
+        let uses_shape_dsl_ir_name = x.decorator_list.iter().find_map(|d| {
+            let call = d.expression.as_call_expr()?;
+            if self.as_special_export(&call.func) != Some(SpecialExport::UsesShapeDsl) {
+                return None;
+            }
+            // The first positional argument is the IR function reference.
+            let first_arg = call.arguments.args.first()?;
+            // Must be a simple name (not a dotted path or arbitrary expression).
+            let name_expr = first_arg.as_name_expr()?;
+            Some((name_expr.id.clone(), ShortIdentifier::expr_name(name_expr)))
+        });
+
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
@@ -811,6 +832,15 @@ impl<'a> BindingsBuilder<'a> {
         self.record_pytest_fixture_definition(&x, class_key);
 
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
+
+        // Convert the function body to DSL IR before `function_body` takes the body.
+        let shape_dsl_def = if is_shape_dsl {
+            Some(Arc::new(
+                convert_shape_dsl_function(&x).expect("@shape_dsl_function body must be valid DSL"),
+            ))
+        } else {
+            None
+        };
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
@@ -846,6 +876,8 @@ impl<'a> BindingsBuilder<'a> {
                 legacy_tparams: legacy_tparams.into_boxed_slice(),
                 module_style: self.module_info.path().style(),
                 outer_funcs,
+                shape_dsl_def,
+                uses_shape_dsl_ir_name,
             },
         );
 

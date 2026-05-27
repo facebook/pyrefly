@@ -55,8 +55,16 @@ struct CalledOverload<'f> {
 }
 
 impl CalledOverload<'_> {
-    fn num_errors(&self) -> usize {
-        self.call_errors.len() + self.specialization_errors.len()
+    fn num_match_errors(&self) -> usize {
+        self.call_errors.len_hard() + self.specialization_errors.len()
+    }
+
+    fn has_match_errors(&self) -> bool {
+        self.call_errors.has_hard() || !self.specialization_errors.is_empty()
+    }
+
+    fn has_hard_call_errors(&self) -> bool {
+        self.call_errors.has_hard()
     }
 }
 
@@ -544,12 +552,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ctor_targs,
             );
             self.solver().restore_vars(snapshot);
-            let n_errors = called_overload.num_errors();
+            let n_errors = called_overload.num_match_errors();
             if n_errors == 0 {
                 matched_overloads.push(called_overload);
             } else {
                 match &closest_unmatched_overload {
-                    Some(overload) if overload.num_errors() <= n_errors => {}
+                    Some(overload) if overload.num_match_errors() <= n_errors => {}
                     _ => {
                         closest_unmatched_overload = Some(called_overload);
                     }
@@ -665,7 +673,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &None,
                             );
                             self.solver().restore_vars(snapshot);
-                            res.num_errors() == 0
+                            !res.has_match_errors()
                         })
                         .map(|(split_point, _)| split_point + 1)
                 };
@@ -701,7 +709,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // specialization errors that the matched-overload step already accounted for,
                     // so we only fall back to the no-hint version on hard call errors. See
                     // `test::generic_restriction::test_nested_call_of_overloaded_function_preserves_bound`.
-                    if contextual_overload.call_errors.is_empty() {
+                    if !contextual_overload.has_hard_call_errors() {
                         contextual_overload
                     } else {
                         overload

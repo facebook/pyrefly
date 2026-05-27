@@ -129,6 +129,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         pydantic_config_dict: &PydanticConfigDict,
         pydantic_before_validator_fields: &[Name],
         django_field_info: &DjangoFieldInfo,
+        capture_init: Option<&[Name]>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         // Get class decorators.
@@ -507,6 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_factory_boy_factory,
             is_metaclass,
             slots_info,
+            capture_init.map(|names| names.to_vec()),
         )
     }
 
@@ -1693,9 +1695,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return true;
             }
             if let Some(metaclass) = base_metadata.custom_metaclass()
-                && metaclass
-                    .class_object()
-                    .has_toplevel_qname("abc", "ABCMeta")
+                && self.metaclass_extends_abcmeta(metaclass.class_object())
             {
                 return true;
             }
@@ -1704,12 +1704,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         if let Some(metaclass) = metaclass
-            && metaclass
-                .class_object()
-                .has_toplevel_qname("abc", "ABCMeta")
+            && self.metaclass_extends_abcmeta(metaclass.class_object())
         {
             return true;
         }
         false
+    }
+
+    /// Check if `metaclass_cls` is `abc.ABCMeta` or has `abc.ABCMeta` anywhere in its
+    /// inheritance chain.
+    fn metaclass_extends_abcmeta(&self, metaclass_cls: &Class) -> bool {
+        if metaclass_cls.has_toplevel_qname("abc", "ABCMeta") {
+            return true;
+        }
+        let metadata = self.get_metadata_for_class(metaclass_cls);
+        metadata
+            .base_class_objects()
+            .iter()
+            .any(|base| self.metaclass_extends_abcmeta(base))
     }
 }

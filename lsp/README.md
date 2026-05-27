@@ -27,7 +27,7 @@ The following configuration options are IDE-specific and exposed as VSCode
 settings:
 
 - `python.pyrefly.typeCheckingMode` [enum: auto, off, basic, legacy,
-  default, strict; default: auto]: [Preset](https://pyrefly.org/en/docs/configuration/#preset)
+  default, strict, all; default: auto]: [Preset](https://pyrefly.org/en/docs/configuration/#preset)
   to use for files not covered by a `pyrefly.toml`. The default `auto`
   migrates a nearby mypy/pyright config when present, otherwise uses
   `basic`.

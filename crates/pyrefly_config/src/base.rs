@@ -91,6 +91,9 @@ pub enum Preset {
     Default,
     /// Enables additional error codes on top of the default for stricter checking.
     Strict,
+    /// Enables every error kind at `Error` severity. Directives like
+    /// `reveal-type` keep their default severity.
+    All,
 }
 
 impl Preset {
@@ -165,6 +168,22 @@ impl Preset {
                     (ErrorKind::MissingOverrideDecorator, Severity::Error),
                     (ErrorKind::UnusedIgnore, Severity::Error),
                 ]);
+                ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(errors)),
+                    strict_callable_subtyping: Some(true),
+                    ..Default::default()
+                }
+            }
+            Preset::All => {
+                // Promote every non-Error kind to Error. Directives (e.g.
+                // RevealType) are left at their default severity so they
+                // remain informational rather than becoming hard errors.
+                let errors: HashMap<ErrorKind, Severity> = all::<ErrorKind>()
+                    .filter_map(|kind| {
+                        (!kind.is_directive() && kind.default_severity() != Severity::Error)
+                            .then_some((kind, Severity::Error))
+                    })
+                    .collect();
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
@@ -250,6 +269,12 @@ pub struct ConfigBase {
     /// By default this is enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
+
+    /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
+    /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
+    /// unless individually overridden in `[errors]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pytorch_efficiency_lints: Option<bool>,
 
     /// (Experimental) Enable tensor shape type inference.
     /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
@@ -554,20 +579,24 @@ mod tests {
                 })
                 .unwrap_or_default();
             let documented_codes = preset_error_codes.get(&name).cloned().unwrap_or_default();
-
-            for code in &documented_codes {
-                assert!(
-                    all_codes.contains(code),
-                    "Preset `{name}`: error code `{code}` is documented in {doc_path} \
-                     but not in Preset::apply()."
-                );
-            }
-            for code in &enabled_codes {
-                assert!(
-                    documented_codes.contains(code),
-                    "Preset `{name}`: error code `{code}` is enabled by Preset::apply() \
-                     but not documented in {doc_path}."
-                );
+            if preset == Preset::All {
+                // `All` turns everything on; we don't document the individual errors
+                assert!(documented_codes.is_empty());
+            } else {
+                for code in &documented_codes {
+                    assert!(
+                        all_codes.contains(code),
+                        "Preset `{name}`: error code `{code}` is documented in {doc_path} \
+                        but not in Preset::apply()."
+                    );
+                }
+                for code in &enabled_codes {
+                    assert!(
+                        documented_codes.contains(code),
+                        "Preset `{name}`: error code `{code}` is enabled by Preset::apply() \
+                        but not documented in {doc_path}."
+                    );
+                }
             }
         }
     }
