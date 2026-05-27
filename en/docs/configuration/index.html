@@ -35,8 +35,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.f4cd5fbf.js" defer="defer"></script>
-<script src="/assets/js/main.56dfd040.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.e4780787.js" defer="defer"></script>
+<script src="/assets/js/main.46befba5.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -501,7 +501,7 @@ set on the CLI.</p>
 <p>A named collection of error severities and behavior settings that serves as the base configuration.
 Any explicit settings you specify override the preset.</p>
 <ul>
-<li>Type: string (<code>&quot;off&quot;</code>, <code>&quot;basic&quot;</code>, <code>&quot;legacy&quot;</code>, <code>&quot;default&quot;</code>, <code>&quot;strict&quot;</code>)</li>
+<li>Type: string (<code>&quot;off&quot;</code>, <code>&quot;basic&quot;</code>, <code>&quot;legacy&quot;</code>, <code>&quot;default&quot;</code>, <code>&quot;strict&quot;</code>, <code>&quot;all&quot;</code>)</li>
 <li>Default: none (equivalent to <code>&quot;default&quot;</code>)</li>
 <li>Flag equivalent: <code>-p</code>/<code>--preset</code></li>
 </ul>
@@ -530,6 +530,15 @@ Any explicit settings you specify override the preset.</p>
 <ul>
 <li>Sets <a href="#strict-callable-subtyping"><code>strict-callable-subtyping</code></a> <code>= true</code></li>
 <li>Enables (as errors): <a href="/en/docs/error-kinds/#implicit-any"><code>implicit-any</code></a> (covers every implicit-<code>Any</code> sub-kind), <a href="/en/docs/error-kinds/#missing-override-decorator"><code>missing-override-decorator</code></a>, <a href="/en/docs/error-kinds/#unused-ignore"><code>unused-ignore</code></a></li>
+</ul>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="preset-all">Preset: <code>all</code><a href="#preset-all" class="hash-link" aria-label="Direct link to preset-all" title="Direct link to preset-all">​</a></h4>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>This is a new preset in <em>upcoming</em> Pyrefly version 1.1.0. It is not yet available in the current stable version.</p></div></div>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>For most users, we recommend using the <code>strict</code> preset and enabling individual additional errors as desired,
+for more stability and an opt-in experience for new errors.</p></div></div>
+<p>Enables every error kind at <code>error</code> severity. Directives like <code>reveal-type</code> remain informational.</p>
+<ul>
+<li>Sets <a href="#strict-callable-subtyping"><code>strict-callable-subtyping</code></a> <code>= true</code></li>
+<li>Enables every error kind at <code>error</code> severity</li>
 </ul>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="errors"><code>errors</code><a href="#errors" class="hash-link" aria-label="Direct link to errors" title="Direct link to errors">​</a></h3>
 <p>Configure the severity for each kind of error that Pyrefly emits: <code>error</code>, <code>warn</code>, <code>ignore</code>.</p>
