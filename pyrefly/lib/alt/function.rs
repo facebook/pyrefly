@@ -2233,7 +2233,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         m: &BoundMethod,
         is_subset: &mut dyn FnMut(&Type, &Type) -> bool,
     ) -> Option<Type> {
-        self.bind_bound_method_type(&m.func, &m.obj, false, is_subset)
+        // Skip instantiation when binding a classmethod whose tparams reference the class's own
+        // tparams, otherwise those class tparams would be erased to `Unknown` in the resulting callable.
+        let skip_instantiation = if let Type::ClassDef(cls) = &m.obj {
+            let class_tparams = self.get_class_tparams(cls);
+            let class_tparams = class_tparams.iter().collect::<SmallSet<_>>();
+            let uses_class_tparam =
+                |tparams: &TParams| tparams.iter().any(|tp| class_tparams.contains(tp));
+            !class_tparams.is_empty()
+                && match &m.func {
+                    BoundMethodType::Function(_) => false,
+                    BoundMethodType::Forall(forall) => uses_class_tparam(&forall.tparams),
+                    BoundMethodType::Overload(overload) => {
+                        overload.signatures.iter().any(|sig| match sig {
+                            OverloadType::Function(_) => false,
+                            OverloadType::Forall(forall) => uses_class_tparam(&forall.tparams),
+                        })
+                    }
+                }
+        } else {
+            false
+        };
+        self.bind_bound_method_type(&m.func, &m.obj, skip_instantiation, is_subset)
     }
 
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {

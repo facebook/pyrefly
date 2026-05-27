@@ -1421,7 +1421,6 @@ assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Unknown], Clas
 );
 
 testcase!(
-    bug = "Generic classmethod callable loses class type params",
     test_generic_classmethod_to_callable_preserves_class_tparams,
     r#"
 from typing import Callable, Generic, ParamSpec, TypeVar, assert_type
@@ -1441,7 +1440,7 @@ class Factory(Generic[T]):
     def make(cls, x: list[T], y: list[T]) -> Box[T]: ...
 
 r = accepts_callable(Factory.make)
-assert_type(r([""], [""]), Box[str])  # E: assert_type(Box[Unknown], Box[str]) failed
+assert_type(r([""], [""]), Box[str])
 "#,
 );
 
