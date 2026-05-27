@@ -580,6 +580,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     dsl_fn: dsl_fn.clone(),
                     helpers: helpers.clone(),
                 }));
+            } else {
+                self.error(
+                    errors,
+                    ir_identifier.range(),
+                    ErrorKind::InvalidArgument,
+                    "`@uses_shape_dsl` argument does not resolve to a `@shape_dsl_function`"
+                        .to_owned(),
+                );
             }
         }
 
