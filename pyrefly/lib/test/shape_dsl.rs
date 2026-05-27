@@ -20,6 +20,14 @@ from shape_extensions.dsl import shape_dsl_function
 @shape_dsl_function
 def identity_ir(x: int) -> int:
     return x
+
+@shape_dsl_function
+def times_two(x: int) -> int:
+    return x + x
+
+@shape_dsl_function
+def double_ir(x: int) -> int:
+    return times_two(x)
 "#,
     );
     env.add_with_path(
@@ -28,7 +36,7 @@ def identity_ir(x: int) -> int:
         r#"
 from typing import overload
 from shape_extensions import uses_shape_dsl
-from my_shapes import identity_ir
+from my_shapes import identity_ir, double_ir
 
 @uses_shape_dsl(identity_ir)
 def plain_fn(x: int) -> int: ...
@@ -45,6 +53,9 @@ def overloaded_with_impl(x: int | str) -> int | str: ...
 def overloaded_no_impl(x: int) -> int: ...
 @overload
 def overloaded_no_impl(x: str) -> str: ...
+
+@uses_shape_dsl(double_ir)
+def double_fn(x: int) -> int: ...
 "#,
     );
     env
@@ -85,5 +96,16 @@ from my_lib import overloaded_no_impl
 
 assert_type(overloaded_no_impl(1), Literal[1])
 assert_type(overloaded_no_impl("a"), str)
+"#,
+);
+
+testcase!(
+    test_uses_shape_dsl_cross_function_call,
+    shape_dsl_env(),
+    r#"
+from typing import Literal, assert_type
+from my_lib import double_fn
+
+assert_type(double_fn(3), Literal[6])
 "#,
 );
