@@ -51,6 +51,18 @@ if sys.version_info[1] >= 6:
 else:
     C = int
 assert_type(C(), str)
+
+if sys.version_info.minor >= 6:
+    D = str
+else:
+    D = int
+assert_type(D(), str)
+
+if sys.version_info.major == 3:
+    E = str
+else:
+    E = int
+assert_type(E(), str)
 "#,
 );
 

@@ -15,11 +15,14 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
+use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::type_var::Restriction;
@@ -435,6 +438,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         module_style: ModuleStyle,
         outer_funcs: Option<Name>,
+        shape_dsl_def: Option<Arc<ShapeDslFunction>>,
+        uses_shape_dsl_ir_name: Option<(Name, ShortIdentifier)>,
         errors: &ErrorCollector,
     ) -> Arc<UndecoratedFunction> {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
@@ -536,13 +541,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams.extend(legacy_tparams);
         let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
 
-        let kind = FunctionKind::from_name(
-            self.module().dupe(),
-            defining_cls.clone(),
-            &def.name.id,
-            Some(def_index),
-            outer_funcs,
-        );
+        let kind = if let Some(dsl_fn) = shape_dsl_def {
+            // Shape DSL functions carry their parsed IR for call-site evaluation.
+            //
+            // TODO: the embedded `ShapeDslFunction` currently carries only this
+            // function's own DSL body, with no `fn_lookup` of resolved helpers.
+            // That's adequate for leaf DSL functions but breaks any function that
+            // calls another `@shape_dsl_function` (e.g. `reshape_ir` ->
+            // `normalize_dim`). We need to build the per-function `fn_lookup` here
+            // from resolved transitive callees.
+            let func_id = Arc::new(FuncId {
+                module: self.module().dupe(),
+                cls: defining_cls.clone(),
+                name: def.name.id.clone(),
+                def_index: Some(def_index),
+                outer_funcs,
+            });
+            FunctionKind::ShapeDsl(func_id, dsl_fn)
+        } else {
+            FunctionKind::from_name(
+                self.module().dupe(),
+                defining_cls.clone(),
+                &def.name.id,
+                Some(def_index),
+                outer_funcs,
+            )
+        };
+
+        // Resolve the IR function reference from @uses_shape_dsl(ir_fn) and
+        // populate `flags.shape_transform` with the DSL function it points to.
+        if let Some((_name, ir_identifier)) = uses_shape_dsl_ir_name {
+            let ir_type = self.get(&Key::BoundName(ir_identifier)).arc_clone_ty();
+            if let Type::Function(func) = &ir_type
+                && let FunctionKind::ShapeDsl(_, dsl_fn) = &func.metadata.kind
+            {
+                flags.shape_transform = Some(Arc::new(ShapeTransformRef {
+                    dsl_fn: dsl_fn.clone(),
+                }));
+            }
+        }
+
         let metadata = FuncMetadata { kind, flags };
 
         Arc::new(UndecoratedFunction {
@@ -784,6 +822,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 Some(SpecialDecorator::DataclassTransformCall(&call.keywords))
             }
+            _ if let Type::KwCall(call) = &decorator.ty
+                && call.has_function_kind(FunctionKind::UsesShapeDsl) =>
+            {
+                Some(SpecialDecorator::UsesShapeDsl)
+            }
             Some(CalleeKind::Class(ClassKind::EnumNonmember)) => {
                 Some(SpecialDecorator::EnumNonmember)
             }
@@ -870,6 +913,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             SpecialDecorator::AbstractMethod => {
                 flags.is_abstract_method = true;
+                true
+            }
+            SpecialDecorator::UsesShapeDsl => {
+                // The actual shape_transform flag is populated after the decorator
+                // loop in undecorated_function, where uses_shape_dsl_ir_name is
+                // available. Returning true here just filters the decorator out of
+                // the list so it doesn't go through the generic decorator pipeline.
                 true
             }
             _ => false,
@@ -1981,7 +2031,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ))
                 },
             );
-            if let Err(specialization_errors) = self.solver().finish_quantified(vs, false) {
+            if let Err(specialization_errors) = self.finish_quantified(vs, false) {
                 let mut builder = errors.error_builder(
                     *range,
                     ErrorKind::InconsistentOverload,

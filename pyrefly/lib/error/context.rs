@@ -170,8 +170,9 @@ pub enum TypeCheckKind {
     /// Check of a parameter's default value against its type annotation.
     FunctionParameterDefault(Name),
     /// Check against type of a TypedDict key. The name may be None if the type comes from
-    /// `extra_items` or some other non-literal-key source.
-    TypedDictKey(Option<Name>),
+    /// `extra_items` or some other non-literal-key source. The bool indicates whether the
+    /// TypedDict was inferred (anonymous) rather than explicitly declared.
+    TypedDictKey(Option<Name>, bool),
     /// Check an unpacked dict against a TypedDict, e.g., `x: MyTypedDict = {**unpacked_dict}`.
     TypedDictUnpacking,
     /// Check unpacking of an open TypedDict into a TypedDict. Used to report instances of
@@ -237,7 +238,7 @@ impl TypeCheckKind {
             Self::CallKwArgs(..) => ErrorKind::BadArgumentType,
             Self::CallUnpackKwArg(..) => ErrorKind::BadArgumentType,
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
-            Self::TypedDictKey(..) => ErrorKind::BadTypedDictKey,
+            Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,
             Self::TypedDictOpenUnpacking => ErrorKind::OpenUnpacking,
             Self::Attribute(..) => ErrorKind::BadAssignment,

@@ -796,6 +796,46 @@ assert_type(A[int]().x, int)
     "#,
 );
 
+fn env_pkg_exported_type_var() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("Foo", "Foo/__init__.py", "");
+    t.add_with_path(
+        "Foo.Bar",
+        "Foo/Bar.py",
+        r#"
+from typing import TypeVar
+ImportedT = TypeVar("ImportedT")
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_function_legacy_typevar_nested_dotted_name,
+    env_pkg_exported_type_var(),
+    r#"
+import Foo.Bar
+from typing import assert_type
+
+def myFunc(t: Foo.Bar.ImportedT) -> Foo.Bar.ImportedT:
+    return t
+assert_type(myFunc(0), int)
+    "#,
+);
+
+testcase!(
+    test_class_legacy_typevar_nested_dotted_name,
+    env_pkg_exported_type_var(),
+    r#"
+import Foo.Bar
+from typing import assert_type, Generic
+
+class A(Generic[Foo.Bar.ImportedT]):
+    x: Foo.Bar.ImportedT
+assert_type(A[int]().x, int)
+    "#,
+);
+
 testcase!(
     test_legacy_typevar_defined_after_use,
     r#"

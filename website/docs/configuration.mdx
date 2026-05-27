@@ -508,7 +508,7 @@ set on the CLI.
 A named collection of error severities and behavior settings that serves as the base configuration.
 Any explicit settings you specify override the preset.
 
-- Type: string (`"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`)
+- Type: string (`"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`, `"all"`)
 - Default: none (equivalent to `"default"`)
 - Flag equivalent: `-p`/`--preset`
 
@@ -543,6 +543,21 @@ Enables additional error codes on top of the default for stricter checking.
 
 - Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
 - Enables (as errors): [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
+
+#### Preset: `all`
+:::info
+This is a new preset in *upcoming* Pyrefly version 1.1.0. It is not yet available in the current stable version.
+:::
+
+:::info
+For most users, we recommend using the `strict` preset and enabling individual additional errors as desired,
+for more stability and an opt-in experience for new errors.
+:::
+
+Enables every error kind at `error` severity. Directives like `reveal-type` remain informational.
+
+- Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
+- Enables every error kind at `error` severity
 
 ### `errors`
 
@@ -699,6 +714,8 @@ See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for mor
 - Equivalent configs:
     - `true` emulates mypy's `check_untyped_defs` flag.
     - `false` emulates mypy's default behavior.
+- Related options:
+    - [`infer-return-types`](#infer-return-types): Controls when Pyrefly infers return types for unannotated functions.
 
 ### `infer-return-types`
 
@@ -710,9 +727,11 @@ unannotated functions are only eligible when `check-unannotated-defs` is `true`.
   completely unannotated ones.
 - `"annotated"`: Infer return types only for functions that have at least one
   parameter or return annotation. This is useful when combined with
-  `check-unannotated-defs = false` to still get return type inference for
+  [`check-unannotated-defs = false`](#check-unannotated-defs) to still get return type inference for
   partially annotated functions.
 - `"never"`: Never infer return types; unannotated returns are treated as `Any`.
+  This is often combined with [`check-unannotated-defs = false`](#check-unannotated-defs)
+  for a more permissive setup.
 
 :::info
 To provide inferred return types with `"checked"` or `"annotated"`, especially
@@ -948,6 +967,26 @@ and values that can be overridden here.
 - Default: `[]`
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
+
+### `pytorch-efficiency-lints`
+
+Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
+in training code. When `true`, all `pytorch-efficiency-lint-*` error kinds are
+enabled at `warn` severity. You can override individual lint severities in
+[`[errors]`](#errors).
+
+- Type: `bool`
+- Default: `false`
+- Flag equivalent: `--pytorch-efficiency-lints`
+
+The following lints are enabled by this flag:
+
+| Lint | What it detects |
+|---|---|
+| [`pytorch-efficiency-lint-cuda-call`](./error-kinds.mdx#pytorch-efficiency-lint-cuda-call) | `Tensor.cuda()` — hard-coded device |
+| [`pytorch-efficiency-lint-item-call`](./error-kinds.mdx#pytorch-efficiency-lint-item-call) | `Tensor.item()` — GPU→CPU sync stall |
+| [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
+| [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
 
 ### `tensor-shapes`
 

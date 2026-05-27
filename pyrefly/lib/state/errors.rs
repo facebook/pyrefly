@@ -227,16 +227,9 @@ impl Errors {
         errors
     }
 
-    pub fn collect_errors_with_baseline(
-        &self,
-        baseline_path: Option<&Path>,
-        relative_to: &Path,
-    ) -> CollectedErrors {
-        let errors = self.collect_errors();
-        self.apply_baseline(errors, baseline_path, relative_to)
-    }
-
     /// Apply baseline filtering to already-collected errors.
+    /// `relative_to` is the resolved `--relative-to` directory so that
+    /// relative paths stored in the baseline file are resolved correctly.
     pub fn apply_baseline(
         &self,
         mut errors: CollectedErrors,
@@ -244,9 +237,9 @@ impl Errors {
         relative_to: &Path,
     ) -> CollectedErrors {
         if let Some(baseline_path) = baseline_path
-            && let Ok(processor) = BaselineProcessor::from_file(baseline_path)
+            && let Ok(processor) = BaselineProcessor::from_file(baseline_path, relative_to)
         {
-            processor.process_errors(&mut errors.ordinary, &mut errors.baseline, relative_to);
+            processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
         }
         errors
     }

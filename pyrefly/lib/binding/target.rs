@@ -31,6 +31,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::MethodSelfKind;
+use crate::binding::binding::MultiTargetReceiver;
 use crate::binding::binding::NameAssign;
 use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::TypeAliasBinding;
@@ -103,6 +104,7 @@ impl<'a> BindingsBuilder<'a> {
                             unpack_idx,
                             range,
                             UnpackedPosition::Slice(i, j),
+                            None,
                         )
                     };
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
@@ -115,8 +117,9 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         UnpackedPosition::Index(i)
                     };
-                    let make_nested_binding =
-                        |ann| Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position);
+                    let make_nested_binding = |ann| {
+                        Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position, None)
+                    };
                     self.bind_target_no_expr(e, &make_nested_binding);
                 }
             }
@@ -410,7 +413,9 @@ impl<'a> BindingsBuilder<'a> {
                         target,
                         None,
                         &|_, ann| {
-                            ExprOrBinding::Binding(Binding::MultiTargetAssign(ann, rhs_idx, range))
+                            ExprOrBinding::Binding(Binding::MultiTargetAssign(
+                                ann, rhs_idx, range, None,
+                            ))
                         },
                         false,
                     );
@@ -423,7 +428,11 @@ impl<'a> BindingsBuilder<'a> {
     /// - Ensure the expression, if there is one we are supposed to ensure
     /// - Update the bindings table and flow info to note that:
     ///   - the name is now bound to a `Key::Definition` + the computed binding
-    ///   - the flow style is `FlowStyle::Other`
+    ///   - the flow style is `FlowStyle::Other`, unless this is a
+    ///     receiver-constrained class rebind (in which case the non-pristine
+    ///     `FlowStyle::ClassDef` is used and the binding is augmented with a
+    ///     `MultiTargetReceiver` so the solver applies the same receiver
+    ///     check as a single-target rebind)
     fn bind_target_name(
         &mut self,
         name: &ExprName,
@@ -449,6 +458,21 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
+        // Receiver detection mirrors `bind_single_name_assign`: a same-scope
+        // rebind of a name originally bound to a class behaves as if the
+        // original `class` declaration were an implicit annotation. We restrict
+        // to non-class-body scopes (class-body assignments stay class-field
+        // shaped). For the targets that flow through this helper, only
+        // `MultiTargetAssign` and `UnpackedValue` participate — the for-loop,
+        // with-stmt, and comprehension forms construct other binding kinds
+        // and intentionally retain `FlowStyle::Other`.
+        let receiver_idx = if !self.scopes.in_class_body() {
+            self.scopes
+                .current_flow_style(&name.id)
+                .and_then(|s| s.canonical_class_receiver_idx())
+        } else {
+            None
+        };
         // If the name was annotation-only (`x: T`, `FlowStyle::Uninitialized`) before this
         // assignment, it is the initialization rather than a reassignment — record it so
         // the solver can suppress the "Final must be initialized" error.
@@ -456,11 +480,40 @@ impl<'a> BindingsBuilder<'a> {
             .scopes
             .current_flow_style(&name.id)
             .is_some_and(|s| matches!(s, FlowStyle::Uninitialized));
-        let ann = self.bind_current(&name.id, &user, FlowStyle::Other);
+        let style = match receiver_idx {
+            // `pristine: false` because the visible binding is this
+            // multi-target / unpacked assignment, not the original class
+            // definition. Sticky across both compatible and incompatible
+            // writes so future same-scope rebinds keep checking against the
+            // original receiver.
+            Some(idx) => FlowStyle::ClassDef {
+                class_idx: idx,
+                pristine: false,
+            },
+            None => FlowStyle::Other,
+        };
+        let ann = self.bind_current(&name.id, &user, style);
         if was_uninitialized && let Some(ann_idx) = ann {
             self.insert_subsequently_initialized(ann_idx);
         }
         let binding = make_binding(assigned.as_deref(), ann);
+        let binding = match (receiver_idx, binding) {
+            (Some(idx), Binding::MultiTargetAssign(a, rhs, range, _)) => {
+                let receiver = Box::new(MultiTargetReceiver {
+                    name: name.id.clone(),
+                    idx,
+                });
+                Binding::MultiTargetAssign(a, rhs, range, Some(receiver))
+            }
+            (Some(idx), Binding::UnpackedValue(a, src, range, pos, _)) => {
+                let receiver = Box::new(MultiTargetReceiver {
+                    name: name.id.clone(),
+                    idx,
+                });
+                Binding::UnpackedValue(a, src, range, pos, Some(receiver))
+            }
+            (_, binding) => binding,
+        };
         self.insert_binding_current(user, binding);
     }
 

@@ -2118,7 +2118,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Arc::unwrap_or_clone avoids cloning since the refcount is 1 here.
         let raw_answer = if K::EXPORTED {
             let mut forced = Arc::unwrap_or_clone(raw_answer);
-            forced.visit_mut(&mut |x| self.current.solver().deep_force_mut(x));
+            forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
             Arc::new(forced)
         } else {
             raw_answer
@@ -2221,7 +2221,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Deep-force to resolve all type variables, matching the
                 // invariant that all iterative answers are deep-forced.
                 let mut forced = Arc::unwrap_or_clone(prior_answer);
-                forced.visit_mut(&mut |x| self.current.solver().deep_force_mut(x));
+                forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
                 let answer = Arc::new(forced);
 
                 // Type-erase for storage. The concrete type inside the outer
@@ -2301,7 +2301,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // for convergence comparisons: without forcing, structurally identical
         // answers can appear different due to unresolved Var IDs.
         let mut forced = Arc::unwrap_or_clone(answer);
-        forced.visit_mut(&mut |x| self.current.solver().deep_force_mut(x));
+        forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
         let answer = Arc::new(forced);
 
         // Type-erase the answer for storage in iteration state.
@@ -3079,19 +3079,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | TypeCheckKind::CallVarArgs(..)
             | TypeCheckKind::CallKwArgs(..)
             | TypeCheckKind::CallUnpackKwArg(..) => {
-                let mut call_context = CallContext::outside();
-                call_context.set_argument_side(ArgumentSide::Got);
-                self.solver().is_subset_eq_with_call_context(
-                    got,
-                    want,
-                    self.type_order(),
-                    &call_context,
-                )
+                let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
+                self.solver()
+                    .is_subset_eq(got, want, self.type_order(), Some(&call_context))
             }
             _ => self.is_subset_eq_with_reason(got, want),
         };
         match subset_result {
-            Ok(()) => true,
+            Ok(()) => {
+                self.warn_if_string_as_iterable(got, want, loc, errors);
+                true
+            }
             Err(error) => {
                 self.report_type_error(got, want, errors, loc, tcc, error);
                 false
@@ -3108,18 +3106,72 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tcc: &dyn Fn() -> TypeCheckContext,
         call_context: &CallContext,
     ) -> bool {
-        match self.solver().is_subset_eq_with_call_context(
-            got,
-            want,
-            self.type_order(),
-            call_context,
-        ) {
-            Ok(()) => true,
+        match self
+            .solver()
+            .is_subset_eq(got, want, self.type_order(), Some(call_context))
+        {
+            Ok(()) => {
+                self.warn_if_string_as_iterable(got, want, loc, errors);
+                true
+            }
             Err(error) => {
                 self.report_type_error(got, want, errors, loc, tcc, error);
                 false
             }
         }
+    }
+
+    /// Warn when `str` is passed where `Iterable[str]` or `Sequence[str]` is expected.
+    /// While `str` is technically iterable, iterating by character is rarely intended.
+    fn warn_if_string_as_iterable(
+        &self,
+        got: &Type,
+        want: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if got.is_error() || got.is_any() || want.is_any() {
+            return;
+        }
+        let is_str = matches!(got, Type::ClassType(cls) if cls.is_builtin("str"));
+        if !is_str && !got.is_literal_string() {
+            return;
+        }
+        let want_is_iterable_str = match want {
+            Type::ClassType(cls) => {
+                let cls_object = cls.class_object();
+                let iterable = self.stdlib.iterable(Type::any_implicit());
+                let sequence = self.stdlib.sequence(Type::any_implicit());
+                let is_iterable =
+                    cls_object == iterable.class_object() || cls_object == sequence.class_object();
+                if !is_iterable {
+                    return;
+                }
+                matches!(
+                    cls.targs().as_slice(),
+                    [elem] if matches!(elem, Type::ClassType(elem_cls) if elem_cls.is_builtin("str"))
+                )
+            }
+            _ => false,
+        };
+        if !want_is_iterable_str {
+            return;
+        }
+        let got_display = self
+            .for_display(self.stdlib.str().clone().to_type())
+            .deterministic_printing();
+        let want_display = self.for_display(want.clone()).deterministic_printing();
+        errors
+            .error_builder(
+                range,
+                ErrorKind::StringAsIterable,
+                format!(
+                    "Passing `{}` to `{}` treats the string as an iterable of characters",
+                    got_display, want_display
+                ),
+            )
+            .with_detail("Did you mean to pass an iterable of strings?".to_owned())
+            .emit();
     }
 
     fn report_type_error(

@@ -106,9 +106,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.expr_with_separate_check_errors(
                                 &x.value,
                                 Some((&field.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(Some(
-                                        key_name.clone(),
-                                    )))
+                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                        Some(key_name.clone()),
+                                        false,
+                                    ))
                                 })),
                                 item_errors,
                             );
@@ -117,7 +118,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             self.expr_with_separate_check_errors(
                                 &x.value,
                                 Some((&extra.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(None))
+                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                        None, false,
+                                    ))
                                 })),
                                 item_errors,
                             );
@@ -1036,7 +1039,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Pin any vars in the type: leaking a var in a class field is particularly
         // likely to lead to data races where downstream uses can pin inconsistently.
-        let ty = self.solver().deep_force(ty);
+        let ty = self.solver().force(ty);
 
         ClassField::typed_dict_field(ty, annotation, read_only_reason)
     }
@@ -1044,4 +1047,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
 fn name_to_literal_type(name: &Name) -> Type {
     Lit::Str(name.as_str().into()).to_implicit_type()
+}
+
+pub trait TypedDictErrorKind {
+    fn key_error_kind(&self) -> ErrorKind;
+}
+
+impl TypedDictErrorKind for pyrefly_types::typed_dict::TypedDict {
+    fn key_error_kind(&self) -> ErrorKind {
+        if self.is_anonymous() {
+            ErrorKind::BadIndex
+        } else {
+            ErrorKind::BadTypedDictKey
+        }
+    }
 }

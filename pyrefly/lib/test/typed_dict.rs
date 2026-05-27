@@ -2451,6 +2451,22 @@ assert_type(updated, dict[str, int])
 );
 
 testcase!(
+    test_anonymous_typed_dict_error_messages,
+    r#"
+d = {"a": 42}
+d["a"] = "b"  # E: `Literal['b']` is not assignable to dict key `a` with type `int`
+
+from typing import TypedDict
+
+class MyTD(TypedDict):
+    x: int
+
+td: MyTD = {"x": 1}
+td["x"] = "b"  # E: `Literal['b']` is not assignable to TypedDict key `x` with type `int`
+"#,
+);
+
+testcase!(
     test_typed_dict_inherited_field_shadows_dict_method,
     r#"
 from typing import TypedDict, assert_type

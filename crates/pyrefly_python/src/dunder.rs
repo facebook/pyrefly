@@ -159,6 +159,7 @@ pub const INIT_SUBCLASS: Name = Name::new_static("__init_subclass__");
 pub const INVERT: Name = Name::new_static("__invert__");
 pub const ITER: Name = Name::new_static("__iter__");
 pub const LE: Name = Name::new_static("__le__");
+pub const LEN: Name = Name::new_static("__len__");
 pub const LT: Name = Name::new_static("__lt__");
 pub const MATCH_ARGS: Name = Name::new_static("__match_args__");
 pub const NE: Name = Name::new_static("__ne__");

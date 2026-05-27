@@ -14,12 +14,14 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::PythonASTRange;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::query::Query;
+use crate::query::TypeShape;
 use crate::test::util::init_test;
 
 /// Helper to create a Query with a ConfigFinder that doesn't use sourcedb.
@@ -50,6 +52,32 @@ fn types_to_json_string(types: Vec<(PythonASTRange, String)>) -> String {
         })
         .collect();
     serde_json::to_string_pretty(&entries).unwrap()
+}
+
+fn type_shape_values(types: Vec<(PythonASTRange, TypeShape)>) -> Vec<Value> {
+    types
+        .into_iter()
+        .map(|(_, type_shape)| serde_json::to_value(type_shape).unwrap())
+        .collect()
+}
+
+fn is_named_shape(shape: &Value, name: &str) -> bool {
+    shape.get("kind").and_then(Value::as_str) == Some("named")
+        && shape.get("name").and_then(Value::as_str) == Some(name)
+}
+
+fn is_named_shape_with_args(shape: &Value, name: &str, arg_names: &[&str]) -> bool {
+    is_named_shape(shape, name)
+        && shape
+            .get("args")
+            .and_then(Value::as_array)
+            .is_some_and(|args| {
+                args.len() == arg_names.len()
+                    && args
+                        .iter()
+                        .zip(arg_names.iter())
+                        .all(|(arg, arg_name)| is_named_shape(arg, arg_name))
+            })
 }
 
 #[test]
@@ -103,6 +131,75 @@ fn test_simple_int_annotation() {
 ]"#;
 
     assert_eq!(expected, actual);
+}
+
+#[test]
+fn test_type_shapes_include_structured_named_callable_and_variable_data() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"from typing import Callable, TypeVar
+
+T = TypeVar("T", bound=int)
+
+def apply(f: Callable[[int, str], bool], x: T) -> bool:
+    values: list[int] = [1]
+    return f(x, "ok")
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let shapes = type_shape_values(query.get_type_shapes_in_file(module_name, path).unwrap());
+    assert!(
+        shapes.iter().all(|shape| {
+            shape.get("display").is_some_and(Value::is_string)
+                && shape.get("kind").is_some_and(Value::is_string)
+        }),
+        "Expected every type shape to include display and kind:\n{shapes:#?}",
+    );
+    assert!(
+        shapes.iter().any(|shape| is_named_shape_with_args(
+            shape,
+            "builtins.list",
+            &["builtins.int"]
+        )),
+        "Expected a structured list[int] named shape:\n{shapes:#?}",
+    );
+    assert!(
+        shapes.iter().any(|shape| {
+            shape.get("kind").and_then(Value::as_str) == Some("callable")
+                && shape
+                    .get("params")
+                    .and_then(Value::as_array)
+                    .is_some_and(|params| {
+                        params.len() == 2
+                            && is_named_shape(&params[0], "builtins.int")
+                            && is_named_shape(&params[1], "builtins.str")
+                    })
+                && shape
+                    .get("return_type")
+                    .is_some_and(|return_type| is_named_shape(return_type, "builtins.bool"))
+        }),
+        "Expected a structured callable shape:\n{shapes:#?}",
+    );
+    assert!(
+        shapes.iter().any(|shape| {
+            shape.get("kind").and_then(Value::as_str) == Some("variable")
+                && shape.get("name").and_then(Value::as_str) == Some("T")
+                && shape
+                    .get("bounds")
+                    .and_then(Value::as_array)
+                    .is_some_and(|bounds| {
+                        bounds.len() == 1 && is_named_shape(&bounds[0], "builtins.int")
+                    })
+        }),
+        "Expected a structured TypeVar shape with a bound:\n{shapes:#?}",
+    );
 }
 
 #[test]

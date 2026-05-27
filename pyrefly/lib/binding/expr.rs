@@ -33,6 +33,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use vec1::Vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
@@ -69,6 +70,26 @@ use crate::types::types::AnyStyle;
 /// like reveal_type.
 fn is_special_name(name: &str) -> bool {
     matches!(name, "reveal_type" | "assert_type")
+}
+
+/// Walk a chain of `Expr::Attribute` nodes (e.g. `a.b.c`) and collect the
+/// base `ExprName` and attribute identifiers in order. Returns `None` if the
+/// chain doesn't bottom out in a Name.
+fn chase_static_attr_chain(mut expr: &Expr) -> Option<(ExprName, Vec1<Identifier>)> {
+    let mut attrs = Vec::new();
+    loop {
+        match expr {
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+                attrs.push(attr.clone());
+                expr = value;
+            }
+            Expr::Name(name) => {
+                attrs.reverse();
+                return Some((name.clone(), Vec1::try_from_vec(attrs).ok()?));
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// Looking up names in an expression requires knowing the identity of the binding
@@ -276,7 +297,7 @@ impl<'a> BindingsBuilder<'a> {
     fn ensure_simple_attr(
         &mut self,
         value: &Identifier,
-        attr: &Identifier,
+        attrs: Vec1<Identifier>,
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) -> Idx<Key> {
@@ -284,10 +305,7 @@ impl<'a> BindingsBuilder<'a> {
             value,
             usage,
             tparams_builder.as_mut().map(|tparams_builder| {
-                (
-                    tparams_builder,
-                    LegacyTParamId::Attr(value.clone(), attr.clone()),
-                )
+                (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
         )
     }
@@ -1189,12 +1207,14 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            Expr::Attribute(ExprAttribute { value, attr, .. })
-                if let Expr::Name(value) = &**value
+            Expr::Attribute(..)
+                if let Some((base, attrs)) = chase_static_attr_chain(x)
                 // We assume "args" and "kwargs" are ParamSpec attributes rather than imported TypeVars.
-                    && attr.id != "args" && attr.id != "kwargs" =>
+                    && attrs.last().id != "args"
+                    && attrs.last().id != "kwargs" =>
             {
-                // We intercept <name>.<name> to check if this is an imported legacy type parameter.
+                // We intercept dotted names (e.g. `mod.T` or `pkg.mod.T`) to check if the
+                // final attribute is an imported legacy type parameter.
                 //
                 // The value part of an attribute access is a module/object reference,
                 // not a type annotation. For example, in `x: pd.DataFrame`, `pd` is a
@@ -1208,8 +1228,8 @@ impl<'a> BindingsBuilder<'a> {
                     ref u => u.clone(),
                 };
                 self.ensure_simple_attr(
-                    &Ast::expr_name_identifier(value.clone()),
-                    attr,
+                    &Ast::expr_name_identifier(base),
+                    attrs,
                     &mut attr_value_usage,
                     tparams_builder,
                 );

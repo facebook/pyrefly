@@ -45,6 +45,14 @@ use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EqualityCompatibilityGroup {
+    Numeric,
+    BytesLike,
+    SetLike,
+    Str,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn callable_dunder_helper(
         &self,
@@ -647,6 +655,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 comparator.range(),
                 errors,
             );
+            self.check_incompatible_comparison(
+                &current_left,
+                &right,
+                *op,
+                comparator.range(),
+                errors,
+            );
 
             let right_range = comparator.range();
             let result = self.compare_types(
@@ -1012,6 +1027,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 Type::any_error()
             }
+        }
+    }
+    /// Checks for incompatible equality comparisons between types that cannot overlap.
+    fn check_incompatible_comparison(
+        &self,
+        left: &Type,
+        right: &Type,
+        op: CmpOp,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+            return;
+        }
+        if left.is_any() || right.is_any() || left.is_never() || right.is_never() {
+            return;
+        }
+        let Some(left_group) = self.equality_compatibility_group(left) else {
+            return;
+        };
+        let Some(right_group) = self.equality_compatibility_group(right) else {
+            return;
+        };
+        if left_group == right_group {
+            return;
+        }
+        let left_display = self.for_display(left.clone());
+        let right_display = self.for_display(right.clone());
+        self.error(
+            errors,
+            range,
+            ErrorKind::IncompatibleComparison,
+            format!(
+                "Comparison `{}` between incompatible types `{}` and `{}`",
+                op.as_str(),
+                left_display,
+                right_display
+            ),
+        );
+    }
+
+    fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
+        let class = match ty {
+            Type::ClassType(cls) => cls.class_object(),
+            Type::Literal(lit) => lit.value.general_class_type(self.stdlib).class_object(),
+            Type::LiteralString(_) => self.stdlib.str().class_object(),
+            _ => return None,
+        };
+        match (class.qname().module_name().as_str(), class.name().as_str()) {
+            ("builtins", "bool" | "int" | "float" | "complex") | ("decimal", "Decimal") => {
+                Some(EqualityCompatibilityGroup::Numeric)
+            }
+            ("builtins", "bytes" | "bytearray" | "memoryview") => {
+                Some(EqualityCompatibilityGroup::BytesLike)
+            }
+            ("builtins", "set" | "frozenset") => Some(EqualityCompatibilityGroup::SetLike),
+            ("builtins", "str") => Some(EqualityCompatibilityGroup::Str),
+            _ => None,
         }
     }
 }

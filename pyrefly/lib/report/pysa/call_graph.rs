@@ -52,6 +52,7 @@ use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtFor;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtReturn;
+use ruff_python_ast::StmtTry;
 use ruff_python_ast::StmtWith;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -4142,6 +4143,37 @@ impl<'a> CallGraphVisitor<'a> {
         }
     }
 
+    fn resolve_and_register_except_star_handlers(&mut self, stmt_try: &StmtTry) {
+        if !stmt_try.is_star {
+            return;
+        }
+        for handler in &stmt_try.handlers {
+            let ruff_python_ast::ExceptHandler::ExceptHandler(except_handler) = handler;
+            if let Some(type_expr) = &except_handler.type_ {
+                let type_range = type_expr.range();
+                let exception_group_class_def_type = self
+                    .module_answers_context
+                    .stdlib
+                    .exception_group_object()
+                    .map(|class| Type::ClassDef(class.dupe()));
+                let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
+                    /* base */ exception_group_class_def_type.as_ref(),
+                    /* attribute */ Some(&dunder::GETITEM),
+                    type_range,
+                    /* callee_expr */ None,
+                    /* unknown_callee_as_direct_call */ true,
+                    "resolve_and_register_except_star_handler",
+                    /* exclude_object_methods */ false,
+                );
+                let expression_identifier = ExpressionIdentifier::ArtificialCall(Origin {
+                    kind: OriginKind::SubscriptGetItem,
+                    location: self.pysa_location(type_range),
+                });
+                self.add_callees(expression_identifier, ExpressionCallees::Call(callees));
+            }
+        }
+    }
+
     fn resolve_and_register_for_statement(&mut self, stmt_for: &StmtFor) {
         let iter_range = stmt_for.iter.range();
         let iter_identifier = ExpressionIdentifier::ArtificialCall(Origin {
@@ -4360,6 +4392,7 @@ impl<'a> AstScopedVisitor for CallGraphVisitor<'a> {
             Stmt::For(stmt_for) => self.resolve_and_register_for_statement(stmt_for),
             Stmt::AugAssign(aug_assign) => self.resolve_and_register_augmented_assign(aug_assign),
             Stmt::Return(return_stmt) => self.resolve_and_register_return_shim(return_stmt),
+            Stmt::Try(stmt_try) => self.resolve_and_register_except_star_handlers(stmt_try),
             _ => {}
         }
     }

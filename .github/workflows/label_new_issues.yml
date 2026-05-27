@@ -24,7 +24,7 @@ jobs:
             const labels = [];
 
             // Crash-related issues
-            if (text.includes('panic') || text.includes('crash') || text.includes('stack overflow')) {
+            if (text.includes('panic') || text.includes('stack overflow')) {
               labels.push('crash');
             }
 
@@ -40,8 +40,8 @@ jobs:
               labels.push('quansight');
             }
 
-            // False positive reports
-            if (text.includes('false-positive') || text.includes('false positive')) {
+            // False positive/negative reports
+            if (text.includes('false-positive') || text.includes('false positive') || text.includes('false-negative') || text.includes('false negative')) {
               labels.push('typechecking');
             }
 

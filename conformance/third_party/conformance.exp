@@ -3808,50 +3808,6 @@
       "severity": "error",
       "stop_column": 6,
       "stop_line": 58
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[int], list[int]) failed",
-      "description": "assert_type(Desc2[int], list[int]) failed",
-      "line": 61,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 61
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[str], list[str]) failed",
-      "description": "assert_type(Desc2[str], list[str]) failed",
-      "line": 62,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 30,
-      "stop_line": 62
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[int], int) failed",
-      "description": "assert_type(Desc2[int], int) failed",
-      "line": 66,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 24,
-      "stop_line": 66
-    },
-    {
-      "code": -2,
-      "column": 12,
-      "concise_description": "assert_type(Desc2[str], str) failed",
-      "description": "assert_type(Desc2[str], str) failed",
-      "line": 67,
-      "name": "assert-type",
-      "severity": "error",
-      "stop_column": 24,
-      "stop_line": 67
     }
   ],
   "dataclasses_final.py": [
@@ -11601,7 +11557,7 @@
       "concise_description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "line": 15,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 49,
       "stop_line": 15
@@ -11612,7 +11568,7 @@
       "concise_description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "description": "`Literal[1982]` is not assignable to TypedDict key with type `bool`",
       "line": 22,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 59,
       "stop_line": 22
@@ -11623,7 +11579,7 @@
       "concise_description": "`None` is not assignable to TypedDict key `year` with type `int`",
       "description": "`None` is not assignable to TypedDict key `year` with type `int`",
       "line": 39,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 58,
       "stop_line": 39
@@ -11947,7 +11903,7 @@
       "concise_description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
       "description": "`Literal[1982]` is not assignable to TypedDict key `name` with type `str`",
       "line": 22,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 21,
       "stop_line": 22
@@ -11958,7 +11914,7 @@
       "concise_description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
       "description": "`Literal['']` is not assignable to TypedDict key `year` with type `int`",
       "line": 23,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 19,
       "stop_line": 23
@@ -12002,7 +11958,7 @@
       "concise_description": "`float` is not assignable to TypedDict key `year` with type `int`",
       "description": "`float` is not assignable to TypedDict key `year` with type `int`",
       "line": 29,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 48,
       "stop_line": 29
@@ -12261,7 +12217,7 @@
       "concise_description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "line": 82,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 15,
       "stop_line": 82
@@ -12272,7 +12228,7 @@
       "concise_description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "description": "`Literal[3]` is not assignable to TypedDict key `ident` with type `str`",
       "line": 83,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 16,
       "stop_line": 83
@@ -12522,7 +12478,7 @@
       "concise_description": "`Literal[1]` is not assignable to TypedDict key `inner_key` with type `str`",
       "description": "`Literal[1]` is not assignable to TypedDict key `inner_key` with type `str`",
       "line": 126,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 57,
       "stop_line": 126
@@ -12546,7 +12502,7 @@
       "concise_description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
       "description": "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`",
       "line": 24,
-      "name": "bad-typed-dict-key",
+      "name": "bad-assignment",
       "severity": "error",
       "stop_column": 23,
       "stop_line": 24
@@ -12618,17 +12574,6 @@
       "severity": "error",
       "stop_column": 46,
       "stop_line": 24
-    },
-    {
-      "code": -2,
-      "column": 7,
-      "concise_description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "description": "Argument `Literal['int']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `func1`",
-      "line": 58,
-      "name": "bad-argument-type",
-      "severity": "error",
-      "stop_column": 12,
-      "stop_line": 58
     },
     {
       "code": -2,

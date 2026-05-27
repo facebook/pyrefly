@@ -185,6 +185,8 @@ pub enum ErrorKind {
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
     ImplicitlyDefinedAttribute,
+    /// Equality or inequality comparison between incompatible types.
+    IncompatibleComparison,
     /// Overload residual branch pruning left no valid branch for a solved type variable.
     IncompatibleOverloadResidual,
     /// An inconsistency between inherited fields or methods from multiple base classes.
@@ -278,6 +280,19 @@ pub enum ErrorKind {
     ParseError,
     /// A protocol attribute was first defined inside a method instead of the class body.
     ProtocolImplicitlyDefinedAttribute,
+    /// Calling `.cuda()` on a `torch.Tensor` hard-codes the target device.
+    /// Use `.to(device)` instead for device-agnostic code.
+    PytorchEfficiencyLintCudaCall,
+    /// Calling `.item()` on a `torch.Tensor` forces GPU→CPU synchronization,
+    /// blocking the training loop until all pending GPU operations complete.
+    PytorchEfficiencyLintItemCall,
+    /// Passing a `torch.Tensor` to `print()` triggers `__repr__`, which forces
+    /// GPU→CPU synchronization.
+    PytorchEfficiencyLintPrintTensor,
+    /// Calling `.to(device)` on a tensor returned by a factory function like
+    /// `torch.zeros()` that already accepts a `device=` parameter. Passing
+    /// `device=` directly avoids allocating the tensor on CPU first.
+    PytorchEfficiencyLintRedundantToCall,
     /// The attribute exists but cannot be modified.
     ReadOnly,
     /// Attempting to annotate or redefine a name with a type that conflicts with an existing annotation in scope.
@@ -288,6 +303,8 @@ pub enum ErrorKind {
     RedundantCondition,
     /// Raised by a call to reveal_type().
     RevealType,
+    /// Passing a string to something that expects an iterable of strings.
+    StringAsIterable,
     /// DEPRECATED: use [ImplicitAnyAttribute] (`implicit-any-attribute`) instead.
     /// Kept so that existing `# pyrefly: ignore[unannotated-attribute]` comments
     /// and config entries continue to work. This variant is never emitted by
@@ -358,6 +375,12 @@ impl std::str::FromStr for ErrorKind {
 /// Also means we can grab error code names without allocation, which is nice.
 static ERROR_KIND_CACHE: LazyLock<SmallMap<String, ErrorKind>> = LazyLock::new(ErrorKind::cache);
 
+static PYTORCH_EFFICIENCY_LINTS: LazyLock<Vec<ErrorKind>> = LazyLock::new(|| {
+    enum_iterator::all::<ErrorKind>()
+        .filter(|k| k.to_name().starts_with("pytorch-efficiency-lint-"))
+        .collect()
+});
+
 impl ErrorKind {
     fn cache() -> SmallMap<String, ErrorKind> {
         let mut map = SmallMap::new();
@@ -368,6 +391,11 @@ impl ErrorKind {
         }
 
         map
+    }
+
+    /// All error kinds with the `pytorch-efficiency-lint-` prefix.
+    pub fn pytorch_efficiency_lints() -> &'static [ErrorKind] {
+        &PYTORCH_EFFICIENCY_LINTS
     }
 
     pub fn to_name(self) -> &'static str {
@@ -426,6 +454,7 @@ impl ErrorKind {
             ErrorKind::ImplicitAnyTypeArgument => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
@@ -434,9 +463,14 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintPrintTensor => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintRedundantToCall => Severity::Ignore,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::RedundantCondition => Severity::Warn,
             ErrorKind::RevealType => Severity::Info,
+            ErrorKind::StringAsIterable => Severity::Ignore,
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
@@ -460,6 +494,13 @@ impl ErrorKind {
         matches!(self, ErrorKind::RevealType)
     }
 
+    /// A soft error is a warning that should not influence overload selection
+    /// or other type-inference decisions. The type check itself passed, but the
+    /// code pattern is suspicious.
+    pub fn is_soft(self) -> bool {
+        matches!(self, ErrorKind::StringAsIterable)
+    }
+
     /// Returns the public documentation URL for this error kind.
     /// Example: https://pyrefly.org/en/docs/error-kinds/#bad-context-manager
     pub fn docs_url(self) -> String {
@@ -480,6 +521,16 @@ mod tests {
     use pulldown_cmark::TagEnd;
 
     use super::*;
+
+    fn severity_str(s: Severity) -> &'static str {
+        match s {
+            Severity::Ignore => "ignore",
+            Severity::Info => "info",
+            Severity::Warn => "warn",
+            Severity::Error => "error",
+        }
+    }
+
     #[test]
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
@@ -487,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn test_doc() {
+    fn test_doc_headers() {
         // Verifies that the secondary headers in error-kinds.mdx contain the same variants as the ErrorKind enum and are sorted lexicographically.
         let mut all_error_kinds = all::<ErrorKind>();
         let doc_path = std::env::var("ERROR_KINDS_DOC_PATH").expect(
@@ -542,6 +593,39 @@ mod tests {
                 "Documentation at {doc_path} is missing error kind: {}",
                 leftover_error_kind.to_name()
             );
+        }
+    }
+
+    #[test]
+    fn test_doc_severities() {
+        let doc_path = std::env::var("ERROR_KINDS_DOC_PATH").expect(
+            "ERROR_KINDS_DOC_PATH env var not set: cargo or buck should set this automatically",
+        );
+        let doc_contents = std::fs::read_to_string(&doc_path)
+            .unwrap_or_else(|e| panic!("Failed to read {doc_path}: {e}"));
+        for kind in all::<ErrorKind>() {
+            let header = format!("## {}", kind.to_name());
+            let section_start = doc_contents.find(&header).expect(
+                "could not validate documented severities due to missing error kind header",
+            );
+            let rest = &doc_contents[section_start + header.len()..];
+            let section_end = rest.find("\n## ").unwrap_or(rest.len());
+            let section = &rest[..section_end];
+            let expected_severity = severity_str(kind.default_severity());
+            if kind.default_severity() != Severity::Error {
+                let expected_prefix = format!("\n\nDefault severity: `{expected_severity}`\n");
+                if !section.starts_with(&expected_prefix) {
+                    panic!(
+                        "Error kind `{}` must have `Default severity: `{expected_severity}`` as the first line after the ## header.",
+                        kind.to_name(),
+                    );
+                }
+            } else if section.contains("Default severity:") {
+                panic!(
+                    "Error kind `{}` has default severity `error` (the default) and should not have a `Default severity:` line.",
+                    kind.to_name(),
+                );
+            }
         }
     }
 }

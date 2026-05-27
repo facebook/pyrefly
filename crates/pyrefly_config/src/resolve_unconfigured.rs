@@ -40,6 +40,8 @@ pub enum UnconfiguredOverride {
     Default,
     /// Force `Strict`.
     Strict,
+    /// Force All.
+    All,
 }
 
 impl UnconfiguredOverride {
@@ -52,6 +54,7 @@ impl UnconfiguredOverride {
             Self::Legacy => Some(Preset::Legacy),
             Self::Default => Some(Preset::Default),
             Self::Strict => Some(Preset::Strict),
+            Self::All => Some(Preset::All),
         }
     }
 }
@@ -65,6 +68,7 @@ impl From<Option<Preset>> for UnconfiguredOverride {
             Some(Preset::Legacy) => Self::Legacy,
             Some(Preset::Default) => Self::Default,
             Some(Preset::Strict) => Self::Strict,
+            Some(Preset::All) => Self::All,
         }
     }
 }

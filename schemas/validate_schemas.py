@@ -25,6 +25,7 @@ from pathlib import Path
 
 try:
     import jsonschema
+    import referencing
     import toml
 except ImportError:
     print("Error: Required packages not installed.")
@@ -37,7 +38,7 @@ SCHEMAS_DIR = Path(__file__).parent
 def _make_validator(schema_file: Path):
     """Create a JSON schema validator with $ref support.
 
-    Uses RefResolver with a store mapping to handle cross-file $ref resolution.
+    Uses a referencing Registry with a store mapping to handle cross-file $ref resolution.
     """
     with open(schema_file, "r") as f:
         schema = json.load(f)
@@ -55,9 +56,11 @@ def _make_validator(schema_file: Path):
         # Also register by relative name so "$ref": "pyrefly.json" resolves.
         store["pyrefly.json"] = main_schema
 
-    resolver = jsonschema.RefResolver.from_schema(schema, store=store)
+    registry = referencing.Registry().with_resources(
+        (uri, referencing.Resource.from_contents(s)) for uri, s in store.items()
+    )
     validator_cls = jsonschema.validators.validator_for(schema)
-    return validator_cls(schema, resolver=resolver)
+    return validator_cls(schema, registry=registry)
 
 
 class TestPositiveValidation(unittest.TestCase):
