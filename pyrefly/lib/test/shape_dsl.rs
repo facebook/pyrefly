@@ -54,10 +54,13 @@ testcase!(
     test_uses_shape_dsl_preserves_type,
     shape_dsl_env(),
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 from my_lib import plain_fn
 
-assert_type(plain_fn(1), int)
+# identity_ir returns its input unchanged. Because val_to_type synthesizes
+# Literal[n] from the DSL's traced integer value (not the declared return
+# type), the result is Literal[1], not int.
+assert_type(plain_fn(1), Literal[1])
 "#,
 );
 
@@ -65,10 +68,10 @@ testcase!(
     test_uses_shape_dsl_overload_with_implementation,
     shape_dsl_env(),
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 from my_lib import overloaded_with_impl
 
-assert_type(overloaded_with_impl(1), int)
+assert_type(overloaded_with_impl(1), Literal[1])
 assert_type(overloaded_with_impl("a"), str)
 "#,
 );
@@ -77,10 +80,10 @@ testcase!(
     test_uses_shape_dsl_overload_no_implementation,
     shape_dsl_env(),
     r#"
-from typing import assert_type
+from typing import Literal, assert_type
 from my_lib import overloaded_no_impl
 
-assert_type(overloaded_no_impl(1), int)
+assert_type(overloaded_no_impl(1), Literal[1])
 assert_type(overloaded_no_impl("a"), str)
 "#,
 );
