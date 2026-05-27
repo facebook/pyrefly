@@ -3222,6 +3222,17 @@ impl TypeEq for ShapeTransformRef {
     }
 }
 
+impl ShapeTransformRef {
+    /// Build a `MetaShapeFunction` evaluator from this shape transform reference.
+    /// Uses an empty `fn_lookup` — cross-function DSL calls are not yet supported.
+    pub fn to_meta_shape_function(&self) -> Box<dyn MetaShapeFunction> {
+        Box::new(DslMetaShapeFunction {
+            fn_def: self.dsl_fn.inner.clone(),
+            fn_lookup: Arc::new(HashMap::new()),
+        })
+    }
+}
+
 /// A bundle of DSL functions that have been validated together as a program.
 ///
 /// The functions held by a `ShapeDslProgram` are guaranteed to have passed
