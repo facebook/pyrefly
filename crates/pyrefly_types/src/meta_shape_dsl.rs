@@ -37,6 +37,7 @@ use ruff_python_ast::Operator as RuffOperator;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::UnaryOp as RuffUnaryOp;
 
+use crate::callable::Derived;
 use crate::dimension::ShapeError;
 use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
@@ -3167,6 +3168,8 @@ impl TypeEq for ShapeDslFunction {
 #[derive(Debug, Clone)]
 pub struct ShapeTransformRef {
     pub dsl_fn: Arc<ShapeDslFunction>,
+    // TODO: Replace all-siblings snapshot with resolved transitive callees.
+    pub helpers: Derived<Arc<Vec<Arc<ShapeDslFunction>>>>,
 }
 
 /// Pointer identity: delegates to `ShapeDslFunction`'s pointer-identity equality.
@@ -3224,11 +3227,19 @@ impl TypeEq for ShapeTransformRef {
 
 impl ShapeTransformRef {
     /// Build a `MetaShapeFunction` evaluator from this shape transform reference.
-    /// Uses an empty `fn_lookup` — cross-function DSL calls are not yet supported.
+    /// Populates `fn_lookup` with this function and all same-module siblings
+    /// so that cross-function DSL calls resolve correctly.
     pub fn to_meta_shape_function(&self) -> Box<dyn MetaShapeFunction> {
+        // helpers already includes self (it's all same-module siblings).
+        let fn_lookup: Arc<HashMap<String, Arc<DslFnDef>>> = Arc::new(
+            self.helpers
+                .iter()
+                .map(|h| (h.inner.name.clone(), h.inner.clone()))
+                .collect(),
+        );
         Box::new(DslMetaShapeFunction {
             fn_def: self.dsl_fn.inner.clone(),
-            fn_lookup: Arc::new(HashMap::new()),
+            fn_lookup,
         })
     }
 }
