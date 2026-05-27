@@ -586,7 +586,6 @@ impl Solver {
             Variable::Quantified {
                 quantified: q,
                 bounds: _,
-                ..
             } => {
                 // A Variable::Quantified should always be finished (see `finish_quantified`) by
                 // the code that creates it, because we need to know when we're done collecting
@@ -856,7 +855,6 @@ impl Solver {
                                     Variable::Quantified {
                                         quantified: q,
                                         bounds,
-                                        ..
                                     } => self
                                         .solve_bounds(mem::take(bounds))
                                         .unwrap_or_else(|| q.as_gradual_type()),
@@ -904,7 +902,6 @@ impl Solver {
                             Variable::Quantified {
                                 quantified: _,
                                 bounds,
-                                ..
                             }
                             | Variable::Unwrap(bounds)
                                 if policy == VarExpansionPolicy::ExpandWithBounds
@@ -976,7 +973,6 @@ impl Solver {
                     Variable::Quantified {
                         quantified: q,
                         bounds,
-                        ..
                     } => self
                         .solve_bounds(mem::take(bounds))
                         .unwrap_or_else(|| q.as_gradual_type()),
@@ -1447,7 +1443,6 @@ impl Solver {
             Variable::Quantified {
                 quantified: _,
                 bounds,
-                ..
             }
             | Variable::Unwrap(bounds) => (
                 bounds.lower.first().cloned(),
@@ -1476,7 +1471,6 @@ impl Solver {
             Variable::Quantified {
                 quantified: _,
                 bounds,
-                ..
             }
             | Variable::Unwrap(bounds) => self.add_bound(&mut bounds.lower, new_bound),
             _ => {}
@@ -1496,7 +1490,6 @@ impl Solver {
             Variable::Quantified {
                 quantified: _,
                 bounds,
-                ..
             }
             | Variable::Unwrap(bounds) => (
                 bounds.upper.first().cloned(),
@@ -1525,7 +1518,6 @@ impl Solver {
             Variable::Quantified {
                 quantified: _,
                 bounds,
-                ..
             }
             | Variable::Unwrap(bounds) => self.add_bound(&mut bounds.upper, new_bound),
             _ => {}
@@ -1584,9 +1576,7 @@ impl Solver {
     ) -> Type {
         match value {
             Variable::Answer(ty) | Variable::ResidualAnswer { ty, .. } => ty.clone(),
-            Variable::Quantified {
-                quantified, bounds, ..
-            } => {
+            Variable::Quantified { quantified, bounds } => {
                 if let Some(bound) = self.solve_bounds(bounds.clone()) {
                     return bound;
                 }
@@ -1919,7 +1909,6 @@ impl Solver {
                 Variable::Quantified {
                     quantified: q,
                     bounds,
-                    ..
                 } => {
                     if let Some(e) = self.instantiation_errors.read().get(&v) {
                         err.push(e.clone());
@@ -2047,7 +2036,6 @@ impl Solver {
             if let Variable::Quantified {
                 quantified: q,
                 bounds,
-                ..
             } = &mut *e
             {
                 let solved_bound = self.solve_bounds(mem::take(bounds));
@@ -2184,7 +2172,6 @@ impl Solver {
                 if let Variable::Quantified {
                     quantified: q,
                     bounds,
-                    ..
                 } = &mut *e
                     && *q == *param
                 {
@@ -3400,12 +3387,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Variable::Quantified {
                                 quantified: q1,
                                 bounds: _,
-                                ..
                             },
                             Variable::Quantified {
                                 quantified: q2,
                                 bounds: _,
-                                ..
                             },
                         )
                         | (Variable::PartialQuantified(q1), Variable::PartialQuantified(q2)) => {
@@ -3460,7 +3445,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Variable::Quantified {
                                 quantified: _,
                                 bounds: _,
-                                ..
                             },
                         ) => {
                             drop(variable1);
@@ -3505,7 +3489,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Quantified {
                         quantified: q,
                         bounds: _,
-                        ..
                     } if q.kind() == QuantifiedKind::ParamSpec => {
                         // TODO(https://github.com/facebook/pyrefly/issues/105): figure out what to
                         // do with ParamSpec.
@@ -3638,7 +3621,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     Variable::Quantified {
                         quantified: q,
                         bounds,
-                        ..
                     } => {
                         let q = q.clone();
                         let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
