@@ -15,6 +15,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::callable::Derived;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::PlaceholderBodyKind;
@@ -543,13 +544,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let kind = if let Some(dsl_fn) = shape_dsl_def {
             // Shape DSL functions carry their parsed IR for call-site evaluation.
-            //
-            // TODO: the embedded `ShapeDslFunction` currently carries only this
-            // function's own DSL body, with no `fn_lookup` of resolved helpers.
-            // That's adequate for leaf DSL functions but breaks any function that
-            // calls another `@shape_dsl_function` (e.g. `reshape_ir` ->
-            // `normalize_dim`). We need to build the per-function `fn_lookup` here
-            // from resolved transitive callees.
             let func_id = Arc::new(FuncId {
                 module: self.module().dupe(),
                 cls: defining_cls.clone(),
@@ -557,7 +551,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 def_index: Some(def_index),
                 outer_funcs,
             });
-            FunctionKind::ShapeDsl(func_id, dsl_fn)
+            // Collect all same-module @shape_dsl_function siblings for fn_lookup.
+            // TODO: Replace all-siblings snapshot with per-caller transitive-callee
+            // resolution.
+            let siblings: Arc<Vec<Arc<ShapeDslFunction>>> = Arc::new(
+                self.bindings()
+                    .metadata()
+                    .shape_dsl_functions()
+                    .iter()
+                    .map(|(_, dsl)| Arc::clone(dsl))
+                    .collect(),
+            );
+            FunctionKind::ShapeDsl(func_id, dsl_fn, Derived(siblings))
         } else {
             FunctionKind::from_name(
                 self.module().dupe(),
@@ -573,10 +578,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some((_name, ir_identifier)) = uses_shape_dsl_ir_name {
             let ir_type = self.get(&Key::BoundName(ir_identifier)).arc_clone_ty();
             if let Type::Function(func) = &ir_type
-                && let FunctionKind::ShapeDsl(_, dsl_fn) = &func.metadata.kind
+                && let FunctionKind::ShapeDsl(_, dsl_fn, helpers) = &func.metadata.kind
             {
                 flags.shape_transform = Some(Arc::new(ShapeTransformRef {
                     dsl_fn: dsl_fn.clone(),
+                    helpers: helpers.clone(),
                 }));
             }
         }
