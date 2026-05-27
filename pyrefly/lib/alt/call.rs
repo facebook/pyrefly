@@ -13,7 +13,6 @@ use pyrefly_python::dunder;
 use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
-use pyrefly_types::tensor_ops_registry::TensorOpsRegistry;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::NNModuleType;
@@ -1092,26 +1091,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         result: Type,
     ) -> Type {
-        // Check ClassMetadata.capture_init first (populated from @uses_shape_dsl
-        // decorator on the forward method). Fall back to TensorOpsRegistry for
-        // classes not yet migrated to stub-based declarations.
         let class_metadata = self.get_metadata_for_class(ct.class_object());
         let capture_names_from_metadata: Vec<Name>;
         let capture_names: &[Name] = if let Some(names) = class_metadata.capture_init() {
             names
         } else {
-            use std::sync::OnceLock;
-            static TENSOR_OPS_REGISTRY: OnceLock<TensorOpsRegistry> = OnceLock::new();
-
-            let class_name = format!("{}.{}", ct.class_object().module_name(), ct.name());
-            let registry = TENSOR_OPS_REGISTRY.get_or_init(TensorOpsRegistry::new);
-            match registry.get_init_capture(&class_name) {
-                Some(names) => {
-                    capture_names_from_metadata = names.iter().map(Name::new).collect();
-                    &capture_names_from_metadata
-                }
-                None => return result,
-            }
+            return result;
         };
 
         let infer_type_or_expr = |toe: TypeOrExpr, errors: &ErrorCollector| -> Type {
