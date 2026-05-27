@@ -1959,3 +1959,23 @@ def g(x: float):
     f(x)  # E: No matching overload
     "#,
 );
+
+testcase!(
+    test_callback_protocol_with_overloads_and_bounded_typevar,
+    r#"
+from typing import Callable, Protocol, overload
+
+class Base: ...
+
+class HasCall(Protocol):
+    @overload
+    def __call__[T: Base](self, arg: T) -> T: ...
+    @overload
+    def __call__(self, arg: float) -> float: ...
+
+def takes(f: Callable[[float], float]) -> None: ...
+
+def repro(p: HasCall):
+    takes(p)
+    "#,
+);

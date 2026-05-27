@@ -30,6 +30,7 @@ use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_types::types::Forall;
 use pyrefly_types::types::Overload;
+use pyrefly_types::types::OverloadType;
 use pyrefly_types::types::Var;
 use pyrefly_util::owner::Owner;
 use ruff_python_ast::name::Name;
@@ -1278,8 +1279,25 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .filter(|v| self.solver.var_is_quantified(*v))
                     .collect();
                 if eligible_vars.is_empty() {
-                    any(overload.signatures.iter(), |l| {
-                        self.is_subset_eq(&l.as_type(), want)
+                    any(overload.signatures.iter(), |l| match l {
+                        OverloadType::Function(_) => self.is_subset_eq(&l.as_type(), want),
+                        OverloadType::Forall(forall) => {
+                            let fresh_forall = self.instantiate_fresh_forall(
+                                Forall {
+                                    tparams: forall.tparams.clone(),
+                                    body: Forallable::Function(forall.body.clone()),
+                                },
+                                want,
+                            );
+                            let vars = fresh_forall.handle.vars().to_vec();
+                            match self
+                                .solver
+                                .with_snapshot(&vars, || self.is_subset_forall(fresh_forall, want))
+                            {
+                                SubsetWithSnapshotResult::Ok => Ok(()),
+                                SubsetWithSnapshotResult::Err(e) => Err(e),
+                            }
+                        }
                     })
                     .is_ok()
                 } else {
