@@ -140,6 +140,14 @@ pub(crate) struct OverloadBranchCapture {
 
 type OverloadWitnessCapturesByHash = SmallMap<u64, Vec<OverloadBranchCapture>>;
 
+/// Witness captures collected during subset checking and consumed at solve
+/// boundaries.
+#[derive(Debug, Default)]
+struct WitnessCaptures {
+    overload: OverloadWitnessCapturesByHash,
+    generic: Vec<GenericWitnessCapture>,
+}
+
 /// Witness-keyed pruning decisions threaded through finishing.
 #[derive(Clone, Debug, Default)]
 struct OverloadWitnessPruningDecision {
@@ -1284,8 +1292,7 @@ impl Solver {
             vs,
             false,
             &mut |_got, _want| Ok(()),
-            &mut SmallMap::new(),
-            &[],
+            &mut WitnessCaptures::default(),
         );
 
         callable
@@ -1798,36 +1805,34 @@ impl Solver {
         type_order: TypeOrder<Ans>,
         call_context: Option<&CallContext>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let (vs, mut overload_witness_captures, generic_witness_captures) =
-            if let Some(cc) = call_context {
-                let tracked_fresh_vars = cc.take_deferred_quantified_vars();
-                let overload_witness_captures = cc.take_overload_witness_captures();
-                let generic_witness_captures = cc.take_generic_witness_captures();
-                cc.mark_boundary_consumed_and_drained();
-                let overload_capture_vars: SmallSet<Var> = overload_witness_captures
-                    .values()
-                    .flat_map(|branch_captures| branch_captures.iter())
-                    .flat_map(|capture| capture.values.keys().copied())
-                    .collect();
-                let mut roots: SmallSet<Var> = vs.0.into_iter().collect();
-                roots.extend(tracked_fresh_vars.0);
-                // Solve boundaries explicitly own fresh quantified tracking. We finish
-                // the exact boundary set (explicit roots + fresh vars + overload capture vars),
-                // rather than using reachability expansion that can miss or overreach.
-                let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
-                // Overload pruning must include solved vars even if they
-                // already collapsed to `Answer` before boundary finishing.
-                all_boundary_vars.extend(overload_capture_vars);
-                all_boundary_vars.sort_unstable();
-                all_boundary_vars.dedup();
-                (
-                    QuantifiedHandle(all_boundary_vars),
-                    overload_witness_captures,
-                    generic_witness_captures,
-                )
-            } else {
-                (vs, SmallMap::new(), Vec::new())
+        let (vs, mut captures) = if let Some(cc) = call_context {
+            let tracked_fresh_vars = cc.take_deferred_quantified_vars();
+            let captures = WitnessCaptures {
+                overload: cc.take_overload_witness_captures(),
+                generic: cc.take_generic_witness_captures(),
             };
+            cc.mark_boundary_consumed_and_drained();
+            let overload_capture_vars: SmallSet<Var> = captures
+                .overload
+                .values()
+                .flat_map(|branch_captures| branch_captures.iter())
+                .flat_map(|capture| capture.values.keys().copied())
+                .collect();
+            let mut roots: SmallSet<Var> = vs.0.into_iter().collect();
+            roots.extend(tracked_fresh_vars.0);
+            // Solve boundaries explicitly own fresh quantified tracking. We finish
+            // the exact boundary set (explicit roots + fresh vars + overload capture vars),
+            // rather than using reachability expansion that can miss or overreach.
+            let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
+            // Overload pruning must include solved vars even if they
+            // already collapsed to `Answer` before boundary finishing.
+            all_boundary_vars.extend(overload_capture_vars);
+            all_boundary_vars.sort_unstable();
+            all_boundary_vars.dedup();
+            (QuantifiedHandle(all_boundary_vars), captures)
+        } else {
+            (vs, WitnessCaptures::default())
+        };
         if vs.0.is_empty() {
             return Ok(());
         }
@@ -1836,8 +1841,7 @@ impl Solver {
             vs,
             infer_with_first_use,
             &mut |got, want| subset.is_subset_eq_probe_for_pruning(got, want),
-            &mut overload_witness_captures,
-            &generic_witness_captures,
+            &mut captures,
         )
     }
 
@@ -1889,11 +1893,10 @@ impl Solver {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
-        overload_witness_captures: &mut OverloadWitnessCapturesByHash,
-        generic_witness_captures: &[GenericWitnessCapture],
+        captures: &mut WitnessCaptures,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let mut err = Vec::new();
-        let has_overload_captures = !overload_witness_captures.is_empty();
+        let has_overload_captures = !captures.overload.is_empty();
         let mut solved_quantified_names_by_var: SmallMap<Var, Name> = SmallMap::new();
         let lock = self.variables.lock();
         for &v in &vs.0 {
@@ -1947,7 +1950,7 @@ impl Solver {
             drop(lock);
             self.compute_overload_pruning_by_witness(
                 &solved_vars,
-                overload_witness_captures,
+                &mut captures.overload,
                 is_subset,
             )
         } else {
@@ -1995,7 +1998,7 @@ impl Solver {
         // should not produce an overload residual.
         let var_to_witness: SmallMap<Var, Option<u64>> = {
             let mut map: SmallMap<Var, Option<u64>> = SmallMap::new();
-            for (&wh, captures) in overload_witness_captures.iter() {
+            for (&wh, captures) in captures.overload.iter() {
                 for capture in captures {
                     for &v in capture.values.keys() {
                         match map.entry(v) {
@@ -2017,10 +2020,11 @@ impl Solver {
         // Precompute union-find roots for all vars that appear in generic
         // residual captures, so we can match vars by equivalence class without
         // holding a mutable borrow during the main loop.
-        let root_map: SmallMap<Var, Var> = if !generic_witness_captures.is_empty() {
+        let root_map: SmallMap<Var, Var> = if !captures.generic.is_empty() {
             let lock = self.variables.lock();
             let all_vars = vs.0.iter().copied().chain(
-                generic_witness_captures
+                captures
+                    .generic
                     .iter()
                     .flat_map(|c| c.witness_vars.iter().copied()),
             );
@@ -2090,25 +2094,23 @@ impl Solver {
                 } else if overload_all_pruned {
                     Variable::Answer(Type::never())
                 } else if let Some(witness_hash) = witness_hash {
-                    let captures =
-                        overload_witness_captures
-                            .get(&witness_hash)
-                            .unwrap_or_else(|| {
-                                unreachable!("overload materialization requires witness captures")
-                            });
-                    let target_vars: SmallSet<Var> = captures
+                    let overload_captures =
+                        captures.overload.get(&witness_hash).unwrap_or_else(|| {
+                            unreachable!("overload materialization requires witness captures")
+                        });
+                    let target_vars: SmallSet<Var> = overload_captures
                         .iter()
                         .flat_map(|c| c.values.keys().copied())
                         .collect();
                     let ty = self.materialize_overload_residual(
                         witness_hash,
                         v,
-                        captures,
+                        overload_captures,
                         &overload_pruning_by_witness,
                     );
                     Variable::ResidualAnswer { target_vars, ty }
                 } else if let Some(target_vars) =
-                    self.find_unique_generic_witness(v, generic_witness_captures, &root_map)
+                    self.find_unique_generic_witness(v, &captures.generic, &root_map)
                 {
                     Variable::ResidualAnswer {
                         target_vars,
