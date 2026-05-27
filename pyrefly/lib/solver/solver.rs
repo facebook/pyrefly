@@ -140,6 +140,10 @@ struct GenericWitnessCapture {
 pub(crate) struct OverloadBranchCapture {
     branch_index: usize,
     values: SmallMap<Var, Variable>,
+    /// Vars that had a generic residual at snapshot time. Used by
+    /// `materialize_overload_residual_branch_value` to decide whether
+    /// to produce a `callable_residual_generic`.
+    generic_residual_vars: SmallSet<Var>,
 }
 
 type OverloadWitnessCapturesByHash = SmallMap<u64, Vec<OverloadBranchCapture>>;
@@ -736,15 +740,22 @@ impl Solver {
         &self,
         branch_index: usize,
         vars: &[Var],
+        generic_captured_vars: &SmallSet<Var>,
     ) -> OverloadBranchCapture {
         let variables = self.variables.lock();
         let values: SmallMap<Var, Variable> = vars
             .iter()
             .map(|var| (*var, variables.get(*var).clone()))
             .collect();
+        let generic_residual_vars: SmallSet<Var> = vars
+            .iter()
+            .copied()
+            .filter(|var| generic_captured_vars.contains(var))
+            .collect();
         OverloadBranchCapture {
             branch_index,
             values,
+            generic_residual_vars,
         }
     }
 
@@ -1287,6 +1298,7 @@ impl Solver {
             false,
             &mut |_got, _want| Ok(()),
             &mut SmallMap::new(),
+            &[],
         );
 
         callable
@@ -1554,25 +1566,10 @@ impl Solver {
         witness: &ResidualWitnessContext,
         call_context: &CallContext,
     ) {
-        let witness_vars = witness.capture_candidate_vars();
-
-        // Dual-write: keep variable-backed path (will be removed in a follow-up)
-        // alongside the new payload-backed path.
-        let lock = self.variables.lock();
-        for &var in witness_vars.iter() {
-            let mut variable = lock.get_mut(var);
-            if let Variable::Quantified { residuals, .. } = &mut *variable
-                && !residuals.contains(&witness.identity)
-            {
-                residuals.push(witness.identity.clone());
-            }
-        }
-        drop(lock);
-
         call_context.persist_generic_witness_capture(GenericWitnessCapture {
             witness_hash: witness.identity.witness_hash,
             target_vars: witness.identity.target_vars.clone(),
-            witness_vars,
+            witness_vars: witness.capture_candidate_vars(),
         });
     }
 
@@ -1588,18 +1585,20 @@ impl Solver {
         *right = left.clone();
     }
 
-    fn materialize_overload_residual_branch_value(&self, value: &Variable) -> Type {
+    fn materialize_overload_residual_branch_value(
+        &self,
+        value: &Variable,
+        has_generic_residual: bool,
+    ) -> Type {
         match value {
             Variable::Answer(ty) | Variable::ResidualAnswer { ty, .. } => ty.clone(),
             Variable::Quantified {
-                quantified,
-                bounds,
-                residuals,
+                quantified, bounds, ..
             } => {
                 if let Some(bound) = self.solve_bounds(bounds.clone()) {
                     return bound;
                 }
-                if residuals.len() == 1 {
+                if has_generic_residual {
                     return Type::callable_residual_generic(quantified.clone());
                 }
                 quantified.as_gradual_type()
@@ -1641,7 +1640,9 @@ impl Solver {
             .filter(|capture| surviving_branch_indices.contains(&capture.branch_index))
             .filter_map(|capture| {
                 let value = capture.values.get(&var)?;
-                let mut ty = self.materialize_overload_residual_branch_value(value);
+                let has_generic_residual = capture.generic_residual_vars.contains(&var);
+                let mut ty =
+                    self.materialize_overload_residual_branch_value(value, has_generic_residual);
                 ty.flatten_overload_residual_markers(&self.heap);
                 Some(OverloadBranchProjection {
                     branch_index: capture.branch_index,
@@ -1822,7 +1823,7 @@ impl Solver {
         type_order: TypeOrder<Ans>,
         call_context: Option<&CallContext>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let (vs, mut overload_witness_captures, _generic_witness_captures) =
+        let (vs, mut overload_witness_captures, generic_witness_captures) =
             if let Some(cc) = call_context {
                 let tracked_fresh_vars = cc.take_deferred_quantified_vars();
                 let overload_witness_captures = cc.take_overload_witness_captures();
@@ -1861,6 +1862,7 @@ impl Solver {
             infer_with_first_use,
             &mut |got, want| subset.is_subset_eq_probe_for_pruning(got, want),
             &mut overload_witness_captures,
+            &generic_witness_captures,
         )
     }
 
@@ -1878,6 +1880,31 @@ impl Solver {
         self.finish_quantified(vs, self.infer_with_first_use, type_order, None)
     }
 
+    /// Find the unique generic witness capture whose `witness_vars` share a
+    /// union-find root with `v`. Returns `None` if zero or multiple captures match
+    /// (ambiguous matches cannot produce a residual).
+    fn find_unique_generic_witness(
+        &self,
+        v: Var,
+        captures: &[GenericWitnessCapture],
+        root_map: &SmallMap<Var, Var>,
+    ) -> Option<SmallSet<Var>> {
+        let v_root = root_map.get(&v).copied().unwrap_or(v);
+        let mut found = None;
+        for c in captures {
+            if c.witness_vars
+                .iter()
+                .any(|wv| root_map.get(wv).copied().unwrap_or(*wv) == v_root)
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(c.target_vars.clone());
+            }
+        }
+        found
+    }
+
     /// Core quantified-finishing implementation.
     ///
     /// The injected `is_subset` callback controls whether/how overload branch
@@ -1888,6 +1915,7 @@ impl Solver {
         infer_with_first_use: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
         overload_witness_captures: &mut OverloadWitnessCapturesByHash,
+        generic_witness_captures: &[GenericWitnessCapture],
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let mut err = Vec::new();
         let has_overload_captures = !overload_witness_captures.is_empty();
@@ -2011,6 +2039,21 @@ impl Solver {
             map
         };
 
+        // Precompute union-find roots for all vars that appear in generic
+        // residual captures, so we can match vars by equivalence class without
+        // holding a mutable borrow during the main loop.
+        let root_map: SmallMap<Var, Var> = if !generic_witness_captures.is_empty() {
+            let lock = self.variables.lock();
+            let all_vars = vs.0.iter().copied().chain(
+                generic_witness_captures
+                    .iter()
+                    .flat_map(|c| c.witness_vars.iter().copied()),
+            );
+            all_vars.map(|v| (v, lock.get_root(v))).collect()
+        } else {
+            SmallMap::new()
+        };
+
         let mut reported_all_pruned_witnesses = SmallSet::new();
         let lock = self.variables.lock();
         for &v in &vs.0 {
@@ -2018,7 +2061,7 @@ impl Solver {
             if let Variable::Quantified {
                 quantified: q,
                 bounds,
-                residuals,
+                ..
             } = &mut *e
             {
                 let solved_bound = self.solve_bounds(mem::take(bounds));
@@ -2066,11 +2109,7 @@ impl Solver {
                         });
                     }
                 }
-                let residual_candidate = if solved_bound.is_none() && residuals.len() == 1 {
-                    residuals.first().cloned()
-                } else {
-                    None
-                };
+
                 *e = if let Some(bound) = solved_bound {
                     Variable::Answer(bound)
                 } else if overload_all_pruned {
@@ -2093,7 +2132,9 @@ impl Solver {
                         &overload_pruning_by_witness,
                     );
                     Variable::ResidualAnswer { target_vars, ty }
-                } else if let Some(ResidualIdentity { target_vars, .. }) = residual_candidate {
+                } else if let Some(target_vars) =
+                    self.find_unique_generic_witness(v, generic_witness_captures, &root_map)
+                {
                     Variable::ResidualAnswer {
                         target_vars,
                         ty: Type::callable_residual_generic(q.clone()),
@@ -2149,7 +2190,7 @@ impl Solver {
     pub fn generalize_class_targs(
         &self,
         targs: &mut TArgs,
-        vars_with_overload_residuals: &SmallSet<Var>,
+        vars_with_residual_captures: &SmallSet<Var>,
     ) {
         // Expanding targs might require the variables lock, so do that first.
         targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
@@ -2160,12 +2201,12 @@ impl Solver {
                 if let Variable::Quantified {
                     quantified: q,
                     bounds,
-                    residuals,
+                    ..
                 } = &mut *e
                     && *q == *param
                 {
-                    let has_overload_residuals = vars_with_overload_residuals.contains(v);
-                    if bounds.is_empty() && residuals.is_empty() && !has_overload_residuals {
+                    let has_residual_captures = vars_with_residual_captures.contains(v);
+                    if bounds.is_empty() && !has_residual_captures {
                         *t = param.clone().to_type(&self.heap);
                     } else if !bounds.is_empty() {
                         // If the variable has bounds, finalize its type now.
