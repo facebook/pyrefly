@@ -25,6 +25,7 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
+use pyrefly_types::meta_shape_dsl::validate_shape_dsl_functions;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::type_var::Restriction;
@@ -552,9 +553,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 def_index: Some(def_index),
                 outer_funcs,
             });
-            // Build the transitive closure of helper functions this DSL function calls.
+            // Build the transitive closure of helper functions this DSL function calls,
+            // then validate cross-function call signatures.
             let module_dsl_fns = self.bindings().metadata().shape_dsl_functions();
             let helpers = compute_transitive_helpers(&dsl_fn, module_dsl_fns);
+            validate_shape_dsl_functions(&helpers);
             FunctionKind::ShapeDsl(func_id, dsl_fn, Derived(helpers))
         } else {
             FunctionKind::from_name(
