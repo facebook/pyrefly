@@ -1284,8 +1284,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     self.with_active_call_context(
                         self.active_call_context
                             .clone()
-                            .with_residual_witness(synthesized)
-                            .with_argument_side(argument_side),
+                            .with_residual_witness(synthesized),
                         |me| {
                             let (witness, captured_vars) =
                             me.witness_and_captured_vars_for_overload().expect(
@@ -2288,8 +2287,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let (result, mut maybe_witness) = self.with_active_call_context(
                     self.active_call_context
                         .clone()
-                        .with_residual_witness(witness)
-                        .with_argument_side(argument_side),
+                        .with_residual_witness(witness),
                     |me| {
                         (
                             me.is_subset_eq(&got, want),
