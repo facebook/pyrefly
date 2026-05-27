@@ -13,6 +13,7 @@ use itertools::Itertools;
 use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
+use pyrefly_types::meta_shape_dsl::ShapeTransformRef;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
@@ -239,6 +240,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         overloads: Vec1<TargetWithTParams<Function>>,
         metadata: &FuncMetadata,
+        shape_transform: Option<&ShapeTransformRef>,
         self_obj: Option<Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
@@ -294,6 +296,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let (mut closest_overload, mut matched) = self.find_closest_overload(
                     &arity_compatible_overloads,
                     metadata,
+                    shape_transform,
                     self_obj.as_ref(),
                     &args,
                     &keywords,
@@ -318,6 +321,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let (cur_closest, cur_matched) = self.find_closest_overload(
                             &arity_compatible_overloads,
                             metadata,
+                            shape_transform,
                             self_obj.as_ref(),
                             cur_args,
                             cur_keywords,
@@ -524,6 +528,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         overloads: &Vec1<&'c TargetWithTParams<Function>>,
         metadata: &FuncMetadata,
+        shape_transform: Option<&ShapeTransformRef>,
         self_obj: Option<&Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
@@ -543,6 +548,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let called_overload = self.call_overload(
                 callable,
                 metadata,
+                shape_transform,
                 self_obj,
                 args,
                 keywords,
@@ -664,6 +670,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let res = self.call_overload(
                                 o.func,
                                 metadata,
+                                shape_transform,
                                 self_obj,
                                 &materialized_args,
                                 &materialized_keywords,
@@ -695,6 +702,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let contextual_overload = self.call_overload(
                     overload.func,
                     metadata,
+                    shape_transform,
                     self_obj,
                     args,
                     keywords,
@@ -819,6 +827,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         callable: &'c TargetWithTParams<Function>,
         metadata: &FuncMetadata,
+        shape_transform: Option<&ShapeTransformRef>,
         self_obj: Option<&Type>,
         args: &[CallArg],
         keywords: &[CallKeyword],
@@ -838,6 +847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let (res, specialization_errors, expected_types) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
+            shape_transform,
             tparams,
             self_obj.cloned(),
             args,
