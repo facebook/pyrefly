@@ -825,13 +825,8 @@ impl<'a> BindingsBuilder<'a> {
             Some((name_expr.id.clone(), ShortIdentifier::expr_name(name_expr)))
         });
 
-        self.scopes.push(Scope::annotation(x.range));
-        let (return_ann_with_range, legacy_tparams) =
-            self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
-
-        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
-
-        // Convert the function body to DSL IR before `function_body` takes the body.
+        // Convert the function to DSL IR before `function_header` takes `returns`
+        // and before `function_body` takes `body`.
         let shape_dsl_def = if is_shape_dsl {
             Some(Arc::new(
                 convert_shape_dsl_function(&x).expect("@shape_dsl_function body must be valid DSL"),
@@ -839,6 +834,12 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             None
         };
+
+        self.scopes.push(Scope::annotation(x.range));
+        let (return_ann_with_range, legacy_tparams) =
+            self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
+
+        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
