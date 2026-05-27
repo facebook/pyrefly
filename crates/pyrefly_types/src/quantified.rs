@@ -368,6 +368,9 @@ impl Quantified {
     /// in the format used for type parameter lists (e.g. `T: int = str`).
     pub fn display_with_bounds(&self) -> impl Display + '_ {
         Fmt(move |f| {
+            if self.is_param_spec() {
+                write!(f, "**")?;
+            }
             write!(f, "{}", self.name)?;
             match self.restriction() {
                 Restriction::Bound(t) => write!(f, ": {}", t)?,
