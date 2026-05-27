@@ -1245,7 +1245,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             if successful_branch_captures.is_empty() {
                 unreachable!("successful overload probe must produce a branch capture");
             }
-            self.persist_overload_witness_captures(
+            self.active_call_context.persist_overload_witness_captures(
                 witness.witness_hash(),
                 successful_branch_captures,
             );
@@ -1276,8 +1276,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .is_ok()
                 } else {
                     let overload_type = Type::Overload(overload.clone());
-                    let synthesized =
-                        self.make_overload_witness(&overload_type, &eligible_vars, argument_side);
+                    let synthesized = ResidualWitnessContext::for_overload(
+                        &overload_type,
+                        &eligible_vars,
+                        argument_side,
+                    );
                     self.with_active_call_context(
                         self.active_call_context
                             .clone()
@@ -2280,7 +2283,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .register_fresh_quantified_vars(vs.vars());
                 let argument_side = self.active_call_context.argument_side();
                 let in_call_analysis = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
-                let witness = self.make_forall_witness(&forall_type, &vs, want);
+                let witness =
+                    ResidualWitnessContext::for_forall(&forall_type, &vs, want, argument_side);
                 let (result, mut maybe_witness) = self.with_active_call_context(
                     self.active_call_context
                         .clone()
@@ -2302,8 +2306,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     {
                         witness.extend_deferred_vars(deferred_vars);
                     }
-                    self.solver
-                        .record_generic_residuals_for_witness(witness, &self.active_call_context);
+                    self.active_call_context.record_generic_residuals(witness);
                 }
                 if in_call_analysis {
                     result

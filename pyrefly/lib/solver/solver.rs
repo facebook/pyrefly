@@ -129,7 +129,7 @@ struct GenericWitnessCapture {
 
 /// Full per-branch capture used transiently during overload probing.
 #[derive(Clone, Debug)]
-pub(crate) struct OverloadBranchCapture {
+pub struct OverloadBranchCapture {
     branch_index: usize,
     values: SmallMap<Var, Variable>,
     /// Vars that had a generic residual at snapshot time. Used by
@@ -1555,18 +1555,6 @@ impl Solver {
         }
     }
 
-    pub(crate) fn record_generic_residuals_for_witness(
-        &self,
-        witness: &ResidualWitnessContext,
-        call_context: &CallContext,
-    ) {
-        call_context.persist_generic_witness_capture(GenericWitnessCapture {
-            witness_hash: witness.witness_hash,
-            target_vars: witness.target_vars.clone(),
-            witness_vars: witness.capture_candidate_vars(),
-        });
-    }
-
     fn materialize_overload_residual_branch_value(
         &self,
         value: &Variable,
@@ -2772,6 +2760,44 @@ pub struct ResidualWitnessContext {
 }
 
 impl ResidualWitnessContext {
+    fn type_witness_hash(ty: &Type) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        ty.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Build a witness for a Forall instantiation during subset checking.
+    pub fn for_forall(
+        got: &Type,
+        vars: &QuantifiedHandle,
+        want: &Type,
+        argument_side: ArgumentSide,
+    ) -> Self {
+        let mut target_vars: SmallSet<Var> =
+            want.collect_maybe_placeholder_vars().into_iter().collect();
+        target_vars.extend(vars.0.iter().copied());
+        Self {
+            witness_hash: Self::type_witness_hash(got),
+            target_vars,
+            argument_side,
+            origin_vars: vars.0.iter().copied().collect(),
+            deferred_vars: SmallSet::new(),
+        }
+    }
+
+    /// Build a witness for an overload residual during subset checking.
+    pub fn for_overload(got: &Type, eligible_vars: &[Var], argument_side: ArgumentSide) -> Self {
+        let target_vars: SmallSet<Var> = eligible_vars.iter().copied().collect();
+        let origin_vars = target_vars.clone();
+        Self {
+            witness_hash: Self::type_witness_hash(got),
+            target_vars,
+            argument_side,
+            origin_vars,
+            deferred_vars: SmallSet::new(),
+        }
+    }
+
     pub(crate) fn witness_hash(&self) -> u64 {
         self.witness_hash
     }
@@ -2913,6 +2939,17 @@ impl CallContext {
         mem::take(&mut *overload_witness_captures)
     }
 
+    /// Persist overload probe captures. Finishing consumes these captures as the
+    /// authoritative pruning source.
+    pub fn persist_overload_witness_captures(
+        &self,
+        witness_hash: u64,
+        branch_captures: Vec<OverloadBranchCapture>,
+    ) {
+        let mut captures = self.overload_witness_captures.lock();
+        captures.insert(witness_hash, branch_captures);
+    }
+
     /// Returns the set of vars that appear in overload witness captures
     /// without draining them.
     pub fn overload_captured_vars(&self) -> SmallSet<Var> {
@@ -2924,8 +2961,14 @@ impl CallContext {
             .collect()
     }
 
-    fn persist_generic_witness_capture(&self, capture: GenericWitnessCapture) {
+    /// Record generic residual information from a completed witness check.
+    pub fn record_generic_residuals(&self, witness: &ResidualWitnessContext) {
         let mut captures = self.generic_witness_captures.lock();
+        let capture = GenericWitnessCapture {
+            witness_hash: witness.witness_hash,
+            target_vars: witness.target_vars.clone(),
+            witness_vars: witness.capture_candidate_vars(),
+        };
         // Dedup: if an existing entry has the same (witness_hash, target_vars),
         // merge witness_vars into it instead of pushing a new entry.
         for existing in captures.iter_mut() {
@@ -3035,12 +3078,6 @@ pub struct Subset<'a, Ans: LookupAnswer> {
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
-    fn type_witness_hash(ty: &Type) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        ty.hash(&mut hasher);
-        hasher.finish()
-    }
-
     fn snapshot_witness_deferred_vars(&self) -> SmallMap<u64, SmallSet<Var>> {
         self.witness_deferred_vars.clone()
     }
@@ -3083,27 +3120,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         self.restore_witness_deferred_vars(deferred_vars);
         self.coinductive_assumptions_used = coinductive_assumptions_used;
         result
-    }
-
-    pub(crate) fn make_forall_witness(
-        &mut self,
-        got: &Type,
-        vars: &QuantifiedHandle,
-        want: &Type,
-    ) -> ResidualWitnessContext {
-        let argument_side = self.active_call_context.argument_side();
-        // Residual reads may happen through either side: call-visible vars from
-        // `want`, or fresh vars created by this Forall instantiation.
-        let mut target_vars: SmallSet<Var> =
-            want.collect_maybe_placeholder_vars().into_iter().collect();
-        target_vars.extend(vars.0.iter().copied());
-        ResidualWitnessContext {
-            witness_hash: Self::type_witness_hash(got),
-            target_vars,
-            argument_side,
-            origin_vars: vars.0.iter().copied().collect(),
-            deferred_vars: SmallSet::new(),
-        }
     }
 
     pub fn is_consistent(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
@@ -3154,34 +3170,6 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         witness_hash: u64,
     ) -> Option<SmallSet<Var>> {
         self.witness_deferred_vars.shift_remove(&witness_hash)
-    }
-
-    /// Persist overload probe captures in the call context.
-    /// Finishing consumes these captures as the authoritative pruning source.
-    pub(crate) fn persist_overload_witness_captures(
-        &self,
-        witness_hash: u64,
-        branch_captures: Vec<OverloadBranchCapture>,
-    ) {
-        let mut captures = self.active_call_context.overload_witness_captures.lock();
-        captures.insert(witness_hash, branch_captures);
-    }
-
-    pub(crate) fn make_overload_witness(
-        &mut self,
-        got: &Type,
-        eligible_vars: &[Var],
-        argument_side: ArgumentSide,
-    ) -> ResidualWitnessContext {
-        let target_vars: SmallSet<Var> = eligible_vars.iter().copied().collect();
-        let origin_vars = target_vars.clone();
-        ResidualWitnessContext {
-            witness_hash: Self::type_witness_hash(got),
-            target_vars,
-            argument_side,
-            origin_vars,
-            deferred_vars: SmallSet::new(),
-        }
     }
 
     pub(crate) fn active_overload_residual_witness(&self) -> Option<ResidualWitnessContext> {
