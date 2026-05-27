@@ -115,14 +115,6 @@ impl Bounds {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ResidualIdentity {
-    witness_hash: u64,
-    /// Vars that are allowed to observe the residualized answer for this candidate.
-    /// This is captured during subset checks and threaded into `Variable::ResidualAnswer`.
-    target_vars: SmallSet<Var>,
-}
-
 /// Per-call capture of generic witness information, stored on `CallContext`.
 /// Each entry records a single Forall instantiation's witness vars and the
 /// target vars that are allowed to observe the residualized answer.
@@ -198,9 +190,6 @@ enum Variable {
     Quantified {
         quantified: Quantified,
         bounds: Bounds,
-        /// Residual candidates captured during subset checks.
-        /// Kept separate from concrete bounds to avoid accidental coupling.
-        residuals: Vec<ResidualIdentity>,
     },
     /// A variable caused by general recursion, e.g. `x = f(); def f(): return x`.
     Recursive,
@@ -233,7 +222,6 @@ impl Display for Variable {
             | Variable::Quantified {
                 quantified: q,
                 bounds: _,
-                residuals: _,
             } => {
                 let label = if matches!(self, Variable::PartialQuantified(_)) {
                     "PartialQuantified"
@@ -1224,7 +1212,6 @@ impl Solver {
                 Variable::Quantified {
                     quantified: (*q).clone(),
                     bounds: Bounds::new(),
-                    residuals: Vec::new(),
                 },
             );
         }
@@ -1567,22 +1554,10 @@ impl Solver {
         call_context: &CallContext,
     ) {
         call_context.persist_generic_witness_capture(GenericWitnessCapture {
-            witness_hash: witness.identity.witness_hash,
-            target_vars: witness.identity.target_vars.clone(),
+            witness_hash: witness.witness_hash,
+            target_vars: witness.target_vars.clone(),
             witness_vars: witness.capture_candidate_vars(),
         });
-    }
-
-    fn merge_residual_candidates(
-        left: &mut Vec<ResidualIdentity>,
-        right: &mut Vec<ResidualIdentity>,
-    ) {
-        for residual in mem::take(right) {
-            if !left.contains(&residual) {
-                left.push(residual);
-            }
-        }
-        *right = left.clone();
     }
 
     fn materialize_overload_residual_branch_value(
@@ -2176,7 +2151,6 @@ impl Solver {
                     Variable::Quantified {
                         quantified: param.clone(),
                         bounds: Bounds::new(),
-                        residuals: Vec::new(),
                     },
                 );
             }
@@ -2774,8 +2748,9 @@ pub(crate) enum SubsetCacheContext {
 }
 
 // The context in which we are collecting residuals.
-// - The `identity` is the particular Forall type that appeared as an argument
-//   in a higher-order call
+// - The `witness_hash` identifies the particular Forall type that appeared as
+//   an argument in a higher-order call
+// - The `target_vars` are vars allowed to observe the residualized answer
 // - The `origin_vars` are `Vars` that correspond to scoped type parameters
 //   inside of that argument (the "origin" of the generic behavior)
 // - The `deferred_vars` are `Vars` that correspond to call-scope vars from
@@ -2786,7 +2761,9 @@ pub(crate) enum SubsetCacheContext {
 // TODO(stroxler): Rethink the names of fields here. It would be difficult to restack.
 #[derive(Clone, Debug)]
 pub struct ResidualWitnessContext {
-    identity: ResidualIdentity,
+    witness_hash: u64,
+    /// Vars that are allowed to observe the residualized answer for this candidate.
+    target_vars: SmallSet<Var>,
     argument_side: ArgumentSide,
     origin_vars: SmallSet<Var>,
     deferred_vars: SmallSet<Var>,
@@ -2794,7 +2771,7 @@ pub struct ResidualWitnessContext {
 
 impl ResidualWitnessContext {
     pub(crate) fn witness_hash(&self) -> u64 {
-        self.identity.witness_hash
+        self.witness_hash
     }
 
     fn capture_candidate_vars(&self) -> SmallSet<Var> {
@@ -2912,7 +2889,7 @@ impl CallContext {
             // witness/polarity-sensitive side effects isolated. Most checks run
             // under Default context and keep prior cache behavior.
             SubsetCacheContext::Witness {
-                witness_hash: witness.identity.witness_hash,
+                witness_hash: witness.witness_hash,
                 argument_side: self.argument_side,
             }
         } else {
@@ -3119,10 +3096,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             want.collect_maybe_placeholder_vars().into_iter().collect();
         target_vars.extend(vars.0.iter().copied());
         ResidualWitnessContext {
-            identity: ResidualIdentity {
-                witness_hash: Self::type_witness_hash(got),
-                target_vars,
-            },
+            witness_hash: Self::type_witness_hash(got),
+            target_vars,
             argument_side,
             origin_vars: vars.0.iter().copied().collect(),
             deferred_vars: SmallSet::new(),
@@ -3199,10 +3174,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         let target_vars: SmallSet<Var> = eligible_vars.iter().copied().collect();
         let origin_vars = target_vars.clone();
         ResidualWitnessContext {
-            identity: ResidualIdentity {
-                witness_hash: Self::type_witness_hash(got),
-                target_vars,
-            },
+            witness_hash: Self::type_witness_hash(got),
+            target_vars,
             argument_side,
             origin_vars,
             deferred_vars: SmallSet::new(),
@@ -3230,8 +3203,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if !witness.origin_vars.contains(&origin_var) {
             return;
         }
-        let witness_hash = witness.identity.witness_hash;
-        let target_vars = witness.identity.target_vars.clone();
+        let witness_hash = witness.witness_hash;
+        let target_vars = witness.target_vars.clone();
         let deferred_vars = self.witness_deferred_vars.entry(witness_hash).or_default();
         for var in other.collect_maybe_placeholder_vars() {
             if target_vars.contains(&var) {
@@ -3377,29 +3350,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             Variable::Quantified {
                                 quantified: _,
                                 bounds: v1_bounds,
-                                residuals: v1_residuals,
-                            },
-                            Variable::Quantified {
-                                quantified: _,
-                                bounds: v2_bounds,
-                                residuals: v2_residuals,
-                            },
-                        ) => {
-                            v1_bounds.extend(mem::take(v2_bounds));
-                            *v2_bounds = v1_bounds.clone();
-                            Solver::merge_residual_candidates(v1_residuals, v2_residuals);
-                        }
-                        (
-                            Variable::Quantified {
-                                quantified: _,
-                                bounds: v1_bounds,
-                                ..
                             }
                             | Variable::Unwrap(v1_bounds),
                             Variable::Quantified {
                                 quantified: _,
                                 bounds: v2_bounds,
-                                ..
                             }
                             | Variable::Unwrap(v2_bounds),
                         ) => {
