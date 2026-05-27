@@ -28,6 +28,7 @@ use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
+use pyrefly_types::types::Forall;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Var;
 use pyrefly_util::owner::Owner;
@@ -40,6 +41,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::OpenTypedDictSubsetError;
+use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::ResidualWitnessContext;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetCacheEntry;
@@ -143,6 +145,12 @@ fn any<T>(
         }
     }
     Err(err.unwrap_or(SubsetError::Other))
+}
+
+struct FreshForall {
+    handle: QuantifiedHandle,
+    ty: Type,
+    witness: ResidualWitnessContext,
 }
 
 impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
@@ -1368,6 +1376,72 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         Err(SubsetError::Other)
     }
 
+    fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
+        let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
+        let witness = ResidualWitnessContext::for_forall(
+            &Type::Forall(Box::new(forall)),
+            &vs,
+            want,
+            self.active_call_context.argument_side(),
+        );
+        FreshForall {
+            handle: vs,
+            ty: got,
+            witness,
+        }
+    }
+
+    fn is_subset_forall(&mut self, got: FreshForall, want: &Type) -> Result<(), SubsetError> {
+        self.active_call_context
+            .register_fresh_quantified_vars(got.handle.vars());
+        let (result, mut maybe_witness) = self.with_active_call_context(
+            self.active_call_context
+                .clone()
+                .with_residual_witness(got.witness),
+            |me| {
+                (
+                    me.is_subset_eq(&got.ty, want),
+                    me.active_call_context.take_residual_witness(),
+                )
+            },
+        );
+        // Either defer finishing to the active
+        // call boundary (when inside call analysis) or finish eagerly
+        // for ad-hoc subset checks outside calls.
+        let in_call_analysis = !matches!(
+            self.active_call_context.argument_side(),
+            ArgumentSide::NotAnalyzingACall
+        );
+        if result.is_ok()
+            && in_call_analysis
+            && let Some(witness) = maybe_witness.as_mut()
+        {
+            if let Some(deferred_vars) = self.take_witness_deferred_vars(witness.witness_hash()) {
+                witness.extend_deferred_vars(deferred_vars);
+            }
+            self.active_call_context.record_generic_residuals(witness);
+        }
+        if in_call_analysis {
+            result
+        } else {
+            // Even when subset checking fails, finish the fresh vars
+            // to avoid leaking Quantified placeholders in ad-hoc paths.
+            let finish_result = self
+                .solver
+                .finish_quantified(
+                    got.handle,
+                    self.solver.infer_with_first_use,
+                    self.type_order,
+                    None,
+                )
+                .map_err(SubsetError::TypeVarSpecialization);
+            match result {
+                Ok(()) => finish_result,
+                Err(e) => Err(e),
+            }
+        }
+    }
+
     fn can_be_recursive(&self, t1: &Type, t2: &Type) -> bool {
         match (t1, t2) {
             // We only care if the RHS is a protocol
@@ -2273,58 +2347,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .mk_class_type(self.type_order.stdlib().none_type().clone()),
             ),
             (Type::Forall(forall), _) => {
-                let forall_type = Type::Forall(forall.clone());
-                // Instantiate once, then either defer finishing to the active
-                // call boundary (when inside call analysis) or finish eagerly
-                // for ad-hoc subset checks outside calls.
-                let (vs, got) = self.type_order.instantiate_fresh_forall((**forall).clone());
-                self.active_call_context
-                    .register_fresh_quantified_vars(vs.vars());
-                let argument_side = self.active_call_context.argument_side();
-                let in_call_analysis = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
-                let witness =
-                    ResidualWitnessContext::for_forall(&forall_type, &vs, want, argument_side);
-                let (result, mut maybe_witness) = self.with_active_call_context(
-                    self.active_call_context
-                        .clone()
-                        .with_residual_witness(witness),
-                    |me| {
-                        (
-                            me.is_subset_eq(&got, want),
-                            me.active_call_context.take_residual_witness(),
-                        )
-                    },
-                );
-                if result.is_ok()
-                    && !matches!(argument_side, ArgumentSide::NotAnalyzingACall)
-                    && let Some(witness) = maybe_witness.as_mut()
-                {
-                    if let Some(deferred_vars) =
-                        self.take_witness_deferred_vars(witness.witness_hash())
-                    {
-                        witness.extend_deferred_vars(deferred_vars);
-                    }
-                    self.active_call_context.record_generic_residuals(witness);
-                }
-                if in_call_analysis {
-                    result
-                } else {
-                    // Even when subset checking fails, finish the fresh vars
-                    // to avoid leaking Quantified placeholders in ad-hoc paths.
-                    let finish_result = self
-                        .solver
-                        .finish_quantified(
-                            vs,
-                            self.solver.infer_with_first_use,
-                            self.type_order,
-                            None,
-                        )
-                        .map_err(SubsetError::TypeVarSpecialization);
-                    match result {
-                        Ok(()) => finish_result,
-                        Err(e) => Err(e),
-                    }
-                }
+                let got = self.instantiate_fresh_forall((**forall).clone(), want);
+                self.is_subset_forall(got, want)
             }
             (_, Type::Forall(forall)) => self.is_subset_eq(got, &forall.body.clone().as_type()),
             (Type::TypeVar(l), Type::TypeVar(u)) => {
