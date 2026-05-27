@@ -123,6 +123,18 @@ struct ResidualIdentity {
     target_vars: SmallSet<Var>,
 }
 
+/// Per-call capture of generic witness information, stored on `CallContext`.
+/// Each entry records a single Forall instantiation's witness vars and the
+/// target vars that are allowed to observe the residualized answer.
+#[derive(Clone, Debug)]
+struct GenericWitnessCapture {
+    witness_hash: u64,
+    target_vars: SmallSet<Var>,
+    /// Union of origin_vars and deferred_vars from the witness — the quantified
+    /// vars constrained by this Forall instantiation.
+    witness_vars: SmallSet<Var>,
+}
+
 /// Full per-branch capture used transiently during overload probing.
 #[derive(Clone, Debug)]
 pub(crate) struct OverloadBranchCapture {
@@ -1537,13 +1549,17 @@ impl Solver {
         }
     }
 
-    pub(crate) fn record_generic_residuals_for_witness(&self, witness: &ResidualWitnessContext) {
+    pub(crate) fn record_generic_residuals_for_witness(
+        &self,
+        witness: &ResidualWitnessContext,
+        call_context: &CallContext,
+    ) {
+        let witness_vars = witness.capture_candidate_vars();
+
+        // Dual-write: keep variable-backed path (will be removed in a follow-up)
+        // alongside the new payload-backed path.
         let lock = self.variables.lock();
-        for &var in witness
-            .origin_vars
-            .iter()
-            .chain(witness.deferred_vars.iter())
-        {
+        for &var in witness_vars.iter() {
             let mut variable = lock.get_mut(var);
             if let Variable::Quantified { residuals, .. } = &mut *variable
                 && !residuals.contains(&witness.identity)
@@ -1551,6 +1567,13 @@ impl Solver {
                 residuals.push(witness.identity.clone());
             }
         }
+        drop(lock);
+
+        call_context.persist_generic_witness_capture(GenericWitnessCapture {
+            witness_hash: witness.identity.witness_hash,
+            target_vars: witness.identity.target_vars.clone(),
+            witness_vars,
+        });
     }
 
     fn merge_residual_candidates(
@@ -1799,33 +1822,36 @@ impl Solver {
         type_order: TypeOrder<Ans>,
         call_context: Option<&CallContext>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
-        let (vs, mut overload_witness_captures) = if let Some(cc) = call_context {
-            let tracked_fresh_vars = cc.take_deferred_quantified_vars();
-            let overload_witness_captures = cc.take_overload_witness_captures();
-            cc.mark_boundary_consumed_and_drained();
-            let overload_capture_vars: SmallSet<Var> = overload_witness_captures
-                .values()
-                .flat_map(|branch_captures| branch_captures.iter())
-                .flat_map(|capture| capture.values.keys().copied())
-                .collect();
-            let mut roots: SmallSet<Var> = vs.0.into_iter().collect();
-            roots.extend(tracked_fresh_vars.0);
-            // Solve boundaries explicitly own fresh quantified tracking. We finish
-            // the exact boundary set (explicit roots + fresh vars + overload capture vars),
-            // rather than using reachability expansion that can miss or overreach.
-            let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
-            // Overload pruning must include solved vars even if they
-            // already collapsed to `Answer` before boundary finishing.
-            all_boundary_vars.extend(overload_capture_vars);
-            all_boundary_vars.sort_unstable();
-            all_boundary_vars.dedup();
-            (
-                QuantifiedHandle(all_boundary_vars),
-                overload_witness_captures,
-            )
-        } else {
-            (vs, SmallMap::new())
-        };
+        let (vs, mut overload_witness_captures, _generic_witness_captures) =
+            if let Some(cc) = call_context {
+                let tracked_fresh_vars = cc.take_deferred_quantified_vars();
+                let overload_witness_captures = cc.take_overload_witness_captures();
+                let generic_witness_captures = cc.take_generic_witness_captures();
+                cc.mark_boundary_consumed_and_drained();
+                let overload_capture_vars: SmallSet<Var> = overload_witness_captures
+                    .values()
+                    .flat_map(|branch_captures| branch_captures.iter())
+                    .flat_map(|capture| capture.values.keys().copied())
+                    .collect();
+                let mut roots: SmallSet<Var> = vs.0.into_iter().collect();
+                roots.extend(tracked_fresh_vars.0);
+                // Solve boundaries explicitly own fresh quantified tracking. We finish
+                // the exact boundary set (explicit roots + fresh vars + overload capture vars),
+                // rather than using reachability expansion that can miss or overreach.
+                let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
+                // Overload pruning must include solved vars even if they
+                // already collapsed to `Answer` before boundary finishing.
+                all_boundary_vars.extend(overload_capture_vars);
+                all_boundary_vars.sort_unstable();
+                all_boundary_vars.dedup();
+                (
+                    QuantifiedHandle(all_boundary_vars),
+                    overload_witness_captures,
+                    generic_witness_captures,
+                )
+            } else {
+                (vs, SmallMap::new(), Vec::new())
+            };
         if vs.0.is_empty() {
             return Ok(());
         }
@@ -2751,6 +2777,9 @@ pub struct CallContext {
     /// Invariant: capture entries are scoped to this call-context lineage and
     /// must not leak across `with_outside_context` boundaries.
     overload_witness_captures: Arc<Mutex<OverloadWitnessCapturesByHash>>,
+    /// Per-call generic witness captures, written during subset checking and
+    /// consumed in `finish_quantified`.
+    generic_witness_captures: Arc<Mutex<Vec<GenericWitnessCapture>>>,
     /// Whether this context must be consumed at a solve boundary.
     require_boundary_consumption: Arc<AtomicBool>,
     /// Whether deferred state from this context lineage was consumed/drained.
@@ -2764,6 +2793,7 @@ impl Default for CallContext {
             argument_side: ArgumentSide::default(),
             deferred_quantified_vars: Arc::new(Mutex::new(SmallSet::new())),
             overload_witness_captures: Arc::new(Mutex::new(SmallMap::new())),
+            generic_witness_captures: Arc::new(Mutex::new(Vec::new())),
             require_boundary_consumption: Arc::new(AtomicBool::new(false)),
             boundary_consumed_and_drained: Arc::new(AtomicBool::new(false)),
         }
@@ -2800,6 +2830,7 @@ impl CallContext {
         self.witness = Default::default();
         self.argument_side = Default::default();
         self.overload_witness_captures = Default::default();
+        self.generic_witness_captures = Default::default();
         self
     }
 
@@ -2873,6 +2904,35 @@ impl CallContext {
             .collect()
     }
 
+    fn persist_generic_witness_capture(&self, capture: GenericWitnessCapture) {
+        let mut captures = self.generic_witness_captures.lock();
+        // Dedup: if an existing entry has the same (witness_hash, target_vars),
+        // merge witness_vars into it instead of pushing a new entry.
+        for existing in captures.iter_mut() {
+            if existing.witness_hash == capture.witness_hash
+                && existing.target_vars == capture.target_vars
+            {
+                existing.witness_vars.extend(capture.witness_vars);
+                return;
+            }
+        }
+        captures.push(capture);
+    }
+
+    fn take_generic_witness_captures(&self) -> Vec<GenericWitnessCapture> {
+        let mut captures = self.generic_witness_captures.lock();
+        mem::take(&mut *captures)
+    }
+
+    /// Returns the union of all `witness_vars` across all captures, without draining.
+    pub fn generic_captured_vars(&self) -> SmallSet<Var> {
+        let captures = self.generic_witness_captures.lock();
+        captures
+            .iter()
+            .flat_map(|c| c.witness_vars.iter().copied())
+            .collect()
+    }
+
     fn mark_boundary_consumed_and_drained(&self) {
         self.boundary_consumed_and_drained
             .store(true, Ordering::Relaxed);
@@ -2902,6 +2962,10 @@ impl Drop for CallContext {
             assert!(
                 self.overload_witness_captures.lock().is_empty(),
                 "CallContext dropped with overload witness captures still pending",
+            );
+            assert!(
+                self.generic_witness_captures.lock().is_empty(),
+                "CallContext dropped with generic witness captures still pending",
             );
         }
     }

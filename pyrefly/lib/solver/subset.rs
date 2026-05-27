@@ -2300,7 +2300,8 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     {
                         witness.extend_deferred_vars(deferred_vars);
                     }
-                    self.solver.record_generic_residuals_for_witness(witness);
+                    self.solver
+                        .record_generic_residuals_for_witness(witness, &self.active_call_context);
                 }
                 if in_call_analysis {
                     result
