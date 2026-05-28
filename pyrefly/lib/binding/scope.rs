@@ -405,7 +405,8 @@ impl Static {
 
     /// Populate static definitions from a list of statements.
     /// Returns the set of implicit captures (names read but not locally defined),
-    /// the set of all Final names, and a map of Final variable string values.
+    /// the set of all Final names, a map of Final variable string values, and
+    /// a map of Final variable bool values.
     fn stmts(
         &mut self,
         x: &[Stmt],
@@ -415,7 +416,12 @@ impl Static {
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
-    ) -> (SmallSet<Name>, SmallSet<Name>, SmallMap<Name, String>) {
+    ) -> (
+        SmallSet<Name>,
+        SmallSet<Name>,
+        SmallMap<Name, String>,
+        SmallMap<Name, bool>,
+    ) {
         let mut d = Definitions::new(
             x,
             module_info.name(),
@@ -470,7 +476,13 @@ impl Static {
             .into_iter()
             .filter_map(|(name, value)| value.map(|v| (name, v)))
             .collect();
-        (implicit_captures, final_names, final_string_values)
+        let final_bool_values = d.final_bool_values;
+        (
+            implicit_captures,
+            final_names,
+            final_string_values,
+            final_bool_values,
+        )
     }
 
     fn expr_lvalue(&mut self, x: &Expr) {
@@ -1213,6 +1225,9 @@ pub struct Scope {
     /// Names marked `Final` with string literal values, e.g. `X: Final = "x"`.
     /// Used to resolve Final variable references in synthesized class field names.
     final_string_values: SmallMap<Name, String>,
+    /// Names marked `Final` with bool literal values, e.g. `FLAG: Final = False`.
+    /// Used to statically evaluate control-flow tests like `if FLAG:`.
+    final_bool_values: SmallMap<Name, bool>,
 }
 
 impl Scope {
@@ -1233,6 +1248,7 @@ impl Scope {
             implicit_captures: SmallSet::new(),
             final_names: SmallSet::new(),
             final_string_values: SmallMap::new(),
+            final_bool_values: SmallMap::new(),
         }
     }
 
@@ -1678,18 +1694,20 @@ impl Scopes {
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
-            let (implicit_captures, final_names, final_string_values) = scope.stat.stmts(
-                x,
-                module_info,
-                top_level,
-                lookup,
-                sys_info,
-                get_annotation_idx,
-                myself,
-            );
+            let (implicit_captures, final_names, final_string_values, final_bool_values) =
+                scope.stat.stmts(
+                    x,
+                    module_info,
+                    top_level,
+                    lookup,
+                    sys_info,
+                    get_annotation_idx,
+                    myself,
+                );
             scope.implicit_captures = implicit_captures;
             scope.final_names = final_names;
             scope.final_string_values = final_string_values;
+            scope.final_bool_values = final_bool_values;
             // Presize the flow, as its likely to need as much space as static
             scope.flow.info.reserve(scope.stat.0.capacity());
         };
@@ -1723,6 +1741,30 @@ impl Scopes {
             if node.scope.stat.0.contains_key(name) {
                 return None;
             }
+        }
+        None
+    }
+
+    /// Look up a Final variable's bool literal value in the current scope stack.
+    pub fn lookup_final_bool_value(&self, name: &Name) -> Option<bool> {
+        for node in self.scopes.iter().rev() {
+            if let Some(value) = node.scope.final_bool_values.get(name) {
+                return Some(*value);
+            }
+            if node.scope.stat.0.contains_key(name) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Return true/false if a control-flow test can be statically evaluated.
+    pub fn evaluate_bool_for_control_flow(&self, sys_info: SysInfo, x: &Expr) -> Option<bool> {
+        if let Some(value) = sys_info.evaluate_bool(x) {
+            return Some(value);
+        }
+        if let Expr::Name(name) = x {
+            return self.lookup_final_bool_value(&name.id);
         }
         None
     }
