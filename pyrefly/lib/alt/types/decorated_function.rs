@@ -92,6 +92,7 @@ pub enum SpecialDecorator<'a> {
     EnumMember,
     Override,
     Final,
+    NoTypeCheck,
     Deprecated(&'a Deprecation),
     PropertySetter(&'a Type),
     PropertyDeleter(&'a Type),

@@ -668,6 +668,8 @@ pub struct FuncFlags {
     pub is_overload: bool,
     pub is_staticmethod: bool,
     pub is_classmethod: bool,
+    /// A function decorated with `@no_type_check`.
+    pub has_no_type_check: bool,
     /// A function decorated with `@deprecated`
     pub deprecation: Option<Deprecation>,
     /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
