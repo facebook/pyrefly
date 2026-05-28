@@ -2514,6 +2514,150 @@ def test(x: UserDict | AdminDict):
 );
 
 testcase!(
+    test_discriminated_union_key_membership,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+class InstantEvent(TypedDict):
+    name: str
+    ph: Literal["I"]
+    s: Literal["p"]
+
+class PauseEvent(TypedDict):
+    name: str
+    cat: str
+    ph: Literal["X"]
+    ts: int
+
+class CounterEvent(TypedDict):
+    name: str
+    ph: Literal["C"]
+    ts: int
+
+class ProcessMeta(TypedDict):
+    name: Literal["process_name"]
+    ph: Literal["M"]
+
+TraceEvent = PauseEvent | CounterEvent | ProcessMeta | InstantEvent
+TimedEvent = PauseEvent | CounterEvent | InstantEvent
+
+def test_in(events: list[TraceEvent]) -> None:
+    timed: list[TimedEvent] = []
+    for event in events:
+        if event["ph"] in ("X", "C", "I"):
+            assert_type(event, TimedEvent)
+            timed.append(event)
+        else:
+            assert_type(event, ProcessMeta)
+
+def test_not_in(event: TraceEvent) -> None:
+    if event["ph"] not in ("M",):
+        assert_type(event, TimedEvent)
+    else:
+        assert_type(event, ProcessMeta)
+    "#,
+);
+
+testcase!(
+    test_discriminated_union_key_membership_non_literal_container,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+class XEvent(TypedDict):
+    ph: Literal["X"]
+
+class MEvent(TypedDict):
+    ph: Literal["M"]
+
+Event = XEvent | MEvent
+
+def test(event: Event, keys: list[str]) -> None:
+    # `keys` is not a statically-enumerable container, so membership cannot
+    # eliminate any union member: both branches keep the full union.
+    if event["ph"] in keys:
+        assert_type(event, Event)
+    else:
+        assert_type(event, Event)
+    "#,
+);
+
+testcase!(
+    test_discriminated_union_key_membership_non_literal_discriminant,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+class XEvent(TypedDict):
+    ph: Literal["X"]
+
+class AnyPhEvent(TypedDict):
+    ph: str
+
+Event = XEvent | AnyPhEvent
+
+def test(event: Event) -> None:
+    if event["ph"] in ("X",):
+        # AnyPhEvent's `str` discriminant might be "X", so it cannot be dropped.
+        assert_type(event, Event)
+    else:
+        # XEvent's "X" is excluded; AnyPhEvent survives (its `str` might not be "X").
+        assert_type(event, AnyPhEvent)
+    "#,
+);
+
+testcase!(
+    test_discriminated_union_key_membership_exhaustive,
+    r#"
+from typing import Literal, Never, TypedDict, assert_type
+
+class XEvent(TypedDict):
+    ph: Literal["X"]
+
+class MEvent(TypedDict):
+    ph: Literal["M"]
+
+Event = XEvent | MEvent
+
+def test(event: Event) -> None:
+    if event["ph"] in ("X", "M"):
+        # Every member's discriminant is covered, so nothing is eliminated.
+        assert_type(event, Event)
+    else:
+        # The complement is empty: this branch is unreachable.
+        assert_type(event, Never)
+    "#,
+);
+
+testcase!(
+    test_discriminated_union_key_membership_enum,
+    r#"
+from typing import Literal, TypedDict, assert_type
+from enum import Enum
+
+class Phase(Enum):
+    X = "x"
+    C = "c"
+    M = "m"
+
+class PauseEvent(TypedDict):
+    ph: Literal[Phase.X]
+
+class CounterEvent(TypedDict):
+    ph: Literal[Phase.C]
+
+class ProcessMeta(TypedDict):
+    ph: Literal[Phase.M]
+
+Event = PauseEvent | CounterEvent | ProcessMeta
+
+def test(event: Event) -> None:
+    if event["ph"] in (Phase.X, Phase.C):
+        assert_type(event, PauseEvent | CounterEvent)
+    else:
+        assert_type(event, ProcessMeta)
+    "#,
+);
+
+testcase!(
     test_discriminated_union_attr,
     r#"
 from typing import assert_type, Literal
