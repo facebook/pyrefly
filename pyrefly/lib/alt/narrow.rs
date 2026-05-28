@@ -437,6 +437,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
         if narrow_heterogeneous_tuple {
             Some(self.instantiate_type_var_tuple())
+        } else if matches!(right, Type::ClassDef(c) if c == self.stdlib.builtins_type().class_object())
+        {
+            // `isinstance(x, type)` narrows `x` to its class-object part. When `x` is already a
+            // type-expression value, that part is `type[inner]`: `type[int]` stays precise and
+            // gradual `type[Any]` stays gradual.
+            match left {
+                Type::Type(_) => Some((TParams::empty(), left.clone())),
+                Type::TypeForm(inner) => {
+                    Some((TParams::empty(), self.heap.mk_type_of((**inner).clone())))
+                }
+                _ => self.unwrap_class_object_silently(right),
+            }
         } else {
             self.unwrap_class_object_silently(right)
         }
