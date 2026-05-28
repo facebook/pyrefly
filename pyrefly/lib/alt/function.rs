@@ -593,17 +593,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if p.annotation().is_none() {
                 let name = p.name().as_str();
-                // Skip parameters starting with single `_` that don't end with `_`
-                // as they indicate intentionally unused variables.
+                // Skip parameters that indicate intentionally unused variables.
                 // `_`, `_abc` → skip; `__abc`, `_abc_`, `__abc__` → don't skip.
-                let is_underscore_unused = {
-                    let b = name.as_bytes();
-                    b.len() >= 1
-                        && b[0] == b'_'
-                        && (b.len() == 1 || b[1] != b'_')
-                        && !name.ends_with('_')
-                };
-                if !is_underscore_unused {
+                if !Ast::is_intentionally_unused(&name) {
                     self.error(
                         errors,
                         p.name().range(),

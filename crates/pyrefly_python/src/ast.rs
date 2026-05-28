@@ -414,6 +414,10 @@ impl Ast {
         name.starts_with("__") && !name.ends_with("__")
     }
 
+    pub fn is_intentionally_unused(name: &str) -> bool {
+        name.starts_with('_') && (name.len() == 1 || !name.ends_with('_'))
+    }
+
     pub fn is_list_literal_or_comprehension(expr: &Expr) -> bool {
         matches!(expr, Expr::List(_) | Expr::ListComp(_))
     }
