@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::iter;
 use std::sync::Arc;
 
@@ -1585,11 +1586,61 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *targs = chosen_targs;
         }
-        let (ty, specialization_errors, _expected_types) = chosen_res;
+        let (ty, specialization_errors, expected_types) = chosen_res;
         if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
             self.add_specialization_errors(errors, arguments_range, call_errors, context);
         }
-        ty
+        self.refine_typevar_bound_call_result(ty, hint, args, keywords, &expected_types)
+    }
+
+    /// Preserve a narrowed `Concrete & T` witness when a concrete helper returns
+    /// the same type it accepts. Fresh concrete values remain plain `Concrete`.
+    fn refine_typevar_bound_call_result(
+        &self,
+        ty: Type,
+        hint: Option<HintRef>,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        expected_types: &HashMap<TextRange, Type>,
+    ) -> Type {
+        let Some(hint) = hint else {
+            return ty;
+        };
+        let [hint] = hint.types() else {
+            return ty;
+        };
+        let Type::Quantified(quantified) = hint else {
+            return ty;
+        };
+        if !matches!(quantified.restriction(), Restriction::Bound(_)) {
+            return ty;
+        }
+        // Match the single value that can carry the TypeVar witness.
+        let (arg_range, value): (TextRange, &TypeOrExpr) = match (args, keywords) {
+            ([CallArg::Arg(value)], []) => (value.range(), value),
+            ([], [keyword]) => (keyword.range, &keyword.value),
+            _ => return ty,
+        };
+        if expected_types.get(&arg_range) != Some(&ty) {
+            return ty;
+        }
+        let arg_ty = match value {
+            TypeOrExpr::Type(ty, _) => (*ty).clone(),
+            TypeOrExpr::Expr(expr) => {
+                let errors = self.error_swallower();
+                self.expr_infer(expr, &errors)
+            }
+        };
+        if let Type::Intersect(intersection) = &arg_ty
+            && intersection.0.iter().any(
+                |part| matches!(part, Type::Quantified(q) if q.as_ref() == quantified.as_ref()),
+            )
+            && intersection.0.iter().any(|part| part == &ty)
+        {
+            arg_ty
+        } else {
+            ty
+        }
     }
 
     pub fn call_infer(

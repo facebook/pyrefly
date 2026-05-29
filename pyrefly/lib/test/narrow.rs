@@ -1542,6 +1542,129 @@ def test[T: int | str](value: T) -> T:
 );
 
 testcase!(
+    test_typevar_dispatch_on_concrete_class,
+    r#"
+from typing import TypeVar
+
+class A:
+    pass
+
+class B:
+    pass
+
+T = TypeVar("T", bound=A | B)
+
+def func_a(a: A) -> A:
+    return a
+
+def func_b(b: B) -> B:
+    return b
+
+def dispatch_with_type_is(x: T) -> T:
+    if type(x) is A:
+        return func_a(x)
+    elif type(x) is B:
+        return func_b(x)
+    raise NotImplementedError
+
+def dispatch_with_isinstance(x: T) -> T:
+    if isinstance(x, A):
+        return func_a(x)
+    elif isinstance(x, B):
+        return func_b(x)
+    raise NotImplementedError
+
+def bad_dispatch_with_fresh_value(x: T) -> T:
+    if isinstance(x, A):
+        return func_a(A())  # E: Returned type `A` is not assignable to declared return type `T`
+    raise NotImplementedError
+    "#,
+);
+
+testcase!(
+    test_typevar_dispatch_keyword_arg,
+    r#"
+from typing import TypeVar
+
+class A:
+    pass
+
+class B:
+    pass
+
+T = TypeVar("T", bound=A | B)
+
+def func_a(a: A) -> A:
+    return a
+
+def dispatch_kw(x: T) -> T:
+    if isinstance(x, A):
+        return func_a(a=x)
+    raise NotImplementedError
+    "#,
+);
+
+testcase!(
+    test_typevar_dispatch_single_bound,
+    r#"
+from typing import TypeVar, reveal_type
+
+class P:
+    pass
+
+class C1(P):
+    pass
+
+Tb = TypeVar("Tb", bound=P)
+
+def fc1(c: C1) -> C1:
+    return c
+
+def dispatch_single_bound(x: Tb) -> Tb:
+    if isinstance(x, C1):
+        reveal_type(x)  # E: revealed type: C1 & Tb
+        return fc1(x)
+    raise NotImplementedError
+    "#,
+);
+
+testcase!(
+    test_typevar_dispatch_negatives,
+    r#"
+from typing import TypeVar
+
+class A:
+    pass
+
+class B:
+    pass
+
+T = TypeVar("T", bound=A | B)
+
+class A3(A):
+    pass
+
+def func_a(a: A) -> A:
+    return a
+
+def fa_sub(a: A) -> A3:
+    return A3()
+
+def bad_return_subtype(x: T) -> T:
+    if isinstance(x, A):
+        return fa_sub(x)  # E: Returned type `A3` is not assignable to declared return type `T`
+    raise NotImplementedError
+
+def bad_keyword_fresh(x: T) -> T:
+    # The keyword path must enforce the same witness guard as the positional
+    # path: a fresh value passed by keyword is not the narrowed `A & T`.
+    if isinstance(x, A):
+        return func_a(a=A())  # E: Returned type `A` is not assignable to declared return type `T`
+    raise NotImplementedError
+    "#,
+);
+
+testcase!(
     test_issubclass_typevar_nondisjoint_classes,
     r#"
 from typing import reveal_type
