@@ -879,7 +879,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }))
             }
-            AtomicNarrowOp::In(_) | AtomicNarrowOp::NotIn(_) => {
+            AtomicNarrowOp::In(v) | AtomicNarrowOp::NotIn(v) => {
+                // Parent narrowing is only reliable for enumerable membership tests
+                // like `x.kind in ("a", "b")`; a general mapping only gives us a
+                // key type, not a closed set of possible runtime values.
+                self.literal_membership_exprs(v, errors)?;
                 Some(self.distribute_over_union(base, |t| {
                     let base_info = TypeInfo::of_ty(t.clone());
                     let facet_ty = self.get_facet_chain_type(
@@ -1778,7 +1782,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     range,
                     errors,
                 );
-                let mut narrowed = type_info.with_narrow(resolved_chain.facets(), ty);
+                let non_literal_membership = match &op_for_narrow {
+                    AtomicNarrowOp::In(v) | AtomicNarrowOp::NotIn(v) => {
+                        self.literal_membership_exprs(v, errors).is_none()
+                    }
+                    _ => false,
+                };
+                // A general mapping's key type is not a closed set of runtime
+                // members. Do not turn `x in some_mapping` into `x: Never` when
+                // `x` and the static key type are disjoint.
+                let mut narrowed = if ty.is_never() && non_literal_membership {
+                    type_info.clone()
+                } else {
+                    type_info.with_narrow(resolved_chain.facets(), ty)
+                };
                 // For certain types of narrows, we can also narrow the parent of the current subject
                 // If `.get()` on a dict or TypedDict is falsy, the key may not be present at all
                 // We should invalidate any existing narrows

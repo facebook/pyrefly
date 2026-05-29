@@ -2658,6 +2658,36 @@ def test(event: Event) -> None:
 );
 
 testcase!(
+    test_repro_mapping_membership_does_not_collapse_base,
+    r#"
+from typing import reveal_type
+
+class C:
+    arg: bytes
+    origin: type
+
+def test(c: C, d: dict[str, int]) -> None:
+    if c.arg in d:
+        reveal_type(c)  # E: revealed type: C
+        reveal_type(c.arg)  # E: revealed type: bytes
+    "#,
+);
+
+testcase!(
+    test_in_general_mapping_preserves_disjoint_facet_value,
+    r#"
+from typing import assert_type
+
+class C:
+    key: bytes
+
+def test(c: C, d: dict[str, int]) -> None:
+    if c.key in d:
+        assert_type(c.key, bytes)
+    "#,
+);
+
+testcase!(
     test_discriminated_union_attr,
     r#"
 from typing import assert_type, Literal
@@ -3244,6 +3274,30 @@ def example(variable: str | None) -> str:
         return "Not Found"
 
     return variable
+"#,
+);
+
+testcase!(
+    test_in_facet_narrow_does_not_make_ignored_subscript_never,
+    r#"
+from typing import Any, Optional
+
+class TypeVar:
+    pass
+
+class AnnotationInfo:
+    def __init__(self, raw_annotation: TypeVar) -> None:
+        self.origin = self.arg = None
+        self.optional = False
+        self.origin = list  # type: ignore
+        self.arg = raw_annotation  # type: ignore
+
+def f(annot_info: AnnotationInfo, param_dict: dict[TypeVar, type[Any]]) -> None:
+    if isinstance(annot_info.arg, TypeVar):
+        if annot_info.arg in param_dict:
+            raw_annot = annot_info.origin[param_dict[annot_info.arg]]  # type: ignore
+            if annot_info.optional:
+                raw_annot = Optional[raw_annot]
 "#,
 );
 
