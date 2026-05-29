@@ -1320,10 +1320,14 @@ fn is_method(
         {
             return true;
         }
-        // Treat Callable as a method if initialized in class body.
-        // This handles decorated methods from stubs (e.g., @dispatch_col_method in PySpark)
-        // that become Callable types instead of Function types.
-        return true;
+        // Only treat Callable as method if it has NO explicit type annotation.
+        // Decorated stub methods (e.g., @dispatch_col_method in PySpark) typically lack
+        // annotations, while intentional Callable attributes are explicitly annotated
+        // (e.g., handler: Callable[[int], None]). This prevents false positives from
+        // incorrectly binding callbacks and other Callable attributes.
+        if annotation.is_none() {
+            return true;
+        }
     }
 
     false
