@@ -36,6 +36,7 @@ use ruff_python_ast::StringLiteral;
 use ruff_python_ast::StringLiteralFlags;
 use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::Tokens;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
@@ -114,6 +115,24 @@ impl Ast {
         let parse_errors = res.errors().to_owned();
         let unsupported_syntax_errors = res.unsupported_syntax_errors().to_owned();
         (res.into_syntax(), parse_errors, unsupported_syntax_errors)
+    }
+
+    pub fn lex_with_version(
+        contents: &str,
+        version: PythonVersion,
+        source_type: PySourceType,
+    ) -> Tokens {
+        // PySourceType of Python vs Stub doesn't actually change the parsing
+        let options = ParseOptions::from(source_type).with_target_version(RuffPythonVersion {
+            major: version.major as u8,
+            minor: version.minor as u8,
+        });
+
+        parse_unchecked(contents, options)
+            .try_into_module()
+            .unwrap()
+            .tokens()
+            .clone()
     }
 
     pub fn parse_expr(contents: &str, pos: TextSize) -> anyhow::Result<Expr> {

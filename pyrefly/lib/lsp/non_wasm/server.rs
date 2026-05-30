@@ -1191,17 +1191,21 @@ pub fn dispatch_lsp_events(server: &Server, reader: &mut MessageReader) {
     let _ = server.lsp_queue().send(LspEvent::Exit);
 }
 
-pub fn capabilities(
-    indexing_mode: IndexingMode,
-    initialization_params: &InitializeParams,
-) -> ServerCapabilitiesWithTypeHierarchy {
-    let augments_syntax_tokens = initialization_params
+fn client_augments_syntax_tokens(initialization_params: &InitializeParams) -> bool {
+    initialization_params
         .capabilities
         .text_document
         .as_ref()
         .and_then(|c| c.semantic_tokens.as_ref())
         .and_then(|c| c.augments_syntax_tokens)
-        .unwrap_or(false);
+        .unwrap_or(false)
+}
+
+pub fn capabilities(
+    indexing_mode: IndexingMode,
+    initialization_params: &InitializeParams,
+) -> ServerCapabilitiesWithTypeHierarchy {
+    let augments_syntax_tokens = client_augments_syntax_tokens(initialization_params);
 
     // Parse syncNotebooks from initialization options, defaults to true
     let sync_notebooks = initialization_params
@@ -1286,6 +1290,9 @@ pub fn capabilities(
             // syntax highlighting for tokens we don't provide, it will be a regression
             // (e.g. users might lose keyword highlighting).
             // Therefore, we should not produce semantic tokens if the client doesn't support `augments_syntax_tokens`.
+            // We now have an implementation path for a full semantic token stream that fills in
+            // syntax tokens, but we do not advertise that capability to non-augmenting clients yet.
+            // Keep the provider gate here until that full-stream behavior is ready to expose.
             Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
                 SemanticTokensOptions {
                     legend: SemanticTokensLegends::lsp_semantic_token_legends(),
@@ -5085,10 +5092,11 @@ impl Server {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let handle = self.make_handle_if_enabled(uri, Some(SemanticTokensFullRequest::METHOD))?;
+        let include_syntax_tokens = !client_augments_syntax_tokens(&self.initialize_params);
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(&handle, None, maybe_cell_idx)
+                .semantic_tokens(&handle, None, maybe_cell_idx, include_syntax_tokens)
                 .unwrap_or_default(),
         })))
     }
@@ -5105,10 +5113,11 @@ impl Server {
             .get_module_info(&handle)
             .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
         let range = self.from_lsp_range(uri, &module_info, params.range);
+        let include_syntax_tokens = !client_augments_syntax_tokens(&self.initialize_params);
         Ok(Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(&handle, Some(range), maybe_cell_idx)
+                .semantic_tokens(&handle, Some(range), maybe_cell_idx, include_syntax_tokens)
                 .unwrap_or_default(),
         })))
     }

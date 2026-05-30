@@ -7,6 +7,7 @@
 
 use lsp_types::SemanticToken;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use ruff_text_size::TextRange;
 
 use crate::binding::binding::Key;
@@ -23,12 +24,22 @@ impl Transaction<'_> {
         handle: &Handle,
         limit_range: Option<TextRange>,
         limit_cell_idx: Option<usize>,
+        include_syntax_tokens: bool,
     ) -> Option<Vec<SemanticToken>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let legends = SemanticTokensLegends::new();
         let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), *handle.sys_info());
         let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
+
+        if include_syntax_tokens {
+            let tokens = Ast::lex_with_version(
+                module_info.contents(),
+                handle.sys_info().version(),
+                module_info.source_type(),
+            );
+            builder.process_syntax_tokens(&tokens);
+        }
 
         builder.process_ast(
             &ast,
@@ -48,6 +59,7 @@ impl Transaction<'_> {
         Some(legends.convert_tokens_into_lsp_semantic_tokens(
             &builder.all_tokens_sorted(),
             module_info,
+            limit_range,
             limit_cell_idx,
         ))
     }
