@@ -50,6 +50,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassBaseType;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyDecoratedFunction;
@@ -403,8 +404,8 @@ impl Static {
     }
 
     /// Populate static definitions from a list of statements.
-    /// Returns the set of implicit captures (names read but not locally defined)
-    /// and a map of Final variable string values.
+    /// Returns the set of implicit captures (names read but not locally defined),
+    /// the set of all Final names, and a map of Final variable string values.
     fn stmts(
         &mut self,
         x: &[Stmt],
@@ -414,7 +415,7 @@ impl Static {
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
-    ) -> (SmallSet<Name>, SmallMap<Name, String>) {
+    ) -> (SmallSet<Name>, SmallSet<Name>, SmallMap<Name, String>) {
         let mut d = Definitions::new(
             x,
             module_info.name(),
@@ -463,12 +464,13 @@ impl Static {
                 self.upsert(name.cloned(), range, StaticStyle::MergeableImport, range)
             }
         }
+        let final_names = d.final_names.keys().cloned().collect();
         let final_string_values = d
             .final_names
             .into_iter()
             .filter_map(|(name, value)| value.map(|v| (name, v)))
             .collect();
-        (implicit_captures, final_string_values)
+        (implicit_captures, final_names, final_string_values)
     }
 
     fn expr_lvalue(&mut self, x: &Expr) {
@@ -525,6 +527,26 @@ impl Flow {
     }
 }
 
+/// Copy new or newly-initialized entries from `source` into `target`.
+/// Entries absent from `target` are inserted; entries present but uninitialized
+/// are overwritten when `source` has an initialized binding.
+fn propagate_new_flow_entries(
+    source: &SmallMap<Name, FlowInfo>,
+    target: &mut SmallMap<Name, FlowInfo>,
+) {
+    for (name, info) in source.iter() {
+        if let Some(existing) = target.get(name) {
+            if matches!(existing.initialized(), InitializedInFlow::No)
+                && !matches!(info.initialized(), InitializedInFlow::No)
+            {
+                target.insert(name.clone(), info.clone());
+            }
+        } else {
+            target.insert(name.clone(), info.clone());
+        }
+    }
+}
+
 /// Bound names can accumulate facet narrows from long assignment chains (e.g. huge
 /// literal dictionaries). Limiting how many consecutive narrows we remember keeps
 /// the flow graph shallow enough to avoid recursive explosions in the solver.
@@ -559,6 +581,18 @@ struct FlowInfo {
 /// - Loop recursion bindings in cases where a name was narrowed above a loop; we
 ///   don't know whether the name might be assigned in the loop so we have to assume
 ///   so; in that case we use `FlowStyle::LoopRecursion`
+///
+/// Invariant for the class-bearing style: `idx` is always the most recent
+/// binding key for the name (used to look up the current visible value),
+/// while `FlowStyle::ClassDef { class_idx, .. }` carries the canonical class
+/// identity that future same-scope writes should treat as their implicit
+/// receiver. The two idxs may differ: for example, after `class Real: ...`
+/// followed by `Real = Dummy`, the value `idx` points at the `Real = Dummy`
+/// assignment binding, but `class_idx` still points at the original
+/// `class Real` definition so subsequent writes are still checked against it.
+/// The `pristine` bit on that style records whether `idx` is still the
+/// original class definition (`true`) or a reassignment of the name
+/// (`false`).
 #[derive(Debug, Clone)]
 struct FlowValue {
     idx: Idx<Key>,
@@ -678,8 +712,22 @@ pub enum FlowStyle {
         has_return_annotation: bool,
         is_overload: bool,
     },
-    /// Am I a class definition?
-    ClassDef,
+    /// Am I a name carrying class identity? `class_idx` is the `Idx<Key>` of
+    /// the class's `class_object` binding — the canonical class identity that
+    /// future same-scope writes to this name should use as their implicit
+    /// receiver.
+    ///
+    /// `pristine` records whether the visible binding (i.e. the `idx` on the
+    /// surrounding `FlowValue`) is the original `Binding::ClassDef` itself:
+    /// - `true`: the visible binding is the original class definition.
+    /// - `false`: the name has been reassigned in the same scope; the visible
+    ///   binding is a `Binding::NameAssign` that was checked against
+    ///   `class_idx` as its receiver. The style is sticky across both
+    ///   compatible writes (where the visible type may refine to the RHS
+    ///   class) and incompatible writes (where the visible type falls back
+    ///   to the receiver), so subsequent writes keep checking against the
+    ///   original receiver.
+    ClassDef { class_idx: Idx<Key>, pristine: bool },
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
     /// The name may or may not be initialized depending on whether certain branches
@@ -735,6 +783,24 @@ impl FlowStyle {
                 (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
                     keys.extend(other_keys);
                 }
+                // Class-bearing styles stay sticky only when their canonical
+                // class identity matches. The `pristine` bit AND-merges: if
+                // any reachable branch saw a reassignment, the merged value
+                // is no longer pristine. Differing `class_idx` payloads fall
+                // back to `Other`: two genuinely distinct classes cannot be
+                // merged into a single canonical identity.
+                (
+                    FlowStyle::ClassDef {
+                        class_idx: l_idx,
+                        pristine: l_pristine,
+                    },
+                    FlowStyle::ClassDef {
+                        class_idx: r_idx,
+                        pristine: r_pristine,
+                    },
+                ) if *l_idx == r_idx => {
+                    *l_pristine = *l_pristine && r_pristine;
+                }
                 // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
                 // keys since those paths still need verification at solve time.
                 (FlowStyle::MaybeInitialized(keys), _) => {
@@ -786,13 +852,26 @@ impl FlowStyle {
             | FlowStyle::ImportAs(_)
             | FlowStyle::MergeableImport(_)
             | FlowStyle::FunctionDef { .. }
-            | FlowStyle::ClassDef
+            | FlowStyle::ClassDef { .. }
             | FlowStyle::ClassField { .. }
             | FlowStyle::LoopRecursion
             | FlowStyle::Other => self,
             FlowStyle::Uninitialized
             | FlowStyle::PossiblyUninitialized
             | FlowStyle::MaybeInitialized { .. } => FlowStyle::Other,
+        }
+    }
+
+    /// Returns the canonical class-object idx for a flow style that should
+    /// behave as if it has an implicit class-typed receiver, or `None` if the
+    /// style is not class-bearing.
+    ///
+    /// This is the entry point for deciding whether a same-scope assignment
+    /// should be bound as a receiver-constrained `NameAssign`.
+    pub fn canonical_class_receiver_idx(&self) -> Option<Idx<Key>> {
+        match self {
+            FlowStyle::ClassDef { class_idx, .. } => Some(*class_idx),
+            _ => None,
         }
     }
 }
@@ -819,6 +898,7 @@ pub struct ClassIndices {
     pub variance_check_idx: Idx<KeyVarianceCheck>,
     pub consistent_override_check_idx: Idx<KeyConsistentOverrideCheck>,
     pub abstract_class_check_idx: Idx<KeyAbstractClassCheck>,
+    pub subscript_symmetry_idx: Idx<KeyClassSubscriptSymmetry>,
 }
 
 #[derive(Clone, Debug)]
@@ -1127,9 +1207,14 @@ pub struct Scope {
     /// from enclosing scopes. Populated during `init_current_static` from the
     /// `Definitions` phase. Used to seed flow entries for captured variables.
     implicit_captures: SmallSet<Name>,
+    /// All names marked `Final` in this scope. Used to prevent literal
+    /// promotion so that `Final` variables preserve their literal types.
+    final_names: SmallSet<Name>,
     /// Names marked `Final` with string literal values, e.g. `X: Final = "x"`.
     /// Used to resolve Final variable references in synthesized class field names.
     final_string_values: SmallMap<Name, String>,
+    /// Names removed by a `del NAME` statement in this scope.
+    deleted_names: SmallSet<Name>,
 }
 
 impl Scope {
@@ -1148,7 +1233,9 @@ impl Scope {
             finally_depth: 0,
             with_depth: 0,
             implicit_captures: SmallSet::new(),
+            final_names: SmallSet::new(),
             final_string_values: SmallMap::new(),
+            deleted_names: SmallSet::new(),
         }
     }
 
@@ -1490,19 +1577,6 @@ impl Scopes {
         self.current().class_and_metadata_keys()
     }
 
-    /// Are we anywhere inside a class? If so, return the keys for the class and its metadata.
-    /// This function looks at enclosing scopes, unlike `current_class_and_metadata_keys`.
-    pub fn enclosing_class_and_metadata_keys(
-        &self,
-    ) -> Option<(Idx<KeyClass>, Idx<KeyClassMetadata>)> {
-        for scope in self.iter_rev() {
-            if let Some(class_and_metadata) = scope.class_and_metadata_keys() {
-                return Some(class_and_metadata);
-            }
-        }
-        None
-    }
-
     /// Are we anywhere inside a class? If so, return the class object idx.
     /// This function looks at enclosing scopes.
     pub fn enclosing_class_object_idx(&self) -> Option<Idx<Key>> {
@@ -1607,7 +1681,7 @@ impl Scopes {
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
-            let (implicit_captures, final_string_values) = scope.stat.stmts(
+            let (implicit_captures, final_names, final_string_values) = scope.stat.stmts(
                 x,
                 module_info,
                 top_level,
@@ -1617,6 +1691,7 @@ impl Scopes {
                 myself,
             );
             scope.implicit_captures = implicit_captures;
+            scope.final_names = final_names;
             scope.final_string_values = final_string_values;
             // Presize the flow, as its likely to need as much space as static
             scope.flow.info.reserve(scope.stat.0.capacity());
@@ -1633,6 +1708,11 @@ impl Scopes {
             initialize(&mut current, Some(self));
             self.push(current);
         }
+    }
+
+    /// Check if a name is declared as `Final` at module scope.
+    pub fn is_final_at_module_scope(&self, name: &Name) -> bool {
+        self.scopes.first().scope.final_names.contains(name)
     }
 
     /// Look up a Final variable's string literal value in the current scope stack.
@@ -2012,9 +2092,11 @@ impl Scopes {
     /// Don't change the type if one is present - downstream we'll emit
     /// uninitialized local errors but keep using our best guess for the type.
     pub fn mark_as_deleted(&mut self, name: &Name) {
-        if let Some(value) = self.current_mut().flow.get_value_mut(name) {
+        let scope = self.current_mut();
+        if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
         }
+        scope.deleted_names.insert(name.clone());
     }
 
     fn get_flow_info(&self, name: &Name) -> Option<&FlowInfo> {
@@ -2085,19 +2167,21 @@ impl Scopes {
             .forks
             .last_mut()
             .expect("propagate_new_flow_entries_to_fork_base called outside of a fork");
-        for (name, info) in scope.flow.info.iter() {
-            if let Some(existing) = fork.base.info.get(name) {
-                // Update the base entry if it is uninitialized but the branch
-                // has an initialized binding (e.g. walrus targeting `x: int`).
-                if matches!(existing.initialized(), InitializedInFlow::No)
-                    && !matches!(info.initialized(), InitializedInFlow::No)
-                {
-                    fork.base.info.insert(name.clone(), info.clone());
-                }
-            } else {
-                fork.base.info.insert(name.clone(), info.clone());
-            }
-        }
+        propagate_new_flow_entries(&scope.flow.info, &mut fork.base.info);
+    }
+
+    /// Copy walrus-defined names from the current flow into the innermost
+    /// loop's base flow. The while-loop condition always evaluates at least
+    /// once, so any walrus target there is guaranteed to be assigned after the
+    /// loop. Without this propagation, `teardown_loop` sees the name only in
+    /// the loop flow and marks it `PossiblyUninitialized`.
+    pub fn propagate_new_flow_entries_to_loop_base(&mut self) {
+        let scope = self.current_mut();
+        let loop_ = scope
+            .loops
+            .last_mut()
+            .expect("propagate_new_flow_entries_to_loop_base called outside of a loop");
+        propagate_new_flow_entries(&scope.flow.info, &mut loop_.base.info);
     }
 
     /// Return the current binding index and flow style for `name`, if it exists
@@ -2588,7 +2672,16 @@ impl Scopes {
                         definition: value.idx,
                         has_return_annotation: *has_return_annotation,
                     },
-                    FlowStyle::ClassDef => ClassFieldDefinition::NestedClass {
+                    // Only treat pristine class definitions as nested classes.
+                    // A non-pristine `ClassDef` carries the class identity for
+                    // receiver checking but its visible binding is a
+                    // `Binding::NameAssign`, so it must not become a nested
+                    // class. (This case is unreachable in current code because
+                    // class-body assignments always produce `ClassField`, but
+                    // the pattern is restricted here so that lifting that
+                    // restriction in a follow-up does not silently promote
+                    // rebound names to nested-class semantics.)
+                    FlowStyle::ClassDef { pristine: true, .. } => ClassFieldDefinition::NestedClass {
                         definition: value.idx,
                     },
                     FlowStyle::ClassField {
@@ -2805,8 +2898,10 @@ impl Scopes {
     ///   is locally shadowed by a non-type definition, we error if it is then used in an annotation.
     /// - For other usages: Normal lookup behavior.
     pub fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
-        let skip_class_overload_function_definitions =
-            matches!(usage, Usage::StaticTypeInformation | Usage::TypeAliasRhs);
+        let skip_class_overload_function_definitions = matches!(
+            usage,
+            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
+        );
         self.visit_scopes(|_, scope, flow_barrier| {
             let is_class = matches!(scope.kind, ScopeKind::Class(_));
 
@@ -2848,6 +2943,16 @@ impl Scopes {
             // compiler has identified as local shadows enclosing scopes, so we should prefer
             // inner static lookups to outer flow lookups.
             if !is_class && let Some(static_info) = scope.stat.0.get_hashed(name) {
+                // A walrus operator's target is added to the comprehension's
+                // static scope (via `add_lvalue_to_current_static`) before the
+                // walrus write adds it to flow. When reading the name before
+                // that write, skip this scope so visit_scopes continues to the
+                // enclosing scope — which correctly handles class-scope-skipping
+                // and flow barriers.
+                if matches!(scope.kind, ScopeKind::Comprehension { .. }) && flow_info.is_none() {
+                    return None;
+                }
+
                 let forward_ref_key = static_info.as_key(name.into_key());
                 return Some(NameReadInfo::Anywhere {
                     key: forward_ref_key,
@@ -2950,6 +3055,11 @@ pub struct ScopeTrace(ScopeTreeNode);
 impl ScopeTrace {
     pub fn toplevel_scope(&self) -> &Scope {
         &self.0.scope
+    }
+
+    /// Names `del`eted at module scope.
+    pub fn module_deletes(&self) -> &SmallSet<Name> {
+        &self.0.scope.deleted_names
     }
 
     pub fn exportables(&self) -> SmallMap<Name, Exportable> {

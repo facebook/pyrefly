@@ -33,6 +33,7 @@ use serde::de;
 use serde::de::Visitor;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
+use tracing::warn;
 
 use crate::absolutize::Absolutize as _;
 use crate::fs_anyhow;
@@ -527,6 +528,19 @@ impl Globs {
 
         let mut result = SmallSet::new();
         for pattern in &self.0 {
+            // Skip include patterns that are themselves excluded (e.g. the
+            // default `**/*.ipynb` include when the user sets
+            // `project-excludes = ["**/*.ipynb"]`). Warn so the user knows
+            // this pattern is not being used, but don't abort discovery.
+            if filter.is_excluded(pattern.as_path()) {
+                warn!(
+                    "Skipping include pattern `{}` because it is matched by \
+                     `project-excludes` or an ignore file.\n{}",
+                    pattern.as_str(),
+                    filter,
+                );
+                continue;
+            }
             let remaining_limit = if let Some(limit) = limit {
                 if limit > result.len() {
                     Some(limit - result.len())
@@ -1760,6 +1774,60 @@ mod tests {
         assert!(!files.contains(&root.join("myscript")));
         assert!(!files.contains(&root.join("another_script")));
         assert!(files.contains(&root.join("regular.py")));
+    }
+
+    /// Regression test: setting `project-excludes = ["**/*.ipynb"]` should not
+    /// prevent `.py` files from being discovered. The default project-includes
+    /// contains both `**/*.py*` and `**/*.ipynb`. When the exclude pattern
+    /// `**/*.ipynb` matches the include pattern `**/*.ipynb`, that include is
+    /// skipped, but the remaining `**/*.py*` include should still find .py files.
+    #[test]
+    fn test_project_excludes_ipynb_does_not_break_py_discovery() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("main.py"),
+                TestPath::file("helper.py"),
+                TestPath::file("notebook.ipynb"),
+                TestPath::dir(
+                    "subdir",
+                    vec![
+                        TestPath::file("module.py"),
+                        TestPath::file("analysis.ipynb"),
+                    ],
+                ),
+            ],
+        );
+
+        // Reproduce the real config scenario: default project-includes has both
+        // `**/*.py*` and `**/*.ipynb`, and the user sets project-excludes to
+        // `["**/*.ipynb"]`.
+        let includes =
+            Globs::new_with_root(root, vec!["**/*.py*".to_owned(), "**/*.ipynb".to_owned()])
+                .unwrap();
+        let excludes = Globs::new_with_root(root, vec!["**/*.ipynb".to_owned()]).unwrap();
+        let filtered = FilteredGlobs::new(includes, excludes, None, HiddenDirFilter::Disabled);
+
+        let mut files = filtered.files().expect(
+            "file discovery should succeed: the excluded **/*.ipynb include \
+             pattern should be skipped, not abort the entire search",
+        );
+        files.sort();
+        let files: Vec<&Path> = files
+            .iter()
+            .map(|p| p.strip_prefix(root).unwrap())
+            .collect();
+        // Only .py files should be returned; .ipynb files are excluded.
+        assert_eq!(
+            files,
+            vec![
+                Path::new("helper.py"),
+                Path::new("main.py"),
+                Path::new("subdir/module.py"),
+            ],
+        );
     }
 
     #[cfg(not(fbcode_build))]

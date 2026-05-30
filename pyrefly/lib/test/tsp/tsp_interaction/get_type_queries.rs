@@ -444,6 +444,40 @@ fn test_get_computed_type_module_import() {
 }
 
 #[test]
+fn test_get_computed_type_module_import_includes_package_init_uri() {
+    let temp_dir = TempDir::new().unwrap();
+    write_pyproject(temp_dir.path());
+
+    let package_dir = temp_dir.path().join("pkg");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("__init__.pyi"), "value: int\n").unwrap();
+
+    let test_file = temp_dir.path().join("main.py");
+    std::fs::write(&test_file, "import pkg\npkg\n").unwrap();
+
+    let mut tsp = TspInteraction::new();
+    tsp.set_root(temp_dir.path().to_path_buf());
+    tsp.initialize(Default::default());
+
+    tsp.server.did_open("main.py");
+    tsp.client.expect_any_message();
+
+    let snapshot = get_current_snapshot(&mut tsp, 2);
+    let file_uri = Url::from_file_path(&test_file).unwrap().to_string();
+
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 1, 0, snapshot);
+    assert_kind(&result, TypeKind::Module);
+
+    let uri = result.get("uri").and_then(|v| v.as_str());
+    assert!(
+        uri.is_some_and(|u| u.contains("pkg/__init__.pyi") || u.contains("pkg\\__init__.pyi")),
+        "Expected package module URI to point at __init__.pyi, got: {uri:?}"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
 fn test_get_computed_type_bound_method_is_function() {
     // `m = x.append` — querying `m` (position 0 on line 1) gives bound method type
     let (mut tsp, file_uri, snapshot) = setup_project("x = [1, 2]\nm = x.append\n");

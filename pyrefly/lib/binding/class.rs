@@ -44,6 +44,7 @@ use crate::binding::binding::BindingClassBaseType;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
+use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingExpect;
@@ -62,6 +63,7 @@ use crate::binding::binding::KeyClassBaseType;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyExpect;
@@ -71,12 +73,12 @@ use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
+use crate::binding::expr::Usage;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::ClassIndices;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
-use crate::error::context::ErrorInfo;
 use crate::export::special::SpecialExport;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
@@ -135,6 +137,7 @@ impl<'a> BindingsBuilder<'a> {
             consistent_override_check_idx: self
                 .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
+            subscript_symmetry_idx: self.idx_for_promise(KeyClassSubscriptSymmetry(def_index)),
         };
         (class_object, class_indices)
     }
@@ -224,6 +227,9 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn class_def(&mut self, mut x: StmtClassDef, parent: &NestingContext) {
+        if x.name.id.is_empty() {
+            return;
+        }
         let synthesized_base_classes = self.prescan_synthesized_bases(&mut x, parent);
         self.class_def_inner(x, parent, synthesized_base_classes);
     }
@@ -239,6 +245,8 @@ impl<'a> BindingsBuilder<'a> {
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let body = mem::take(&mut x.body);
         let field_docstrings = self.extract_field_docstrings(&body);
+        let pydantic_before_validator_fields = self.extract_field_validator_fields(&body);
+        let capture_init = self.extract_capture_init(&body);
         let decorators =
             self.ensure_and_bind_decorators(mem::take(&mut x.decorator_list), class_object.usage());
 
@@ -271,7 +279,7 @@ impl<'a> BindingsBuilder<'a> {
                 Expr::StringLiteral(v) => {
                     self.error(
                         base.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                        ErrorKind::InvalidInheritance,
                         format!(
                             "Cannot use string annotation `{}` as a base class",
                             v.value.to_str()
@@ -301,7 +309,13 @@ impl<'a> BindingsBuilder<'a> {
                 }
                 _ => &mut none,
             };
-            self.ensure_type(&mut base, legacy);
+            self.ensure_type_with_usage(
+                &mut base,
+                legacy,
+                &mut Usage::StaticTypeInformation {
+                    is_annotation: false,
+                },
+            );
 
             let base_class = self.base_class_of(base.clone());
             // NOTE(grievejia): If any of the class base is a specialized generic class (e.g. `Foo[Bar]`), and if the tparam of the
@@ -337,7 +351,7 @@ impl<'a> BindingsBuilder<'a> {
                 if has_protocol_base {
                     self.error(
                         *range,
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                        ErrorKind::InvalidInheritance,
                         "Duplicate base class `Protocol`".to_owned(),
                     );
                 }
@@ -354,7 +368,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.error(
                         keyword.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidInheritance),
+                        ErrorKind::InvalidInheritance,
                         "Unpacking is not supported in class header".to_owned(),
                     )
                 }
@@ -389,6 +403,15 @@ impl<'a> BindingsBuilder<'a> {
             x.name.clone(),
             has_protocol_base,
         ));
+        // Record the class body range for solve-time `typing.Self` resolution.
+        // We use the body extent (first..last stmt) — not `x.range` — so
+        // bases, decorators, and type params (which are evaluated in the
+        // enclosing scope) fall outside this entry.
+        if let (Some(first), Some(last)) = (body.first(), body.last()) {
+            let body_range = first.range().cover(last.range());
+            self.class_scopes
+                .push((body_range, class_indices.class_idx));
+        }
         self.init_static_scope(&body, false);
         self.stmts(
             body,
@@ -445,7 +468,10 @@ impl<'a> BindingsBuilder<'a> {
                 class_indices.class_idx,
                 decorators.clone().into_boxed_slice(),
             ),
-            FlowStyle::ClassDef,
+            FlowStyle::ClassDef {
+                class_idx: class_indices.class_object_idx,
+                pristine: true,
+            },
         );
 
         // Insert a `KeyTParams` / `BindingTParams` pair, but only if there is at least
@@ -512,7 +538,10 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: decorators.into_boxed_slice(),
                 is_new_type: false,
                 pydantic_config_dict,
+                pydantic_before_validator_fields: pydantic_before_validator_fields
+                    .into_boxed_slice(),
                 django_field_info: Box::new(django_field_info),
+                capture_init: capture_init.map(|v| v.into_boxed_slice()),
             },
         );
         self.insert_binding_idx(
@@ -521,6 +550,52 @@ impl<'a> BindingsBuilder<'a> {
                 class_idx: class_indices.class_idx,
             },
         );
+        self.insert_binding_idx(
+            class_indices.subscript_symmetry_idx,
+            BindingClassSubscriptSymmetry {
+                class_idx: class_indices.class_idx,
+            },
+        );
+    }
+
+    /// Scan a class body for a `forward` method decorated with
+    /// `@uses_shape_dsl(..., capture_init=[...])` and return the list of `__init__`
+    /// parameter names to capture for shape inference.
+    fn extract_capture_init(&mut self, body: &[Stmt]) -> Option<Vec<Name>> {
+        let forward = body
+            .iter()
+            .filter_map(|stmt| stmt.as_function_def_stmt())
+            .find(|func_def| func_def.name.as_str() == "forward")?;
+
+        forward.decorator_list.iter().find_map(|decorator| {
+            let call = decorator.expression.as_call_expr()?;
+            if self.as_special_export(&call.func) != Some(SpecialExport::UsesShapeDsl) {
+                return None;
+            }
+            let capture_init_kw = call.arguments.keywords.iter().find(|kw| {
+                kw.arg
+                    .as_ref()
+                    .is_some_and(|a| a.as_str() == "capture_init")
+            })?;
+            let list = capture_init_kw.value.as_list_expr()?;
+            let names: Vec<Name> = list
+                .elts
+                .iter()
+                .filter_map(|elt| {
+                    if let Some(s) = elt.as_string_literal_expr() {
+                        Some(Name::new(s.value.to_str()))
+                    } else {
+                        self.error(
+                            elt.range(),
+                            ErrorKind::InvalidArgument,
+                            "`capture_init` entries must be string literals".to_owned(),
+                        );
+                        None
+                    }
+                })
+                .collect();
+            Some(names)
+        })
     }
 
     /// Extracts docstrings for each field, mapping the field's range to the docstring's range.
@@ -663,7 +738,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     error_range,
-                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    ErrorKind::BadClassDefinition,
                     "Expected valid functional named tuple definition".to_owned(),
                 );
                 has_dynamic_fields = true;
@@ -707,7 +782,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     error_range,
-                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    ErrorKind::BadClassDefinition,
                     "Expected valid functional named tuple definition".to_owned(),
                 );
                 has_dynamic_fields = true;
@@ -735,7 +810,7 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.error(
                             item.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                            ErrorKind::InvalidLiteral,
                             "Expected a string literal".to_owned(),
                         );
                         None
@@ -744,7 +819,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         item.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                        ErrorKind::InvalidLiteral,
                         "Expected a string literal".to_owned(),
                     );
                     None
@@ -774,7 +849,7 @@ impl<'a> BindingsBuilder<'a> {
                         } else {
                             self.error(
                                 n.range(),
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                ErrorKind::InvalidArgument,
                                 "Expected first item to be a string literal".to_owned(),
                             );
                             None
@@ -783,7 +858,7 @@ impl<'a> BindingsBuilder<'a> {
                     [k, _] => {
                         self.error(
                             k.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            ErrorKind::InvalidArgument,
                             "Expected first item to be a string literal".to_owned(),
                         );
                         None
@@ -791,7 +866,7 @@ impl<'a> BindingsBuilder<'a> {
                     elts => {
                         self.error(
                             item.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            ErrorKind::InvalidArgument,
                             format!("Expected (name, type) pair, got {}-tuple", elts.len()),
                         );
                         None
@@ -800,7 +875,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         item.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorKind::InvalidArgument,
                         "Expected a tuple".to_owned(),
                     );
                     None
@@ -831,7 +906,7 @@ impl<'a> BindingsBuilder<'a> {
                     IllegalIdentifierHandling::Error => {
                         self.error(
                             range,
-                            ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                            ErrorKind::BadClassDefinition,
                             format!("`{member_name}` is not a valid identifier"),
                         );
                         continue;
@@ -845,7 +920,7 @@ impl<'a> BindingsBuilder<'a> {
                     IllegalIdentifierHandling::Error => {
                         self.error(
                              range,
-                             ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                             ErrorKind::BadClassDefinition,
                              format!(
                                  "NamedTuple field name may not start with an underscore: `{member_name}`"
                              ),
@@ -860,7 +935,7 @@ impl<'a> BindingsBuilder<'a> {
             if fields.contains_key(&member_name) {
                 self.error(
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    ErrorKind::BadClassDefinition,
                     format!("Duplicate field `{member_name}`"),
                 );
                 continue;
@@ -959,7 +1034,9 @@ impl<'a> BindingsBuilder<'a> {
                 decorators: Box::new([]),
                 is_new_type,
                 pydantic_config_dict: PydanticConfigDict::default(),
+                pydantic_before_validator_fields: Box::default(),
                 django_field_info: Box::default(),
+                capture_init: None,
             },
         );
         self.insert_binding_idx(
@@ -988,7 +1065,10 @@ impl<'a> BindingsBuilder<'a> {
                 &class_name,
                 class_object,
                 Binding::ClassDef(class_indices.class_idx, Box::new([])),
-                FlowStyle::ClassDef,
+                FlowStyle::ClassDef {
+                    class_idx: class_indices.class_object_idx,
+                    pristine: true,
+                },
             );
         } else {
             self.insert_binding_current(
@@ -1022,6 +1102,12 @@ impl<'a> BindingsBuilder<'a> {
         self.insert_binding_idx(
             class_indices.abstract_class_check_idx,
             BindingAbstractClassCheck {
+                class_idx: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.subscript_symmetry_idx,
+            BindingClassSubscriptSymmetry {
                 class_idx: class_indices.class_idx,
             },
         );
@@ -1101,7 +1187,7 @@ impl<'a> BindingsBuilder<'a> {
                         (Some(k), _) => {
                             self.error(
                                 k.range(),
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                ErrorKind::InvalidArgument,
                                 "Expected first item to be a string literal".to_owned(),
                             );
                             None
@@ -1109,7 +1195,7 @@ impl<'a> BindingsBuilder<'a> {
                         _ => {
                             self.error(
                                 item.range(),
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                ErrorKind::InvalidArgument,
                                 "Unpacking is not supported in functional enum definition"
                                     .to_owned(),
                             );
@@ -1120,7 +1206,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => {
                     self.error(
                         class_name.range,
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorKind::InvalidArgument,
                         "Expected valid functional enum definition".to_owned(),
                     );
                     Vec::new()
@@ -1186,7 +1272,7 @@ impl<'a> BindingsBuilder<'a> {
                 if n_defaults > n_members {
                     self.error(
                         kw.value.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorKind::InvalidArgument,
                         format!(
                             "Too many defaults: expected at most {n_members}, got {n_defaults}",
                         ),
@@ -1204,7 +1290,7 @@ impl<'a> BindingsBuilder<'a> {
                 };
                 self.error(
                     kw.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorKind::InvalidArgument,
                     format!("{msg} in named tuple definition"),
                 );
             }
@@ -1363,7 +1449,7 @@ impl<'a> BindingsBuilder<'a> {
                 };
                 self.error(
                     kw.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorKind::InvalidArgument,
                     format!("{msg} in typed dictionary definition"),
                 );
             }
@@ -1385,7 +1471,7 @@ impl<'a> BindingsBuilder<'a> {
                         (Some(k), _) => {
                             self.error(
                                 k.range(),
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                ErrorKind::InvalidArgument,
                                 "Expected first item to be a string literal".to_owned(),
                             );
                             None
@@ -1393,7 +1479,7 @@ impl<'a> BindingsBuilder<'a> {
                         _ => {
                             self.error(
                                 item.range(),
-                                ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                                ErrorKind::InvalidArgument,
                                 "Unpacking is not supported in functional typed dictionary definition"
                                     .to_owned(),
                             );
@@ -1405,7 +1491,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => {
                 self.error(
                     class_name.range,
-                    ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                    ErrorKind::InvalidArgument,
                     "Expected valid functional typed dictionary definition".to_owned(),
                 );
                 Vec::new()
@@ -1438,14 +1524,14 @@ impl<'a> BindingsBuilder<'a> {
             if x.value.to_str() != name.as_str() {
                 self.error(
                     arg.range(),
-                    ErrorInfo::Kind(error_kind),
+                    error_kind,
                     format!("Expected string literal \"{name}\""),
                 );
             }
         } else {
             self.error(
                 arg.range(),
-                ErrorInfo::Kind(error_kind),
+                error_kind,
                 format!("Expected string literal \"{name}\""),
             );
         }

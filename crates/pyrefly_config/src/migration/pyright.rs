@@ -187,6 +187,8 @@ pub struct RuleOverrides {
     // Type annotation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_invalid_type_form: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_explicit_any: Option<Severity>,
 
     // Abstract/instantiation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -303,8 +305,8 @@ pub struct RuleOverrides {
 }
 
 impl RuleOverrides {
-    /// Consume the RuleOverrides to turn it into an ErrorDisplayConfig map.
-    pub fn to_config(self) -> Option<ErrorDisplayConfig> {
+    /// Convert the RuleOverrides into an ErrorDisplayConfig map.
+    pub fn to_config(&self) -> Option<ErrorDisplayConfig> {
         let mut map = HashMap::new();
         let mut add = |value, kind| {
             // If multiple Pyright overrides map to the same Pyrefly error
@@ -322,6 +324,7 @@ impl RuleOverrides {
         add(self.report_missing_module_source, ErrorKind::MissingSource);
         add(self.report_missing_type_stubs, ErrorKind::UntypedImport);
         add(self.report_invalid_type_form, ErrorKind::InvalidAnnotation);
+        add(self.report_explicit_any, ErrorKind::ExplicitAny);
         add(self.report_abstract_usage, ErrorKind::BadInstantiation);
         add(self.report_argument_type, ErrorKind::BadArgumentType);
         add(self.report_assert_type_failure, ErrorKind::AssertType);
@@ -365,11 +368,11 @@ impl RuleOverrides {
         );
         add(
             self.report_unknown_parameter_type,
-            ErrorKind::UnannotatedParameter,
+            ErrorKind::ImplicitAnyParameter,
         );
         add(
             self.report_missing_parameter_type,
-            ErrorKind::UnannotatedParameter,
+            ErrorKind::ImplicitAnyParameter,
         );
         add(self.report_unknown_argument_type, ErrorKind::ImplicitAny);
         add(self.report_unknown_variable_type, ErrorKind::ImplicitAny);

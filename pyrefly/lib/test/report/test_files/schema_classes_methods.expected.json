@@ -1,0 +1,128 @@
+{
+  "name": "test",
+  "path": "test.py",
+  "names": [
+    "test.Point.x",
+    "test.Point.y",
+    "test.Vector.x",
+    "test.Vector.y",
+    "test.Point.distance",
+    "test.Vector.magnitude",
+    "test.Point",
+    "test.Vector"
+  ],
+  "line_count": 28,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.Point.x",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 15,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Point.y",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 16,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Vector.x",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 23,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Vector.y",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 24,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Point.distance",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 18,
+        "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.Vector.magnitude",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 26,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Point",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Vector",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 22,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 2,
+  "n_typed": 2,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 2,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 2,
+  "n_attrs": 4,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

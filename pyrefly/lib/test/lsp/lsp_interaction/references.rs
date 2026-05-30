@@ -916,3 +916,99 @@ fn test_references_for_metaclass_call_priority() {
 
     interaction.shutdown().unwrap();
 }
+
+/// Regression test for https://github.com/facebook/pyrefly/issues/3237:
+/// `textDocument/references` should find cross-file references even when the
+/// target module starts with a docstring and the on-disk files use CRLF line
+/// endings while the editor sends LF-normalized content via `did_open`.
+#[test]
+fn test_references_cross_file_with_module_docstring() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("references_docstring");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let a = root_path.join("a.py");
+    let b = root_path.join("b.py");
+    let services = root_path.join("services.py");
+
+    // The source fixtures use LF (to satisfy linters). Convert them to CRLF
+    // on disk in the temp directory so we can simulate an editor that
+    // normalizes CRLF→LF when opening files via `did_open`.
+    for path in [&a, &b, &services] {
+        let raw = std::fs::read_to_string(path).unwrap();
+        let lf_content = raw.replace("\r\n", "\n");
+        let crlf_content = lf_content.replace('\n', "\r\n");
+        std::fs::write(path, &crlf_content).unwrap();
+    }
+
+    for (name, path) in [("a.py", &a), ("b.py", &b), ("services.py", &services)] {
+        let on_disk = std::fs::read_to_string(path).unwrap();
+        let normalized = on_disk.replace("\r\n", "\n");
+        let uri = Url::from_file_path(path).unwrap();
+        interaction.client.did_open_uri(&uri, "python", normalized);
+        assert!(
+            on_disk.contains("\r\n"),
+            "{name} should have CRLF line endings on disk"
+        );
+    }
+
+    // Class A defined in a.py (which starts with a docstring) should find
+    // cross-file references from services.py just like B.
+    interaction
+        .client
+        .references("a.py", 8, 6, true)
+        .expect_response(json!([
+            {
+                "range": {"start":{"line":8,"character":6},"end":{"line":8,"character":7}},
+                "uri": Url::from_file_path(a.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":5,"character":14},"end":{"line":5,"character":15}},
+                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":9,"character":13},"end":{"line":9,"character":14}},
+                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":9,"character":19},"end":{"line":9,"character":20}},
+                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+            },
+        ]))
+        .unwrap();
+
+    // Class B should also find cross-file refs.
+    interaction
+        .client
+        .references("b.py", 6, 6, true)
+        .expect_response(json!([
+            {
+                "range": {"start":{"line":6,"character":6},"end":{"line":6,"character":7}},
+                "uri": Url::from_file_path(b.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":6,"character":14},"end":{"line":6,"character":15}},
+                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":13,"character":13},"end":{"line":13,"character":14}},
+                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":13,"character":19},"end":{"line":13,"character":20}},
+                "uri": Url::from_file_path(services.clone()).unwrap().to_string()
+            },
+        ]))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

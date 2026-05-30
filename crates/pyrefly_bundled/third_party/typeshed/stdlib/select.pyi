@@ -31,6 +31,7 @@ if sys.platform != "win32":
 
     # This is actually a function that returns an instance of a class.
     # The class is not accessible directly, and also calls itself select.poll.
+    @final
     class poll:
         """
         Returns a polling object.
@@ -44,9 +45,9 @@ if sys.platform != "win32":
         def unregister(self, fd: FileDescriptorLike, /) -> None: ...
         def poll(self, timeout: float | None = None, /) -> list[tuple[int, int]]: ...
 
-_R = TypeVar("_R", default=Never)
-_W = TypeVar("_W", default=Never)
-_X = TypeVar("_X", default=Never)
+_R = TypeVar("_R", default=Never, bound=FileDescriptorLike)
+_W = TypeVar("_W", default=Never, bound=FileDescriptorLike)
+_X = TypeVar("_X", default=Never, bound=FileDescriptorLike)
 
 def select(
     rlist: Iterable[_R], wlist: Iterable[_W], xlist: Iterable[_X], timeout: float | None = None, /
@@ -64,7 +65,7 @@ def select(
     gotten from a fileno() method call on one of those.
 
     The optional 4th argument specifies a timeout in seconds; it may be
-    a floating-point number to specify fractions of seconds.  If it is absent
+    a floating point number to specify fractions of seconds.  If it is absent
     or None, the call will never time out.
 
     The return value is a tuple of three lists corresponding to the first three
@@ -83,6 +84,22 @@ if sys.platform != "linux" and sys.platform != "win32":
     # BSD only
     @final
     class kevent:
+        """
+        kevent(ident, filter=KQ_FILTER_READ, flags=KQ_EV_ADD, fflags=0, data=0, udata=0)
+
+        This object is the equivalent of the struct kevent for the C API.
+
+        See the kqueue manpage for more detailed information about the meaning
+        of the arguments.
+
+        One minor note: while you might hope that udata could store a
+        reference to a python object, it cannot, because it is impossible to
+        keep a proper reference count of the object once it's passed into the
+        kernel. Therefore, I have restricted it to only storing an integer.  I
+        recommend ignoring it and simply using the 'ident' field to key off
+        of. You could also set up a dictionary on the python side to store a
+        udata->object mapping.
+        """
         data: Any
         fflags: int
         filter: int
@@ -97,15 +114,53 @@ if sys.platform != "linux" and sys.platform != "win32":
     # BSD only
     @final
     class kqueue:
+        """
+        Kqueue syscall wrapper.
+
+        For example, to start watching a socket for input:
+        >>> kq = kqueue()
+        >>> sock = socket()
+        >>> sock.connect((host, port))
+        >>> kq.control([kevent(sock, KQ_FILTER_WRITE, KQ_EV_ADD)], 0)
+
+        To wait one second for it to become writeable:
+        >>> kq.control(None, 1, 1000)
+
+        To stop listening:
+        >>> kq.control([kevent(sock, KQ_FILTER_WRITE, KQ_EV_DELETE)], 0)
+        """
         closed: bool
         def __init__(self) -> None: ...
-        def close(self) -> None: ...
+        def close(self) -> None:
+            """
+            Close the kqueue control file descriptor.
+
+            Further operations on the kqueue object will raise an exception.
+            """
+            ...
         def control(
             self, changelist: Iterable[kevent] | None, maxevents: int, timeout: float | None = None, /
-        ) -> list[kevent]: ...
-        def fileno(self) -> int: ...
+        ) -> list[kevent]:
+            """
+            Calls the kernel kevent function.
+
+            changelist
+              Must be an iterable of kevent objects describing the changes to be made
+              to the kernel's watch list or None.
+            maxevents
+              The maximum number of events that the kernel will return.
+            timeout
+              The maximum time to wait in seconds, or else None to wait forever.
+              This accepts floats for smaller timeouts, too.
+            """
+            ...
+        def fileno(self) -> int:
+            """Return the kqueue control file descriptor."""
+            ...
         @classmethod
-        def fromfd(cls, fd: FileDescriptorLike, /) -> kqueue: ...
+        def fromfd(cls, fd: FileDescriptorLike, /) -> kqueue:
+            """Create a kqueue object from a given control fd."""
+            ...
 
     KQ_EV_ADD: Final[int]
     KQ_EV_CLEAR: Final[int]
@@ -158,6 +213,7 @@ if sys.platform == "linux":
             "Use `os.set_inheritable()` to make the file descriptor inheritable."
         )
         def __new__(self, sizehint: int = -1, flags: int = 0) -> Self: ...
+
         def __enter__(self) -> Self: ...
         def __exit__(
             self,
@@ -196,6 +252,7 @@ if sys.platform == "linux":
 
 if sys.platform != "linux" and sys.platform != "darwin" and sys.platform != "win32":
     # Solaris only
+    @final
     class devpoll:
         def close(self) -> None: ...
         closed: bool

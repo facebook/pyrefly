@@ -131,16 +131,14 @@ fn collect_module_entries(stmts: &[Stmt], entries: &mut Vec<CodeLensEntry>) {
                     is_unittest,
                 );
             }
-            Stmt::If(stmt_if) => {
-                if is_main_guard(&stmt_if.test) {
-                    entries.push(CodeLensEntry {
-                        range: stmt_if.range,
-                        kind: CodeLensKind::Run,
-                        test_name: None,
-                        class_name: None,
-                        is_unittest: false,
-                    });
-                }
+            Stmt::If(stmt_if) if is_main_guard(&stmt_if.test) => {
+                entries.push(CodeLensEntry {
+                    range: stmt_if.range,
+                    kind: CodeLensKind::Run,
+                    test_name: None,
+                    class_name: None,
+                    is_unittest: false,
+                });
             }
             _ => {}
         }

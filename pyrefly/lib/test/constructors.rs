@@ -244,12 +244,11 @@ class Child(Base[int]):
 // and metaclass __call__ cls param is not actually `type[Self]`; (2) instantiating `T=str`
 // may be reasonable here.
 testcase!(
-    bug = "Missing check that self/cls param is a supertype of the defining class",
     test_metaclass_call_cls_param_does_not_instantiate,
     r#"
 from typing import assert_type
 class Meta(type):
-    def __call__(cls: 'type[C[str]]', *args, **kwargs): ... # TODO: error because annot is not supertype of Meta
+    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__` method self type `type[C[str]]` is not a superclass of class `Meta`
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
@@ -340,6 +339,56 @@ class C:
         return 0
 x = C()
 assert_type(x, Any)
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_ignores_concrete_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> C:
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_ignores_bad_new_return,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls) -> int:
+        return 0
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(), Self)
+        return cls()
+    "#,
+);
+
+testcase!(
+    test_type_self_constructor_checks_new_params,
+    r#"
+from typing import Self, assert_type
+
+class C:
+    def __new__(cls, x: int, y: str) -> "C":
+        return object.__new__(cls)
+
+    @classmethod
+    def make(cls) -> Self:
+        assert_type(cls(1, "a"), Self)
+        cls(1, 2)  # E: Argument `Literal[2]` is not assignable to parameter `y` with type `str`
+        cls()  # E: Missing argument `x`  # E: Missing argument `y`
+        return cls(1, "a")
     "#,
 );
 
@@ -729,9 +778,9 @@ class K:
 
 class C[T]:
     @overload
-    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> None`
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
     @overload
-    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> None` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> None` accepts
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
     def __new__(cls, x):
         pass
 
@@ -828,8 +877,10 @@ T = TypeVar("T")
 class C(Generic[T]):
     def __init__[V](self: "C[V]", x: V) -> None: pass
 def takes_callable[V](x: Callable[[V], C[V]], y: V) -> C[V]: ...
-assert_type(takes_callable(C, 42), C[int])
-assert_type(takes_callable(C, "hello"), C[str])
+out1 = takes_callable(C, 42)
+assert_type(out1, C[int])
+out2 = takes_callable(C, "hello")
+assert_type(out2, C[str])
     "#,
 );
 
@@ -941,8 +992,8 @@ class C:
     def __new__(cls) -> "C": ...
 
     def method(self) -> None:
-        # __new__ explicitly returns C, not Self, so type(self)() returns C.
-        reveal_type(type(self)())  # E: revealed type: C
+        # `type[Self]` construction returns Self, even when __new__ returns C.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
@@ -960,8 +1011,8 @@ class C:
     def __new__(cls) -> list[Self]: ...
 
     def method(self) -> None:
-        # __new__ returns list[Self], so type(self)() preserves Self.
-        reveal_type(type(self)())  # E: revealed type: list[Self@C]
+        # `type[Self]` construction returns Self, even when __new__ returns another type.
+        reveal_type(type(self)())  # E: revealed type: Self@C
 
 class D(C): ...
 
@@ -991,7 +1042,6 @@ C("5")  # E: Argument `Literal['5']` is not assignable to parameter `x` with typ
 
 // Regression test for a problem in networkx: https://github.com/facebook/pyrefly/issues/3121
 testcase!(
-    bug = "Following the typing spec, we may assume unannotated `__new__` returns Self, which would avoid bad behaviors in some complex, dynamically-typed codebases",
     test_return_type_inference_for_constructors,
     r#"
 from typing import assert_type
@@ -1002,12 +1052,16 @@ class A:
             return cls.__new__(cls, 5)
         else:
             return object.__new__(cls)
-    
-    def __init__(cls):
+
+    def __init__(self):
         return "x"
 
+class B(A): ...
+
 a = A()
-assert_type(a, A)  # E: assert_type(A | Unknown, A)
+assert_type(a, A)
+b = B()
+assert_type(b, B)
 "#,
 );
 
@@ -1050,11 +1104,101 @@ assert_type(process(Box({1: 1})), Box[int])
 );
 
 testcase!(
-    bug = "False positive",
     test_construct_list_with_union_input,
     r#"
 Y = list[int] | list[str] | str
 def f(x: str):
-    y: Y = list(x)  # E: `str` is not assignable to parameter `iterable` with type `Iterable[int]`
+    y: Y = list(x)
+    "#,
+);
+
+testcase!(
+    test_construct_list_from_iterator_with_parent_hint,
+    r#"
+from collections.abc import Iterator
+
+class ParentItem: ...
+class ChildItem(ParentItem): ...
+
+def f() -> Iterator[ChildItem]: ...
+def g() -> list[ParentItem] | None:
+    return list(f())
+    "#,
+);
+
+// Overloaded __new__ where one overload has an explicit return annotation
+// and one doesn't. The unannotated overload should assume Self; the
+// annotated overload should keep its declared return type. The explicit-return
+// overload is an inconsistent overload error because `C` is not a subtype of
+// the implementation's `Self@C`.
+testcase!(
+    test_overloaded_new_mixed_annotation,
+    r#"
+from typing import assert_type, overload
+
+class C:
+    @overload
+    def __new__(cls, x: int) -> "C": ...  # E: Overload return type `C` is not assignable to implementation return type `Self@C`
+    @overload
+    def __new__(cls, x: str): ...
+    def __new__(cls, x: int | str):
+        return object.__new__(cls)
+
+class D(C): ...
+
+# int overload: explicit return annotation -> C (not D)
+c1 = C(1)
+assert_type(c1, C)
+d1 = D(1)
+assert_type(d1, C)
+
+# str overload: unannotated -> Self (D for D(), C for C())
+c2 = C("a")
+assert_type(c2, C)
+d2 = D("a")
+assert_type(d2, D)
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3236
+testcase!(
+    test_construct_with_hint_and_overloads,
+    r#"
+from typing import Generic, Never, overload, Protocol, TypeVar
+
+_T = TypeVar("_T")
+_T_co = TypeVar("_T_co", covariant=True)
+_AddWithT_contra = TypeVar("_AddWithT_contra", contravariant=True)
+_ResultT_co = TypeVar("_ResultT_co", covariant=True)
+_AddWithT = TypeVar("_AddWithT")
+_ResultT = TypeVar("_ResultT")
+
+class CanAdd(Protocol[_AddWithT_contra, _ResultT_co]):
+    def __add__(self, other: _AddWithT_contra, /) -> _ResultT_co: ...
+
+class H(Generic[_T_co]):
+    @overload
+    def __init__(self: "H[Never]", init_val: dict[Never, int], /) -> None: ...
+    @overload
+    def __init__(self: "H[_T]", init_val: dict[_T, int], /) -> None: ...
+    @overload
+    def __init__(self: "H[int]", init_val: int, /) -> None: ...
+    def __init__(self, init_val: object, /) -> None: ...
+
+def explode_n(source: "H[CanAdd[_AddWithT, _ResultT]]") -> "H[_ResultT]":
+    raise NotImplementedError
+
+result: "H[int]" = explode_n(H(10))
+    "#,
+);
+
+testcase!(
+    test_hint_and_bound_interaction,
+    r#"
+from typing import assert_type, Self, Sequence
+class C[T: int | list[str]]:
+    def __new__(cls, data: T | Sequence[T]) -> Self: ...
+x = C([1, 2])
+assert_type(x, C[int])
     "#,
 );

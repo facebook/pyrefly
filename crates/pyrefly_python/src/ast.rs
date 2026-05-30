@@ -13,12 +13,14 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Operator;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::ParameterWithDefault;
 use ruff_python_ast::Parameters;
@@ -229,10 +231,8 @@ impl Ast {
     /// Calls a function on all of the names bound by this lvalue expression.
     pub fn expr_lvalue<'a>(x: &'a Expr, f: &mut impl FnMut(&'a ExprName)) {
         match x {
-            Expr::Name(x) => {
-                if !Self::is_synthesized_empty_name(x) {
-                    f(x);
-                }
+            Expr::Name(x) if !Self::is_synthesized_empty_name(x) => {
+                f(x);
             }
             Expr::Tuple(x) => {
                 for x in &x.elts {
@@ -414,7 +414,65 @@ impl Ast {
         name.starts_with("__") && !name.ends_with("__")
     }
 
+    // Parameters and variables that are prefixed (but not suffixed) with a single underscore
+    // are potentially unused, so we should skip some diagnostics/errors.
+    // Examples: `_`, `_x`
+    // Non-examples: `x`, `__x__`, `__x`, `_x_`
+    pub fn is_intentionally_unused(name: &str) -> bool {
+        name.starts_with('_')
+            && !name.starts_with("__")
+            && (name.len() == 1 || !name.ends_with('_'))
+    }
+
     pub fn is_list_literal_or_comprehension(expr: &Expr) -> bool {
         matches!(expr, Expr::List(_) | Expr::ListComp(_))
+    }
+
+    /// Returns a description of the syntax problem if `x` is not valid
+    /// annotation syntax, or `None` if valid. This only checks syntax;
+    /// semantic validation (e.g. that `typing.Self` is in a class context)
+    /// is handled elsewhere.
+    /// See https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions
+    pub fn annotation_syntax_problem(x: &Expr) -> Option<&'static str> {
+        match x {
+            Expr::Name(..)
+            | Expr::Named(..)
+            | Expr::StringLiteral(..)
+            | Expr::NoneLiteral(..)
+            | Expr::Attribute(..)
+            | Expr::Starred(..) => None,
+            Expr::BinOp(ExprBinOp {
+                op: Operator::BitOr,
+                ..
+            }) => None,
+            Expr::Subscript(s) => match *s.value {
+                Expr::Name(..)
+                | Expr::BinOp(ExprBinOp {
+                    op: Operator::BitOr,
+                    ..
+                })
+                | Expr::Named(..)
+                | Expr::StringLiteral(..)
+                | Expr::NoneLiteral(..)
+                | Expr::Attribute(..) => None,
+                _ => Some("Invalid subscript expression"),
+            },
+            Expr::Call(..) => Some("Function call"),
+            Expr::Lambda(..) => Some("Lambda definition"),
+            Expr::List(..) => Some("List literal"),
+            Expr::NumberLiteral(..) => Some("Number literal"),
+            Expr::Tuple(..) => Some("Tuple literal"),
+            Expr::Dict(..) => Some("Dict literal"),
+            Expr::ListComp(..) => Some("List comprehension"),
+            Expr::If(..) => Some("If expression"),
+            Expr::BooleanLiteral(..) => Some("Bool literal"),
+            Expr::BoolOp(..) => Some("Boolean operation"),
+            Expr::FString(..) => Some("F-string"),
+            Expr::TString(..) => Some("T-string"),
+            Expr::UnaryOp(..) => Some("Unary operation"),
+            // Intentionally omits the specific operator to keep `&'static str`.
+            Expr::BinOp(..) => Some("Binary operation"),
+            _ => Some("Expression"),
+        }
     }
 }

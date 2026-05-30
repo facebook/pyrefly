@@ -83,6 +83,7 @@ pub struct MypyErrorConfigFlags {
     pub disallow_untyped_defs: bool,
     pub disallow_incomplete_defs: bool,
     pub disallow_any_generics: bool,
+    pub disallow_any_explicit: bool,
     pub strict: bool,
     pub report_deprecated_as_note: bool,
     pub allow_redefinitions: bool,
@@ -107,6 +108,7 @@ pub fn make_error_config(
         disallow_untyped_defs,
         disallow_incomplete_defs,
         disallow_any_generics,
+        disallow_any_explicit,
         strict,
         report_deprecated_as_note,
         allow_redefinitions,
@@ -114,20 +116,35 @@ pub fn make_error_config(
     {
         // These severities take precedence over enable/disable
         if warn_redundant_casts || strict {
-            errors.insert(ErrorKind::RedundantCast.to_string(), Severity::Warn);
+            errors.insert(
+                ErrorKind::RedundantCast.to_name().to_owned(),
+                Severity::Warn,
+            );
         }
         if disallow_untyped_defs || disallow_incomplete_defs || strict {
-            errors.insert(ErrorKind::UnannotatedParameter.to_string(), Severity::Error);
-            errors.insert(ErrorKind::UnannotatedReturn.to_string(), Severity::Error);
+            errors.insert(
+                ErrorKind::ImplicitAnyParameter.to_name().to_owned(),
+                Severity::Error,
+            );
+            errors.insert(
+                ErrorKind::UnannotatedReturn.to_name().to_owned(),
+                Severity::Error,
+            );
         }
         if disallow_any_generics || strict {
-            errors.insert(ErrorKind::ImplicitAny.to_string(), Severity::Error);
+            errors.insert(ErrorKind::ImplicitAny.to_name().to_owned(), Severity::Error);
         }
-        if report_deprecated_as_note && errors.contains_key(&ErrorKind::Deprecated.to_string()) {
-            errors.insert(ErrorKind::Deprecated.to_string(), Severity::Info);
+        if disallow_any_explicit {
+            errors.insert(ErrorKind::ExplicitAny.to_name().to_owned(), Severity::Error);
+        }
+        if report_deprecated_as_note && errors.contains_key(ErrorKind::Deprecated.to_name()) {
+            errors.insert(ErrorKind::Deprecated.to_name().to_owned(), Severity::Info);
         }
         if allow_redefinitions {
-            errors.insert(ErrorKind::Redefinition.to_string(), Severity::Ignore);
+            errors.insert(
+                ErrorKind::Redefinition.to_name().to_owned(),
+                Severity::Ignore,
+            );
         }
     }
     code_to_kind(errors)
@@ -156,13 +173,18 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
                 add(severity, ErrorKind::UnsupportedOperation);
             }
             "dict-item" => add(severity, ErrorKind::BadTypedDict),
+            "explicit-any" => add(severity, ErrorKind::ExplicitAny),
             "operator" => add(severity, ErrorKind::UnsupportedOperation),
             "typeddict-unknown-key" => add(severity, ErrorKind::BadTypedDictKey),
             "typeddict-readonly-mutated" => add(severity, ErrorKind::ReadOnly),
             "name-defined" => add(severity, ErrorKind::UnknownName),
             "used-before-def" | "possibly-undefined" => add(severity, ErrorKind::UnboundName),
             "valid-type" => add(severity, ErrorKind::InvalidAnnotation),
-            "type-arg" | "no-untyped-def" => add(severity, ErrorKind::ImplicitAny),
+            "type-arg" => add(severity, ErrorKind::ImplicitAnyTypeArgument),
+            "no-untyped-def" => {
+                add(severity, ErrorKind::ImplicitAnyParameter);
+                add(severity, ErrorKind::UnannotatedReturn);
+            }
             "metaclass" => add(severity, ErrorKind::InvalidInheritance),
             "override" => add(severity, ErrorKind::BadOverride),
             "mutable-override" => add(severity, ErrorKind::BadOverrideMutableAttribute),

@@ -286,7 +286,7 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 /// Test opening a file while a recheck for another file is happening.
 /// Start with only b open, then open file d while a recheck for b is happening.
 // TODO: Flaky on GitHub CI — disabled until stabilized.
-// https://github.com/facebook/pyrefly/actions/runs/23870936742/job/69602458839
+// https://github.com/facebook/pyrefly/actions/runs/26119243466/job/76816531108
 #[test]
 #[ignore]
 fn test_open_file_during_recheck() {
@@ -324,23 +324,18 @@ fn test_open_file_during_recheck() {
     interaction.do_not_commit_next_recheck();
     let new_contents = b_contents.replace("1", "''");
     interaction.client.edit_file("b.py", &new_contents);
-    // Streamed diagnostic for first recheck
-    interaction
-        .client
-        .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
-        .expect("Failed to receive streamed diagnostics for first edit");
     // While recheck is blocked, open file d
     interaction.client.did_open("d.py");
     // Expect initial diagnostic for d to show no errors since it's based on old state
     interaction
         .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 0)
+        .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive diagnostics for d after opening during recheck");
     // After recheck completes, error count reflects new state
     interaction.continue_recheck();
     interaction
         .client
-        .expect_publish_diagnostics_must_have_error_count(d_path.clone(), 1)
+        .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 1)
         .expect("Failed to receive transaction complete diagnostics for second edit");
 
     interaction.shutdown().unwrap();
@@ -1720,6 +1715,77 @@ fn test_deprecated_diagnostic_tag() {
                     "tags": [2]
                 }
             ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_ignore_diagnostic() {
+    let root = get_test_files_root();
+    let test_files_root = root.path().join("unused_ignore");
+    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("example.py");
+
+    interaction
+        .client
+        .diagnostic("example.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unused-ignore",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-ignore"
+                    },
+                    "message": "Unused `# pyrefly: ignore` comment",
+                    "range": {
+                        "start": {"line": 5, "character": 0},
+                        "end": {"line": 5, "character": 1}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_ignore_diagnostic_default_severity() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("unused_ignore_no_config.py");
+
+    // Without `unused-ignore = "error"` in config, the default severity is "ignore", so no
+    // `unused-ignore` diagnostic should appear.
+    interaction
+        .client
+        .diagnostic("unused_ignore_no_config.py")
+        .expect_response(json!({
+            "items": [],
             "kind": "full"
         }))
         .unwrap();

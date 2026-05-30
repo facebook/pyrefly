@@ -238,17 +238,6 @@ def update_a(a: A, b: B) -> None:
 );
 
 testcase!(
-    test_update_with_readonly_key,
-    r#"
-from typing import ReadOnly, TypedDict
-class A(TypedDict):
-    x: ReadOnly[int]
-a: A = {'x': 1}
-a.update({'x': 2})  # E: No matching overload found for function `A.update`
-    "#,
-);
-
-testcase!(
     test_typed_dict_readonly_kwargs_tuple_update,
     r#"
 from typing import TypedDict, ReadOnly
@@ -2462,6 +2451,22 @@ assert_type(updated, dict[str, int])
 );
 
 testcase!(
+    test_anonymous_typed_dict_error_messages,
+    r#"
+d = {"a": 42}
+d["a"] = "b"  # E: `Literal['b']` is not assignable to dict key `a` with type `int`
+
+from typing import TypedDict
+
+class MyTD(TypedDict):
+    x: int
+
+td: MyTD = {"x": 1}
+td["x"] = "b"  # E: `Literal['b']` is not assignable to TypedDict key `x` with type `int`
+"#,
+);
+
+testcase!(
     test_typed_dict_inherited_field_shadows_dict_method,
     r#"
 from typing import TypedDict, assert_type
@@ -2530,4 +2535,20 @@ def test_inherited(c: Child) -> None:
     c.get
     c.update
 "#,
+);
+
+testcase!(
+    test_construct_generic_typed_dict_with_union_hint,
+    r#"
+from typing import TypedDict, Generic
+from typing_extensions import TypeVar
+
+T = TypeVar('T')
+
+class TD(TypedDict, Generic[T]):
+    value: T
+
+def f(x: str) -> TD[int] | TD[str]:
+    return TD(value=x)
+    "#,
 );

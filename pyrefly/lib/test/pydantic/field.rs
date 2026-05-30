@@ -224,6 +224,36 @@ A()  # E: Missing argument `x`
 );
 
 pydantic_testcase!(
+    test_private_attributes_not_init_fields,
+    r#"
+from pydantic import BaseModel
+
+class Foo(BaseModel):
+    a: int
+    _a: int
+
+    def initialize(self):
+        self._a = 1
+
+Foo(a=1)
+Foo()  # E: Missing argument `a`
+    "#,
+);
+
+pydantic_testcase!(
+    test_pydantic_dataclass_underscore_field_is_init_param,
+    r#"
+from pydantic.dataclasses import dataclass
+
+@dataclass
+class Bar:
+    _name: str
+
+Bar(_name="hello")
+    "#,
+);
+
+pydantic_testcase!(
     test_field_default_gt_violation,
     r#"
 from pydantic import BaseModel, Field
@@ -326,5 +356,77 @@ class A[T: BaseModel]:
 
 a = A(MyModel)
 a.print_model_fields()
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator,
+    r#"
+from pydantic import BaseModel
+from pydantic import field_validator
+
+class MyBaseModel(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not v:
+            raise ValueError("Name cannot be empty")
+        return v
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator_mode_before,
+    r#"
+from pydantic import BaseModel, field_validator
+
+class C(BaseModel):
+    x: str
+    @field_validator('x', mode='before')
+    @classmethod
+    def validate_x(cls, x):
+        return str(x)
+
+C(x=0)
+C(x="hello")
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator_mode_before_inherited,
+    r#"
+from pydantic import BaseModel, field_validator
+
+class Parent(BaseModel):
+    x: str
+    @field_validator('x', mode='before')
+    @classmethod
+    def validate_x(cls, x):
+        return str(x)
+
+class Child(Parent):
+    pass
+
+Child(x=0)
+Child(x="hello")
+    "#,
+);
+
+pydantic_testcase!(
+    test_field_validator_mode_plain,
+    r#"
+from pydantic import BaseModel, field_validator
+
+class P(BaseModel):
+    x: int
+    @field_validator('x', mode='plain')
+    @classmethod
+    def validate_x(cls, x) -> int:
+        return int(x)
+
+P(x="99")
+P(x=42)
     "#,
 );

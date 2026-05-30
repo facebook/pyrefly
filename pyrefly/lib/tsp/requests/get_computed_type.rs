@@ -12,9 +12,10 @@ use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspServer;
+use crate::tsp::server::TspConnection;
+use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspServer<T> {
+impl<T: TspInterface> TspConnection<T> {
     /// Return the computed (inferred) type at the given position.
     ///
     /// The computed type reflects the type checker's analysis of the code
@@ -25,10 +26,14 @@ impl<T: TspInterface> TspServer<T> {
         params: GetTypeParams,
     ) -> Result<Option<Type>, ResponseError> {
         self.validate_snapshot(params.snapshot)?;
+        // Validate the URI is parseable (rejects malformed strings).
+        // Any valid scheme is accepted — notebook cell URIs are resolved
+        // to notebook paths inside get_type_at_position.
+        parse_uri(params.uri())?;
         let position = params.position();
         let ty = self
-            .inner
+            .inner()
             .get_type_at_position(params.uri(), position.line, position.character);
-        Ok(ty.map(|t| self.convert_type(&t)))
+        Ok(ty.map(|t| self.convert_type(&t, Some(params.uri()))))
     }
 }

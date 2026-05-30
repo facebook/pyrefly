@@ -175,3 +175,57 @@ def test() -> None:
     f(A())  # E: Argument `A` is not assignable to parameter `x` with type `P1 | P2`
 "#,
 );
+
+// Soundness test for typed_dict_cache with coinductive assumptions.
+//
+// Similar to test_protocol_coinductive_cache_soundness, but the stale cache
+// entry lives in the persistent typed_dict_cache rather than the per-query
+// subset_cache. The fields are ReadOnly so comparisons are covariant
+// (one-direction is_subset_eq), avoiding the invariant is_consistent check
+// that would independently catch the failure.
+//
+// The scenario:
+//   1. Check `A <: P1 | P2` — union tries `A <: P1`.
+//   2. `A <: P1` inserts InProgress(A, P1). Method `foo` return type: `ATD <: TD1`.
+//   3. TypedDict ReadOnly field: `A <: P2`. Inserts InProgress(A, P2).
+//   4. Method `foo` return type: `ATD <: TD2`. ReadOnly field: `A <: P1`.
+//   5. `A <: P1` is InProgress → coinductive Ok. `ATD <: TD2` succeeds,
+//      stored in typed_dict_cache.
+//   6. `A <: P2` succeeds. `ATD <: TD1` succeeds, also cached.
+//   7. Back in `A <: P1`: method `bar` fails (A lacks `bar`). `A <: P1` fails.
+//   8. subset_cache rolls back, but typed_dict_cache retains `ATD <: TD2 → Ok`.
+//   9. Union tries `A <: P2`. Method `foo`: `ATD <: TD2` — hits stale cache → Ok.
+//  10. `A <: P2` incorrectly succeeds — false positive!
+//
+// The fix: track coinductive_assumptions_used in is_subset_typed_dict and skip
+// caching when coinductive assumptions were involved.
+testcase!(
+    test_typed_dict_coinductive_cache_soundness,
+    r#"
+from typing import Protocol, TypedDict, ReadOnly
+
+class P1(Protocol):
+    def foo(self) -> "TD1": ...
+    def bar(self) -> int: ...
+
+class P2(Protocol):
+    def foo(self) -> "TD2": ...
+
+class TD1(TypedDict):
+    field: ReadOnly[P2]
+
+class TD2(TypedDict):
+    field: ReadOnly[P1]
+
+class ATD(TypedDict):
+    field: ReadOnly["A"]
+
+class A:
+    def foo(self) -> ATD: ...
+
+def f(x: P1 | P2) -> None: ...
+
+def test() -> None:
+    f(A())  # E: Argument `A` is not assignable to parameter `x` with type `P1 | P2`
+"#,
+);

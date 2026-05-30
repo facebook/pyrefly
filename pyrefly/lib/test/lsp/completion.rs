@@ -748,6 +748,81 @@ Completion Results:
 }
 
 #[test]
+fn from_import_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    // NOTE: trailing space after `import` is intentional — it places the
+    // cursor in whitespace so the empty-import completion path triggers.
+    let main_code = "from foo import \n#               ^\n";
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let expected = [
+        "# main.py",
+        "1 | from foo import ",
+        "                    ^",
+        "Completion Results:",
+        "- (Variable) imperial_guard",
+        "- (Constant) __annotations__",
+        "- (Constant) __builtins__",
+        "- (Constant) __cached__",
+        "- (Constant) __debug__",
+        "- (Constant) __dict__",
+        "- (Constant) __doc__",
+        "- (Constant) __file__",
+        "- (Constant) __loader__",
+        "- (Constant) __name__",
+        "- (Constant) __package__",
+        "- (Constant) __path__",
+        "- (Constant) __spec__",
+        "",
+        "",
+        "# foo.py",
+    ]
+    .join("\n");
+    assert_eq!(expected, report.trim());
+}
+
+#[test]
+fn from_import_relative_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    // NOTE: trailing space after `import` is intentional.
+    let main_code = "from .foo import \n#                ^\n";
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let expected = [
+        "# main.py",
+        "1 | from .foo import ",
+        "                     ^",
+        "Completion Results:",
+        "- (Variable) imperial_guard",
+        "- (Constant) __annotations__",
+        "- (Constant) __builtins__",
+        "- (Constant) __cached__",
+        "- (Constant) __debug__",
+        "- (Constant) __dict__",
+        "- (Constant) __doc__",
+        "- (Constant) __file__",
+        "- (Constant) __loader__",
+        "- (Constant) __name__",
+        "- (Constant) __package__",
+        "- (Constant) __path__",
+        "- (Constant) __spec__",
+        "",
+        "",
+        "# foo.py",
+    ]
+    .join("\n");
+    assert_eq!(expected, report.trim());
+}
+
+#[test]
 fn from_import_deprecated() {
     let foo_code = r#"
 from warnings import deprecated
@@ -1207,6 +1282,65 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn completion_class_override_members() {
+    let code = r#"
+from typing import *
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @property
+    @abstractmethod
+    def error_message(self):
+        """
+        Child classes must provide an error message string.
+        """
+        ...
+
+class B(A):
+    erro = ""
+#   ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.iter().any(|item| item.label == "error_message"),
+        "Expected inherited override completion, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn attribute_completion_remains_unfiltered() {
+    let code = r#"
+class A:
+    name = 1
+
+a = A()
+a.zz
+#  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.iter().any(|item| item.label == "name"),
+        "Expected normal attribute completions to remain unfiltered, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -2758,8 +2892,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[Unknown]) -> None: ...
-- (Field) p: Unknown
+- (Method) m: def m(self: C[@8]) -> None: ...
+- (Field) p: @8
 "#
         .trim(),
         report.trim(),

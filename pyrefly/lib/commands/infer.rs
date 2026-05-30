@@ -14,7 +14,6 @@ use pyrefly_config::base::InferReturnTypes;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::qname::QName;
-use pyrefly_types::types::Union;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
@@ -33,6 +32,7 @@ use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::types::class::Class;
+use crate::types::display::TypeDisplayContext;
 use crate::types::heap::TypeHeap;
 use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
@@ -188,10 +188,14 @@ fn format_hints(
     let mut needed_imports = HashSet::new();
     for (position, hint, kind) in inlay_hints {
         let is_container = is_container(&hint);
+        let contains_self_type = hint.any(|sub_type| matches!(sub_type, Type::SelfType(_)));
         // Collect QNames before hint_to_string consumes the type. Each QName
         // carries the defining module, so we know exactly where to import from.
         let mut hint_imports = Vec::new();
         hint.universe(&mut |sub_type| {
+            if matches!(sub_type, Type::SelfType(_)) {
+                return;
+            }
             if let Some(qname) = sub_type.qname() {
                 let module_name = qname.module_name();
                 if module_name != ModuleName::builtins() && module_name != current_module_name {
@@ -199,6 +203,9 @@ fn format_hints(
                 }
             }
         });
+        if contains_self_type {
+            hint_imports.push((ModuleName::typing(), "Self".to_owned()));
+        }
         let formatted_hint = hint_to_string(hint, stdlib, enum_members, heap);
         // TODO: Put these behind a flag
         if formatted_hint.contains("Any") {
@@ -257,12 +264,12 @@ fn hint_to_string(
     let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
     let hint = match hint {
-        Type::Union(box Union { members: types, .. }) => {
-            unions_with_literals(types, stdlib, enum_members, heap)
-        }
+        Type::Union(u) => unions_with_literals(u.members, stdlib, enum_members, heap),
         _ => hint,
     };
-    hint.to_string()
+    let mut ctx = TypeDisplayContext::new(&[&hint]);
+    ctx.render_self_type_as_self();
+    ctx.display(&hint).to_string()
 }
 
 impl InferArgs {
@@ -279,7 +286,8 @@ impl InferArgs {
             .set_check_unannotated_defs_if_unset(true);
         self.config_override
             .set_infer_return_types_if_unset(InferReturnTypes::Checked);
-        let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
+        let (files_to_check, config_finder, _) =
+            self.files.resolve(self.config_override, wrapper)?;
         Self::run_inner(files_to_check, config_finder, self.flags, thread_count)
     }
 
@@ -416,10 +424,10 @@ mod test {
     use pyrefly_util::globs::FilteredGlobs;
     use pyrefly_util::globs::Globs;
     use pyrefly_util::globs::HiddenDirFilter;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use tempfile;
 
     use super::*;
-    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn assert_annotations(input: &str, output: &str, flags: Option<InferFlags>) {
@@ -804,6 +812,28 @@ def foo():
             r#"
 def foo():
     return ""
+"#,
+            Some(flags),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unannotated_dunder_new_return_is_inserted_as_self() -> anyhow::Result<()> {
+        let mut flags = InferFlags::default();
+        flags.parameter_types = Some(false);
+
+        assert_annotations(
+            r#"
+class C:
+    def __new__(cls):
+        return super().__new__(cls)
+"#,
+            r#"
+from typing import Self
+class C:
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
 "#,
             Some(flags),
         );

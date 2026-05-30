@@ -650,7 +650,6 @@ def test():
     # it works out to None, sometimes Unknown.
     # Plenty of errors here.
     reveal_type(i.x) # E:
-
 "#,
 );
 
@@ -1194,6 +1193,51 @@ from foo import X as Y
 "#,
 );
 
+fn env_type_checking_reexport() -> TestEnv {
+    TestEnv::one(
+        "a",
+        r#"
+from typing import TYPE_CHECKING
+"#,
+    )
+}
+
+testcase!(
+    test_star_import_type_checking,
+    env_type_checking_reexport(),
+    r#"
+from typing import TYPE_CHECKING
+from a import *
+"#,
+);
+
+fn env_final_cross_module() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "a",
+        r#"
+from typing import Final
+X: Final = 42
+"#,
+    );
+    t.add(
+        "b",
+        r#"
+X: int = 10
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_final_then_import_different_value,
+    env_final_cross_module(),
+    r#"
+from a import X
+from b import X  # E: Cannot assign to `X` because it is imported as final
+"#,
+);
+
 fn env_all_binop_add() -> TestEnv {
     let mut t = TestEnv::new();
     t.add(
@@ -1521,7 +1565,190 @@ assert_type(c.name, str)
 testcase!(
     test_malformed_def_from_star,
     r#"
-def # E: Expected an identifier
-from *a # E: Expected `)` # E: Cannot find module # E: only allowed at module level # E: Expected a module name # E: Star import must be the only import # E: Expected `,`
+def # E: Parse error: Expected an identifier
+from *a # E: Parse error: Expected `)`, found `from` # E: Parse error: Expected a module name # E: Parse error: Star import must be the only import # E: Parse error: Expected `,`, found name
+"#,
+);
+
+// Additional regression test for https://github.com/facebook/pyrefly/issues/2983
+testcase!(
+    test_malformed_class_from_star,
+    r#"
+class # E: Parse error: Expected an identifier
+from *a # E: Parse error: Expected an indented block after `class` definition # E: Parse error: Expected a module name # E: Parse error: Star import must be the only import # E: Parse error: Expected `,`, found name # E: Cannot find module `main`
+"#,
+);
+
+const PKGUTIL_INIT: &str =
+    "from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n";
+
+#[test]
+fn test_pkgutil_namespace_package_multi_root() {
+    // Two search roots both contain `ns/__init__.py` with `pkgutil.extend_path`.
+    // Both register as LegacyNamespacePackage and accumulate, so submodules from
+    // both roots are importable through the merged namespace.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("root0/ns/baz")).unwrap();
+    std::fs::create_dir_all(root.join("root1/ns/bar")).unwrap();
+    std::fs::write(root.join("root0/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(
+        root.join("root0/ns/baz/__init__.py"),
+        "def helper() -> int: return 0\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("root1/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(root.join("root1/ns/bar/__init__.py"), "class Foo: ...\n").unwrap();
+
+    let mut env =
+        TestEnv::new().with_site_package_paths(vec![root.join("root0"), root.join("root1")]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        "from ns.bar import Foo\nfrom ns.baz import helper\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_pkgutil_namespace_absorbs_implicit_namespace() {
+    // An earlier search root contributes only an implicit (PEP 420) `ns/`
+    // directory; a later root has `ns/__init__.py` with `pkgutil.extend_path`.
+    // The LNP must absorb the prior implicit namespace dir so submodules from
+    // both roots are importable. This mirrors the layout produced by editable
+    // installs of `extend_path`-style namespace packages (e.g. azure-sdk-for-python).
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("root0/ns/baz")).unwrap();
+    std::fs::create_dir_all(root.join("root1/ns/bar")).unwrap();
+    // root0 has no ns/__init__.py — implicit namespace.
+    std::fs::write(
+        root.join("root0/ns/baz/__init__.py"),
+        "def helper() -> int: return 0\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("root1/ns/__init__.py"), PKGUTIL_INIT).unwrap();
+    std::fs::write(root.join("root1/ns/bar/__init__.py"), "class Foo: ...\n").unwrap();
+
+    let mut env =
+        TestEnv::new().with_site_package_paths(vec![root.join("root0"), root.join("root1")]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        "from ns.bar import Foo\nfrom ns.baz import helper\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+// ----------------------------------------------------------------------------
+// Cross-module class rebind tests: importers should observe whichever class
+// the visible result chose. See `assign.rs` for the same-module regressions.
+// ----------------------------------------------------------------------------
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1378
+fn env_singleton() -> TestEnv {
+    TestEnv::one(
+        "singleton",
+        r#"
+class GlobalInventory:
+    _instance: GlobalInventory | None = None
+    _initialized: bool = False
+    initialization_status: bool
+    config_file_inventory: dict[str, int]
+
+    def __new__(cls) -> GlobalInventory:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        assert cls._instance is not None
+        return cls._instance
+
+    def __init__(self) -> None:
+        if not self._initialized:
+            self.initialization_status = False
+            self.config_file_inventory = {}
+            GlobalInventory._initialized = True
+
+globals_inv = GlobalInventory()
+"#,
+    )
+}
+
+testcase!(
+    test_cross_module_singleton_attribute_access,
+    env_singleton(),
+    r#"
+from singleton import globals_inv
+
+class Foo:
+    def __init__(self) -> None:
+        globals_inv.config_file_inventory = {"foo": 1}
+        for _ in globals_inv.config_file_inventory.values():
+            if globals_inv.initialization_status:
+                break
+        globals_inv.initialization_status = True
+"#,
+);
+
+fn env_class_rebind_incompatible() -> TestEnv {
+    TestEnv::one(
+        "mod",
+        r#"
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class Dummy: ...
+
+def b() -> bool: ...
+
+if b():
+    Real = Dummy  # E: `type[Dummy]` is not assignable to variable `Real` with type `type[Real]`
+"#,
+    )
+}
+
+fn env_class_rebind_compatible() -> TestEnv {
+    TestEnv::one(
+        "mod",
+        r#"
+class Real:
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+class SubReal(Real):
+    def __init__(self, host: str, port: int = 0) -> None: ...
+
+Real = SubReal
+"#,
+    )
+}
+
+testcase!(
+    test_class_rebind_import_after_incompatible_write,
+    env_class_rebind_incompatible(),
+    r#"
+from typing import reveal_type
+from mod import Real
+reveal_type(Real)  # E: revealed type: type[Real]
+Real("example.com", port=443)
+"#,
+);
+
+testcase!(
+    test_class_rebind_import_after_compatible_write,
+    env_class_rebind_compatible(),
+    r#"
+from typing import reveal_type
+from mod import Real
+reveal_type(Real)  # E: revealed type: type[SubReal]
+Real("example.com", port=443)
 "#,
 );

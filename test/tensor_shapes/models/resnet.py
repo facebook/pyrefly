@@ -18,8 +18,8 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 # A no-arg factory that produces a shape-preserving activation module.
 # Each member's forward signature is Tensor[*S] -> Tensor[*S], so

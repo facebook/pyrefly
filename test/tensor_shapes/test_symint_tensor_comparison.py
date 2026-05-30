@@ -6,8 +6,8 @@
 from typing import assert_type, reveal_type
 
 import torch
+from shape_extensions import Dim
 from torch import Tensor
-from torch_shapes import Dim
 
 
 # Dim tests

@@ -787,6 +787,26 @@ assert_type(C.x, int)
 );
 
 testcase!(
+    test_metaclass_property_precedence,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    @property
+    def f(cls) -> str:
+        return "1"
+
+class C(metaclass=Meta):
+    @property
+    def f(self) -> str:
+        return type(self).f
+
+# C.f should resolve to the metaclass property, returning str
+assert_type(C.f, str)
+    "#,
+);
+
+testcase!(
     test_metaclass_method_cls_typetype,
     r#"
 from typing import assert_type
@@ -1161,6 +1181,30 @@ def test(stack: ThemeStack) -> None:
 );
 
 testcase!(
+    test_generic_function_as_closure_default_arg,
+    r#"
+import bisect
+
+class Worker:
+    def __init__(self) -> None:
+        self.heartbeats: list[float] = []
+        self.event = self._create_event_handler()
+
+    def _create_event_handler(self):
+        heartbeats = self.heartbeats
+
+        def event(
+            timestamp: float | None = None,
+            insort = bisect.insort,
+        ) -> None:
+            if timestamp is not None:
+                insort(heartbeats, timestamp)
+
+        return event
+"#,
+);
+
+testcase!(
     test_attr_unknown,
     r#"
 class Op:
@@ -1171,7 +1215,6 @@ class Namespace:
             return "test"
         return Op()
 x = Namespace().some_op.default # E:  Object of class `str` has no attribute `default
-
 "#,
 );
 
@@ -1189,7 +1232,7 @@ class C:
         if orig_func is None:
             return super().__new__(cls)
 def f():
-    with C():  # E: `NoneType` has no attribute `__enter__`  # E: `NoneType` has no attribute `__exit__`
+    with C():
         pass
     "#,
 );
@@ -1490,6 +1533,95 @@ class B:
     "#,
 );
 
+testcase!(
+    test_private_attribute_with_getattr,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __getattr__(self, attr: str) -> str:
+        return attr
+
+def main(f: Foo) -> None:
+    assert_type(f._foo, str)
+    assert_type(f.__foo, str)
+    "#,
+);
+
+testcase!(
+    test_private_attribute_with_getattr_and_explicit_field,
+    r#"
+class A:
+    __secret: int = 0
+    def __getattr__(self, name: str) -> str: ...
+
+class B:
+    def leak(self, a: A):
+        return a.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+    "#,
+);
+
+testcase!(
+    test_private_attribute_with_getattribute,
+    r#"
+from typing import assert_type
+
+class Foo:
+    def __getattribute__(self, name: str) -> str:
+        return name
+
+def main(f: Foo) -> None:
+    assert_type(f.__bar, str)
+    "#,
+);
+
+testcase!(
+    test_private_attribute_with_inherited_getattr,
+    r#"
+from typing import assert_type
+
+class Base:
+    def __getattr__(self, name: str) -> str:
+        return name
+
+class Child(Base):
+    pass
+
+def main(c: Child) -> None:
+    assert_type(c.__foo, str)
+    "#,
+);
+
+testcase!(
+    test_private_attribute_inherited_field_with_child_getattr,
+    r#"
+class Parent:
+    __secret: int = 0
+
+class Child(Parent):
+    def __getattr__(self, name: str) -> str: ...
+
+class External:
+    def leak(self, c: Child):
+        return c.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+    "#,
+);
+
+testcase!(
+    test_private_attribute_mixed_union_with_getattr,
+    r#"
+class A:
+    __secret: int = 0
+
+class Dyn:
+    def __getattr__(self, name: str) -> str: ...
+
+class External:
+    def leak(self, x: A | Dyn):
+        return x.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+    "#,
+);
+
 // We allow __attr access on modules, since name mangling only occurs on attributes of classes.
 testcase!(
     test_module_attr_is_not_private,
@@ -1616,6 +1748,21 @@ class TD(TypedDict):
 
 ty(TD(x = 0))(x = 0)
 ty(TD).mro() # E: Expr::attr_infer_for_type attribute base undefined
+"#,
+);
+
+testcase!(
+    test_attribute_access_on_type_bare_typeddict_special_form,
+    r#"
+from typing import TypedDict
+# `type[TypedDict]` is invalid as an annotation. After the error is reported,
+# the inner `TypedDict` should be recovered to `Any` so attribute access on
+# `cls` does not trigger an internal error. Value-position access on bare
+# `TypedDict` is unaffected and should still error.
+def f(cls: type[TypedDict]) -> None:  # E: `TypedDict` is not allowed in this context
+    cls.__annotations__
+    cls.__name__
+    cls.__bases__
 "#,
 );
 
@@ -2351,6 +2498,54 @@ class A:
 def f(a: A):
     assert_type(a.x, str)
     assert_type(a.y, int | str)
+    "#,
+);
+
+testcase!(
+    test_promote_literalstring_method_attribute,
+    r#"
+from typing import Literal, assert_type
+
+class SessionMiddleware:
+    def __init__(
+        self, same_site: Literal["lax", "strict", "none"] = "lax", domain: str | None = None
+    ) -> None:
+        self.security_flags = "httponly; samesite=" + same_site
+        if domain is not None:
+            self.security_flags += f"; domain={domain}"
+
+def f(middleware: SessionMiddleware):
+    assert_type(middleware.security_flags, str)
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_addition_of_explicit_literal_strings,
+    r#"
+from typing import LiteralString, assert_type
+
+class C:
+    def __init__(self, x: LiteralString, y: LiteralString) -> None:
+        self.z = x + y
+
+def f(c: C):
+    assert_type(c.z, LiteralString)
+    "#,
+);
+
+testcase!(
+    test_do_not_promote_augmented_addition_of_explicit_literal_strings,
+    r#"
+from typing import LiteralString, assert_type
+
+class C:
+    def __init__(self, x: LiteralString, y: LiteralString) -> None:
+        z = x
+        z += y
+        self.attr = z
+
+def f(c: C):
+    assert_type(c.attr, LiteralString)
     "#,
 );
 

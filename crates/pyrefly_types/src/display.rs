@@ -17,7 +17,6 @@ use pyrefly_python::qname::QName;
 use pyrefly_util::display::Fmt;
 use pyrefly_util::display::append;
 use pyrefly_util::display::commas_iter;
-use pyrefly_util::uniques::Unique;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
@@ -26,9 +25,12 @@ use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
+use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
+use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
+use crate::quantified::QuantifiedIdentity;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
@@ -38,6 +40,7 @@ use crate::type_output::DisplayOutput;
 use crate::type_output::OutputWithLocations;
 use crate::type_output::TypeOutput;
 use crate::type_var::Restriction;
+use crate::typed_dict::AnonymousTypedDictInner;
 use crate::typed_dict::TypedDict;
 use crate::types::AnyStyle;
 use crate::types::BoundMethod;
@@ -48,12 +51,11 @@ use crate::types::NeverStyle;
 use crate::types::SuperObj;
 use crate::types::TArgs;
 use crate::types::Type;
-use crate::types::Union;
 
 /// Scope guard that truncates the forall type-parameter tracking stack on drop,
 /// ensuring cleanup even on early return or panic.
 struct ForallScope<'a> {
-    vec: &'a RefCell<Vec<Unique>>,
+    vec: &'a RefCell<Vec<QuantifiedIdentity>>,
     prev_len: usize,
 }
 
@@ -135,13 +137,14 @@ pub struct TypeDisplayContext<'a> {
     lsp_display_mode: LspDisplayMode,
     always_display_module_name: bool,
     always_display_expanded_unions: bool,
+    render_self_type_as_self: bool,
     /// Optional stdlib reference for resolving builtin type locations
     stdlib: Option<&'a Stdlib>,
-    /// Stack of unique IDs of type variables currently bound by enclosing Foralls.
-    /// Owner display is suppressed for a variable if its unique is in this stack (it is
+    /// Stack of identities of type variables currently bound by enclosing Foralls.
+    /// Owner display is suppressed for a variable if its identity is in this stack (it is
     /// quantified by an enclosing Forall), but shown for free variables from outer scopes
     /// (e.g. `F1@bar.f1` inside a nested function `f2[F2]` — F1 is free, F2 is bound).
-    forall_tparam_uniques: RefCell<Vec<Unique>>,
+    forall_tparam_uniques: RefCell<Vec<QuantifiedIdentity>>,
 }
 
 impl<'a> TypeDisplayContext<'a> {
@@ -167,7 +170,8 @@ impl<'a> TypeDisplayContext<'a> {
             if let Some(qname) = t.qname() {
                 self.add_qname(qname);
             }
-            if let Type::SuperInstance(box (cls, obj)) = t {
+            if let Type::SuperInstance(s) = t {
+                let (cls, obj) = &**s;
                 self.add_qname(cls.qname());
                 let obj_qname = match obj {
                     SuperObj::Instance(obj) | SuperObj::Class(obj) => obj.qname(),
@@ -189,6 +193,10 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn always_display_expanded_unions(&mut self) {
         self.always_display_expanded_unions = true;
+    }
+
+    pub fn render_self_type_as_self(&mut self) {
+        self.render_self_type_as_self = true;
     }
 
     /// Always display the module name, except for builtins.
@@ -236,42 +244,70 @@ impl<'a> TypeDisplayContext<'a> {
         Fmt(|f| self.fmt_helper(t, f, false))
     }
 
-    fn fmt_targ(&self, param: &Quantified, arg: &Type, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if param.is_type_var_tuple()
-            && let Type::Tuple(tuple) = arg
+    pub fn display_quantified(&'a self, quantified: &'a Quantified) -> impl Display + 'a {
+        Fmt(|f| {
+            let output = &mut DisplayOutput::new(self, f);
+            self.fmt_quantified(quantified, output)
+        })
+    }
+
+    fn fmt_quantified(&self, quantified: &Quantified, output: &mut impl TypeOutput) -> fmt::Result {
+        write!(output, "{}", quantified.name)?;
+        if self.always_display_module_name
+            && !self
+                .forall_tparam_uniques
+                .borrow()
+                .contains(quantified.identity())
+            && let Some(owner) = &quantified.owner
         {
-            match tuple {
-                Tuple::Concrete(elts) if !elts.is_empty() => write!(
-                    f,
-                    "{}",
-                    commas_iter(|| elts.iter().map(|elt| self.display_internal(elt)))
-                ),
-                Tuple::Unpacked(box (prefix, middle, suffix)) => {
-                    let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
-                    write!(
-                        f,
-                        "{}",
-                        commas_iter(|| {
-                            prefix
-                                .iter()
-                                .chain(std::iter::once(&unpacked_middle))
-                                .chain(suffix.iter())
-                                .map(|elt| self.display_internal(elt))
-                        })
-                    )
-                }
-                _ => {
-                    write!(f, "*{}", self.display_internal(arg))
-                }
+            write!(output, "@{owner}")?;
+        }
+        Ok(())
+    }
+
+    fn fmt_targ(
+        &self,
+        param: &Quantified,
+        arg: &Type,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        if !param.is_type_var_tuple() {
+            return self.fmt_helper_generic(arg, false, output);
+        }
+        match arg {
+            Type::Tuple(Tuple::Concrete(elts)) if !elts.is_empty() => {
+                self.fmt_type_sequence(elts.iter(), ", ", false, output)
             }
-        } else {
-            write!(f, "{}", self.display_internal(arg))
+            Type::Tuple(Tuple::Unpacked(unpacked)) => {
+                let (prefix, middle, suffix) = &**unpacked;
+                let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
+                self.fmt_type_sequence(
+                    prefix
+                        .iter()
+                        .chain(std::iter::once(&unpacked_middle))
+                        .chain(suffix.iter()),
+                    ", ",
+                    false,
+                    output,
+                )
+            }
+            _ => {
+                if matches!(arg, Type::Tuple(_)) || arg.is_kind_type_var_tuple() {
+                    output.write_str("*")?;
+                }
+                self.fmt_helper_generic(arg, false, output)
+            }
         }
     }
 
     /// Formats a `TParam` with its restriction and default.
     /// e.g. `T: int = bool`
     fn fmt_tparam(&self, param: &Quantified, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if param.is_param_spec() {
+            write!(f, "**")?;
+        } else if param.is_type_var_tuple() {
+            write!(f, "*")?;
+        }
         write!(f, "{}", param.name)?;
         match param.restriction() {
             Restriction::Bound(ty) => write!(f, ": {}", self.display_internal(ty))?,
@@ -290,20 +326,19 @@ impl<'a> TypeDisplayContext<'a> {
         Ok(())
     }
 
-    pub(crate) fn fmt_targs(&self, targs: &TArgs, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    pub(crate) fn fmt_targs(&self, targs: &TArgs, output: &mut impl TypeOutput) -> fmt::Result {
         let display_count = targs.display_count();
-        if display_count > 0 {
-            write!(
-                f,
-                "[{}]",
-                commas_iter(|| targs
-                    .iter_paired()
-                    .take(display_count)
-                    .map(|(param, arg)| Fmt(|f| self.fmt_targ(param, arg, f))))
-            )
-        } else {
-            Ok(())
+        if display_count == 0 {
+            return Ok(());
         }
+        output.write_str("[")?;
+        for (i, (param, arg)) in targs.iter_paired().take(display_count).enumerate() {
+            if i > 0 {
+                output.write_str(", ")?;
+            }
+            self.fmt_targ(param, arg, output)?;
+        }
+        output.write_str("]")
     }
 
     pub(crate) fn fmt_qname(&self, qname: &QName, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -357,7 +392,10 @@ impl<'a> TypeDisplayContext<'a> {
             let needs_parens = wrap_callables_and_intersect
                 && matches!(
                     t,
-                    Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                    Type::Callable(_)
+                        | Type::CallableResidual(_)
+                        | Type::Function(_)
+                        | Type::Intersect(_)
                 );
             if needs_parens {
                 output.write_str("(")?;
@@ -405,11 +443,26 @@ impl<'a> TypeDisplayContext<'a> {
         let prev_len = self.forall_tparam_uniques.borrow().len();
         self.forall_tparam_uniques
             .borrow_mut()
-            .extend(tparams.into_iter().map(|q| q.unique()));
+            .extend(tparams.into_iter().map(|q| q.identity().clone()));
         ForallScope {
             vec: &self.forall_tparam_uniques,
             prev_len,
         }
+    }
+
+    /// Format the value type of an anonymous typed dict by computing the union
+    /// of all field types on-the-fly. This avoids storing a redundant clone in the
+    /// type tree (which caused exponential memory growth for nested dict literals).
+    /// Delegates to `compute_value_type` + `fmt_helper_generic` so that union
+    /// display (dedup, literal grouping, etc.) stays in one place.
+    fn fmt_anonymous_typed_dict_value_type(
+        &self,
+        inner: &AnonymousTypedDictInner,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        let heap = TypeHeap::new();
+        let value_type = inner.compute_value_type(&heap);
+        self.fmt_helper_generic(&value_type, false, output)
     }
 
     /// Core formatting logic for types that works with any `TypeOutput` implementation.
@@ -462,7 +515,7 @@ impl<'a> TypeDisplayContext<'a> {
             }
             // Display Dim[Unknown] as just "Dim" for cleaner output
             Type::ClassType(class_type)
-                if class_type.has_qname("torch_shapes", "Dim")
+                if class_type.has_qname("shape_extensions", "Dim")
                     && class_type.targs().as_slice().len() == 1
                     && matches!(
                         class_type.targs().as_slice()[0],
@@ -477,7 +530,7 @@ impl<'a> TypeDisplayContext<'a> {
                     && class_type.targs().as_slice().len() == 1
                     && matches!(
                         &class_type.targs().as_slice()[0],
-                        Type::Tuple(Tuple::Unbounded(box Type::Any(_)))
+                        Type::Tuple(Tuple::Unbounded(t)) if matches!(**t, Type::Any(_))
                     ) =>
             {
                 output.write_qname(class_type.qname())
@@ -498,7 +551,7 @@ impl<'a> TypeDisplayContext<'a> {
                     let str_qname = self.stdlib.map(|s| s.str().qname());
                     output.write_builtin("str", str_qname)?;
                     output.write_str(", ")?;
-                    self.fmt_helper_generic(&inner.value_type, false, output)?;
+                    self.fmt_anonymous_typed_dict_value_type(inner, output)?;
                     output.write_str("]")
                 }
             },
@@ -514,7 +567,7 @@ impl<'a> TypeDisplayContext<'a> {
                     let str_qname = self.stdlib.map(|s| s.str().qname());
                     output.write_builtin("str", str_qname)?;
                     output.write_str(", ")?;
-                    self.fmt_helper_generic(&inner.value_type, false, output)?;
+                    self.fmt_anonymous_typed_dict_value_type(inner, output)?;
                     output.write_str("]")
                 }
             },
@@ -558,8 +611,12 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::SelfType(cls) => {
-                self.maybe_fmt_with_module("typing", "Self@", output)?;
-                output.write_qname(cls.qname())
+                if self.render_self_type_as_self {
+                    self.maybe_fmt_with_module("typing", "Self", output)
+                } else {
+                    self.maybe_fmt_with_module("typing", "Self@", output)?;
+                    output.write_qname(cls.qname())
+                }
             }
 
             // Other things
@@ -580,7 +637,7 @@ impl<'a> TypeDisplayContext<'a> {
                 let qname = self.get_special_form_qname("LiteralString");
                 output.write_builtin("LiteralString", qname)
             }
-            Type::Callable(box c) => {
+            Type::Callable(c) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     c.fmt_with_type_with_newlines(output, &|t, o| {
                         self.fmt_helper_generic(t, false, o)
@@ -589,38 +646,58 @@ impl<'a> TypeDisplayContext<'a> {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
             }
-            Type::Function(box Function {
-                signature,
-                metadata,
-            }) => match self.lsp_display_mode {
-                LspDisplayMode::Hover
-                | LspDisplayMode::SignatureHelp
-                | LspDisplayMode::ProvideType
-                    if is_toplevel =>
-                {
-                    let func_name = metadata.kind.function_name();
-                    output.write_str("def ")?;
-                    self.write_func_fqn(output, &func_name, &metadata.kind)?;
-                    match self.lsp_display_mode {
-                        LspDisplayMode::Hover => {
-                            signature.fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })?;
-                        }
-                        _ => {
-                            signature.fmt_with_type(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            })?;
-                        }
-                    }
-                    if self.lsp_display_mode == LspDisplayMode::ProvideType {
-                        Ok(())
-                    } else {
-                        output.write_str(": ...")
-                    }
+            Type::CallableResidual(residual) => match &residual.kind {
+                CallableResidualKind::Generic { quantified } => {
+                    output.write_str("GenericResidual@")?;
+                    write!(output, "{quantified}")
                 }
-                _ => signature.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
+                CallableResidualKind::Overload { branches, .. } => {
+                    output.write_str("OverloadResidual@[")?;
+                    for (i, branch) in branches.iter().enumerate() {
+                        if i > 0 {
+                            output.write_str(", ")?;
+                        }
+                        self.fmt_helper_generic(&branch.ty, false, output)?;
+                    }
+                    output.write_str("]")
+                }
             },
+            Type::Function(func) => {
+                let Function {
+                    signature,
+                    metadata,
+                } = &**func;
+                match self.lsp_display_mode {
+                    LspDisplayMode::Hover
+                    | LspDisplayMode::SignatureHelp
+                    | LspDisplayMode::ProvideType
+                        if is_toplevel =>
+                    {
+                        let func_name = metadata.kind.function_name();
+                        output.write_str("def ")?;
+                        self.write_func_fqn(output, &func_name, &metadata.kind)?;
+                        match self.lsp_display_mode {
+                            LspDisplayMode::Hover => {
+                                signature.fmt_with_type_with_newlines(output, &|t, o| {
+                                    self.fmt_helper_generic(t, false, o)
+                                })?;
+                            }
+                            _ => {
+                                signature.fmt_with_type(output, &|t, o| {
+                                    self.fmt_helper_generic(t, false, o)
+                                })?;
+                            }
+                        }
+                        if self.lsp_display_mode == LspDisplayMode::ProvideType {
+                            Ok(())
+                        } else {
+                            output.write_str(": ...")
+                        }
+                    }
+                    _ => signature
+                        .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
+                }
+            }
             Type::Overload(overload) => {
                 if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
                     output.write_str("\n@overload\n")?;
@@ -663,7 +740,8 @@ impl<'a> TypeDisplayContext<'a> {
                 x.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))?;
                 output.write_str("]")
             }
-            Type::BoundMethod(box BoundMethod { obj, func }) => {
+            Type::BoundMethod(bm) => {
+                let BoundMethod { obj, func } = &**bm;
                 match self.lsp_display_mode {
                     LspDisplayMode::Query => {
                         output.write_str("BoundMethod[")?;
@@ -781,31 +859,31 @@ impl<'a> TypeDisplayContext<'a> {
                 let qname = self.get_special_form_qname("Never");
                 output.write_builtin("Never", qname)
             }
-            Type::Union(box Union { members: types, .. }) if types.is_empty() => {
+            Type::Union(u) if u.members.is_empty() => {
                 if self.always_display_module_name {
                     output.write_str("typing.")?;
                 }
                 let qname = self.get_special_form_qname("Never");
                 output.write_builtin("Never", qname)
             }
-            Type::Union(box Union {
-                display_name: Some((module, name)),
-                ..
-            }) if !(self.always_display_expanded_unions || is_toplevel) => {
+            Type::Union(u)
+                if !(self.always_display_expanded_unions || is_toplevel)
+                    && let Some((module, name)) = &u.display_name =>
+            {
                 if self.always_display_module_name && *module != ModuleName::unknown() {
                     write!(output, "{}.{}", module, name)
                 } else {
                     output.write_str(name.as_str())
                 }
             }
-            Type::Union(box Union { members, .. }) => {
+            Type::Union(u) => {
                 let mut literal_idx = None;
                 let mut literals = Vec::new();
                 let mut union_members: Vec<&Type> = Vec::new();
                 // Track seen types to deduplicate (mainly to prettify types for functions with different names but the same signature)
                 let mut seen_types = SmallSet::new();
 
-                for t in members.iter() {
+                for t in u.members.iter() {
                     match t {
                         Type::Literal(lit) => {
                             if literal_idx.is_none() {
@@ -821,7 +899,10 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => {
+                        Type::Callable(_)
+                        | Type::CallableResidual(_)
+                        | Type::Function(_)
+                        | Type::Intersect(_) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -884,7 +965,10 @@ impl<'a> TypeDisplayContext<'a> {
                             // Regular union member - use helper for just this one
                             let needs_parens = matches!(
                                 t,
-                                Type::Callable(_) | Type::Function(_) | Type::Intersect(_)
+                                Type::Callable(_)
+                                    | Type::CallableResidual(_)
+                                    | Type::Function(_)
+                                    | Type::Intersect(_)
                             );
                             if needs_parens {
                                 output.write_str("(")?;
@@ -911,101 +995,100 @@ impl<'a> TypeDisplayContext<'a> {
                     self.fmt_helper_generic(ty, false, o)
                 })
             }
-            Type::Forall(box Forall {
-                tparams,
-                body: body @ Forallable::Callable(c),
-            }) => {
-                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
-                    output.write_str("[")?;
-                    write!(
-                        output,
-                        "{}",
-                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
-                    )?;
-                    output.write_str("]")?;
-                    c.fmt_with_type_with_newlines(output, &|t, o| {
-                        self.fmt_helper_generic(t, false, o)
-                    })
-                } else {
-                    output.write_str("[")?;
-                    write!(
-                        output,
-                        "{}",
-                        commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
-                    )?;
-                    output.write_str("]")?;
-                    self.fmt_helper_generic(&body.clone().as_type(), false, output)
-                }
-            }
-            Type::Forall(box Forall {
-                tparams,
-                body:
-                    body @ Forallable::Function(Function {
+            Type::Forall(forall) => {
+                let Forall { tparams, body } = &**forall;
+                match body {
+                    Forallable::Callable(c) => {
+                        if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
+                            output.write_str("[")?;
+                            write!(
+                                output,
+                                "{}",
+                                commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                            )?;
+                            output.write_str("]")?;
+                            c.fmt_with_type_with_newlines(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })
+                        } else {
+                            output.write_str("[")?;
+                            write!(
+                                output,
+                                "{}",
+                                commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
+                            )?;
+                            output.write_str("]")?;
+                            self.fmt_helper_generic(&body.clone().as_type(), false, output)
+                        }
+                    }
+                    Forallable::Function(Function {
                         signature,
                         metadata,
-                        ..
-                    }),
-            }) => match self.lsp_display_mode {
-                LspDisplayMode::Hover
-                | LspDisplayMode::SignatureHelp
-                | LspDisplayMode::ProvideType
-                    if is_toplevel =>
-                {
-                    let func_name = metadata.kind.function_name();
-                    output.write_str("def ")?;
-                    self.write_func_fqn(output, &func_name, &metadata.kind)?;
-                    output.write_str("[")?;
-                    write!(
-                        output,
-                        "{}",
-                        commas_iter(|| tparams.iter().map(|q| Fmt(|f| self.fmt_tparam(q, f))))
-                    )?;
-                    output.write_str("]")?;
-                    let _scope = self.push_forall_scope(tparams.iter());
-                    match self.lsp_display_mode {
-                        LspDisplayMode::Hover => signature
-                            .fmt_with_type_with_newlines(output, &|t, o| {
-                                self.fmt_helper_generic(t, false, o)
-                            }),
-                        _ => signature
-                            .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
-                    }?;
-                    if self.always_display_module_name {
-                        Ok(())
-                    } else {
-                        output.write_str(": ...")
+                    }) => match self.lsp_display_mode {
+                        LspDisplayMode::Hover
+                        | LspDisplayMode::SignatureHelp
+                        | LspDisplayMode::ProvideType
+                            if is_toplevel =>
+                        {
+                            let func_name = metadata.kind.function_name();
+                            output.write_str("def ")?;
+                            self.write_func_fqn(output, &func_name, &metadata.kind)?;
+                            output.write_str("[")?;
+                            write!(
+                                output,
+                                "{}",
+                                commas_iter(|| tparams
+                                    .iter()
+                                    .map(|q| Fmt(|f| self.fmt_tparam(q, f))))
+                            )?;
+                            output.write_str("]")?;
+                            let _scope = self.push_forall_scope(tparams.iter());
+                            match self.lsp_display_mode {
+                                LspDisplayMode::Hover => signature
+                                    .fmt_with_type_with_newlines(output, &|t, o| {
+                                        self.fmt_helper_generic(t, false, o)
+                                    }),
+                                _ => signature.fmt_with_type(output, &|t, o| {
+                                    self.fmt_helper_generic(t, false, o)
+                                }),
+                            }?;
+                            if self.always_display_module_name {
+                                Ok(())
+                            } else {
+                                output.write_str(": ...")
+                            }
+                        }
+                        _ => {
+                            output.write_str("[")?;
+                            write!(
+                                output,
+                                "{}",
+                                commas_iter(|| tparams
+                                    .iter()
+                                    .map(|q| Fmt(|f| self.fmt_tparam(q, f))))
+                            )?;
+                            output.write_str("]")?;
+                            let _scope = self.push_forall_scope(tparams.iter());
+                            self.fmt_helper_generic(&body.clone().as_type(), false, output)
+                        }
+                    },
+                    Forallable::TypeAlias(ta) => {
+                        if is_toplevel && let TypeAliasData::Value(ta) = ta {
+                            ta.fmt_with_type(
+                                output,
+                                &|t, o| self.fmt_helper_generic(t, false, o),
+                                Some(tparams),
+                            )
+                        } else {
+                            if self.always_display_module_name {
+                                output.write_str("builtins.")?;
+                            }
+                            write!(output, "type[{}{}]", ta.name(), tparams)
+                        }
                     }
-                }
-                _ => {
-                    output.write_str("[")?;
-                    write!(
-                        output,
-                        "{}",
-                        commas_iter(|| tparams.iter().map(|q| Fmt(|f| self.fmt_tparam(q, f))))
-                    )?;
-                    output.write_str("]")?;
-                    let _scope = self.push_forall_scope(tparams.iter());
-                    self.fmt_helper_generic(&body.clone().as_type(), false, output)
-                }
-            },
-            Type::Forall(box Forall {
-                tparams,
-                body: Forallable::TypeAlias(ta),
-            }) => {
-                if is_toplevel && let TypeAliasData::Value(ta) = ta {
-                    ta.fmt_with_type(
-                        output,
-                        &|t, o| self.fmt_helper_generic(t, false, o),
-                        Some(tparams),
-                    )
-                } else {
-                    if self.always_display_module_name {
-                        output.write_str("builtins.")?;
-                    }
-                    write!(output, "type[{}{}]", ta.name(), tparams)
                 }
             }
-            Type::Type(box Type::Any(_)) => {
+            Type::Type(inner) if inner.is_any() => {
                 if self.always_display_module_name {
                     output.write_str("builtins.")?;
                 }
@@ -1019,7 +1102,7 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
-            Type::TypeForm(box Type::Any(_)) => output.write_str("TypeForm[Any]"),
+            Type::TypeForm(inner) if inner.is_any() => output.write_str("TypeForm[Any]"),
             Type::TypeForm(ty) => {
                 output.write_str("TypeForm[")?;
                 self.fmt_helper_generic(ty, false, output)?;
@@ -1055,14 +1138,14 @@ impl<'a> TypeDisplayContext<'a> {
                 self.fmt_helper_generic(ty, false, output)?;
                 output.write_str("]")
             }
-            Type::Unpack(box ty @ Type::TypedDict(_)) => {
+            Type::Unpack(inner) if matches!(**inner, Type::TypedDict(_)) => {
                 if self.always_display_module_name {
                     output.write_str("typing.")?;
                 }
                 let qname = self.get_special_form_qname("Unpack");
                 output.write_builtin("Unpack", qname)?;
                 output.write_str("[")?;
-                self.fmt_helper_generic(ty, false, output)?;
+                self.fmt_helper_generic(inner, false, output)?;
                 output.write_str("]")
             }
             Type::Unpack(ty) => {
@@ -1085,16 +1168,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str("]")
             }
             Type::Var(var) => write!(output, "{var}"),
-            Type::Quantified(var) => {
-                write!(output, "{}", var.name)?;
-                if self.always_display_module_name
-                    && !self.forall_tparam_uniques.borrow().contains(&var.unique())
-                    && let Some(owner) = &var.owner
-                {
-                    write!(output, "@{owner}")?;
-                }
-                Ok(())
-            }
+            Type::Quantified(var) => self.fmt_quantified(var, output),
             Type::QuantifiedValue(var) => write!(output, "{var}"),
             Type::ElementOfTypeVarTuple(var) => write!(output, "ElementOf[{var}]"),
             Type::Args(q) => {
@@ -1149,11 +1223,12 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
-            Type::UntypedAlias(box TypeAliasData::Ref(r)) => {
+            Type::UntypedAlias(ta) if let TypeAliasData::Ref(r) = &**ta => {
                 self.fmt_helper_type_alias_ref(r, output)
             }
             Type::UntypedAlias(ta) => output.write_str(ta.name().as_str()),
-            Type::SuperInstance(box (cls, obj)) => {
+            Type::SuperInstance(s) => {
+                let (cls, obj) = &**s;
                 if self.always_display_module_name {
                     output.write_str("builtins.super[")?;
                 } else {
@@ -1315,7 +1390,6 @@ pub mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::nesting_context::NestingContext;
-    use pyrefly_util::uniques::UniqueFactory;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
     use vec1::vec1;
@@ -1336,8 +1410,11 @@ pub mod tests {
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
+    use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
     use crate::tuple::Tuple;
     use crate::type_alias::TypeAlias;
     use crate::type_alias::TypeAliasData;
@@ -1350,6 +1427,7 @@ pub mod tests {
     use crate::types::Overload;
     use crate::types::OverloadType;
     use crate::types::TParams;
+    use crate::types::Union;
 
     pub fn fake_class(name: &str, module: &str, range: u32) -> Class {
         let mi = Module::new(
@@ -1371,9 +1449,14 @@ pub mod tests {
         Arc::new(TParams::new(tparams))
     }
 
-    fn fake_tparam(uniques: &UniqueFactory, name: &str, kind: QuantifiedKind) -> Quantified {
+    fn fake_tparam(ordinal: u32, name: &str, kind: QuantifiedKind) -> Quantified {
+        let identity = QuantifiedIdentity::new(
+            ModuleName::from_str("__test__"),
+            AnchorIndex::new(ruff_text_size::TextRange::default(), ordinal),
+            QuantifiedOrigin::Pep695,
+        );
         Quantified::new(
-            uniques.fresh(),
+            identity,
             Name::new(name),
             kind,
             None,
@@ -1423,12 +1506,7 @@ pub mod tests {
             obj: Type::ClassDef(class.dupe()),
             func: BoundMethodType::Function(Function {
                 signature: method,
-                metadata: FuncMetadata::def(
-                    class.dupe().module().dupe(),
-                    class.dupe(),
-                    Name::new(method_name),
-                    None,
-                ),
+                metadata: FuncMetadata::method(&class, Name::new(method_name)),
             }),
         }))
     }
@@ -1466,12 +1544,7 @@ pub mod tests {
                 tparams,
                 body: Function {
                     signature: method,
-                    metadata: FuncMetadata::def(
-                        class.dupe().module().dupe(),
-                        class.dupe(),
-                        Name::new(method_name),
-                        None,
-                    ),
+                    metadata: FuncMetadata::method(&class, Name::new(method_name)),
                 },
             }),
         }))
@@ -1479,28 +1552,24 @@ pub mod tests {
 
     #[test]
     fn test_display() {
-        let uniques = UniqueFactory::new();
+        let heap = TypeHeap::new();
         let foo1 = fake_class("foo", "mod.ule", 5);
         let foo2 = fake_class("foo", "mod.ule", 8);
         let foo3 = fake_class("foo", "ule", 3);
         let bar = fake_class("bar", "mod.ule", 0);
-        let bar_tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let bar_tparams = fake_tparams(vec![fake_tparam(0, "T", QuantifiedKind::TypeVar)]);
         let tuple_param = fake_class("TupleParam", "mod.ule", 0);
-        let tuple_param_tparams = fake_tparams(vec![fake_tparam(
-            &uniques,
-            "T",
-            QuantifiedKind::TypeVarTuple,
-        )]);
-        fn class_type(class: &Class, targs: TArgs) -> Type {
-            Type::ClassType(ClassType::new(class.dupe(), targs))
-        }
+        let tuple_param_tparams =
+            fake_tparams(vec![fake_tparam(1, "T", QuantifiedKind::TypeVarTuple)]);
+        let class_type =
+            |class: &Class, targs: TArgs| heap.mk_class_type(ClassType::new(class.dupe(), targs));
 
         assert_eq!(
             class_type(
                 &tuple_param,
                 TArgs::new(
                     tuple_param_tparams.dupe(),
-                    vec![Type::concrete_tuple(vec![
+                    vec![heap.mk_concrete_tuple(vec![
                         class_type(&foo1, TArgs::default()),
                         class_type(&foo1, TArgs::default())
                     ])]
@@ -1514,7 +1583,7 @@ pub mod tests {
                 &tuple_param,
                 TArgs::new(
                     tuple_param_tparams.dupe(),
-                    vec![Type::concrete_tuple(Vec::new())]
+                    vec![heap.mk_concrete_tuple(Vec::new())]
                 )
             )
             .to_string(),
@@ -1525,7 +1594,7 @@ pub mod tests {
                 &tuple_param,
                 TArgs::new(
                     tuple_param_tparams.dupe(),
-                    vec![Type::unbounded_tuple(class_type(&foo1, TArgs::default()))]
+                    vec![heap.mk_unbounded_tuple(class_type(&foo1, TArgs::default()))]
                 )
             )
             .to_string(),
@@ -1536,23 +1605,36 @@ pub mod tests {
                 &tuple_param,
                 TArgs::new(
                     tuple_param_tparams.dupe(),
-                    vec![Type::Tuple(Tuple::Unpacked(Box::new((
+                    vec![heap.mk_unpacked_tuple(
                         vec![class_type(&foo1, TArgs::default())],
-                        Type::unbounded_tuple(class_type(&foo1, TArgs::default())),
+                        heap.mk_unbounded_tuple(class_type(&foo1, TArgs::default())),
                         vec![class_type(&foo1, TArgs::default())],
-                    ))))]
+                    )]
                 )
             )
             .to_string(),
             "TupleParam[foo, *tuple[foo, ...], foo]"
         );
+        let shape_param = fake_tparam(0, "Shape", QuantifiedKind::TypeVarTuple);
+        assert_eq!(
+            class_type(
+                &tuple_param,
+                TArgs::new(
+                    tuple_param_tparams.dupe(),
+                    vec![shape_param.clone().to_type(&heap)]
+                )
+            )
+            .to_string(),
+            "TupleParam[*Shape]"
+        );
 
         assert_eq!(
-            Type::unbounded_tuple(class_type(&foo1, TArgs::default())).to_string(),
+            heap.mk_unbounded_tuple(class_type(&foo1, TArgs::default()))
+                .to_string(),
             "tuple[foo, ...]"
         );
         assert_eq!(
-            Type::concrete_tuple(vec![
+            heap.mk_concrete_tuple(vec![
                 class_type(&foo1, TArgs::default()),
                 class_type(
                     &bar,
@@ -1566,7 +1648,7 @@ pub mod tests {
             "tuple[foo, bar[foo]]"
         );
         assert_eq!(
-            Type::concrete_tuple(vec![
+            heap.mk_concrete_tuple(vec![
                 class_type(&foo1, TArgs::default()),
                 class_type(
                     &bar,
@@ -1580,14 +1662,14 @@ pub mod tests {
             "tuple[mod.ule.foo@1:6, bar[mod.ule.foo@1:9]]"
         );
         assert_eq!(
-            Type::concrete_tuple(vec![
+            heap.mk_concrete_tuple(vec![
                 class_type(&foo1, TArgs::default()),
                 class_type(&foo3, TArgs::default())
             ])
             .to_string(),
             "tuple[mod.ule.foo, ule.foo]"
         );
-        assert_eq!(Type::concrete_tuple(vec![]).to_string(), "tuple[()]");
+        assert_eq!(heap.mk_concrete_tuple(vec![]).to_string(), "tuple[()]");
 
         let t1 = class_type(&foo1, TArgs::default());
         let t2 = class_type(&foo2, TArgs::default());
@@ -1772,12 +1854,11 @@ pub mod tests {
 
     #[test]
     fn test_display_generic_callable() {
-        let uniques = UniqueFactory::new();
         let param1 = Param::Pos(Name::new_static("hello"), Type::None, Required::Required);
         let param2 = Param::KwOnly(Name::new_static("world"), Type::None, Required::Required);
         let callable = Callable::list(ParamList::new(vec![param1, param2]), Type::None);
         let generic_callable_type = Type::Forall(Box::new(Forall {
-            tparams: fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]),
+            tparams: fake_tparams(vec![fake_tparam(1, "T", QuantifiedKind::TypeVar)]),
             body: Forallable::Callable(callable),
         }));
         let mut ctx = TypeDisplayContext::new(&[&generic_callable_type]);
@@ -1856,9 +1937,7 @@ pub mod tests {
 
     #[test]
     fn test_display_specialized_untyped_alias() {
-        let uniques = UniqueFactory::new();
-
-        let tparams1 = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams1 = fake_tparams(vec![fake_tparam(2, "T", QuantifiedKind::TypeVar)]);
         let alias1 = Type::UntypedAlias(Box::new(TypeAliasData::Ref(TypeAliasRef {
             name: Name::new_static("X"),
             args: Some(TArgs::new(tparams1, vec![Type::any_implicit()])),
@@ -1868,8 +1947,8 @@ pub mod tests {
         })));
 
         let tparams2 = fake_tparams(vec![
-            fake_tparam(&uniques, "K", QuantifiedKind::TypeVar),
-            fake_tparam(&uniques, "V", QuantifiedKind::TypeVar),
+            fake_tparam(0, "K", QuantifiedKind::TypeVar),
+            fake_tparam(0, "V", QuantifiedKind::TypeVar),
         ]);
         let alias2 = Type::UntypedAlias(Box::new(TypeAliasData::Ref(TypeAliasRef {
             name: Name::new_static("Y"),
@@ -1980,9 +2059,8 @@ pub mod tests {
 
     #[test]
     fn test_display_generic_typeddict() {
-        let uniques = UniqueFactory::new();
         let cls = fake_class("C", "test", 0);
-        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams = fake_tparams(vec![fake_tparam(3, "T", QuantifiedKind::TypeVar)]);
         let t = Type::None;
         let targs = TArgs::new(tparams.dupe(), vec![t]);
         let td = TypedDict::new(cls, targs);
@@ -2015,12 +2093,11 @@ pub mod tests {
 
     #[test]
     fn test_display_generic_bound_method() {
-        let uniques = UniqueFactory::new();
         let bound_method = fake_generic_bound_method(
             "foo",
             "MyClass",
             "my.module",
-            fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]),
+            fake_tparams(vec![fake_tparam(4, "T", QuantifiedKind::TypeVar)]),
         );
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
@@ -2044,8 +2121,55 @@ pub mod tests {
     }
 
     #[test]
+    fn test_display_param_spec() {
+        let tparams = fake_tparams(vec![
+            fake_tparam(0, "T", QuantifiedKind::TypeVar),
+            fake_tparam(1, "P", QuantifiedKind::ParamSpec),
+            fake_tparam(2, "R", QuantifiedKind::TypeVar),
+        ]);
+        let method = fake_generic_bound_method("foo", "MyClass", "my.module", tparams);
+        let mut ctx = TypeDisplayContext::new(&[&method]);
+        assert_eq!(
+            ctx.display(&method).to_string(),
+            "[T, **P, R](self: Any, x: Any, y: Any) -> None"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
+        assert_eq!(
+            ctx.display(&method).to_string(),
+            r#"def foo[T, **P, R](
+    self: Any,
+    x: Any,
+    y: Any
+) -> None: ..."#
+        );
+    }
+
+    #[test]
+    fn test_display_type_var_tuple() {
+        let tparams = fake_tparams(vec![
+            fake_tparam(0, "T", QuantifiedKind::TypeVar),
+            fake_tparam(1, "Ts", QuantifiedKind::TypeVarTuple),
+            fake_tparam(2, "R", QuantifiedKind::TypeVar),
+        ]);
+        let method = fake_generic_bound_method("foo", "MyClass", "my.module", tparams);
+        let mut ctx = TypeDisplayContext::new(&[&method]);
+        assert_eq!(
+            ctx.display(&method).to_string(),
+            "[T, *Ts, R](self: Any, x: Any, y: Any) -> None"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Hover);
+        assert_eq!(
+            ctx.display(&method).to_string(),
+            r#"def foo[T, *Ts, R](
+    self: Any,
+    x: Any,
+    y: Any
+) -> None: ..."#
+        );
+    }
+
+    #[test]
     fn test_display_overload() {
-        let uniques = UniqueFactory::new();
         let class = fake_class("TestClass", "test", 0);
         let sig1 = Function {
             signature: Callable::list(
@@ -2056,12 +2180,7 @@ pub mod tests {
                 )]),
                 Type::None,
             ),
-            metadata: FuncMetadata::def(
-                class.dupe().module().dupe(),
-                class.dupe(),
-                Name::new_static("overloaded_func"),
-                None,
-            ),
+            metadata: FuncMetadata::method(&class, Name::new_static("overloaded_func")),
         };
 
         let sig2 = Function {
@@ -2080,23 +2199,14 @@ pub mod tests {
                 ]),
                 Type::None,
             ),
-            metadata: FuncMetadata::def(
-                class.dupe().module().dupe(),
-                class.dupe(),
-                Name::new_static("overloaded_func"),
-                None,
-            ),
+            metadata: FuncMetadata::method(&class, Name::new_static("overloaded_func")),
         };
 
         let overload = Type::Overload(Overload {
             signatures: vec1![
                 OverloadType::Function(sig1.clone()),
                 OverloadType::Forall(Forall {
-                    tparams: fake_tparams(vec![fake_tparam(
-                        &uniques,
-                        "T",
-                        QuantifiedKind::TypeVar
-                    )]),
+                    tparams: fake_tparams(vec![fake_tparam(8, "T", QuantifiedKind::TypeVar)]),
                     body: sig2.clone()
                 })
             ],
@@ -2138,11 +2248,7 @@ def overloaded_func[T](
                 signatures: vec1![
                     OverloadType::Function(sig1.clone()),
                     OverloadType::Forall(Forall {
-                        tparams: fake_tparams(vec![fake_tparam(
-                            &uniques,
-                            "T",
-                            QuantifiedKind::TypeVar
-                        )]),
+                        tparams: fake_tparams(vec![fake_tparam(9, "T", QuantifiedKind::TypeVar)]),
                         body: sig2
                     })
                 ],
@@ -2268,10 +2374,9 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_class_with_targs() {
-        let uniques = UniqueFactory::new();
         let foo = fake_class("Foo", "test.module", 10);
         let bar = fake_class("Bar", "test.module", 20);
-        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams = fake_tparams(vec![fake_tparam(5, "T", QuantifiedKind::TypeVar)]);
 
         let inner_type = Type::ClassType(ClassType::new(bar, TArgs::default()));
         let t = Type::ClassType(ClassType::new(foo, TArgs::new(tparams, vec![inner_type])));
@@ -2314,10 +2419,9 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_nested_types() {
-        let uniques = UniqueFactory::new();
         let outer = fake_class("Outer", "test", 10);
         let inner = fake_class("Inner", "test", 20);
-        let tparams = fake_tparams(vec![fake_tparam(&uniques, "T", QuantifiedKind::TypeVar)]);
+        let tparams = fake_tparams(vec![fake_tparam(6, "T", QuantifiedKind::TypeVar)]);
 
         let inner_type = Type::ClassType(ClassType::new(inner, TArgs::default()));
         let outer_type =
@@ -2340,10 +2444,9 @@ def overloaded_func[T](
 
     #[test]
     fn test_get_types_with_location_tparams() {
-        let uniques = UniqueFactory::new();
-        let t_param = fake_tparam(&uniques, "T", QuantifiedKind::TypeVar);
-        let u_param = fake_tparam(&uniques, "U", QuantifiedKind::TypeVar);
-        let ts_param = fake_tparam(&uniques, "Ts", QuantifiedKind::TypeVarTuple);
+        let t_param = fake_tparam(7, "T", QuantifiedKind::TypeVar);
+        let u_param = fake_tparam(0, "U", QuantifiedKind::TypeVar);
+        let ts_param = fake_tparam(0, "Ts", QuantifiedKind::TypeVarTuple);
         let tparams = fake_tparams(vec![t_param, u_param, ts_param]);
 
         let param1 = Param::Pos(
@@ -2471,6 +2574,24 @@ def overloaded_func[T](
 
         assert_output_contains(&parts, "TypeVarTuple");
         assert_part_has_location(&parts, "Ts", "test.module", 70);
+    }
+
+    #[test]
+    fn test_get_types_with_location_type_var_tuple_arg_in_class() {
+        // A TypeVarTuple bound to a TypeVarTuple parameter must render with a `*`
+        // prefix on the location-aware path too — otherwise quick-fix code generation
+        // emits invalid syntax like `TupleParam[Shape]` instead of `TupleParam[*Shape]`.
+        let tuple_param = fake_class("TupleParam", "mod.ule", 0);
+        let tparams = fake_tparams(vec![fake_tparam(2, "T", QuantifiedKind::TypeVarTuple)]);
+        let heap = TypeHeap::new();
+        let shape = fake_tparam(1, "Shape", QuantifiedKind::TypeVarTuple);
+        let t = heap.mk_class_type(ClassType::new(
+            tuple_param,
+            TArgs::new(tparams, vec![shape.to_type(&heap)]),
+        ));
+        let parts = get_parts(&t);
+
+        assert_eq!(parts_to_string(&parts), "TupleParam[*Shape]");
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::binding::bindings::BindingsBuilder;
 
 const PRIMARY_KEY: Name = Name::new_static("primary_key");
 const FOREIGN_KEY: Name = Name::new_static("ForeignKey");
+const ONE_TO_ONE_FIELD: Name = Name::new_static("OneToOneField");
 const CHOICES: Name = Name::new_static("choices");
 
 /// Django-specific field information detected during binding phase.
@@ -23,8 +24,8 @@ const CHOICES: Name = Name::new_static("choices");
 pub struct DjangoFieldInfo {
     /// The name of the field that has primary_key=True, if any.
     pub primary_key_field: Option<Name>,
-    /// Names of ForeignKey fields.
-    pub foreign_key_fields: Vec<Name>,
+    /// Names of ForeignKey and OneToOneField fields.
+    pub foreign_key_like_fields: Vec<Name>,
     /// Names of fields with choices=...
     pub fields_with_choices: Vec<Name>,
 }
@@ -47,15 +48,16 @@ impl<'a> BindingsBuilder<'a> {
         false
     }
 
-    pub fn extract_django_foreign_key(&self, e: &Expr) -> bool {
+    pub fn extract_django_foreign_key_like(&self, e: &Expr) -> bool {
         let Some(call) = e.as_call_expr() else {
             return false;
         };
-        match &*call.func {
-            Expr::Name(name) => name.id.as_str() == FOREIGN_KEY.as_str(),
-            Expr::Attribute(attr) => attr.attr.as_str() == FOREIGN_KEY.as_str(),
-            _ => false,
-        }
+        let name_str = match &*call.func {
+            Expr::Name(name) => name.id.as_str(),
+            Expr::Attribute(attr) => attr.attr.as_str(),
+            _ => return false,
+        };
+        name_str == FOREIGN_KEY.as_str() || name_str == ONE_TO_ONE_FIELD.as_str()
     }
 
     pub fn extract_django_choices(&self, e: &Expr) -> bool {
@@ -81,7 +83,7 @@ impl<'a> BindingsBuilder<'a> {
         field_definitions: &SmallMap<Name, (ClassFieldDefinition, TextRange)>,
     ) -> DjangoFieldInfo {
         let mut primary_key_field = None;
-        let mut foreign_key_fields = Vec::new();
+        let mut foreign_key_like_fields = Vec::new();
         let mut fields_with_choices = Vec::new();
         for (name, (definition, _range)) in field_definitions.iter() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = definition
@@ -90,8 +92,8 @@ impl<'a> BindingsBuilder<'a> {
                 if self.extract_django_primary_key(e) {
                     primary_key_field = Some(name.clone());
                 }
-                if self.extract_django_foreign_key(e) {
-                    foreign_key_fields.push(name.clone());
+                if self.extract_django_foreign_key_like(e) {
+                    foreign_key_like_fields.push(name.clone());
                 }
                 if self.extract_django_choices(e) {
                     fields_with_choices.push(name.clone());
@@ -100,7 +102,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         DjangoFieldInfo {
             primary_key_field,
-            foreign_key_fields,
+            foreign_key_like_fields,
             fields_with_choices,
         }
     }

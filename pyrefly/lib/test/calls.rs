@@ -160,6 +160,48 @@ f(0)  # E: `f` is deprecated
     "#,
 );
 
+fn test_env_string_as_iterable() -> TestEnv {
+    TestEnv::new().enable_string_as_iterable_warning()
+}
+
+testcase!(
+    test_string_as_iterable_warning,
+    test_env_string_as_iterable(),
+    r#"
+from typing import Iterable, Sequence
+
+def takes_iter(xs: Iterable[str]) -> None: ...
+def takes_seq(xs: Sequence[str]) -> None: ...
+def takes_iter_or_str(xs: Iterable[str] | str) -> None: ...
+
+s: str = "hello"
+takes_iter(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+takes_seq(s)  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+takes_iter_or_str(s)
+takes_iter(["hello"])
+
+x: Iterable[str] = s  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+y: Sequence[str] = s  # E: Passing `str` to `Sequence[str]` treats the string as an iterable of characters
+
+takes_iter("hello")  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+z: Iterable[str] = "hello"  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
+testcase!(
+    test_string_as_iterable_warning_does_not_break_overload_matching,
+    test_env_string_as_iterable(),
+    r#"
+from traceback import format_exception
+
+def f(exc: BaseException) -> None:
+    "".join(format_exception(exc))
+
+s: str = "hello"
+"".join(s)  # E: Passing `str` to `Iterable[str]` treats the string as an iterable of characters
+    "#,
+);
+
 testcase!(
     test_deprecated_overloaded_signature,
     r#"
@@ -230,6 +272,18 @@ testcase!(
     r#"
 from functools import reduce
 reduce(max, [1,2])
+    "#,
+);
+
+testcase!(
+    test_call_arg_lambda_contextual_typing,
+    r#"
+from typing import Callable
+
+def takes(cb: Callable[[int], int]) -> None: ...
+
+# This only errors because we're able to pass down the `int` hint through contextual typing.
+takes(lambda x: x + "")  # E:  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`
     "#,
 );
 
@@ -406,18 +460,52 @@ def get_flow_version(run_id: str | None) -> str | None:
     "#,
 );
 
-// https://github.com/facebook/pyrefly/issues/2918
 testcase!(
-    bug = "Should error when calling NotImplemented (a constant, not a class)",
     test_call_not_implemented_constant,
     r#"
 # NotImplemented is a singleton constant, not a callable class.
 # Using NotImplemented() is always a mistake; they mean NotImplementedError().
 def broken():
-    raise NotImplemented()
+    raise NotImplemented()  # E: `NotImplemented` is not callable. Did you mean `NotImplementedError`?
 
 def also_broken():
-    raise NotImplemented("not yet done")
+    raise NotImplemented("not yet done")  # E: `NotImplemented` is not callable. Did you mean `NotImplementedError`?
+"#,
+);
+
+testcase!(
+    test_call_not_implemented_in_union,
+    r#"
+def f(condition: bool):
+    def g(): ...
+    if condition:
+        x = g
+    else:
+        x = NotImplemented
+    x()  # E: `NotImplemented` is not callable. Did you mean `NotImplementedError`?
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2914
+testcase!(
+    test_non_callable_bool_attribute,
+    r#"
+class BadBool:
+    __bool__: int = 3
+
+assert BadBool()  # E: `__bool__` attribute of `BadBool` has type `int`, which is not callable
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3060
+testcase!(
+    test_setdefault_then_index,
+    r#"
+def parse_groups(entries: list[tuple[str, str]]) -> None:
+    groups = {}
+    for group, host in entries:
+        groups.setdefault(group, {})
+        groups[group][host] = True
 "#,
 );
 

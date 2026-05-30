@@ -1029,15 +1029,13 @@ z: " T" = 1  # E: Expected a type form, got instance of `Literal[' T']`
 );
 
 testcase!(
-    test_no_backtracking,
+    test_backtracking,
     r#"
 from typing import assert_type
 def foo(x: tuple[list[int], list[int]] | tuple[list[str], list[str]]) -> None: ...
 def test(x: list[str]) -> None:
     y = ([], x)
-    # Because we pin down the `[]` first, we end up with a type error.
-    # If we had backtracking we wouldn't.
-    foo(y)  # E: Argument `tuple[list[int], list[str]]` is not assignable to parameter `x` with type `tuple[list[int], list[int]] | tuple[list[str], list[str]]`
+    foo(y)
 "#,
 );
 
@@ -1073,6 +1071,16 @@ assert_type(type(x5), type[str])
 class TD(TypedDict): ...
 x6: TD = {}
 assert_type(type(x6), type[dict])
+"#,
+);
+
+testcase!(
+    test_builtins_type_constructor_union,
+    r#"
+from typing import assert_type
+def f(x: int | str) -> None:
+    assert_type(type(x), type[int] | type[str])
+    assert_type(type(x), type[int | str])
 "#,
 );
 
@@ -1146,6 +1154,18 @@ def test(x: list[int], y: list[str]):
 );
 
 testcase!(
+    test_unpack_map_in_list_literal,
+    r#"
+from typing import assert_type
+def test(cs: list[str], n: int):
+    assert_type(
+        ",".join([*("=" + c for c in cs), *map(str, range(n))]),
+        str,
+    )
+"#,
+);
+
+testcase!(
     test_union_never,
     r#"
 from typing import Never, assert_type
@@ -1162,6 +1182,16 @@ testcase!(
 from typing import assert_type
 class A: pass
 assert_type(A, type[A])
+    "#,
+);
+
+testcase!(
+    test_assert_type_metaclass,
+    r#"
+from typing import assert_type
+class Meta(type): pass
+class A(metaclass=Meta): pass
+assert_type(A, Meta)  # E: assert_type(type[A], Meta) failed
     "#,
 );
 
@@ -1206,6 +1236,36 @@ testcase!(
     test_syntax_error_resulting_in_empty_defintion,
     r#"
 @:a=1 # E: Parse # E: Could not find name `a`
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_decorator_slice,
+    r#"
+@:[ # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_star,
+    r#"
+x = object()
+match x:
+    case [*]: # E: Parse
+        pass
+    "#,
+);
+
+testcase!(
+    test_syntax_error_empty_match_bindings,
+    r#"
+x = object()
+match x:
+    case as: # E: Parse
+        pass
+match x:
+    case {**}: # E: Parse
+        pass
     "#,
 );
 
@@ -1800,6 +1860,14 @@ testcase!(
 );
 
 testcase!(
+    test_crash_on_incomplete_named_walrus_attribute_annotation,
+    r#"
+# Regression test for https://github.com/facebook/pyrefly/issues/3344
+(a:=).:b  # E: Cannot annotate non-self attribute `a:=.` # E: Parse error: Expected an expression # E: Parse error: Expected an identifier # E: Could not find name `b`
+"#,
+);
+
+testcase!(
     test_crash_on_incomplete_walrus,
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/2093
@@ -1812,6 +1880,22 @@ testcase!(
     r#"
 # Regression test for https://github.com/facebook/pyrefly/issues/1991
 1 += (c := 1)  # E: Parse error: Invalid augmented assignment target
+"#,
+);
+
+testcase!(
+    test_crash_on_decorator_assign,
+    r#"
+from typing import TypeVar
+@T=TypeVar()  # E: Expected newline, found `=`
+"#,
+);
+
+testcase!(
+    test_crash_on_multi_target_named_tuple,
+    r#"
+from typing import NamedTuple
+a = b = NamedTuple("b", [("x", int)])
 "#,
 );
 
@@ -1850,6 +1934,20 @@ async def bar():
 );
 
 testcase!(
+    test_unused_coroutine_after_await,
+    r#"
+from typing import Any, Coroutine
+async def inner() -> int:
+    return 1
+class Engine:
+    async def call_flow_fn(self) -> Coroutine[Any, Any, int]:
+        return inner()
+async def run(engine: Engine) -> None:
+    await engine.call_flow_fn()  # E: Result of `await` is itself a coroutine that is silently discarded. Either `await` it again or pass it to a consumer, or if the `Coroutine[...]` return annotation was a mistake, simplify it to the inner type (e.g. `int` instead of `Coroutine[Any, Any, int]`).
+"#,
+);
+
+testcase!(
     test_loop_forever,
     r#"
 # Used to loop forever, https://github.com/facebook/pyrefly/issues/519
@@ -1860,7 +1958,6 @@ while True:
     break
 else:
     exit(1)
-
 
 def func() -> int:
     return 1
@@ -1875,7 +1972,6 @@ class MyException:
     def __init__(self) -> None:
         self.x = ""
         self
-
 
 def f(x: MyException):
     x.__init__()
@@ -2336,6 +2432,33 @@ def f(x):
     y &= x
     assert_type(y, Any)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2221
+testcase!(
+    test_shutil_copyfileobj_with_urlopen,
+    r#"
+import shutil
+import urllib.request as request
+with request.urlopen("https://example.com") as remote, open("out.html", 'wb') as local:
+    shutil.copyfileobj(remote, local)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2866
+testcase!(
+    test_reduce_gcd_return_type,
+    r#"
+from functools import reduce
+from math import gcd
+
+def detect_indentation(values: list[int]) -> int:
+    try:
+        indentation = reduce(gcd, [v for v in values if not v % 2]) or 1
+    except TypeError:
+        indentation = 1
+    return indentation
+"#,
 );
 
 // Regression test for https://github.com/facebook/pyrefly/issues/3048

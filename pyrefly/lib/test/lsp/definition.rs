@@ -139,7 +139,7 @@ Definition Result:
 4 | def f(x: list[int], y: str, z: Literal[42]):
                                     ^
 Definition Result:
-249 | Literal: _SpecialForm
+255 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | yyy = f([1, 2, 3], "test", 42)
@@ -594,7 +594,7 @@ Definition Result:
 6 | foo: Literal[1] = 1
              ^
 Definition Result:
-249 | Literal: _SpecialForm
+255 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | bar = f([1], "", 42)
@@ -895,6 +895,306 @@ Definition Result: None
 }
 
 #[test]
+fn import_via_module_getattr_test() {
+    // `from m import name` where `m` defines a module-level
+    // `__getattr__`. Go-to-definition for `name` (in the import
+    // statement and at usage sites) should land on `__getattr__`
+    // in the imported module.
+    let code_provider: &str = r#"
+def __getattr__(name: str) -> int: ...
+"#;
+    let code_test: &str = r#"
+from .provider import foo
+#                     ^
+
+bar = foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code_test), ("provider", code_provider)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .provider import foo
+                          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+5 | bar = foo
+          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+
+# provider.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn import_via_reexported_module_getattr_test() {
+    // `from m import name` where `m` re-exports `__getattr__` from
+    // another module. Go-to-definition should follow the re-export
+    // chain to where `__getattr__` is actually defined.
+    let code_inner: &str = r#"
+def __getattr__(name: str) -> int: ...
+"#;
+    let code_provider: &str = r#"
+from .inner import __getattr__
+"#;
+    let code_test: &str = r#"
+from .provider import foo
+#                     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("provider", code_provider),
+            ("inner", code_inner),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .provider import foo
+                          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+
+# provider.py
+
+# inner.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn import_via_reexported_module_getattr_indirect_test() {
+    // `from m import name` where `m` re-exports `name` from another
+    // module that itself only resolves `name` via `__getattr__`. The
+    // chase walks `provider` -> `inner`, finds `name` missing there,
+    // and the `__getattr__` fallback in `resolve_named_import` lands
+    // at `__getattr__` in `inner`.
+    let code_inner: &str = r#"
+def __getattr__(name: str) -> int: ...
+"#;
+    let code_provider: &str = r#"
+from .inner import foo
+"#;
+    let code_test: &str = r#"
+from .provider import foo
+#                     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("provider", code_provider),
+            ("inner", code_inner),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from .provider import foo
+                          ^
+Definition Result:
+2 | def __getattr__(name: str) -> int: ...
+        ^^^^^^^^^^^
+
+
+# provider.py
+
+# inner.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn import_submodule_via_from_test() {
+    // `from pkg import sub` where `sub` is a submodule of `pkg`
+    // (not an explicit export of `pkg/__init__.py`). Go-to-definition
+    // for `sub` should land on `pkg/sub.py`.
+    let code_pkg_init: &str = r#"# pkg/__init__.py
+"#;
+    let code_pkg_sub: &str = r#"# pkg/sub.py
+def f(): pass
+"#;
+    let code_test: &str = r#"
+from pkg import sub
+#               ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code_test),
+            ("pkg", code_pkg_init),
+            ("pkg.sub", code_pkg_sub),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from pkg import sub
+                    ^
+Definition Result:
+1 | # pkg/sub.py
+    ^
+
+
+# pkg.py
+
+# pkg.sub.py
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn unresolved_no_hop_import_test() {
+    // `from x import Y` where `x` doesn't define `Y` and has no
+    // fallback. Go-to-def lands at the import statement -- the
+    // import-site fallback in `resolve_intermediate_definition`
+    // gives the user somewhere meaningful to land when the chase
+    // finds nothing.
+    let code_x: &str = r#"
+"#;
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code_test), ("x", code_x)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+
+
+# x.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn unresolved_multi_hop_import_test() {
+    // `from x import Y` where `x` re-exports `Y` from `z` but `z`
+    // doesn't define `Y`. Go-to-def lands at the import statement,
+    // matching `unresolved_no_hop_import_test`.
+    let code_z: &str = r#"
+"#;
+    let code_x: &str = r#"
+from z import Y
+"#;
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code_test), ("x", code_x), ("z", code_z)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+
+
+# x.py
+
+# z.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn unresolved_no_hop_missing_module_test() {
+    // `from x import Y` where `x` itself can't be found. Same
+    // import-site fallback as `unresolved_no_hop_import_test`:
+    // go-to-def lands at the import statement.
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code_test)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn unresolved_multi_hop_missing_module_test() {
+    // `from x import Y` where `x` re-exports `from z import Y`
+    // but `z` itself can't be found. Same result as
+    // `unresolved_multi_hop_import_test`: lands at the import
+    // statement.
+    let code_x: &str = r#"
+from z import Y
+"#;
+    let code_test: &str = r#"
+from x import Y
+#             ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code_test), ("x", code_x)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from x import Y
+                  ^
+Definition Result:
+2 | from x import Y
+                  ^
+
+
+# x.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn goto_def_dead_code() {
     let code: &str = r#"
 if False:
@@ -943,7 +1243,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-182 | class Path(PurePath):
+185 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1185,13 +1485,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3632 |     def __getitem__(self, key: _KT, /) -> _VT:
+3738 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3632 |     def __getitem__(self, key: _KT, /) -> _VT:
+3738 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),
@@ -2497,6 +2797,121 @@ x = Baz
 Definition Result:
 2 | class Baz:
           ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_dataclass_synthesized_init() {
+    // Dataclass with no inherited explicit __init__: gotodef correctly falls
+    // back to the class definition since the synthesized __init__ has no
+    // source location.
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+    y: int
+
+Point(1, 2)
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | Point(1, 2)
+       ^
+Definition Result:
+5 | class Point:
+          ^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_basemodel_subclass() {
+    // BUG: Gotodef on a subclass constructor call jumps to the inherited
+    // BaseModel.__init__ instead of the subclass class definition. When a
+    // class has synthesized fields (like pydantic models), the user expects
+    // gotodef to navigate to the class definition, not to the base __init__.
+    let basemodel_code = r#"
+class BaseModel:
+    def __init__(self, **kwargs: object) -> None: ...
+"#;
+    let code = r#"
+from .models import BaseModel
+
+class UserConfig(BaseModel):
+    name: str
+    age: int
+
+UserConfig(name="test", age=1)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("models", basemodel_code)],
+        get_test_report,
+    );
+    // Currently jumps to BaseModel.__init__ — should jump to `class UserConfig`.
+    assert_eq!(
+        r#"
+# main.py
+8 | UserConfig(name="test", age=1)
+          ^
+Definition Result:
+3 |     def __init__(self, **kwargs: object) -> None: ...
+            ^^^^^^^^
+
+
+# models.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_dataclass_inheriting_init() {
+    // Dataclass inheriting from a base with explicit __init__: gotodef
+    // should jump to the class definition because the dataclass synthesizes
+    // its own __init__ which takes precedence over the inherited one.
+    let base_code = r#"
+class Base:
+    def __init__(self, **kwargs: object) -> None: ...
+"#;
+    let code = r#"
+from dataclasses import dataclass
+from .base_mod import Base
+
+@dataclass
+class Config(Base):
+    name: str
+    value: int
+
+Config(name="x", value=1)
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("base_mod", base_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+10 | Config(name="x", value=1)
+         ^
+Definition Result:
+6 | class Config(Base):
+          ^^^^^^
+
+
+# base_mod.py
 "#
         .trim(),
         report.trim(),

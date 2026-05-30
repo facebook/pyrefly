@@ -91,6 +91,26 @@ y = list([1, 2, 3])
 }
 
 #[test]
+fn test_dunder_new_implicit_self_return_inlay_hint() {
+    let code = r#"
+class A:
+    def __new__(cls, x: int | None = None):
+        if x is None:
+            return cls.__new__(cls, 5)
+        return super().__new__(cls)
+"#;
+    assert_eq!(
+        r#"
+# main.py
+3 |     def __new__(cls, x: int | None = None):
+                                              ^ inlay-hint: ` -> Self@A`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
 fn test_enum_literal_inlay_hint() {
     let code = r#"
 from enum import Enum
@@ -527,5 +547,135 @@ x, y = get_tuple()
     assert!(
         !y_hint.insertable,
         "Unpacked variable 'y' should NOT be insertable"
+    );
+}
+
+#[test]
+fn test_class_attribute_inlay_hint() {
+    let code = r#"
+def make_list() -> list[int]:
+    return [1, 2, 3]
+
+class MyClass:
+    def __init__(self, x: int, y: str) -> None:
+        self.x = x
+        self.y = y
+        self.data = make_list()
+        self.name = "literal"
+        self.count = 42
+"#;
+    // self.x and self.y are suppressed (self.x = x pattern, type visible at parameter).
+    // self.data gets a hint (function call return).
+    // self.name and self.count are suppressed (assigned from literals).
+    assert_eq!(
+        r#"
+# main.py
+9 |         self.data = make_list()
+                     ^ inlay-hint: `: list[int]`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_class_attribute_inlay_hint_disabled() {
+    let code = r#"
+def make_list() -> list[int]:
+    return [1, 2, 3]
+
+class MyClass:
+    def __init__(self) -> None:
+        self.data = make_list()
+"#;
+    // No hints when variable_types is disabled
+    assert_eq!(
+        r#"
+# main.py
+"#
+        .trim(),
+        generate_inlay_hint_report(
+            code,
+            InlayHintConfig {
+                variable_types: false,
+                ..Default::default()
+            }
+        )
+        .trim()
+    );
+}
+
+#[test]
+fn test_class_attribute_with_annotation() {
+    let code = r#"
+class MyClass:
+    def __init__(self) -> None:
+        self.x: int = 42
+"#;
+    // No hint because the attribute has an explicit annotation
+    assert_eq!(
+        r#"
+# main.py
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_class_attribute_constructor_suppressed() {
+    let code = r#"
+class Inner:
+    pass
+
+class Outer:
+    def __init__(self) -> None:
+        self.inner = Inner()
+"#;
+    // Constructor call matching the inferred class name should be suppressed
+    assert_eq!(
+        r#"
+# main.py
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_class_attribute_self_x_eq_x_suppressed() {
+    let code = r#"
+class MyClass:
+    def __init__(self, x: int, y: str, data: list[int]) -> None:
+        self.x = x
+        self.y = y
+        self.data = data
+"#;
+    // All attributes use the self.x = x pattern, so all hints are suppressed.
+    assert_eq!(
+        r#"
+# main.py
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+}
+
+#[test]
+fn test_class_attribute_different_name_not_suppressed() {
+    let code = r#"
+class MyClass:
+    def __init__(self, value: int) -> None:
+        self.x = value
+"#;
+    // self.x = value is NOT the self.x = x pattern (names differ), so hint is shown.
+    assert_eq!(
+        r#"
+# main.py
+4 |         self.x = value
+                  ^ inlay-hint: `: int`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
     );
 }

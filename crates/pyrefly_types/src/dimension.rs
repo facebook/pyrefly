@@ -19,7 +19,6 @@ use std::fmt::Display;
 
 use crate::equality::TypeEq;
 use crate::literal::Lit;
-use crate::literal::Literal;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -100,9 +99,7 @@ impl SizeExpr {
             // SizeExpr type -> unwrap and return the SizeExpr directly
             Type::Size(dim) => Some(dim.clone()),
             // Literal integer -> Literal dimension
-            Type::Literal(box Literal {
-                value: Lit::Int(i), ..
-            }) => i.as_i64().map(SizeExpr::Literal),
+            Type::Literal(lit) if let Lit::Int(i) = &lit.value => i.as_i64().map(SizeExpr::Literal),
             // Symbolic integer -> recursively extract SizeExpr from the Type
             Type::Dim(ty) => SizeExpr::from_type(ty),
             // All other types (Quantified, Var, Any, etc.) should remain as Type

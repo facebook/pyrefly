@@ -18,9 +18,11 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display;
 
 use crate::base::InferReturnTypes;
+use crate::base::Preset;
 use crate::base::RecursionOverflowHandler;
 use crate::base::UntypedDefBehavior;
 use crate::config::ConfigFile;
+use crate::config::SynthesizedPresetReason;
 use crate::config::validate_path;
 use crate::error::ErrorDisplayConfig;
 use crate::error_kind::ErrorKind;
@@ -39,6 +41,11 @@ fn absolute_path_parser(s: &str) -> Result<PathBuf, String> {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone, Default)]
 pub struct ConfigOverrideArgs {
+    /// A named collection of error severities and behavior settings that serves as the base configuration.
+    /// Any explicit settings you specify override the preset.
+    #[arg(short, long)]
+    preset: Option<Preset>,
+
     /// Configures Pyrefly to replace `project-excludes` fully rather than
     /// append whatever is in your configuration or passed by CLI to Pyrefly's
     /// defaults.
@@ -192,6 +199,9 @@ pub struct ConfigOverrideArgs {
     /// How to handle when recursion depth limit is exceeded.
     #[arg(long)]
     recursion_overflow_handler: Option<RecursionOverflowHandler>,
+    /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
+    #[arg(long)]
+    pytorch_efficiency_lints: Option<bool>,
     /// (Experimental) Enable tensor shape type inference.
     /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
     #[arg(long)]
@@ -285,7 +295,15 @@ impl ConfigOverrideArgs {
         Ok(())
     }
 
+    pub fn preset(&self) -> Option<Preset> {
+        self.preset
+    }
+
     pub fn override_config(&self, mut config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
+        if let Some(x) = self.preset {
+            config.preset = Some(x);
+            config.synthesized_preset_reason = Some(SynthesizedPresetReason::UserOverride);
+        }
         if let Some(x) = &self.python_platform {
             config.python_environment.python_platform = Some(x.clone());
         }
@@ -401,6 +419,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.recursion_overflow_handler {
             config.root.recursion_overflow_handler = Some(*x);
+        }
+        if let Some(x) = &self.pytorch_efficiency_lints {
+            config.root.pytorch_efficiency_lints = Some(*x);
         }
         if let Some(x) = &self.tensor_shapes {
             config.root.tensor_shapes = Some(*x);

@@ -56,7 +56,8 @@ impl StubgenArgs {
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
         self.config_override.validate()?;
-        let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
+        let (files_to_check, config_finder, _) =
+            self.files.resolve(self.config_override, wrapper)?;
 
         let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
         let state = State::new(config_finder, thread_count);

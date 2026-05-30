@@ -22,12 +22,11 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use vec1::Vec1;
 
 use super::types::LocalRefactorCodeAction;
-use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 use crate::state::lsp::quick_fixes::extract_shared::expr_needs_parens;
+use crate::state::lsp::quick_fixes::extract_shared::find_local_definition;
 use crate::state::lsp::quick_fixes::extract_shared::first_parameter_name;
 use crate::state::lsp::quick_fixes::extract_shared::is_disallowed_scope_expr;
 use crate::state::lsp::quick_fixes::extract_shared::is_static_or_class_method;
@@ -50,17 +49,13 @@ pub(crate) fn inline_method_code_actions(
         ),
         _ => return None,
     };
-    let defs = transaction
-        .find_definition(handle, callee_range.start(), FindPreference::default())
-        .map(Vec1::into_vec)
-        .unwrap_or_default();
-    let def = defs.into_iter().find(|def| {
-        def.module.path() == module_info.path()
-            && matches!(
-                def.metadata.symbol_kind(),
-                Some(SymbolKind::Function | SymbolKind::Method)
-            )
-    });
+    let def = find_local_definition(
+        transaction,
+        handle,
+        callee_range.start(),
+        &module_info,
+        |k| matches!(k, Some(SymbolKind::Function | SymbolKind::Method)),
+    );
     let mut function_def_ctx =
         def.and_then(|def| find_function_def_with_context(ast.as_ref(), def.definition_range));
     if function_def_ctx.is_none() {

@@ -274,11 +274,11 @@ _Ts = TypeVarTuple("_Ts")
 
 class partial(Generic[_P1, _P2, _T, _R_co, *_Ts]):
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ...
+    def __new__(cls, __func: Callable[_P1, _R_co]) -> partial[_P1, _P1, Any, _R_co]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, Any, object, *tuple[()]]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ...
+    def __new__(cls, __func: Callable[Concatenate[*_Ts, _P2], _R_co], *args: *_Ts) -> partial[Concatenate[*_Ts, _P2], _P2, Any, _R_co, *_Ts]: ... # E: Overload return type `partial[Concatenate[*tuple[Unknown, ...], _P2], Ellipsis, Any, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
     @overload
-    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ...
+    def __new__(cls, __func: Callable[_P1, _R_co], *args: *_Ts, **kwargs: _T) -> partial[_P1, ..., _T, _R_co, *_Ts]: ... # E: Overload return type `partial[Ellipsis, Ellipsis, object, object, *tuple[Unknown, ...]]` is not assignable to implementation return type `Self@partial`
     def __new__(cls, __func, *args, **kwargs):
         return super().__new__(cls)
     def __call__(self, *args: _P2.args, **kwargs: _P2.kwargs) -> _R_co: ...
@@ -356,6 +356,24 @@ class MyStr(str): ...
 def test(m: MyStr, s: str):
     assert_type(concat(m, m), str)
     assert_type(concat(m, s), str)
+"#,
+);
+
+testcase!(
+    test_constrained_typevar_any_does_not_pin_constraint,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+AnyStr = TypeVar("AnyStr", str, bytes)
+
+def concat(x: AnyStr, y: AnyStr) -> AnyStr:
+    return x + y
+
+def test(s: str, b: bytes, a: Any):
+    concat(s, a)
+    concat(a, b)
+    concat(a, s)
+    concat(a, a)
 "#,
 );
 
@@ -487,6 +505,17 @@ def f[T1, T2](x: T1, y: T2 | None = None) -> T1 | T2: ...
 assert_type(f(1), int)
 assert_type(f(1, "2"), int | str)
 assert_type(f(1, None), int)
+    "#,
+);
+
+testcase!(
+    test_typevar_or_none_from_call,
+    r#"
+from typing import assert_type
+class C: ...
+def unwrap[T](value: T | None) -> T: ...
+def get() -> C | None: ...
+assert_type(unwrap(get()), C)
     "#,
 );
 
@@ -751,6 +780,21 @@ def g[T](x: T, y: Sequence[T]) -> T: ...
 assert_type(f(0, [""]), int | str)  # E: Argument `list[str]` is not assignable to parameter `y` with type `list[int | str]`
 assert_type(g(0, [""]), int | str)
     "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/2130
+testcase!(
+    test_generic_return_type_with_union_of_scoped_type_params,
+    r#"
+from typing import reveal_type, assert_type
+
+class A[T]:
+    def __init__(self, x: T): ...
+    def f[T2](self, other: T2):
+        return A[T | T2](other)
+
+assert_type(A(0).f(""), A[int | str])
+"#,
 );
 
 testcase!(

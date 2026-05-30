@@ -22,6 +22,7 @@ use starlark_map::smallmap;
 use vec1::Vec1;
 
 use crate::facet::FacetKind;
+use crate::type_var::TypeVar;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -784,7 +785,7 @@ fn join_types(
     join_style: JoinStyle<Type>,
 ) -> Type {
     match join_style {
-        JoinStyle::SimpleMerge => union_types(types),
+        JoinStyle::SimpleMerge => union_types(dedup_compatible_type_vars(types)),
         JoinStyle::NarrowOf(base_ty) => {
             join_types_impl(types, base_ty, true, union_types, is_subset_eq)
         }
@@ -832,8 +833,29 @@ fn join_types_impl(
             }
         }
     } else {
-        union_types(types)
+        union_types(dedup_compatible_type_vars(types))
     }
+}
+
+/// Deduplicate TypeVars that have the same short name, restriction, variance, and default.
+/// When duplicates are found, the first TypeVar encountered is kept.
+fn dedup_compatible_type_vars(mut types: Vec<Type>) -> Vec<Type> {
+    let mut seen_type_vars: Vec<TypeVar> = Vec::new();
+    types.retain(|ty| {
+        if let Type::TypeVar(tv) = ty {
+            if seen_type_vars.iter().any(|seen| {
+                seen.qname().id() == tv.qname().id()
+                    && seen.restriction() == tv.restriction()
+                    && seen.variance() == tv.variance()
+                    && seen.default() == tv.default()
+            }) {
+                return false;
+            }
+            seen_type_vars.push(tv.clone());
+        }
+        true
+    });
+    types
 }
 
 #[cfg(test)]

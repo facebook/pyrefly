@@ -11,32 +11,32 @@ Tests how pyrefly's native tensor syntax (Tensor[N, 3], Tensor[N+1, M]) behaves
 at Python runtime. Two independent issues with standard Python typing:
 
 1. torch.Tensor is not natively subscriptable — Tensor[3, 4] fails.
-   SOLVED: torch_shapes patches __class_getitem__ on import.
+   SOLVED: shape_extensions patches __class_getitem__ on import.
 
 2. PEP 695 TypeVar doesn't support arithmetic — N + 1, N * 2, etc. fail.
-   SOLVED: torch_shapes.TypeVar provides arithmetic operators that return self.
+   SOLVED: shape_extensions.TypeVar provides arithmetic operators that return self.
 
 This file tests both the remaining problems (PEP 695 TypeVar arithmetic)
-and the solutions (torch_shapes patches, torch_shapes.TypeVar, Generic integration).
+and the solutions (shape_extensions patches, shape_extensions.TypeVar, Generic integration).
 """
 
 import unittest
 from typing import Generic, TypedDict
 
 import torch
-from torch_shapes import Dim, TypeVar, TypeVarTuple
+from shape_extensions import Dim, TypeVar, TypeVarTuple
 
 
 class TestSubscriptRuntime(unittest.TestCase):
     """torch.Tensor subscripting behavior at runtime.
 
-    torch.Tensor is not natively subscriptable, but importing torch_shapes
+    torch.Tensor is not natively subscriptable, but importing shape_extensions
     patches __class_getitem__ so that Tensor[3, 4] evaluates to Tensor
     (a no-op) instead of crashing.
     """
 
     def test_concrete_subscript(self):
-        """Tensor[3, 4] — works after torch_shapes patches __class_getitem__."""
+        """Tensor[3, 4] — works after shape_extensions patches __class_getitem__."""
 
         def f(x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
             return x
@@ -125,7 +125,7 @@ class TestClassAnnotationRuntime(unittest.TestCase):
     """Classes with class-level and method-level TypeVars."""
 
     def test_class_concrete_subscript(self):
-        """Class method with Tensor[3, 4] — works after torch_shapes patch."""
+        """Class method with Tensor[3, 4] — works after shape_extensions patch."""
 
         class Layer:
             def forward(self, x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
@@ -201,46 +201,46 @@ class TestDimRuntime(unittest.TestCase):
 
 
 class TestTypeVarRuntime(unittest.TestCase):
-    """torch_shapes.TypeVar provides arithmetic operators that don't crash."""
+    """shape_extensions.TypeVar provides arithmetic operators that don't crash."""
 
     def test_add(self):
-        """N + 1 doesn't crash with torch_shapes.TypeVar."""
+        """N + 1 doesn't crash with shape_extensions.TypeVar."""
         N = TypeVar("N")
         result = N + 1
         self.assertIsNotNone(result)
 
     def test_radd(self):
-        """1 + N doesn't crash with torch_shapes.TypeVar."""
+        """1 + N doesn't crash with shape_extensions.TypeVar."""
         N = TypeVar("N")
         result = 1 + N
         self.assertIsNotNone(result)
 
     def test_sub(self):
-        """N - 1 doesn't crash with torch_shapes.TypeVar."""
+        """N - 1 doesn't crash with shape_extensions.TypeVar."""
         N = TypeVar("N")
         result = N - 1
         self.assertIsNotNone(result)
 
     def test_rsub(self):
-        """1 - N doesn't crash with torch_shapes.TypeVar."""
+        """1 - N doesn't crash with shape_extensions.TypeVar."""
         N = TypeVar("N")
         result = 1 - N
         self.assertIsNotNone(result)
 
     def test_mul(self):
-        """N * 2 doesn't crash with torch_shapes.TypeVar."""
+        """N * 2 doesn't crash with shape_extensions.TypeVar."""
         N = TypeVar("N")
         result = N * 2
         self.assertIsNotNone(result)
 
     def test_rmul(self):
-        """2 * N doesn't crash with torch_shapes.TypeVar."""
+        """2 * N doesn't crash with shape_extensions.TypeVar."""
         N = TypeVar("N")
         result = 2 * N
         self.assertIsNotNone(result)
 
     def test_floordiv(self):
-        """N // 2 doesn't crash with torch_shapes.TypeVar."""
+        """N // 2 doesn't crash with shape_extensions.TypeVar."""
         N = TypeVar("N")
         result = N // 2
         self.assertIsNotNone(result)
@@ -252,19 +252,19 @@ class TestTypeVarRuntime(unittest.TestCase):
         self.assertIsNotNone(result)
 
     def test_two_vars(self):
-        """N + M doesn't crash with two torch_shapes.TypeVars."""
+        """N + M doesn't crash with two shape_extensions.TypeVars."""
         N = TypeVar("N")
         M = TypeVar("M")
         result = N + M
         self.assertIsNotNone(result)
 
     def test_repr(self):
-        """torch_shapes.TypeVar repr shows the name."""
+        """shape_extensions.TypeVar repr shows the name."""
         N = TypeVar("N")
         self.assertEqual(repr(N), "N")
 
     def test_in_dim(self):
-        """Dim[N] with torch_shapes.TypeVar."""
+        """Dim[N] with shape_extensions.TypeVar."""
         N = TypeVar("N")
 
         def f(x: Dim[N]) -> Dim[N]:
@@ -273,7 +273,7 @@ class TestTypeVarRuntime(unittest.TestCase):
         f(42)
 
     def test_arithmetic_in_dim(self):
-        """Dim[N+1] with torch_shapes.TypeVar — N+1 returns self, which Dim accepts."""
+        """Dim[N+1] with shape_extensions.TypeVar — N+1 returns self, which Dim accepts."""
         N = TypeVar("N")
 
         def f(x: Dim[N]) -> Dim[N + 1]:
@@ -283,10 +283,10 @@ class TestTypeVarRuntime(unittest.TestCase):
 
 
 class TestGenericRuntime(unittest.TestCase):
-    """Generic works with torch_shapes.TypeVar at runtime thanks to __class__ = typing.TypeVar."""
+    """Generic works with shape_extensions.TypeVar at runtime thanks to __class__ = typing.TypeVar."""
 
     def test_generic_subscript(self):
-        """Generic[N, M] works with torch_shapes.TypeVar."""
+        """Generic[N, M] works with shape_extensions.TypeVar."""
         N = TypeVar("N")
         M = TypeVar("M")
 
@@ -309,7 +309,7 @@ class TestGenericRuntime(unittest.TestCase):
         self.assertEqual(result, 42)
 
     def test_generic_accepts_intvar(self):
-        """Generic[N] works when N is torch_shapes.TypeVar — it sets
+        """Generic[N] works when N is shape_extensions.TypeVar — it sets
         __class__ = typing.TypeVar so isinstance(N, typing.TypeVar) returns True."""
         N = TypeVar("N")
 
@@ -334,7 +334,7 @@ class TestGenericRuntime(unittest.TestCase):
         self.assertEqual(result, 42)
 
     def test_typeddict_generic_intvar(self):
-        """TypedDict + Generic[N] works with torch_shapes.TypeVar."""
+        """TypedDict + Generic[N] works with shape_extensions.TypeVar."""
         N = TypeVar("N")
         M = TypeVar("M")
 
@@ -346,7 +346,7 @@ class TestGenericRuntime(unittest.TestCase):
 
 
 class TestTypeVarTupleRuntime(unittest.TestCase):
-    """torch_shapes.TypeVarTuple supports star-unpacking at runtime."""
+    """shape_extensions.TypeVarTuple supports star-unpacking at runtime."""
 
     def test_iter(self):
         """*Ns unpacking works — __iter__ yields self."""
@@ -390,7 +390,7 @@ class TestTypeVarTupleRuntime(unittest.TestCase):
         self.assertEqual(result, 42)
 
     def test_repr(self):
-        """torch_shapes.TypeVarTuple repr shows *name."""
+        """shape_extensions.TypeVarTuple repr shows *name."""
         Ns = TypeVarTuple("Ns")
         self.assertEqual(repr(Ns), "*Ns")
 

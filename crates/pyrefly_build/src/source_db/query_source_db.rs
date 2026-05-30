@@ -128,16 +128,26 @@ pub struct QuerySourceDatabase {
     repo_root: InternedPath,
     querier: Arc<dyn SourceDbQuerier>,
     cached_modules: ModulePathCache,
+    /// Targets that will be added to the query as a fallback.
+    catch_all_targets: Vec<Target>,
+    catch_all_targets_only: bool,
 }
 
 impl QuerySourceDatabase {
-    pub fn new(cwd: PathBuf, querier: Arc<dyn SourceDbQuerier>) -> Self {
+    pub fn new(
+        cwd: PathBuf,
+        querier: Arc<dyn SourceDbQuerier>,
+        catch_all_targets: Vec<Target>,
+        catch_all_targets_only: bool,
+    ) -> Self {
         QuerySourceDatabase {
             repo_root: InternedPath::new(cwd),
             inner: RwLock::new(Inner::new()),
             includes: Mutex::new(SmallSet::new()),
             querier,
             cached_modules: ModulePathCache::new(),
+            catch_all_targets,
+            catch_all_targets_only,
         }
     }
 
@@ -361,6 +371,14 @@ impl SourceDatabase for QuerySourceDatabase {
             return package_matches.into_iter().next();
         }
 
+        if let Some(result) = self
+            .catch_all_targets
+            .iter()
+            .find_map(|t| self.lookup_from_target(&read, module, *t, style_filter))
+        {
+            return Some(result);
+        }
+
         None
     }
 
@@ -387,14 +405,23 @@ impl SourceDatabase for QuerySourceDatabase {
 
     fn query_source_db(
         &self,
-        files: SmallSet<InternedPath>,
+        mut files: SmallSet<InternedPath>,
         force: bool,
     ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
+        // reassign files here, so that we record that 0 files were explicitly included in the
+        // sourcedb rebuild
+        if self.catch_all_targets_only {
+            files = SmallSet::new();
+        }
         let mut stats = TelemetrySourceDbRebuildInstanceStats::default();
         stats.common.forced = force;
         stats.common.files = files.len();
         let run = || {
-            let new_includes = files.into_iter().map(Include::path).collect();
+            let new_includes = files
+                .into_iter()
+                .map(Include::path)
+                .chain(self.catch_all_targets.iter().copied().map(Include::Target))
+                .collect();
             let mut includes = self.includes.lock();
             if *includes == new_includes && !force {
                 debug!("Not querying Buck source DB, since no inputs have changed");
@@ -518,6 +545,8 @@ mod tests {
                 repo_root: InternedPath::from_path(root),
                 querier: Arc::new(DummyQuerier {}),
                 cached_modules: ModulePathCache::new(),
+                catch_all_targets: vec![],
+                catch_all_targets_only: false,
             };
             new.update_with_target_manifest(raw_db);
             new
@@ -1038,6 +1067,168 @@ mod tests {
             "Lookup of 'dir' from a.py should resolve to __init__.py, got: {:?}",
             result_path
         );
+    }
+
+    #[test]
+    fn test_lookup_catch_all_fallback() {
+        let raw_db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//normal:target".to_owned()) => TargetManifest::lib(
+                    &[("normal.module", &["normal/module.py"])],
+                    &[],
+                    "normal/BUCK",
+                    &[],
+                    None,
+                ),
+                Target::from_string("//catch:all".to_owned()) => TargetManifest::lib(
+                    &[("fallback.module", &["fallback/module.py"])],
+                    &[],
+                    "fallback/BUCK",
+                    &[],
+                    None,
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+        let root = raw_db.root.to_path_buf();
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(&root),
+            querier: Arc::new(DummyQuerier {}),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
+            catch_all_targets_only: false,
+        };
+        db.update_with_target_manifest(raw_db);
+
+        // Origin is in path_lookup (for //normal:target), but fallback.module is not
+        // reachable from that target. Falls through to catch_all.
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("fallback.module"),
+                Some(&root.join("normal/module.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(root.join("fallback/module.py"))),
+            "catch_all should find module when normal lookup fails",
+        );
+
+        // Origin is not in any lookup table. Goes directly to catch_all.
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("fallback.module"),
+                Some(&root.join("unknown/file.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(root.join("fallback/module.py"))),
+            "catch_all should find module when origin is unknown",
+        );
+
+        // Module doesn't exist in any target including catch_all.
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("nonexistent.module"),
+                Some(&root.join("unknown/file.py")),
+                None,
+            ),
+            None,
+            "should return None when module not found anywhere",
+        );
+    }
+
+    #[test]
+    fn test_lookup_prefers_normal_over_catch_all() {
+        let raw_db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//normal:target".to_owned()) => TargetManifest::lib(
+                    &[("shared.module", &["normal/shared.py"])],
+                    &[],
+                    "normal/BUCK",
+                    &[],
+                    None,
+                ),
+                Target::from_string("//catch:all".to_owned()) => TargetManifest::lib(
+                    &[("shared.module", &["catch_all/shared.py"])],
+                    &[],
+                    "catch_all/BUCK",
+                    &[],
+                    None,
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+        let root = raw_db.root.to_path_buf();
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(&root),
+            querier: Arc::new(DummyQuerier {}),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
+            catch_all_targets_only: false,
+        };
+        db.update_with_target_manifest(raw_db);
+
+        // shared.module is reachable from origin's own target, so normal
+        // lookup should succeed without falling through to catch_all.
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("shared.module"),
+                Some(&root.join("normal/shared.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(root.join("normal/shared.py"))),
+            "normal lookup should take precedence over catch_all",
+        );
+    }
+
+    #[test]
+    fn test_query_source_db_includes_catch_all_targets() {
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(Path::new("/repo")),
+            querier: Arc::new(DummyQuerier {}),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
+            catch_all_targets_only: false,
+        };
+
+        let files = smallset! { InternedPath::new(PathBuf::from("/repo/file.py")) };
+        let (result, _) = db.query_source_db(files, false);
+        result.expect("query_source_db should succeed");
+
+        let includes = db.includes.lock();
+        let expected = smallset! {
+            Include::path(InternedPath::new(PathBuf::from("/repo/file.py"))),
+            Include::Target(Target::from_string("//catch:all".to_owned())),
+        };
+        assert_eq!(*includes, expected);
+    }
+
+    #[test]
+    fn test_query_source_db_catch_all_targets_only() {
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(Path::new("/repo")),
+            querier: Arc::new(DummyQuerier {}),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![Target::from_string("//catch:all".to_owned())],
+            catch_all_targets_only: true,
+        };
+
+        let files = smallset! { InternedPath::new(PathBuf::from("/repo/file.py")) };
+        let (result, _) = db.query_source_db(files, false);
+        result.expect("query_source_db should succeed");
+
+        // With catch_all_targets_only, files are cleared before building includes
+        let includes = db.includes.lock();
+        let expected = smallset! {
+            Include::Target(Target::from_string("//catch:all".to_owned())),
+        };
+        assert_eq!(*includes, expected);
     }
 
     #[test]

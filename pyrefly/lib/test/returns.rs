@@ -10,7 +10,6 @@ use crate::testcase;
 testcase!(
     test_missing_return,
     r#"
-
 def f() -> int:  # E: Function declared to return `int` but is missing an explicit `return`
     pass
 "#,
@@ -832,6 +831,19 @@ def f(value: int | str | float) -> str:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/2894
+testcase!(
+    test_exhaustive_isinstance_no_bad_return,
+    r#"
+class A: ...
+class B: ...
+
+def test(ab: A | B) -> int:
+    if isinstance(ab, A): return 1
+    if isinstance(ab, B): return 2
+"#,
+);
+
 testcase!(
     test_pruned_if_last_statement_no_bad_override,
     r#"
@@ -848,7 +860,6 @@ class B(A):
 );
 
 testcase!(
-    bug = "https://github.com/facebook/pyrefly/issues/2912 - list(dict.items()) incorrectly errors when returned directly with a union return type",
     test_return_list_dict_items_union_return_type,
     r#"
 from typing import Sequence
@@ -857,7 +868,7 @@ def _process_null_values(
     null_values: dict[str, str],
 ) -> Sequence[str] | list[tuple[str, str]]:
     if isinstance(null_values, dict):
-        return list(null_values.items())  # E: Argument `dict_items[str, str]` is not assignable to parameter `iterable` with type `Iterable[str]` in function `list.__init__`
+        return list(null_values.items())
     return ['a', 'b']
 "#,
 );

@@ -28,8 +28,8 @@ import torch.optim
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 class LayerNorm[M](nn.Module):

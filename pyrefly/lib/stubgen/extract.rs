@@ -19,6 +19,9 @@ use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Param;
+use pyrefly_types::callable::Params;
+use pyrefly_types::callable::Required;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Operator;
@@ -28,10 +31,14 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 
 use crate::alt::answers::Answers;
 use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyClassField;
+use crate::binding::binding::KeyClassMetadata;
+use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::bindings::Bindings;
 use crate::export::definitions::Definitions;
@@ -45,6 +52,7 @@ pub struct ModuleStub {
     /// Whether any item uses `Incomplete` (so we know whether to
     /// emit `from _typeshed import Incomplete`).
     pub uses_incomplete: bool,
+    pub uses_self: bool,
 }
 
 pub enum StubItem {
@@ -129,6 +137,7 @@ pub fn extract_module_stub(
         module_info: &module_info,
         config,
         uses_incomplete: false,
+        uses_self: false,
         function_map: &function_map,
         dunder_all: &dunder_all,
     };
@@ -138,6 +147,7 @@ pub fn extract_module_stub(
     Some(ModuleStub {
         items,
         uses_incomplete: ctx.uses_incomplete,
+        uses_self: ctx.uses_self,
     })
 }
 
@@ -147,6 +157,7 @@ struct ExtractionContext<'a> {
     module_info: &'a Module,
     config: &'a ExtractConfig,
     uses_incomplete: bool,
+    uses_self: bool,
     function_map: &'a HashMap<TextRange, DecoratedFunction>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
@@ -212,10 +223,8 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
                 let text = source_text(ctx.module_info, type_alias.range()).to_owned();
                 items.push(StubItem::TypeAlias(StubTypeAlias { text }));
             }
-            Stmt::If(if_stmt) => {
-                if is_type_checking_guard(&if_stmt.test) {
-                    items.extend(extract_stmts(&if_stmt.body, ctx, in_class));
-                }
+            Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test) => {
+                items.extend(extract_stmts(&if_stmt.body, ctx, in_class));
             }
             _ => {}
         }
@@ -412,7 +421,12 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
         ctx.uses_incomplete = true;
         return Some("Incomplete".to_owned());
     }
-    let s = ty.to_string();
+    if ty.any(|sub_type| matches!(sub_type, Type::SelfType(_))) {
+        ctx.uses_self = true;
+    }
+    let mut display = TypeDisplayContext::new(&[ty]);
+    display.render_self_type_as_self();
+    let s = display.display(ty).to_string();
     if s.contains("@") || s.contains("Unknown") {
         ctx.uses_incomplete = true;
         return Some("Incomplete".to_owned());
@@ -475,6 +489,232 @@ fn extract_return_type(
     None
 }
 
+/// Names already represented as variables in the extracted class body.
+fn stub_class_level_variable_names(body: &[StubItem]) -> HashSet<&str> {
+    let mut out = HashSet::new();
+    for item in body {
+        if let StubItem::Variable(v) = item {
+            out.insert(v.name.as_str());
+        }
+    }
+    out
+}
+
+/// Instance attributes inferred from methods (e.g. `self.name` in `__init__`) that
+/// are not already declared in the class body, materialized as stub `name: T` lines.
+///
+/// Emitted in alphabetical order by field name (stable regardless of map / inference order).
+fn extract_instance_attr_stubs_from_class_fields(
+    class_def: &StmtClassDef,
+    class_body: &[StubItem],
+    ctx: &mut ExtractionContext,
+) -> Vec<StubVariable> {
+    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+        return Vec::new();
+    };
+    let already = stub_class_level_variable_names(class_body);
+    let class_fields = match ctx.bindings.get_class_fields(def_index) {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    for (name, _) in class_fields.iter() {
+        if already.contains(name.as_str()) {
+            continue;
+        }
+        if !should_include_name(name.as_str(), ctx.config, true, ctx.dunder_all) {
+            continue;
+        }
+        let key = KeyClassField(def_index, name.clone());
+        let Some(field_idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+            continue;
+        };
+        let Some(field) = ctx.answers.get_idx(field_idx) else {
+            continue;
+        };
+        if !field.is_simple_instance_attribute() {
+            continue;
+        }
+        let Some(ann) = format_type(&field.ty(), ctx) else {
+            continue;
+        };
+        out.push(StubVariable {
+            name: name.to_string(),
+            annotation: Some(ann),
+            value: None,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Inserts synthesized instance attribute stubs before `__init__` when present,
+/// otherwise at the start of the class body.
+fn merge_instance_field_stubs(
+    synthesized: Vec<StubVariable>,
+    mut body: Vec<StubItem>,
+) -> Vec<StubItem> {
+    if synthesized.is_empty() {
+        return body;
+    }
+    let init_idx = body
+        .iter()
+        .position(|item| matches!(item, StubItem::Function(f) if f.name == "__init__"));
+    let synth: Vec<StubItem> = synthesized.into_iter().map(StubItem::Variable).collect();
+    match init_idx {
+        Some(i) => {
+            body.splice(i..i, synth);
+            body
+        }
+        None => {
+            body.splice(0..0, synth);
+            body
+        }
+    }
+}
+
+/// Returns `true` when the class is a dataclass or pydantic model, using
+/// the resolved `ClassMetadata` from the type checker rather than fragile
+/// AST pattern matching on decorator/base-class names.
+fn is_dataclass_or_pydantic_model(class_def: &StmtClassDef, ctx: &ExtractionContext) -> bool {
+    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+        return false;
+    };
+    let key = KeyClassMetadata(def_index);
+    let Some(idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+        return false;
+    };
+    let Some(metadata) = ctx.answers.get_idx(idx) else {
+        return false;
+    };
+    metadata.dataclass_metadata().is_some() || metadata.is_pydantic_model()
+}
+
+/// Extract a synthesized `__init__` stub for dataclass and pydantic model
+/// classes that generate `__init__` at type-check time rather than declaring
+/// it in source.
+fn extract_synthesized_init_stub(
+    class_def: &StmtClassDef,
+    ctx: &mut ExtractionContext,
+) -> Option<StubFunction> {
+    let def_index = ctx.bindings.class_def_index(class_def)?;
+    let key = KeyClassSynthesizedFields(def_index);
+    let idx = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+    let synth_fields = ctx.answers.get_idx(idx)?;
+    let init_field = synth_fields.get(&Name::new("__init__"))?;
+    let init_ty = init_field.inner.ty();
+    let func = match &init_ty {
+        Type::Function(f) => f,
+        _ => return None,
+    };
+    let params = match &func.signature.params {
+        Params::List(param_list) => param_list.items(),
+        _ => return None,
+    };
+    Some(StubFunction {
+        name: "__init__".to_owned(),
+        is_async: false,
+        type_params: None,
+        decorators: Vec::new(),
+        params: synthesized_params_to_stub(params, ctx),
+        return_type: Some("None".to_owned()),
+        docstring: None,
+    })
+}
+
+/// Convert resolved `Param`s from a synthesized method into `StubParam`s.
+fn synthesized_params_to_stub(params: &[Param], ctx: &mut ExtractionContext) -> Vec<StubParam> {
+    let mut result = Vec::new();
+    let mut seen_kwonly = false;
+    let mut seen_posonly = false;
+    let has_varargs = params.iter().any(|p| matches!(p, Param::Varargs(..)));
+    for param in params {
+        if seen_posonly && !matches!(param, Param::PosOnly(..)) {
+            result.push(StubParam {
+                prefix: "",
+                name: "/".to_owned(),
+                annotation: None,
+                default: None,
+            });
+            seen_posonly = false;
+        }
+        match param {
+            Param::PosOnly(..) => {
+                seen_posonly = true;
+                result.push(StubParam {
+                    prefix: "",
+                    name: param.name().map_or("_".to_owned(), |n| n.to_string()),
+                    annotation: format_param_type(param, ctx),
+                    default: required_to_default(param),
+                });
+            }
+            Param::Pos(name, ..) => {
+                result.push(StubParam {
+                    prefix: "",
+                    name: name.to_string(),
+                    annotation: format_param_type(param, ctx),
+                    default: required_to_default(param),
+                });
+            }
+            Param::Varargs(..) => {
+                result.push(StubParam {
+                    prefix: "*",
+                    name: param.name().map_or("args".to_owned(), |n| n.to_string()),
+                    annotation: format_param_type(param, ctx),
+                    default: None,
+                });
+            }
+            Param::KwOnly(name, ..) => {
+                if !seen_kwonly && !has_varargs {
+                    result.push(StubParam {
+                        prefix: "",
+                        name: "*".to_owned(),
+                        annotation: None,
+                        default: None,
+                    });
+                }
+                seen_kwonly = true;
+                result.push(StubParam {
+                    prefix: "",
+                    name: name.to_string(),
+                    annotation: format_param_type(param, ctx),
+                    default: required_to_default(param),
+                });
+            }
+            Param::Kwargs(..) => {
+                result.push(StubParam {
+                    prefix: "**",
+                    name: param.name().map_or("kwargs".to_owned(), |n| n.to_string()),
+                    annotation: format_param_type(param, ctx),
+                    default: None,
+                });
+            }
+        }
+    }
+    if seen_posonly {
+        result.push(StubParam {
+            prefix: "",
+            name: "/".to_owned(),
+            annotation: None,
+            default: None,
+        });
+    }
+    result
+}
+
+/// Map a `Param`'s requiredness to a stub default (`= ...` for optional, `None` for required).
+fn required_to_default(param: &Param) -> Option<String> {
+    let required = match param {
+        Param::PosOnly(_, _, r) | Param::Pos(_, _, r) | Param::KwOnly(_, _, r) => r,
+        Param::Varargs(..) | Param::Kwargs(..) => return None,
+    };
+    match required {
+        Required::Required => None,
+        Required::Optional(_) => Some("...".to_owned()),
+    }
+}
+
 fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Option<StubClass> {
     let name = class_def.name.id.as_str();
     if !should_include_name(name, ctx.config, false, ctx.dunder_all) {
@@ -524,7 +764,18 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
-    let body = extract_stmts(&class_def.body, ctx, true);
+    let mut body = extract_stmts(&class_def.body, ctx, true);
+    let has_explicit_init = body
+        .iter()
+        .any(|item| matches!(item, StubItem::Function(f) if f.name == "__init__"));
+    if !has_explicit_init
+        && is_dataclass_or_pydantic_model(class_def, ctx)
+        && let Some(init_stub) = extract_synthesized_init_stub(class_def, ctx)
+    {
+        body.push(StubItem::Function(init_stub));
+    }
+    let extra = extract_instance_attr_stubs_from_class_fields(class_def, &body, ctx);
+    let body = merge_instance_field_stubs(extra, body);
 
     Some(StubClass {
         name: name.to_owned(),

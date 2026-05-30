@@ -11,7 +11,7 @@
 With postponed evaluation, annotations are stored as strings and never
 evaluated at definition time. This additionally avoids the TypeVar
 arithmetic crash (N + 1 etc.), which remains a problem without future
-annotations when using PEP 695 TypeVar (torch_shapes.TypeVar solves it differently).
+annotations when using PEP 695 TypeVar (shape_extensions.TypeVar solves it differently).
 """
 
 from __future__ import annotations
@@ -20,12 +20,12 @@ import unittest
 from typing import assert_type, Generic
 
 import torch
-from torch_shapes import Dim, TypeVar
+from shape_extensions import Dim, TypeVar
 
 
 class TestSubscriptRuntime(unittest.TestCase):
     """torch.Tensor subscript — works both with and without future annotations
-    (torch_shapes patches __class_getitem__)."""
+    (shape_extensions patches __class_getitem__)."""
 
     def test_concrete_subscript(self):
         """Tensor[3, 4] — concrete integer dims, no TypeVars."""
@@ -182,12 +182,12 @@ class TestAssertTypeRuntime(unittest.TestCase):
     from __future__ import annotations does NOT postpone its evaluation."""
 
     def test_assert_type_concrete(self):
-        """assert_type(x, Tensor[3, 4]) — works after torch_shapes patch."""
+        """assert_type(x, Tensor[3, 4]) — works after shape_extensions patch."""
         t = torch.randn(3, 4)
         assert_type(t, torch.Tensor[3, 4])
 
     def test_assert_type_typevar(self):
-        """assert_type(result, Tensor[N, 3]) — works after torch_shapes patch."""
+        """assert_type(result, Tensor[N, 3]) — works after shape_extensions patch."""
 
         def f[N](x: torch.Tensor[N, 3]) -> torch.Tensor[N, 3]:
             assert_type(x, torch.Tensor[N, 3])
@@ -210,10 +210,10 @@ class TestAssertTypeRuntime(unittest.TestCase):
 
 
 class TestTypeVarWithFutureAnnotations(unittest.TestCase):
-    """torch_shapes.TypeVar combined with future annotations — everything works."""
+    """shape_extensions.TypeVar combined with future annotations — everything works."""
 
     def test_in_annotation(self):
-        """torch_shapes.TypeVar in annotations with future annotations."""
+        """shape_extensions.TypeVar in annotations with future annotations."""
         N = TypeVar("N")
         M = TypeVar("M")
 
@@ -225,7 +225,7 @@ class TestTypeVarWithFutureAnnotations(unittest.TestCase):
         self.assertEqual(result.shape, (3, 4))
 
     def test_arithmetic_in_annotation(self):
-        """torch_shapes.TypeVar arithmetic in annotations with future annotations."""
+        """shape_extensions.TypeVar arithmetic in annotations with future annotations."""
         N = TypeVar("N")
 
         def f(x: torch.Tensor[N, 3]) -> torch.Tensor[N + 1, 3]:

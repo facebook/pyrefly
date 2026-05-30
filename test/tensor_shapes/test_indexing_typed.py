@@ -8,8 +8,8 @@ from typing import Any, assert_type, TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 def test_slice_with_typed_bounds():

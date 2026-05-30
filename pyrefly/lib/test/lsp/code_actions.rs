@@ -248,6 +248,28 @@ fn compute_invert_boolean_actions_allow_errors(
     (module_info, edit_sets, titles)
 }
 
+fn compute_convert_dict_actions(
+    code: &str,
+    selection: TextRange,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .convert_dict_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 fn assert_no_invert_boolean_action_allow_errors(code: &str, selection: TextRange) {
     let (_, actions, _) = compute_invert_boolean_actions_allow_errors(code, selection);
     assert!(
@@ -612,6 +634,15 @@ class my_export:
     pass
 my_export
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+my_export
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
+my_export
+# ^
 
 
 
@@ -679,6 +710,15 @@ class BytesIO:
     pass
 BytesIO
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+BytesIO
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
+BytesIO
+# ^
 "#
         .trim(),
         report.trim(),
@@ -735,6 +775,15 @@ my_module
 ## After:
 class my_module:
     pass
+my_module
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+my_module
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
 my_module
 # ^
 "#
@@ -841,6 +890,163 @@ class my_export:
     pass
 my_export
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+# i am a comment
+my_export
+# ^
+## After:
+# i am a comment
+# pyrefly: ignore [unknown-name]
+my_export
+# ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_add_pyrefly_ignore_code() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "x: int = \"hello\"\n#         ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello"
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello"
+#         ^
+## After:
+# pyrefly: ignore [bad-assignment]
+x: int = "hello"
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_replace_string_literal_with_enum_member() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from enum import Enum
+
+class AccountStatus(Enum):
+    ACTIVE = "active"
+
+def takes_status(status: AccountStatus) -> None:
+    pass
+
+takes_status("active")
+#             ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Replace with `AccountStatus.ACTIVE`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("takes_status(AccountStatus.ACTIVE)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = \"hello\" # intentional error\n#         ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello" # intentional error
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello" # intentional error
+#         ^
+## After:
+# pyrefly: ignore [bad-assignment]
+x: int = "hello" # intentional error
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_merge_pyrefly_ignore_codes() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "x: int = \"hello\"  # pyrefly: ignore [bad-return]\n#         ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+1 | x: int = "hello"  # pyrefly: ignore [bad-return]
+              ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+x: int = "hello"  # pyrefly: ignore [bad-return]
+#         ^
+## After:
+x: int = "hello"  # pyrefly: ignore [bad-assignment, bad-return]
+#         ^
+"#
+        .trim(),
+        report.trim()
+    );
+}
+
+#[test]
+fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            "    # pyrefly: ignore [bad-return]\n    x: int = \"hello\"\n#             ^",
+        )],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     x: int = "hello"
+                  ^
+Code Actions Results:
+# Title: Add `# pyrefly: ignore [bad-assignment]`
+
+## Before:
+    # pyrefly: ignore [bad-return]
+    x: int = "hello"
+#             ^
+## After:
+    # pyrefly: ignore [bad-assignment, bad-return]
+    x: int = "hello"
+#             ^
 "#
         .trim(),
         report.trim()
@@ -909,6 +1115,17 @@ my_export
 from typing import List
 class my_export:
     pass
+my_export
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+from typing import List
+my_export
+# ^
+## After:
+from typing import List
+# pyrefly: ignore [unknown-name]
 my_export
 # ^
 "#
@@ -982,6 +1199,17 @@ class my_export:
     pass
 my_export
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+from a import another_thing
+my_export
+# ^
+## After:
+from a import another_thing
+# pyrefly: ignore [unknown-name]
+my_export
+# ^
 "#
         .trim(),
         report.trim()
@@ -1041,6 +1269,34 @@ fn redundant_cast_fix_all() {
     assert_eq!(
         "from typing import cast\nx: int = 0\nx = x\ny = x\n",
         updated
+    );
+}
+
+#[test]
+fn unnecessary_str_call_quickfix() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", "def f(x: str) -> None:\n    y = str(x)\n#       ^")],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 |     y = str(x)
+            ^
+Code Actions Results:
+# Title: Remove unnecessary `str()` call
+
+## Before:
+def f(x: str) -> None:
+    y = str(x)
+#       ^
+## After:
+def f(x: str) -> None:
+    y = x
+#       ^
+"#
+        .trim(),
+        report.trim()
     );
 }
 
@@ -1174,6 +1430,15 @@ class TypeVar:
         pass
 TypeVar('T')
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+TypeVar('T')
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
+TypeVar('T')
+# ^
 "#
         .trim(),
         report.trim()
@@ -1255,6 +1520,25 @@ class myFunc:
         pass
 myFunc(user)
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+myFunc(user)
+# ^
+## After:
+class UserId:
+    def __init__(self, value: int):
+        pass
+
+user: UserId = UserId(1234)
+# pyrefly: ignore [unknown-name]
+myFunc(user)
+# ^
 "#
         .trim(),
         report.trim()
@@ -1324,6 +1608,21 @@ class myFunc:
         pass
 myFunc(x, y, z)
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+myFunc(x, y, z)
+# ^
+## After:
+x: int = 1
+y: str = "hello"
+z: float = 3.14
+# pyrefly: ignore [unknown-name]
+myFunc(x, y, z)
+# ^
 "#
         .trim(),
         report.trim()
@@ -1391,6 +1690,21 @@ kwargs: dict[str, int] = {"a": 1}
 class myFunc:
     def __init__(self, x: int, *args: list[str], key: int, **kwargs: dict[str, int]):
         pass
+myFunc(x, *args, key=42, **kwargs)
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+myFunc(x, *args, key=42, **kwargs)
+# ^
+## After:
+x: int = 1
+args: list[str] = ["a", "b"]
+kwargs: dict[str, int] = {"a": 1}
+# pyrefly: ignore [unknown-name]
 myFunc(x, *args, key=42, **kwargs)
 # ^
 "#
@@ -1468,6 +1782,23 @@ class myFunc:
         pass
 myFunc(a.val, b.val)
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+myFunc(a.val, b.val)
+# ^
+## After:
+class Obj:
+    val: int = 0
+a: Obj = Obj()
+b: Obj = Obj()
+# pyrefly: ignore [unknown-name]
+myFunc(a.val, b.val)
+# ^
 "#
         .trim(),
         report.trim()
@@ -1517,6 +1848,15 @@ myFunc(42, len("test"), [i for i in range(3)])
 class myFunc:
     def __init__(self, arg1: int, arg2: int, arg3: list[int]):
         pass
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+myFunc(42, len("test"), [i for i in range(3)])
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
 "#
@@ -1582,6 +1922,19 @@ class outer:
         pass
 outer(inner(42))
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+def inner(x: int) -> str:
+    return str(x)
+outer(inner(42))
+# ^
+## After:
+def inner(x: int) -> str:
+    return str(x)
+# pyrefly: ignore [unknown-name]
+outer(inner(42))
+# ^
 "#
         .trim(),
         report.trim()
@@ -1640,6 +1993,19 @@ x: Any = 1
 class myFunc:
     def __init__(self, x):
         pass
+myFunc(x)
+# ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+from typing import Any
+x: Any = 1
+myFunc(x)
+# ^
+## After:
+from typing import Any
+x: Any = 1
+# pyrefly: ignore [unknown-name]
 myFunc(x)
 # ^
 "#
@@ -1718,6 +2084,15 @@ class my_func:
     pass
 my_func()
 # ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+my_func()
+# ^
+## After:
+# pyrefly: ignore [unknown-name]
+my_func()
+# ^
 "#
         .trim(),
         report.trim()
@@ -1771,9 +2146,135 @@ def foo():
         pass
     print(undef_var)
 #         ^
+# Title: Add `# pyrefly: ignore [unknown-name]`
+
+## Before:
+def foo():
+    print(undef_var)
+#         ^
+## After:
+def foo():
+    # pyrefly: ignore [unknown-name]
+    print(undef_var)
+#         ^
 "#
         .trim(),
         report.trim()
+    );
+}
+
+#[test]
+fn convert_dict_code_actions_basic() {
+    let code = r#"def build():
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (module_info, actions, titles) = compute_convert_dict_actions(code, selection);
+    assert_eq!(3, actions.len());
+    assert_eq!(
+        vec![
+            "Create TypedDict `Data`",
+            "Create dataclass `Data`",
+            "Create pydantic model `Data`",
+        ],
+        titles
+    );
+
+    let typed_dict_result = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected_typed_dict = r#"from typing import TypedDict
+def build():
+    class Data(TypedDict):
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_typed_dict.trim(), typed_dict_result.trim());
+
+    let dataclass_result = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected_dataclass = r#"from dataclasses import dataclass
+def build():
+    @dataclass
+    class Data:
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_dataclass.trim(), dataclass_result.trim());
+
+    let pydantic_result = apply_refactor_edits_for_module(&module_info, &actions[2]);
+    let expected_pydantic = r#"from pydantic import BaseModel
+def build():
+    class Data(BaseModel):
+        a: int
+        b: list[int]
+    data = {"a": 1, "b": [1, 2]}
+    return data
+"#;
+    assert_eq!(expected_pydantic.trim(), pydantic_result.trim());
+}
+
+#[test]
+fn convert_dict_includes_any_imports() {
+    let code = r#"def build(value):
+    data = {"a": value}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (module_info, actions, _) = compute_convert_dict_actions(code, selection);
+    assert_eq!(3, actions.len());
+
+    let typed_dict_result = apply_refactor_edits_for_module(&module_info, &actions[0]);
+    let expected_typed_dict = r#"from typing import TypedDict, Any
+def build(value):
+    class Data(TypedDict):
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_typed_dict.trim(), typed_dict_result.trim());
+
+    let dataclass_result = apply_refactor_edits_for_module(&module_info, &actions[1]);
+    let expected_dataclass = r#"from typing import Any
+from dataclasses import dataclass
+def build(value):
+    @dataclass
+    class Data:
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_dataclass.trim(), dataclass_result.trim());
+
+    let pydantic_result = apply_refactor_edits_for_module(&module_info, &actions[2]);
+    let expected_pydantic = r#"from typing import Any
+from pydantic import BaseModel
+def build(value):
+    class Data(BaseModel):
+        a: Any
+    data = {"a": value}
+    return data
+"#;
+    assert_eq!(expected_pydantic.trim(), pydantic_result.trim());
+}
+
+#[test]
+fn convert_dict_rejects_non_literal_keys() {
+    let code = r#"def build(extra):
+    data = {"a": 1, **extra}
+    return data
+"#;
+    let dict_start = find_nth_range(code, "{", 1).start();
+    let selection = TextRange::new(dict_start, dict_start);
+    let (_, actions, _) = compute_convert_dict_actions(code, selection);
+    assert!(
+        actions.is_empty(),
+        "expected no dict definition actions, found {}",
+        actions.len()
     );
 }
 

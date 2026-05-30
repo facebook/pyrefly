@@ -6,7 +6,6 @@
  */
 
 use anstream::ColorChoice;
-pub use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::trace::init_tracing;
 
 pub fn init_test() {

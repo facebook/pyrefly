@@ -12,8 +12,8 @@ where each element is Literal[n] for the corresponding dimension.
 from typing import assert_type, Literal, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 def test_shape_2d(x: Tensor[3, 4]) -> tuple[Literal[3], Literal[4]]:

@@ -60,13 +60,16 @@ use tracing::error;
 
 use crate::base::ConfigBase;
 use crate::base::InferReturnTypes;
+use crate::base::Preset;
 use crate::base::RecursionLimitConfig;
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::interpreters::Interpreters;
 use crate::error::ErrorConfig;
 use crate::error::ErrorDisplayConfig;
+use crate::error_kind::ErrorKind;
 use crate::error_kind::Severity;
 use crate::finder::ConfigError;
+use crate::migration::run::MigratedFromKind;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
 
@@ -85,6 +88,30 @@ impl SubConfig {
     fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
         self.matches = self.matches.clone().from_root(config_root);
     }
+}
+
+/// Why a `ConfigFile` was synthesized rather than loaded from a real config
+/// on disk. Set by `resolve_unconfigured_config` and read by the LSP status
+/// bar and the CLI upsell to explain to the user how Pyrefly chose its
+/// behavior in the absence of a `pyrefly.toml` / `[tool.pyrefly]` section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SynthesizedPresetReason {
+    /// Nothing migrate-able was found near the source file. Pyrefly fell
+    /// back to the basic preset.
+    NoNearbyConfig,
+    /// A mypy or pyright config was found nearby and its settings
+    /// were migrated in memory. The wrapped `MigratedFromKind`
+    /// records both which type checker (mypy → resulting preset is
+    /// `Legacy`; pyright → `Default`) and which kind of file the
+    /// settings physically lived in (a dedicated `mypy.ini` /
+    /// `pyrightconfig.json` vs. a `[tool.mypy]` / `[tool.pyright]`
+    /// section in `pyproject.toml`). Both axes affect the surfaced
+    /// upsell wording.
+    Migrated(MigratedFromKind),
+    /// The user explicitly chose a preset — either via the IDE
+    /// workspace setting `typeCheckingMode` or the `--preset` CLI
+    /// flag — overriding any auto-detection.
+    UserOverride,
 }
 
 /// Where did this config come from?
@@ -529,6 +556,11 @@ pub struct ConfigFile {
     #[serde(flatten)]
     pub python_environment: PythonEnvironment,
 
+    /// Named preset that provides default error severities and behavior settings.
+    /// User-specified settings override the preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<Preset>,
+
     /// The `ConfigBase` values for the whole project.
     #[serde(default, flatten)]
     pub root: ConfigBase,
@@ -580,6 +612,16 @@ pub struct ConfigFile {
     /// name `foo.cinc`, not `foo`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_file_extensions: Vec<String>,
+
+    /// Runtime-only metadata. Populated by `resolve_unconfigured_config`
+    /// when this `ConfigFile` was synthesized rather than loaded from a
+    /// `pyrefly.toml` / `[tool.pyrefly]` section, and by the `--preset`
+    /// flag when a user specifies a preset on the command line. Used by
+    /// the status bar (LSP) and the upsell message (CLI) to explain to
+    /// the user why Pyrefly is behaving the way it is. Never serialized.
+    #[serde(skip)]
+    #[derivative(PartialEq = "ignore")]
+    pub synthesized_preset_reason: Option<SynthesizedPresetReason>,
 }
 
 impl Default for ConfigFile {
@@ -602,6 +644,7 @@ impl Default for ConfigFile {
             import_root: None,
             fallback_search_path: Default::default(),
             python_environment: Default::default(),
+            preset: None,
             root: Default::default(),
             sub_configs: Default::default(),
             build_system: Default::default(),
@@ -613,6 +656,7 @@ impl Default for ConfigFile {
             output_format: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            synthesized_preset_reason: None,
         }
     }
 }
@@ -689,8 +733,13 @@ impl ConfigFile {
 
 impl ConfigFile {
     pub const PYREFLY_FILE_NAME: &str = "pyrefly.toml";
+    pub const PYREFLY_HIDDEN_FILE_NAME: &str = ".pyrefly.toml";
     pub const PYPROJECT_FILE_NAME: &str = "pyproject.toml";
-    pub const CONFIG_FILE_NAMES: &[&str] = &[Self::PYREFLY_FILE_NAME, Self::PYPROJECT_FILE_NAME];
+    pub const CONFIG_FILE_NAMES: &[&str] = &[
+        Self::PYREFLY_FILE_NAME,
+        Self::PYREFLY_HIDDEN_FILE_NAME,
+        Self::PYPROJECT_FILE_NAME,
+    ];
     /// Files that don't contain pyrefly-specific config information but indicate that we're at the
     /// root of a Python project, which should be added to the search path.
     pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json"];
@@ -759,6 +808,23 @@ impl ConfigFile {
             } else {
                 self.import_root.iter()
             })
+    }
+
+    /// Explicit search paths from CLI args and config file, excluding the
+    /// heuristic import_root.
+    pub fn explicit_search_path(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.search_path_from_args
+            .iter()
+            .chain(self.search_path_from_file.iter())
+    }
+
+    /// The heuristic import_root, if search path heuristics are enabled.
+    pub fn heuristic_search_path(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        if self.disable_search_path_heuristics {
+            None.iter()
+        } else {
+            self.import_root.iter()
+        }
     }
 
     pub fn site_package_path(&self) -> impl Iterator<Item = &PathBuf> + Clone {
@@ -969,14 +1035,21 @@ impl ConfigFile {
         {
             Some(handle) => handle.dupe(),
             None => {
-                // Check site-package paths before search paths so that files
-                // in site-packages (which live under the project root) get their
-                // module name from the more specific site-packages prefix rather
-                // than from the project root.
+                // Order: explicit search paths (user intent) > site-package
+                // paths (known third-party roots) > heuristic import_root.
+                // This ensures files in site-packages nested under the project
+                // root resolve from the site-package prefix, not from the
+                // heuristic project root, while still letting explicit search
+                // paths override when the user has configured them.
+                let all_paths: Vec<&PathBuf> = self
+                    .explicit_search_path()
+                    .chain(self.site_package_path())
+                    .chain(self.heuristic_search_path())
+                    .collect();
                 let module_kind = if fallback_search_path.is_empty() {
                     let name = ModuleName::from_path(
                         module_path.as_path(),
-                        self.search_path().chain(self.site_package_path()),
+                        all_paths.iter().copied(),
                         &self.extra_file_extensions,
                     )
                     .unwrap_or_else(ModuleName::unknown);
@@ -986,7 +1059,7 @@ impl ConfigFile {
                         fallback_search_path.for_directory(Some(module_path.as_path()));
                     ModuleName::from_path_with_fallback(
                         module_path.as_path(),
-                        self.search_path().chain(self.site_package_path()),
+                        all_paths.iter().copied(),
                         fallback_paths.iter(),
                         &self.extra_file_extensions,
                     )
@@ -1165,17 +1238,83 @@ impl ConfigFile {
             self.project_excludes = self.get_full_project_excludes(project_excludes);
         }
 
+        // Resolve deprecated untyped_def_behavior BEFORE applying preset, so that
+        // the user's explicit legacy field takes precedence over the preset.
+        self.root.resolve_legacy_untyped_def_behavior();
+        for sub in &mut self.sub_configs {
+            sub.settings.resolve_legacy_untyped_def_behavior();
+        }
+
+        // Process pytorch-efficiency-lints BEFORE preset merge so the flag
+        // entries behave like user overrides (winning over preset defaults
+        // like Basic's blanket Ignore). Explicit [errors] entries still win
+        // because set_default_severity only inserts when the key is absent.
+        if self.root.pytorch_efficiency_lints == Some(true) {
+            let errors = self.root.errors.get_or_insert_default();
+            for &kind in ErrorKind::pytorch_efficiency_lints() {
+                errors.set_default_severity(kind, Severity::Warn);
+            }
+        }
+
+        // Apply preset as defaults: preset values fill in any fields the user
+        // didn't explicitly set. For errors, preset errors are the base and user
+        // errors merge on top.
+        if let Some(preset) = self.preset {
+            let preset_base = preset.apply();
+            // For errors: merge user errors on top of preset errors, dropping
+            // preset entries shadowed by a user-set parent kind or alias so
+            // broad user overrides cascade correctly.
+            match (&mut self.root.errors, preset_base.errors) {
+                (user @ None, preset_errors) => *user = preset_errors,
+                (Some(user_errors), Some(preset_errors)) => {
+                    let mut merged = preset_errors;
+                    merged.merge_user_overrides(user_errors);
+                    *user_errors = merged;
+                }
+                (Some(_), None) => {}
+            }
+            // For scalar fields: preset fills in None values. Any preset field
+            // not listed here is silently dropped, so new fields added to
+            // `Preset::apply()` must be added here as well — `test_preset_fields_propagate`
+            // guards against accidental omissions.
+            macro_rules! apply_preset_default {
+                ($field:ident) => {
+                    if self.root.$field.is_none() {
+                        self.root.$field = preset_base.$field;
+                    }
+                };
+            }
+            apply_preset_default!(check_unannotated_defs);
+            apply_preset_default!(infer_return_types);
+            apply_preset_default!(infer_with_first_use);
+            apply_preset_default!(strict_callable_subtyping);
+            apply_preset_default!(spec_compliant_overloads);
+            apply_preset_default!(ignore_errors_in_generated_code);
+            apply_preset_default!(tensor_shapes);
+            apply_preset_default!(permissive_ignores);
+        }
+
         if self.root.errors.is_none() {
             self.root.errors = Some(Default::default());
         }
 
-        // Merge root errors into each sub-config's errors so that sub-configs
-        // inherit root-level error severity overrides for codes they don't set.
+        // Merge root errors into each sub-config's errors so sub-configs
+        // inherit root-level overrides (including any from a preset) for codes
+        // they don't set. Uses `merge_user_overrides` so that a sub-config
+        // setting a parent kind or a deprecated alias cascades through
+        // preset-derived child/canonical entries in root, matching the
+        // semantics at root.
         if let Some(root_errors) = &self.root.errors {
             for sub in &mut self.sub_configs {
+                if sub.settings.pytorch_efficiency_lints == Some(true) {
+                    let sub_errors = sub.settings.errors.get_or_insert_default();
+                    for &kind in ErrorKind::pytorch_efficiency_lints() {
+                        sub_errors.set_default_severity(kind, Severity::Warn);
+                    }
+                }
                 if let Some(sub_errors) = &mut sub.settings.errors {
                     let mut merged = root_errors.clone();
-                    merged.merge_from(sub_errors);
+                    merged.merge_user_overrides(sub_errors);
                     *sub_errors = merged;
                 }
             }
@@ -1189,11 +1328,12 @@ impl ConfigFile {
             self.root.ignore_missing_imports = Some(Default::default());
         }
 
-        // Resolve the deprecated untyped_def_behavior into the two new fields
-        // for both root and sub-configs.
-        self.root.resolve_legacy_untyped_def_behavior();
-        for sub in &mut self.sub_configs {
-            sub.settings.resolve_legacy_untyped_def_behavior();
+        if self.root.check_unannotated_defs.is_none() {
+            self.root.check_unannotated_defs = Some(true);
+        }
+
+        if self.root.infer_return_types.is_none() {
+            self.root.infer_return_types = Some(InferReturnTypes::Checked);
         }
 
         if self.root.ignore_errors_in_generated_code.is_none() {
@@ -1544,6 +1684,7 @@ mod tests {
                 disable_search_path_heuristics: false,
                 disable_project_excludes_heuristics: false,
                 import_root: None,
+                preset: None,
                 build_system: Default::default(),
                 use_ignore_files: true,
                 output_format: Some(OutputFormat::MinText),
@@ -1577,6 +1718,7 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     tensor_shapes: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
@@ -1602,6 +1744,7 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         tensor_shapes: None,
                         replace_imports_with_any: Some(Vec::new()),
@@ -1621,6 +1764,7 @@ mod tests {
                 min_severity: None,
                 skip_lsp_config_indexing: false,
                 extra_file_extensions: Vec::new(),
+                synthesized_preset_reason: None,
             }
         );
     }
@@ -1840,6 +1984,7 @@ mod tests {
             disable_search_path_heuristics: false,
             disable_project_excludes_heuristics: false,
             import_root: None,
+            preset: None,
             use_ignore_files: true,
             output_format: Some(OutputFormat::Json),
             fallback_search_path: Default::default(),
@@ -1864,6 +2009,7 @@ mod tests {
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            synthesized_preset_reason: None,
         };
 
         let current_dir = std::env::current_dir().unwrap();
@@ -1912,6 +2058,7 @@ mod tests {
             use_ignore_files: true,
             output_format: Some(OutputFormat::Json),
             import_root: None,
+            preset: None,
             fallback_search_path: Default::default(),
             python_environment,
             root: Default::default(),
@@ -1926,6 +2073,7 @@ mod tests {
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
+            synthesized_preset_reason: None,
         };
         assert_eq!(config, expected_config);
     }
@@ -2019,6 +2167,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -2185,6 +2334,359 @@ output-format = "omit-errors"
         assert_eq!(
             sub_errors.severity(ErrorKind::BadAssignment),
             Severity::Ignore
+        );
+    }
+
+    #[test]
+    fn test_preset_legacy_applies_defaults() {
+        let mut config = ConfigFile {
+            preset: Some(Preset::Legacy),
+            ..Default::default()
+        };
+        config.configure();
+
+        assert_eq!(config.root.check_unannotated_defs, Some(false));
+        assert_eq!(
+            config.root.infer_return_types,
+            Some(InferReturnTypes::Never)
+        );
+        // Preset leaves `infer_with_first_use` unset, so the post-preset
+        // default-fill in `configure()` provides the default value of `true`.
+        assert_eq!(config.root.infer_with_first_use, Some(true));
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Ignore
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideParamName),
+            Severity::Ignore
+        );
+        assert_eq!(errors.severity(ErrorKind::UnboundName), Severity::Ignore);
+    }
+
+    #[test]
+    fn test_preset_user_settings_override() {
+        let mut config = ConfigFile {
+            preset: Some(Preset::Legacy),
+            root: ConfigBase {
+                check_unannotated_defs: Some(true),
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::BadOverrideMutableAttribute,
+                    Severity::Error,
+                )]))),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        // User setting overrides preset
+        assert_eq!(config.root.check_unannotated_defs, Some(true));
+        let errors = config.root.errors.as_ref().unwrap();
+        // Explicit user error override wins
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Error
+        );
+        // Preset error still applies for non-overridden codes
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideParamName),
+            Severity::Ignore
+        );
+    }
+
+    #[test]
+    fn test_preset_default_is_noop() {
+        let mut with_preset = ConfigFile {
+            preset: Some(Preset::Default),
+            ..Default::default()
+        };
+        with_preset.configure();
+
+        let mut without_preset = ConfigFile::default();
+        without_preset.configure();
+
+        assert_eq!(with_preset.root, without_preset.root);
+    }
+
+    #[test]
+    fn test_preset_strict_enables_errors() {
+        let mut config = ConfigFile {
+            preset: Some(Preset::Strict),
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
+        // Setting `implicit-any` cascades to every sub-kind via parent_kind,
+        // so strict mode covers parameters, attributes, type arguments, and
+        // empty containers without listing them individually.
+        for kind in [
+            ErrorKind::ImplicitAnyParameter,
+            ErrorKind::ImplicitAnyAttribute,
+            ErrorKind::ImplicitAnyTypeArgument,
+            ErrorKind::ImplicitAnyEmptyContainer,
+        ] {
+            assert_eq!(
+                errors.severity(kind),
+                Severity::Error,
+                "strict should enable {kind:?} via the implicit-any parent"
+            );
+        }
+        assert_eq!(
+            errors.severity(ErrorKind::MissingOverrideDecorator),
+            Severity::Error
+        );
+        // Pyrefly infers concrete return types in most cases, so we don't
+        // ask users for an explicit annotation in strict mode.
+        assert_eq!(
+            errors.severity(ErrorKind::UnannotatedReturn),
+            Severity::Ignore
+        );
+        assert_eq!(config.root.strict_callable_subtyping, Some(true));
+    }
+
+    #[test]
+    fn test_preset_off_silences_all_errors() {
+        // The `off` preset silences every error kind and leaves all other
+        // settings at their defaults.
+        let mut config = ConfigFile {
+            preset: Some(Preset::Off),
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        for kind in enum_iterator::all::<ErrorKind>() {
+            assert_eq!(
+                errors.severity(kind),
+                Severity::Ignore,
+                "`off` preset should silence {kind:?}"
+            );
+        }
+
+        // Scalar fields fall back to the post-preset defaults in `configure()`.
+        let mut default_config = ConfigFile::default();
+        default_config.configure();
+        assert_eq!(
+            config.root.check_unannotated_defs,
+            default_config.root.check_unannotated_defs
+        );
+        assert_eq!(
+            config.root.infer_return_types,
+            default_config.root.infer_return_types
+        );
+        assert_eq!(
+            config.root.infer_with_first_use,
+            default_config.root.infer_with_first_use
+        );
+        assert_eq!(config.root.permissive_ignores, None);
+    }
+
+    #[test]
+    fn test_preset_basic_enables_only_high_confidence_errors() {
+        // Basic is an opt-in preset: only a small set of high-confidence
+        // diagnostics fires, everything else is silenced. The enabled kinds
+        // should have their configured severities; every other kind should
+        // be Ignore.
+        let mut config = ConfigFile {
+            preset: Some(Preset::Basic),
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+
+        // All enabled kinds are errors. Keeping them at `Error` (rather than
+        // `Warn`) avoids the surprise of switching presets changing
+        // `min-severity` requirements.
+        for kind in [
+            ErrorKind::DivisionByZero,
+            ErrorKind::InvalidSyntax,
+            ErrorKind::MissingImport,
+            ErrorKind::ParseError,
+            ErrorKind::UnexpectedKeyword,
+            ErrorKind::UnknownName,
+            ErrorKind::InvalidAnnotation,
+            ErrorKind::NotAsync,
+            ErrorKind::UnusedCoroutine,
+        ] {
+            assert_eq!(
+                errors.severity(kind),
+                Severity::Error,
+                "Basic preset should enable {kind:?} as Error"
+            );
+        }
+        // A representative sample of kinds that should be silenced. Exhaustive
+        // enumeration is covered by `test_preset_fields_propagate`.
+        for kind in [
+            ErrorKind::BadArgumentType,
+            ErrorKind::BadOverride,
+            ErrorKind::MissingAttribute,
+            ErrorKind::NotCallable,
+            ErrorKind::NotIterable,
+            ErrorKind::RedundantCast,
+        ] {
+            assert_eq!(
+                errors.severity(kind),
+                Severity::Ignore,
+                "Basic preset should silence {kind:?}"
+            );
+        }
+
+        // Scalar/top-level settings
+        assert_eq!(config.root.check_unannotated_defs, Some(false));
+        assert_eq!(
+            config.root.infer_return_types,
+            Some(InferReturnTypes::Never)
+        );
+        assert_eq!(config.root.infer_with_first_use, Some(false));
+        assert_eq!(config.root.permissive_ignores, Some(true));
+    }
+
+    #[test]
+    fn test_preset_deserialization() {
+        let config_str = r#"preset = "legacy""#;
+        let config: ConfigFile = toml::from_str(config_str).unwrap();
+        assert_eq!(config.preset, Some(Preset::Legacy));
+    }
+
+    #[test]
+    fn test_preset_fields_propagate() {
+        // Applying a preset should produce the same `root` as setting each of
+        // its fields explicitly. If `configure()` forgets to handle a new
+        // field added to `Preset::apply()`, the preset value would silently
+        // be dropped — this test catches that.
+        for preset in enum_iterator::all::<Preset>() {
+            let mut via_preset = ConfigFile {
+                preset: Some(preset),
+                ..Default::default()
+            };
+            via_preset.configure();
+
+            let mut via_fields = ConfigFile {
+                root: preset.apply(),
+                ..Default::default()
+            };
+            via_fields.configure();
+
+            assert_eq!(
+                via_preset.root, via_fields.root,
+                "Preset `{preset:?}`: `configure()` produced a different `root` \
+                 when applied via `preset = ...` vs. setting the fields directly. \
+                 A preset field is probably not handled by `apply_preset_default!`."
+            );
+        }
+    }
+
+    #[test]
+    fn test_preset_user_parent_override_cascades_to_preset_child() {
+        // `bad-override = "error"` should cascade through the legacy preset's
+        // child `BadOverrideMutableAttribute` / `BadOverrideParamName`
+        // `Ignore` entries so the user's broader override actually takes
+        // effect.
+        let mut config = ConfigFile {
+            preset: Some(Preset::Legacy),
+            root: ConfigBase {
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::BadOverride,
+                    Severity::Error,
+                )]))),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Error
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideParamName),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_preset_sub_config_parent_override_cascades() {
+        // A sub-config setting a parent kind should cascade through the
+        // preset's child entries the same way it does at root — i.e., the
+        // preset's `BadOverrideMutableAttribute = Ignore` gets dropped when
+        // the sub-config sets `BadOverride = Error`. This gives sub-configs
+        // the same "least surprise" behavior as root overrides.
+        let mut config = ConfigFile {
+            preset: Some(Preset::Legacy),
+            sub_configs: vec![SubConfig {
+                matches: Glob::new("tests/**".to_owned()).unwrap(),
+                settings: ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                        ErrorKind::BadOverride,
+                        Severity::Error,
+                    )]))),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        config.configure();
+
+        let sub_errors = config.sub_configs[0].settings.errors.as_ref().unwrap();
+        assert_eq!(
+            sub_errors.severity(ErrorKind::BadOverrideMutableAttribute),
+            Severity::Error
+        );
+        assert_eq!(
+            sub_errors.severity(ErrorKind::BadOverrideParamName),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_preset_user_deprecated_alias_overrides_preset_canonical() {
+        // The deprecated alias `bad-param-name-override` should override the
+        // legacy preset's canonical `BadOverrideParamName` entry.
+        let mut config = ConfigFile {
+            preset: Some(Preset::Legacy),
+            root: ConfigBase {
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::BadParamNameOverride,
+                    Severity::Error,
+                )]))),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::BadOverrideParamName),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn test_deprecated_untyped_def_behavior_overrides_preset() {
+        // The deprecated `untyped-def-behavior` field should override the
+        // preset's `check-unannotated-defs` and `infer-return-types` values.
+        let config_str = r#"
+            preset = "legacy"
+            untyped-def-behavior = "check-and-infer-return-type"
+        "#;
+        let mut config: ConfigFile = toml::from_str(config_str).unwrap();
+        config.configure();
+
+        // The legacy preset sets `check_unannotated_defs = false`, but the
+        // deprecated field resolves to `check_unannotated_defs = true` and
+        // overrides it.
+        assert_eq!(config.root.check_unannotated_defs, Some(true));
+        assert_eq!(
+            config.root.infer_return_types,
+            Some(InferReturnTypes::Checked)
         );
     }
 
@@ -2442,6 +2944,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -2481,6 +2984,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 tensor_shapes: None,
                 extras: Default::default(),
@@ -2615,5 +3119,131 @@ output-format = "omit-errors"
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.
         assert_eq!(config.source.root(), Some(root.path()));
+    }
+
+    #[test]
+    fn test_explicit_search_path_wins_over_site_packages() {
+        // An explicit search path should take priority over a site-package
+        // path when resolving a file path back to a module name, even when
+        // the site-package path would also match.
+        let root = TempDir::new().unwrap();
+        let sp_dir = root.path().join("venv/lib/python3.13/site-packages");
+        let mylib_dir = sp_dir.join("mylib");
+        fs::create_dir_all(&mylib_dir).unwrap();
+        let submod = mylib_dir.join("submod.py");
+        fs::write(&submod, "").unwrap();
+
+        let mut config = ConfigFile {
+            search_path_from_args: vec![mylib_dir.clone()],
+            import_root: Some(root.path().to_path_buf()),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.site_package_path = Some(vec![sp_dir]);
+        config.python_environment.set_empty_to_default();
+
+        let handle = config.handle_from_module_path(ModulePath::filesystem(submod));
+        // The explicit search path points into mylib, so the file resolves
+        // as `submod` rather than `mylib.submod` (from site-packages) or
+        // the full venv-relative path (from import_root).
+        assert_eq!(handle.module(), ModuleName::from_str("submod"));
+    }
+
+    #[test]
+    fn test_site_packages_wins_over_heuristic_import_root() {
+        // A site-package path should take priority over the heuristic
+        // import_root when resolving files in site-packages.
+        let root = TempDir::new().unwrap();
+        let sp_dir = root.path().join("venv/lib/python3.13/site-packages");
+        let fastapi_dir = sp_dir.join("fastapi");
+        fs::create_dir_all(&fastapi_dir).unwrap();
+        let init = fastapi_dir.join("__init__.py");
+        fs::write(&init, "").unwrap();
+
+        let mut config = ConfigFile {
+            import_root: Some(root.path().to_path_buf()),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.site_package_path = Some(vec![sp_dir]);
+        config.python_environment.set_empty_to_default();
+
+        let handle = config.handle_from_module_path(ModulePath::filesystem(init));
+        assert_eq!(handle.module(), ModuleName::from_str("fastapi"));
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_flag_enables_lints() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                pytorch_efficiency_lints: Some(true),
+                ..Default::default()
+            },
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Warn,
+            "pytorch-efficiency-lints = true should enable item-call lint at Warn"
+        );
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_user_override_wins() {
+        let mut config = ConfigFile {
+            root: ConfigBase {
+                pytorch_efficiency_lints: Some(true),
+                errors: Some(ErrorDisplayConfig::new(HashMap::from([(
+                    ErrorKind::PytorchEfficiencyLintItemCall,
+                    Severity::Error,
+                )]))),
+                ..Default::default()
+            },
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Error,
+            "explicit [errors] override should win over pytorch-efficiency-lints flag"
+        );
+    }
+
+    #[test]
+    fn test_pytorch_efficiency_lints_disabled_by_default() {
+        let mut config = ConfigFile {
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+
+        let errors = config.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
+            Severity::Ignore,
+            "without pytorch-efficiency-lints flag, lints should default to Ignore"
+        );
     }
 }

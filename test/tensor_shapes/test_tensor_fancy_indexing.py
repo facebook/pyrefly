@@ -16,8 +16,8 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    from shape_extensions import Dim
     from torch import Tensor
-    from torch_shapes import Dim
 
 
 def test_basic_tensor_index[B](z: Tensor[B, 4, 4], idx: Tensor[6]) -> None:

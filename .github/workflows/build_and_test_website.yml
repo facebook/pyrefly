@@ -33,8 +33,6 @@ jobs:
         run: cd website && yarn install
       - name: Install wasm-pack
         run: cargo install wasm-pack wasm-opt
-      - name: Use rust nightly
-        run: rustup install nightly && rustup default nightly
       - name: Build
         working-directory: ./website
         run: cargo version && chmod +x scripts/build.sh && scripts/build.sh && yarn build-wasm-for-test

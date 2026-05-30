@@ -90,7 +90,6 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
-    use vec1::vec1;
 
     use super::*;
     use crate::config::error_kind::ErrorKind;
@@ -116,7 +115,8 @@ mod tests {
         Error::new(
             module,
             TextRange::new(TextSize::new(offset), TextSize::new(offset + 1)),
-            vec1![msg.to_owned()],
+            msg.to_owned(),
+            Vec::new(),
             ErrorKind::BadReturn,
         )
     }

@@ -24,18 +24,19 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use tempfile::TempDir;
 
 use crate::commands::config_finder::default_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
+use crate::module::finder::DirEntryCache;
 use crate::module::finder::find_import;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
-use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::TestEnv;
 
 #[test]
@@ -63,9 +64,16 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -96,9 +104,16 @@ fn test_cross_module_literal_promotion() {
     let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
     let f = |name: &str| {
         let name = ModuleName::from_str(name);
-        let path = find_import(&config_file, name, None, None)
-            .finding()
-            .unwrap();
+        let path = find_import(
+            &config_file,
+            name,
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        )
+        .finding()
+        .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
     let handles = [f("main")];

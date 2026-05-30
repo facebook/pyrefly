@@ -53,6 +53,7 @@ use crate::report::cinderx::CinderxSolutions;
 use crate::report::pysa::PysaSolutions;
 use crate::solver::solver::Solver;
 use crate::solver::solver::VarRecurser;
+use crate::state::errors::ModuleRanges;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::state::ModuleChanges;
@@ -92,8 +93,8 @@ pub struct Index {
 
 #[derive(Debug, Clone)]
 pub struct OverloadTrace {
-    pub(crate) callable: Callable,
-    pub(crate) tparams: Option<Arc<TParams>>,
+    callable: Callable,
+    tparams: Option<Arc<TParams>>,
 }
 
 impl OverloadTrace {
@@ -135,7 +136,7 @@ pub struct Traces {
 
 impl Traces {
     /// Merge accumulated side effects into the persisted trace store.
-    pub(crate) fn merge(&mut self, side_effects: TraceSideEffects) {
+    fn merge(&mut self, side_effects: TraceSideEffects) {
         for (k, v) in side_effects.types {
             self.types.insert(k, v);
         }
@@ -224,6 +225,8 @@ pub struct Solutions {
     module_info: ModuleInfo,
     table: SolutionsTable,
     metadata: Arc<BindingsMetadata>,
+    /// Multi-line ranges and ignore-all directives.
+    module_ranges: Arc<ModuleRanges>,
     index: Option<Arc<Mutex<Index>>>,
     /// Per-module pysa data, populated when pysa reporting is enabled.
     pysa_solutions: Option<Arc<PysaSolutions>>,
@@ -298,6 +301,10 @@ impl Display for SolutionsDifference<'_> {
 impl Solutions {
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
         &self.metadata
+    }
+
+    pub fn module_ranges(&self) -> &Arc<ModuleRanges> {
+        &self.module_ranges
     }
 
     /// Access per-module pysa data, if pysa reporting was enabled.
@@ -806,6 +813,7 @@ impl Answers {
             module_info: bindings.module().dupe(),
             table: res,
             metadata: bindings.metadata().dupe(),
+            module_ranges: bindings.module_ranges().dupe(),
             index: self.index.dupe(),
             pysa_solutions,
             cinderx_solutions,
@@ -980,8 +988,8 @@ impl Answers {
         }
     }
 
-    fn deep_force(&self, t: Type) -> Type {
-        self.solver.deep_force(t)
+    fn force_for_export_boundary(&self, t: Type) -> Type {
+        self.solver.for_export_boundary(t)
     }
 
     pub fn solver(&self) -> &Solver {
@@ -1002,28 +1010,57 @@ impl Answers {
     }
 
     pub fn get_type_at(&self, idx: Idx<Key>) -> Option<Type> {
-        Some(self.deep_force(self.get_idx(idx)?.arc_clone_ty()))
+        Some(self.force_for_export_boundary(self.get_idx(idx)?.arc_clone_ty()))
+    }
+
+    pub fn get_type_at_for_display(&self, idx: Idx<Key>) -> Option<Type> {
+        Some(self.solver.for_display(self.get_idx(idx)?.arc_clone_ty()))
     }
 
     pub fn get_type_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.deep_force(lock.types.get(&range)?.as_ref().clone()))
+        Some(self.force_for_export_boundary(lock.types.get(&range)?.as_ref().clone()))
+    }
+
+    pub fn get_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        Some(
+            self.solver
+                .for_display(lock.types.get(&range)?.as_ref().clone()),
+        )
     }
 
     pub fn try_get_getter_for_range(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.deep_force(lock.invoked_properties.get(&range)?.as_ref().clone()))
+        Some(self.force_for_export_boundary(lock.invoked_properties.get(&range)?.as_ref().clone()))
     }
 
     pub fn get_chosen_overload_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
-            OverloadedCallee::Resolved { callable } => Some(self.deep_force(callable.as_type())),
+            OverloadedCallee::Resolved { callable } => {
+                Some(self.force_for_export_boundary(callable.as_type()))
+            }
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
-            } if *is_closest_chosen => Some(self.deep_force(closest.as_type())),
+            } if *is_closest_chosen => Some(self.force_for_export_boundary(closest.as_type())),
+            _ => None,
+        }
+    }
+
+    pub fn get_chosen_overload_trace_for_display(&self, range: TextRange) -> Option<Type> {
+        let lock = self.trace.as_ref()?.lock();
+        match lock.overloaded_callees.get(&range)? {
+            OverloadedCallee::Resolved { callable } => {
+                Some(self.solver.for_display(callable.as_type()))
+            }
+            OverloadedCallee::Candidates {
+                closest,
+                is_closest_chosen,
+                ..
+            } if *is_closest_chosen => Some(self.solver.for_display(closest.as_type())),
             _ => None,
         }
     }

@@ -70,44 +70,12 @@ class CORSMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         pass
 
-
 def use_middleware() -> None:
     app = FastAPI()
     app.add_middleware(
         CORSMiddleware,
         x="",  # E: Unexpected keyword argument `x`
     )
-"#,
-);
-
-testcase!(
-    bug = "Generic functions don't work with ParamSpec",
-    test_param_spec_generic_function,
-    r#"
-from typing import Callable, reveal_type
-def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
-    return x
-def foo[T](x: T, y: T) -> T:
-    return x
-foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
-"#,
-);
-
-testcase!(
-    bug = "Generic class constructors don't work with ParamSpec",
-    test_param_spec_generic_constructor,
-    r#"
-from typing import Callable, reveal_type
-def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
-  return x
-class C[T]:
-  x: T
-  def __init__(self, x: T) -> None:
-    self.x = x
-c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
-x: C[int] = c2(1)
 "#,
 );
 
@@ -852,6 +820,41 @@ def compute(x: int, y: str) -> bool:
 
 call_with_retry(compute, max_attempts=3, x=1, y="hello")
 call_with_retry(compute, 3, 1, "hello")
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3054
+testcase!(
+    test_paramspec_forwarding_with_overloaded_callable,
+    r#"
+from typing import ParamSpec, overload, Callable, Any
+
+P = ParamSpec("P")
+
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    /,
+) -> None: ...
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    callable: Callable[P, Any],
+    /,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> None: ...
+def assert_raises(*args: Any, **kwargs: Any) -> None:
+    pass
+
+@overload
+def compute(x: int, y: int) -> int: ...
+@overload
+def compute(x: str, y: str) -> str: ...
+def compute(x: int | str, y: int | str) -> int | str:
+    return x
+
+assert_raises(ValueError, compute, "hello", "world")
 "#,
 );
 

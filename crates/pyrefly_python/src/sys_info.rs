@@ -6,7 +6,6 @@
  */
 
 use std::cmp::Ordering;
-use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::Display;
@@ -229,7 +228,7 @@ impl PythonPlatform {
     }
 }
 
-static SYS_INFO_INTERNER: Interner<SysInfoInner, DefaultHasher> = Interner::new();
+static SYS_INFO_INTERNER: Interner<SysInfoInner> = Interner::new();
 
 /// Information available from the Python library `sys`, namely
 /// `version` and `platform`.
@@ -555,6 +554,15 @@ impl SysInfo {
             }) if value.is_name_expr() && Self::is_type_checking_constant_name(attr.as_str()) => {
                 Some(Value::Bool(self.type_checking()))
             }
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => match self.evaluate(value)? {
+                Value::VersionInfo(version) => match attr.as_str() {
+                    "major" => Some(Value::Int(version.major as i64)),
+                    "minor" => Some(Value::Int(version.minor as i64)),
+                    "micro" => Some(Value::Int(version.micro as i64)),
+                    _ => None,
+                },
+                _ => None,
+            },
             Expr::Call(ExprCall {
                 func, arguments, ..
             }) if let Expr::Attribute(ExprAttribute { value, attr, .. }) = &**func
@@ -757,10 +765,6 @@ mod tests {
         assert_eq!(
             PythonVersion::from_str("cinder.3.8").unwrap(),
             PythonVersion::new(3, 8, 0)
-        );
-        assert_eq!(
-            PythonVersion::from_str("3.10.cinder").unwrap(),
-            PythonVersion::new(3, 10, 0)
         );
         assert!(PythonVersion::from_str("").is_err());
         assert!(PythonVersion::from_str("abc").is_err());

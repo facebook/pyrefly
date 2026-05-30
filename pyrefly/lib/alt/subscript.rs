@@ -21,7 +21,6 @@ use crate::alt::callable::CallArg;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::types::types::Type;
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -61,7 +60,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         match tuple {
             Tuple::Concrete(elts) => self.infer_concrete_slice(elts, &slice.lower, &slice.upper),
-            Tuple::Unpacked(box (prefix, middle, suffix)) => {
+            Tuple::Unpacked(f) => {
+                let (prefix, middle, suffix) = &**f;
                 self.infer_unpacked_slice(prefix, middle, suffix, &slice.lower, &slice.upper)
             }
             _ => None,
@@ -80,7 +80,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Tuple::Concrete(elts) => {
                     self.infer_concrete_index(elts, idx, index.range(), errors)
                 }
-                Tuple::Unpacked(box (prefix, _middle, suffix)) => {
+                Tuple::Unpacked(f) => {
+                    let (prefix, _middle, suffix) = &**f;
                     self.infer_unpacked_index(prefix, suffix, idx)
                 }
                 _ => None,
@@ -162,7 +163,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadIndex),
+                ErrorKind::BadIndex,
                 format!(
                     "Index {idx} out of range for tuple with {} elements",
                     elts.len()
@@ -448,7 +449,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::BadIndex),
+                        ErrorKind::BadIndex,
                         format!(
                             "Index `{idx}` out of range for string with {} elements",
                             chars.len()
@@ -488,7 +489,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::BadIndex),
+                            ErrorKind::BadIndex,
                             format!(
                                 "Index `{idx}` out of range for bytes with {} elements",
                                 bytes.len()

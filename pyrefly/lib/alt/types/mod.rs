@@ -9,6 +9,7 @@ pub mod abstract_class;
 pub mod class_bases;
 pub mod class_metadata;
 pub mod decorated_function;
+pub mod instance;
 pub mod legacy_lookup;
 pub mod pydantic;
 pub mod yields;

@@ -4,6 +4,10 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-strict
+
+from __future__ import annotations
+
 """Build a rolling history of primer comparison results.
 
 Reads the current run's primer_errors.json and an optional previous

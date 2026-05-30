@@ -9,6 +9,12 @@ on:
         description: 'Tag name to upload assets to (e.g., 0.51.0)'
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name to upload assets to (e.g., 0.51.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -40,6 +46,16 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact_name: pyrefly-linux-arm64
             container: ubuntu:20.04
+            github_env: $GITHUB_ENV
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: pyrefly-linux-x86_64-musl
+            cross: true
+            github_env: $GITHUB_ENV
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact_name: pyrefly-linux-arm64-musl
+            cross: true
             github_env: $GITHUB_ENV
           # macOS
           - os: macos-15-intel
@@ -87,13 +103,9 @@ jobs:
           # Fix git safe.directory for container builds (checkout creates repo with different owner)
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Read rust-toolchain file
-        run: echo "toolchain=$(cat pyrefly/rust-toolchain)" && echo "toolchain=$(cat pyrefly/rust-toolchain)" >> ${{ matrix.github_env }}
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ env.toolchain }}
           targets: ${{ matrix.target }}
 
       - name: Set up Rust cache
@@ -106,7 +118,7 @@ jobs:
         run: echo "CARGO_HOME=C:\cargo" >> ${{ matrix.github_env }}
 
       - name: Set jemalloc page size for ARM64 Linux
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        if: startsWith(matrix.target, 'aarch64-unknown-linux-')
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> ${{ matrix.github_env }}
 
       - name: Set jemalloc page size for ARM64 macOS
@@ -124,7 +136,7 @@ jobs:
           command: build
           target: ${{ matrix.target }}
           args: "--release --manifest-path pyrefly/Cargo.toml -p pyrefly"
-          toolchain: ${{ env.toolchain }}
+          toolchain: stable
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'

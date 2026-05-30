@@ -926,3 +926,43 @@ class Foo:
         )]))
     },
 );
+
+// When the user declares both __x and _Foo__x, pyrefly emits both as separate
+// fields. Pysa handles this by skipping the private-name entry when the mangled
+// form already exists. This test documents the current pyrefly behavior.
+exported_class_testcase!(
+    test_export_private_attribute_with_explicit_mangled_form,
+    r#"
+class Foo:
+    __x: int = 1
+    _Foo__x: str = "hello"
+"#,
+    &|context: &ModuleContext| {
+        create_simple_class(
+            "Foo",
+            0,
+            ScopeParent::TopLevel,
+            create_location(2, 7, 2, 10),
+        )
+        .with_fields(HashMap::from([
+            (
+                "__x".into(),
+                PysaClassField {
+                    type_: PysaType::from_class_type(context.answers_context.stdlib.int(), context),
+                    explicit_annotation: Some("int".to_owned()),
+                    location: Some(create_location(3, 5, 3, 8)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::AssignedInBody),
+                },
+            ),
+            (
+                "_Foo__x".into(),
+                PysaClassField {
+                    type_: PysaType::from_class_type(context.answers_context.stdlib.str(), context),
+                    explicit_annotation: Some("str".to_owned()),
+                    location: Some(create_location(4, 5, 4, 12)),
+                    declaration_kind: Some(PysaClassFieldDeclaration::AssignedInBody),
+                },
+            ),
+        ]))
+    },
+);

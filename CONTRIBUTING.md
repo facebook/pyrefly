@@ -27,7 +27,9 @@ When looking for an issue to pick up, consider the following things:
 Development docs are WIP. Please reach out if you are working on an issue and
 have questions or want a code pointer.
 
-As described in the README, our architecture follows 3 phases:
+As described in the
+[architecture overview](https://github.com/facebook/pyrefly/blob/main/ARCHITECTURE.md),
+our architecture follows 3 phases:
 
 1. figuring out exports
 2. making bindings
@@ -74,7 +76,7 @@ the command line.
 ## Coding conventions
 
 We follow the
-[Buck2 coding conventions](https://github.com/facebook/buck2/blob/main/HACKING.md#coding-conventions),
+[Buck2 coding convention](https://github.com/facebook/buck2/blob/main/docs/developers/basics.md),
 with the caveat that we use our internal error framework for errors reported by
 the type checker.
 
@@ -154,12 +156,13 @@ like [lldb](https://docs.rs/lldb/latest/lldb/#installation):
 
 Contributing a pull request (PR) is the main way to propose changes to Pyrefly. To ensure your PR is reviewed efficiently and has the best chance of being accepted, please make sure you have done the following:
 
-[ ] Updated or added new tests to cover your changes (see testing section for details)
-[] Made sure all continuous integration (CI) checks pass before requesting a review. Fix any errors or warnings, or ask us about any CI results you don't understand.
-[ ] Written a clear description: Provide a concise summary of what your PR does. Explain the motivation, the approach, and any important details.
-[] If your PR addresses a specific issue, reference the issue(s) in the description using the special GitHub keywords (e.g., “Fixes #123”). This will automatically link your PR to the relevant issue and helps us keep track of things
-[ ] Try to limit your PR to a single purpose or issue. Avoid mixing unrelated changes, as this makes review harder.
-[ ] Clean up any temporary debugging statements or code before submitting.
+- [ ] **IMPORTANT** [Comment on the issue](https://github.com/facebook/pyrefly/issues) so we can assign it to you
+- [ ] Updated or added new tests to cover your changes (see testing section for details)
+- [ ] Made sure all continuous integration (CI) checks pass before requesting a review. Fix any errors or warnings, or ask us about any CI results you don't understand.
+- [ ] Written a clear description: Provide a concise summary of what your PR does. Explain the motivation, the approach, and any important details.
+- [ ] If your PR addresses a specific issue, reference the issue(s) in the description using the special GitHub keywords (e.g., “Fixes #123”). This will automatically link your PR to the relevant issue and helps us keep track of things
+- [ ] Try to limit your PR to a single purpose or issue. Avoid mixing unrelated changes, as this makes review harder.
+- [ ] Clean up any temporary debugging statements or code before submitting.
 
 We aim to respond to all PRs in a timely manner, but please note we prioritise reviews for work that is highest priority (e.g. critical bug fixes, upcoming milestones). If you haven’t received a response to your PR within a week of submitting, you can nudge maintainers by tagging us in a comment or sending a reminder in discord.
 
