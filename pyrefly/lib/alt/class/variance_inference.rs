@@ -18,19 +18,26 @@ use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::tensor::TensorShape;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::class_bases::ClassBases;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
+use crate::types::callable::Callable;
+use crate::types::callable::FuncMetadata;
+use crate::types::callable::FunctionKind;
 use crate::types::callable::Params;
 use crate::types::class::Class;
 use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Variance;
+use crate::types::types::OverloadType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
@@ -354,34 +361,35 @@ fn check_typevar(
     }
 }
 
-/// Check method for variance violations (shallow - only direct TypeVars in params/return).
-fn check_method_shallow(typ: &Type, range: TextRange, violations: &mut Vec<VarianceViolation>) {
-    typ.visit_toplevel_callable(|callable| {
-        // Check return type (covariant position)
-        if let Type::Quantified(q) = &callable.ret {
-            check_typevar(
-                q.name(),
-                Variance::Covariant,
-                q.variance(),
-                range,
-                violations,
-            );
-        }
-        // Check parameters (contravariant position)
-        if let Params::List(param_list) = &callable.params {
-            for param in param_list.items().iter() {
-                if let Type::Quantified(q) = param.as_type() {
-                    check_typevar(
-                        q.name(),
-                        Variance::Contravariant,
-                        q.variance(),
-                        range,
-                        violations,
-                    );
-                }
+/// Check a single callable signature for variance violations at `range`.
+/// The return type is a covariant position; parameters are contravariant.
+fn check_callable_variance(
+    callable: &Callable,
+    range: TextRange,
+    violations: &mut Vec<VarianceViolation>,
+) {
+    if let Type::Quantified(q) = &callable.ret {
+        check_typevar(
+            q.name(),
+            Variance::Covariant,
+            q.variance(),
+            range,
+            violations,
+        );
+    }
+    if let Params::List(param_list) = &callable.params {
+        for param in param_list.items().iter() {
+            if let Type::Quantified(q) = param.as_type() {
+                check_typevar(
+                    q.name(),
+                    Variance::Contravariant,
+                    q.variance(),
+                    range,
+                    violations,
+                );
             }
         }
-    });
+    }
 }
 
 fn initial_inference_status(gp: &Quantified) -> InferenceStatus {
@@ -666,10 +674,54 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let range = class_fields
                     .and_then(|f| f.field_decl_range(name))
                     .unwrap_or_else(|| class.range());
-                check_method_shallow(ty, range, &mut violations);
+                self.check_method_shallow(ty, range, &mut violations);
             }
         }
 
         violations
+    }
+
+    /// The `def`-name range of `metadata`'s function, via `KeyUndecoratedFunctionRange`.
+    /// `None` when there's no `def_index` (synthesized/metadata-only); the caller then
+    /// falls back to the field range. Current-module only: variance checks a class's own
+    /// fields, so `def_index` is always local — we don't resolve cross-module `FuncId`s.
+    fn func_def_range(&self, metadata: &FuncMetadata) -> Option<TextRange> {
+        let def_index = match &metadata.kind {
+            FunctionKind::Def(func_id) | FunctionKind::ShapeDsl(func_id, ..) => func_id.def_index?,
+            _ => return None,
+        };
+        let idx = self
+            .bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))?;
+        Some(self.get_idx(idx).0.range())
+    }
+
+    /// Check a method's signatures for variance violations (shallow: direct
+    /// TypeVars in params/return only, not nested Callables).
+    ///
+    /// Each overload arm is reported at its own `def` range, taken from that arm's
+    /// own metadata — not the merged group metadata, which points at the
+    /// implementation or first overload — so the error lands on the offending
+    /// overload. Other callable shapes report at `field_range`.
+    fn check_method_shallow(
+        &self,
+        ty: &Type,
+        field_range: TextRange,
+        violations: &mut Vec<VarianceViolation>,
+    ) {
+        if let Type::Overload(overload) = ty {
+            for signature in overload.signatures.iter() {
+                let (callable, metadata) = match signature {
+                    OverloadType::Function(func) => (&func.signature, &func.metadata),
+                    OverloadType::Forall(forall) => (&forall.body.signature, &forall.body.metadata),
+                };
+                let range = self.func_def_range(metadata).unwrap_or(field_range);
+                check_callable_variance(callable, range, violations);
+            }
+            return;
+        }
+        ty.visit_toplevel_callable(|callable| {
+            check_callable_variance(callable, field_range, violations);
+        });
     }
 }

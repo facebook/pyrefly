@@ -694,7 +694,6 @@ class Box(Protocol[T_co]):
 );
 
 testcase!(
-    bug = "The reported error is correct but is on the wrong line",
     test_variance_error_in_overload,
     r#"
 from typing import Any, Generic, overload, TypeVar
@@ -703,9 +702,147 @@ T_co = TypeVar("T_co", covariant=True)
 
 class C(Generic[T_co]):
     @overload
-    def f(self, x: int) -> int: ...  # E: `T_co` is covariant but is used in contravariant position
+    def f(self, x: int) -> int: ...
     @overload
-    def f(self, x: T_co) -> str: ...
+    def f(self, x: T_co) -> str: ...  # E: `T_co` is covariant but is used in contravariant position
     def f(self, x: Any) -> Any: ...
+    "#,
+);
+
+testcase!(
+    test_variance_error_in_overload_issue_3536,
+    r#"
+from typing import Generic, overload, TypeVar
+
+_T_co = TypeVar("_T_co", covariant=True)
+
+class Foo(Generic[_T_co]):
+    @overload
+    def foo(self) -> None: ...
+    @overload
+    def foo(self, instance: _T_co) -> None: ...  # E: `_T_co` is covariant but is used in contravariant position
+    def foo(self, instance: _T_co | None = ...) -> None: ...
+    "#,
+);
+
+// Overloads without an implementation are built from the final `@overload`
+// definition itself, which is a different construction path from overloads with
+// a concrete implementation.
+testcase!(
+    test_variance_error_in_overload_protocol_no_implementation,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+T_co = TypeVar("T_co", covariant=True)
+
+class P(Protocol[T_co]):
+    @overload
+    def f(self, x: int) -> None: ...
+    @overload
+    def f(self, x: T_co) -> None: ...  # E: `T_co` is covariant but is used in contravariant position
+    "#,
+);
+
+// The error must track the *offending* overload, not a fixed index: here the
+// violation is in the FIRST arm, so the error belongs there.
+testcase!(
+    test_variance_error_in_overload_first_arm,
+    r#"
+from typing import Generic, overload, TypeVar
+
+T_co = TypeVar("T_co", covariant=True)
+
+class C(Generic[T_co]):
+    @overload
+    def f(self, x: T_co) -> None: ...  # E: `T_co` is covariant but is used in contravariant position
+    @overload
+    def f(self, x: int) -> None: ...
+    def f(self, x: object) -> None: ...
+    "#,
+);
+
+// Each violating overload is reported independently, on its own line.
+testcase!(
+    test_variance_error_in_overload_both_arms,
+    r#"
+from typing import Generic, overload, TypeVar
+
+T_co = TypeVar("T_co", covariant=True)
+
+class C(Generic[T_co]):
+    @overload
+    def f(self, x: T_co) -> None: ...  # E: `T_co` is covariant but is used in contravariant position
+    @overload
+    def f(self, x: T_co, y: int) -> None: ...  # E: `T_co` is covariant but is used in contravariant position
+    def f(self, x: T_co, y: int = ...) -> None: ...
+    "#,
+);
+
+// Return position is covariant: a contravariant TypeVar there is the violation,
+// and it must land on the arm that returns it (the second), not the first.
+testcase!(
+    test_variance_error_in_overload_contravariant_return,
+    r#"
+from typing import Generic, overload, TypeVar
+
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class C(Generic[T_contra]):
+    @overload
+    def f(self, x: T_contra) -> None: ...
+    @overload
+    def f(self, x: int) -> T_contra: ...  # E: `T_contra` is contravariant but is used in covariant position
+    def f(self, x: object) -> T_contra | None: ...
+    "#,
+);
+
+// The offending arm is itself generic (an `OverloadType::Forall`), exercising
+// the Forall branch of the per-signature range lookup.
+testcase!(
+    test_variance_error_in_overload_generic_arm,
+    r#"
+from typing import Generic, overload, TypeVar
+
+T_co = TypeVar("T_co", covariant=True)
+U = TypeVar("U")
+
+class C(Generic[T_co]):
+    @overload
+    def f(self, x: int) -> None: ...
+    @overload
+    def f(self, x: T_co, y: U) -> U: ...  # E: `T_co` is covariant but is used in contravariant position
+    def f(self, x: object, y: object = ...) -> object: ...
+    "#,
+);
+
+// Negative: correct positions across overloads must not over-report.
+testcase!(
+    test_variance_overload_no_false_positive,
+    r#"
+from typing import Generic, overload, TypeVar
+
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class C(Generic[T_co, T_contra]):
+    @overload
+    def f(self, x: T_contra) -> T_co: ...
+    @overload
+    def f(self, x: int) -> T_co: ...
+    def f(self, x: object) -> T_co: ...
+    "#,
+);
+
+// Regression guard: single (non-overloaded) methods still go through the
+// unchanged `visit_toplevel_callable` path and are still flagged.
+testcase!(
+    test_variance_error_in_single_method,
+    r#"
+from typing import Generic, TypeVar
+
+T_co = TypeVar("T_co", covariant=True)
+
+class C(Generic[T_co]):
+    def f(self, x: T_co) -> None: ...  # E: `T_co` is covariant but is used in contravariant position
     "#,
 );
