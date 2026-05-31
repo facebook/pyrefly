@@ -1835,37 +1835,40 @@ impl<'a> BindingsBuilder<'a> {
             let mut default = None;
             let mut bound = None;
             let mut constraints = None;
+            let mut usage = Usage::StaticTypeInformation {
+                is_annotation: false,
+            };
             let kind = match x {
                 TypeParam::TypeVar(tv) => {
                     if let Some(bound_expr) = &mut tv.bound {
                         if let Expr::Tuple(tuple) = &mut **bound_expr {
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
-                                self.ensure_type(constraint, &mut None);
+                                self.ensure_type_with_usage(constraint, &mut None, &mut usage);
                                 constraint_exprs.push(constraint.clone());
                             }
                             constraints = Some((constraint_exprs, bound_expr.range()))
                         } else {
-                            self.ensure_type(bound_expr, &mut None);
+                            self.ensure_type_with_usage(bound_expr, &mut None, &mut usage);
                             bound = Some((**bound_expr).clone());
                         }
                     }
                     if let Some(default_expr) = &mut tv.default {
-                        self.ensure_type(default_expr, &mut None);
+                        self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::TypeVar
                 }
                 TypeParam::ParamSpec(x) => {
                     if let Some(default_expr) = &mut x.default {
-                        self.ensure_type(default_expr, &mut None);
+                        self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::ParamSpec
                 }
                 TypeParam::TypeVarTuple(x) => {
                     if let Some(default_expr) = &mut x.default {
-                        self.ensure_type(default_expr, &mut None);
+                        self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
                     QuantifiedKind::TypeVarTuple
@@ -2158,10 +2161,7 @@ impl<'a> BindingsBuilder<'a> {
             } => {
                 self.mark_does_not_pin_if_first_use(original_idx);
                 match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
-                    Some(mut possible_tparam) => {
-                        possible_tparam.initialized = initialized;
-                        TParamLookupResult::MaybeTParam(possible_tparam)
-                    }
+                    Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
                     None => TParamLookupResult::NotTParam {
                         idx: original_idx,
                         initialized,
