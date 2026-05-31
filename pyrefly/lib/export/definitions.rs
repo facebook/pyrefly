@@ -596,10 +596,14 @@ impl DefinitionsBuilder {
                 decorator_list,
                 ..
             }) => {
-                if let Some(decoration) = decorator_list
-                    .iter()
-                    .find_map(|d| parse_deprecation(&d.expression))
-                {
+                let mut deprecated_decoration = None;
+                for d in decorator_list {
+                    self.named_in_expr(&d.expression);
+                    if deprecated_decoration.is_none() {
+                        deprecated_decoration = parse_deprecation(&d.expression);
+                    }
+                }
+                if let Some(decoration) = deprecated_decoration {
                     self.inner.deprecated.insert(name.id.clone(), decoration);
                 }
                 self.add_identifier_with_body(
@@ -801,6 +805,7 @@ impl DefinitionsBuilder {
                 let mut is_overload = false;
                 let mut deprecated_decoration = None;
                 for d in decorator_list {
+                    self.named_in_expr(&d.expression);
                     is_overload = is_overload || is_overload_decorator(d);
                     if deprecated_decoration.is_none() {
                         deprecated_decoration = parse_deprecation(&d.expression);
@@ -1088,6 +1093,10 @@ match (x7 := 42):
     case int(): pass
 (x8 := 42)[y] = 42
 assert (x9 := 42), (x10 := "oops")
+@decorator(x12 := 42)
+def foo(): pass
+@decorator(x13 := 42)
+class Foo: pass
 # Named expressions inside type aliases and lambdas should not appear in definitions.
 type y = (x11 := int)
 lambda x: (z2 := 42)
@@ -1101,7 +1110,8 @@ lambda x: (z2 := 42)
         assert_definition_names(
             &defs,
             &[
-                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "z",
+                "x0", "y", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x12",
+                "foo", "x13", "Foo", "z",
             ],
         );
     }

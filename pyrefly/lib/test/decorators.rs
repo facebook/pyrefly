@@ -85,6 +85,25 @@ assert_type(decorated, Callable[[int], list[set[str]]])
 );
 
 testcase!(
+    test_walrus_in_decorator,
+    r#"
+from typing import assert_type, Callable, Literal
+
+def decorator[T](x: object) -> Callable[[T], T]: ...
+
+@decorator(x := 42)
+def foo() -> None: ...
+
+assert_type(x, Literal[42])
+
+@decorator(y := "bar")
+class Bar: ...
+
+assert_type(y, Literal["bar"])
+    "#,
+);
+
+testcase!(
     test_parameter_type_inferred_from_decorator,
     r#"
 from typing import Callable, reveal_type

@@ -880,11 +880,11 @@ impl<'a> BindingsBuilder<'a> {
             None
         };
 
+        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
+
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
-
-        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
