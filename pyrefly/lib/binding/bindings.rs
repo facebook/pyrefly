@@ -150,7 +150,7 @@ impl NameLookupResult {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InitializedInFlow {
     Yes,
     Conditionally,
@@ -2021,30 +2021,33 @@ struct PossibleTParam {
     id: LegacyTParamId,
     idx: Idx<Key>,
     tparam_idx: Idx<KeyLegacyTypeParam>,
+    initialized: InitializedInFlow,
 }
 
 enum TParamLookupResult {
     MaybeTParam(PossibleTParam),
-    NotTParam(Idx<Key>),
+    NotTParam {
+        idx: Idx<Key>,
+        initialized: InitializedInFlow,
+    },
     NotFound,
 }
 
 impl TParamLookupResult {
-    fn idx(&self) -> Option<Idx<Key>> {
-        match self {
-            Self::MaybeTParam(possible_tparam) => Some(possible_tparam.idx),
-            Self::NotTParam(idx) => Some(*idx),
-            Self::NotFound => None,
-        }
-    }
-
     fn as_name_lookup_result(&self) -> NameLookupResult {
-        self.idx()
-            .map_or(NameLookupResult::NotFound, |idx| NameLookupResult::Found {
-                idx,
-                initialized: InitializedInFlow::Yes,
+        match self {
+            Self::MaybeTParam(possible_tparam) => NameLookupResult::Found {
+                idx: possible_tparam.idx,
+                initialized: possible_tparam.initialized.clone(),
                 is_module_scope: false,
-            })
+            },
+            Self::NotTParam { idx, initialized } => NameLookupResult::Found {
+                idx: *idx,
+                initialized: initialized.clone(),
+                is_module_scope: false,
+            },
+            Self::NotFound => NameLookupResult::NotFound,
+        }
     }
 }
 
@@ -2147,15 +2150,26 @@ impl<'a> BindingsBuilder<'a> {
         let mut usage = Usage::StaticTypeInformation {
             is_annotation: false,
         };
-        self.lookup_name(Hashed::new(&name.id), &mut usage)
-            .found()
-            .map_or(TParamLookupResult::NotFound, |original_idx| {
+        match self.lookup_name(Hashed::new(&name.id), &mut usage) {
+            NameLookupResult::Found {
+                idx: original_idx,
+                initialized,
+                ..
+            } => {
                 self.mark_does_not_pin_if_first_use(original_idx);
                 match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
-                    Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
-                    None => TParamLookupResult::NotTParam(original_idx),
+                    Some(mut possible_tparam) => {
+                        possible_tparam.initialized = initialized;
+                        TParamLookupResult::MaybeTParam(possible_tparam)
+                    }
+                    None => TParamLookupResult::NotTParam {
+                        idx: original_idx,
+                        initialized,
+                    },
                 }
-            })
+            }
+            NameLookupResult::NotFound => TParamLookupResult::NotFound,
+        }
     }
 
     pub fn get_original_binding(
@@ -2215,6 +2229,7 @@ impl<'a> BindingsBuilder<'a> {
             id,
             idx,
             tparam_idx,
+            initialized: InitializedInFlow::Yes,
         })
     }
 

@@ -173,6 +173,78 @@ bad: IntAlias | "str" = "foo"  # E: `|` union syntax does not work with string l
 "#,
 );
 
+testcase!(
+    test_unquoted_forward_reference_before_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from dataclasses import dataclass
+from typing import Optional, Union
+
+@dataclass
+class Leaf:
+    value: int
+
+@dataclass
+class Node:
+    left: Optional[Tree]  # E: `Tree` is uninitialized
+    right: Optional[Tree]  # E: `Tree` is uninitialized
+
+type Tree = Union[Leaf, Node]
+"#,
+);
+
+testcase!(
+    test_unquoted_function_annotation_forward_reference_before_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+def f(x: Alias) -> Alias:  # E: `Alias` is uninitialized  # E: `Alias` is uninitialized
+    return x
+
+type Alias = int
+"#,
+);
+
+testcase!(
+    test_unquoted_forward_reference_ok_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from dataclasses import dataclass
+from typing import Optional, Union
+
+@dataclass
+class Leaf:
+    value: int
+
+@dataclass
+class Node:
+    left: Optional[Tree]
+    right: Optional[Tree]
+
+type Tree = Union[Leaf, Node]
+"#,
+);
+
+testcase!(
+    test_unquoted_forward_reference_ok_future_annotations,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional, Union
+
+@dataclass
+class Leaf:
+    value: int
+
+@dataclass
+class Node:
+    left: Optional[Tree]
+    right: Optional[Tree]
+
+type Tree = Union[Leaf, Node]
+"#,
+);
+
 fn env_3_13_with_stub() -> TestEnv {
     let mut env = TestEnv::new_with_version(PythonVersion::new(3, 13, 0));
     env.add_with_path("foo", "foo.pyi", "x: int | 'str'");

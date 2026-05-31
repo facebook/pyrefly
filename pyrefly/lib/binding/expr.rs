@@ -286,12 +286,23 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) -> Idx<Key> {
+        self.ensure_name_in_type(name, usage, tparams_builder, false)
+    }
+
+    fn ensure_name_in_type(
+        &mut self,
+        name: &Identifier,
+        usage: &mut Usage,
+        tparams_builder: &mut Option<LegacyTParamCollector>,
+        is_runtime_evaluated_annotation: bool,
+    ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
             usage,
             tparams_builder
                 .as_mut()
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
+            is_runtime_evaluated_annotation,
         )
     }
 
@@ -308,6 +319,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder.as_mut().map(|tparams_builder| {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
+            false,
         )
     }
 
@@ -337,6 +349,7 @@ impl<'a> BindingsBuilder<'a> {
         name: &Identifier,
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
+        is_runtime_evaluated_annotation: bool,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -386,6 +399,20 @@ impl<'a> BindingsBuilder<'a> {
                     } else if let Some(error_message) = is_initialized.as_error_message(&name.id) {
                         self.error(name.range, ErrorKind::UnboundName, error_message);
                     }
+                }
+                if is_runtime_evaluated_annotation
+                    && matches!(
+                        usage,
+                        Usage::StaticTypeInformation {
+                            is_annotation: true
+                        }
+                    )
+                    && self.module_info.path().style() == ModuleStyle::Executable
+                    && !self.sys_info.version().at_least(3, 14)
+                    && !self.scopes.has_future_annotations()
+                    && let Some(error_message) = is_initialized.as_error_message(&name.id)
+                {
+                    self.error(name.range, ErrorKind::UnboundName, error_message);
                 }
 
                 // TODO: `global x` reads bypass this (they use Flow, not Anywhere).
@@ -1109,7 +1136,7 @@ impl<'a> BindingsBuilder<'a> {
         match x {
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
-                self.ensure_name(&name, usage, tparams_builder);
+                self.ensure_name_in_type(&name, usage, tparams_builder, !in_string_literal);
             }
             Expr::Subscript(ExprSubscript { value, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
