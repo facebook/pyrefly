@@ -20,6 +20,7 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::token::Tokens;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
@@ -30,7 +31,7 @@ use crate::config::base::RecursionLimitConfig;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
-use crate::module::parse::module_parse;
+use crate::module::parse::module_parse_with_tokens;
 use crate::solver::solver::Solver;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
@@ -76,6 +77,8 @@ pub struct Steps {
     pub last_step: Option<Step>,
     pub load: Option<Arc<Load>>,
     pub ast: Option<Arc<ModModule>>,
+    /// Tokens from the same parser invocation as `ast`.
+    pub syntax_tokens: Option<Arc<Tokens>>,
     pub exports: Option<Arc<Exports>>,
     pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
     pub solutions: Option<Arc<Solutions>>,
@@ -229,6 +232,8 @@ pub struct StepsMut {
     pub current_step: AtomicStep,
     pub load: ArcSwapOption<Load>,
     pub ast: ArcSwapOption<ModModule>,
+    /// Tokens from the same parser invocation as `ast`.
+    pub syntax_tokens: ArcSwapOption<Tokens>,
     pub exports: ArcSwapOption<Exports>,
     pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
     pub solutions: ArcSwapOption<Solutions>,
@@ -248,6 +253,7 @@ impl StepsMut {
             current_step: AtomicStep::new(steps.last_step),
             load: ArcSwapOption::new(steps.load.dupe()),
             ast: ArcSwapOption::new(steps.ast.dupe()),
+            syntax_tokens: ArcSwapOption::new(steps.syntax_tokens.dupe()),
             exports: ArcSwapOption::new(steps.exports.dupe()),
             answers: ArcSwapOption::new(steps.answers.dupe()),
             solutions: ArcSwapOption::new(steps.solutions.dupe()),
@@ -263,6 +269,7 @@ impl StepsMut {
             current_step: AtomicStep::new(None),
             load: ArcSwapOption::empty(),
             ast: ArcSwapOption::empty(),
+            syntax_tokens: ArcSwapOption::empty(),
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
@@ -280,6 +287,7 @@ impl StepsMut {
             current_step: AtomicStep::new(Some(Step::Load)),
             load: ArcSwapOption::from(Some(load)),
             ast: ArcSwapOption::empty(),
+            syntax_tokens: ArcSwapOption::empty(),
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
@@ -317,7 +325,12 @@ impl StepsMut {
     pub fn compute<Lookup: LookupExport + LookupAnswer>(&self, step: Step, ctx: &Context<Lookup>) {
         match step {
             Step::Load => compute_step!(self, ctx, load =),
-            Step::Ast => compute_step!(self, ctx, ast = load),
+            Step::Ast => {
+                let load = self.load.load_full().unwrap();
+                let (ast, syntax_tokens) = Step::step_ast(ctx, load);
+                self.syntax_tokens.store(Some(syntax_tokens));
+                self.ast.store(Some(ast));
+            }
             Step::Exports => compute_step!(self, ctx, exports = load, ast),
             Step::Answers => compute_step!(self, ctx, answers = load, ast, exports),
             Step::Solutions => compute_step!(self, ctx, solutions = load, ast?, answers),
@@ -334,6 +347,7 @@ impl StepsMut {
     pub fn reset_for_rebuild(&self, clear_ast: bool) {
         if clear_ast {
             self.ast.store(None);
+            self.syntax_tokens.store(None);
         }
 
         // Determine the new last_step value based on what data remains.
@@ -365,6 +379,7 @@ impl StepsMut {
             last_step: self.current_step.load(),
             load: self.load.into_inner(),
             ast: self.ast.into_inner(),
+            syntax_tokens: self.syntax_tokens.into_inner(),
             exports: self.exports.into_inner(),
             answers: self.answers.into_inner(),
             solutions: self.solutions.into_inner(),
@@ -405,13 +420,14 @@ impl Step {
     }
 
     #[inline(never)]
-    fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ModModule> {
-        Arc::new(module_parse(
+    fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> (Arc<ModModule>, Arc<Tokens>) {
+        let (ast, tokens) = module_parse_with_tokens(
             load.module_info.contents(),
             ctx.sys_info.version(),
             load.module_info.source_type(),
             &load.errors,
-        ))
+        );
+        (Arc::new(ast), Arc::new(tokens))
     }
 
     #[inline(never)]

@@ -7,7 +7,6 @@
 
 use lsp_types::SemanticToken;
 use pyrefly_build::handle::Handle;
-use pyrefly_python::ast::Ast;
 use ruff_text_size::TextRange;
 
 use crate::binding::binding::Key;
@@ -33,11 +32,9 @@ impl Transaction<'_> {
         let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
 
         if include_syntax_tokens {
-            let tokens = Ast::lex_with_version(
-                module_info.contents(),
-                handle.sys_info().version(),
-                module_info.source_type(),
-            );
+            let tokens = self
+                .get_syntax_tokens(handle)
+                .expect("syntax tokens must be cached with the AST");
             builder.process_syntax_tokens(&tokens);
         }
 

@@ -40,6 +40,7 @@ use dupe::Dupe;
 use pyrefly_util::lock::Condvar;
 use pyrefly_util::lock::Mutex;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::token::Tokens;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
@@ -146,6 +147,10 @@ impl ModuleStateMut {
 
     pub fn get_ast(&self) -> Option<Arc<ModModule>> {
         self.steps.ast.load_full()
+    }
+
+    pub fn get_syntax_tokens(&self) -> Option<Arc<Tokens>> {
+        self.steps.syntax_tokens.load_full()
     }
 
     pub fn get_exports(&self) -> Option<Arc<Exports>> {
@@ -367,6 +372,7 @@ impl PostComputeGuard<'_> {
             "evict_ast called before answers computed"
         );
         self.state.steps.ast.store(None);
+        self.state.steps.syntax_tokens.store(None);
     }
 
     /// Evict answers after computing solutions (if not needed for retention).
@@ -464,6 +470,7 @@ impl CleanGuard<'_> {
 pub trait ModuleStateReader {
     fn get_load(&self) -> Option<Arc<Load>>;
     fn get_ast(&self) -> Option<Arc<ModModule>>;
+    fn get_syntax_tokens(&self) -> Option<Arc<Tokens>>;
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>>;
     fn get_solutions(&self) -> Option<Arc<Solutions>>;
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>>;
@@ -476,6 +483,10 @@ impl ModuleStateReader for ModuleState {
 
     fn get_ast(&self) -> Option<Arc<ModModule>> {
         self.steps.ast.dupe()
+    }
+
+    fn get_syntax_tokens(&self) -> Option<Arc<Tokens>> {
+        self.steps.syntax_tokens.dupe()
     }
 
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
@@ -505,6 +516,10 @@ impl ModuleStateReader for ModuleStateMut {
 
     fn get_ast(&self) -> Option<Arc<ModModule>> {
         self.get_ast()
+    }
+
+    fn get_syntax_tokens(&self) -> Option<Arc<Tokens>> {
+        self.get_syntax_tokens()
     }
 
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {

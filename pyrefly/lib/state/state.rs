@@ -62,6 +62,7 @@ use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::Tokens;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
@@ -859,6 +860,10 @@ impl<'a> Transaction<'a> {
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
         self.with_module_inner(handle, |x| x.get_ast())
+    }
+
+    pub fn get_syntax_tokens(&self, handle: &Handle) -> Option<Arc<Tokens>> {
+        self.with_module_inner(handle, |x| x.get_syntax_tokens())
     }
 
     pub fn get_config(&self, handle: &Handle) -> Option<ArcId<ConfigFile>> {
