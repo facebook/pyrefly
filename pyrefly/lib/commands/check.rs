@@ -52,6 +52,7 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::unix_path::path_to_unix_string;
 use pyrefly_util::watcher::Watcher;
 use ruff_text_size::Ranged;
 use starlark_map::small_map::SmallMap;
@@ -66,6 +67,7 @@ use crate::commands::files::get_config_finder_for_snippet;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
+use crate::error::code_climate::CodeClimateIssues;
 use crate::error::error::Error;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyError;
@@ -431,6 +433,7 @@ fn write_errors_to_file(
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
+        OutputFormat::CodeClimate => write_error_codeclimate_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -445,6 +448,7 @@ fn write_errors_to_console(
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
+        OutputFormat::CodeClimate => write_error_codeclimate_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -551,7 +555,7 @@ fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
 fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
-    let file = github_actions_path(error.path().as_path());
+    let file = path_to_unix_string(error.path().as_path());
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -568,20 +572,50 @@ fn github_actions_command(error: &Error) -> Option<String> {
 const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
 const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
 
-fn github_actions_path(path: &Path) -> String {
-    let mut path_str = path.to_string_lossy().into_owned();
-    if std::path::MAIN_SEPARATOR != '/' {
-        path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
-    }
-    path_str
-}
-
 fn escape_workflow_data(value: &str) -> String {
     utf8_percent_encode(value, WORKFLOW_DATA_ENCODE_SET).to_string()
 }
 
 fn escape_workflow_property(value: &str) -> String {
     utf8_percent_encode(value, WORKFLOW_PROPERTY_ENCODE_SET).to_string()
+}
+
+fn write_error_codeclimate(
+    writer: &mut impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let issues = CodeClimateIssues::from_errors(relative_to, errors);
+    serde_json::to_writer_pretty(writer, &issues)?;
+    Ok(())
+}
+
+fn buffered_write_error_codeclimate(
+    writer: impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_codeclimate(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_codeclimate_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    fn f(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        let file = File::create(path)?;
+        buffered_write_error_codeclimate(file, relative_to, errors)
+    }
+    f(path, relative_to, errors)
+        .with_context(|| format!("while writing CodeClimate issues to `{}`", path.display()))
+}
+
+fn write_error_codeclimate_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_codeclimate(stdout(), relative_to, errors)
 }
 
 /// A data structure to facilitate the creation of handles for all the files we want to check.

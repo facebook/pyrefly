@@ -59,6 +59,7 @@ pub mod test_path;
 pub mod thread_pool;
 pub mod trace;
 pub mod uniques;
+pub mod unix_path;
 pub mod upward_search;
 pub mod visit;
 pub mod watch_pattern;

@@ -160,6 +160,8 @@ pub enum OutputFormat {
     Json,
     /// Emit GitHub Actions workflow commands
     Github,
+    /// Emit CodeClimate issues in a JSON array (e.g. for GitLab Code Quality reports)
+    CodeClimate,
     /// Only show error count, omitting individual errors
     OmitErrors,
 }

@@ -117,6 +117,38 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=json
 [1]
 ```
 
+## Snippet with CodeClimate output format
+
+```scrut
+$ $PYREFLY snippet "x: int = 'hello'" --output-format=code-climate
+[
+  {
+    "type": "issue",
+    "check_name": "Pyrefly/BadAssignment",
+    "description": "`Literal['hello']` is not assignable to `int`",
+    "categories": [
+      "Bug Risk"
+    ],
+    "location": {
+      "path": "snippet",
+      "positions": {
+        "begin": {
+          "line": 1,
+          "column": 10
+        },
+        "end": {
+          "line": 1,
+          "column": 17
+        }
+      }
+    },
+    "severity": "major",
+    "fingerprint": "b617fbb80219b6a3"
+  }
+] (no-eol)
+[1]
+```
+
 ## Snippet with config file
 
 ```scrut {output_stream: stderr}
