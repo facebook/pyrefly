@@ -110,6 +110,9 @@ pub struct Definition {
     /// definition, this equals `range`. Used to determine if a variable is
     /// reassigned after a given point (e.g. after a nested function definition).
     pub last_range: TextRange,
+    /// True while every definition site is inside an `if TYPE_CHECKING:` body.
+    /// Such names resolve in-module but are not importable at runtime.
+    pub type_checking_only: bool,
 }
 
 impl Definition {
@@ -120,7 +123,8 @@ impl Definition {
         }
     }
 
-    fn merge(&mut self, other: DefinitionStyle, range: TextRange) {
+    fn merge(&mut self, other: DefinitionStyle, range: TextRange, in_type_checking: bool) {
+        self.type_checking_only &= in_type_checking;
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
         if other < self.style {
@@ -274,6 +278,7 @@ struct DefinitionsBuilder {
     is_init: bool,
     sys_info: SysInfo,
     inner: Definitions,
+    in_type_checking: bool,
 }
 
 fn is_private_name(name: &Name) -> bool {
@@ -327,6 +332,7 @@ impl Definitions {
             sys_info,
             is_init,
             inner: Definitions::default(),
+            in_type_checking: false,
         };
         builder.stmts(x);
 
@@ -352,6 +358,7 @@ impl Definitions {
                     needs_anywhere: false,
                     docstring_range: None,
                     last_range: TextRange::default(),
+                    type_checking_only: false,
                 },
             );
         }
@@ -373,6 +380,7 @@ impl Definitions {
         }
         for (name, def) in self.definitions.iter() {
             if !is_private_name(name)
+                && !def.type_checking_only
                 && (style == ModuleStyle::Executable
                     || matches!(
                         def.style,
@@ -427,9 +435,10 @@ impl DefinitionsBuilder {
         if x.is_empty() {
             return;
         }
+        let in_type_checking = self.in_type_checking;
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                e.get_mut().merge(style, range);
+                e.get_mut().merge(style, range, in_type_checking);
             }
             Entry::Vacant(e) => {
                 e.insert(Definition {
@@ -438,6 +447,7 @@ impl DefinitionsBuilder {
                     needs_anywhere: false,
                     docstring_range: body.and_then(Docstring::range_from_stmts),
                     last_range: range,
+                    type_checking_only: in_type_checking,
                 });
             }
         }
@@ -862,8 +872,24 @@ impl DefinitionsBuilder {
             Stmt::If(x) => {
                 self.named_in_expr(&x.test);
                 let sys_info = self.sys_info;
-                for (_, body) in sys_info.pruned_if_branches(x) {
+                if SysInfo::is_type_checking_test(&x.test) && !x.elif_else_clauses.is_empty() {
+                    let outer = self.in_type_checking;
+                    self.in_type_checking = true;
+                    self.stmts(&x.body);
+                    self.in_type_checking = outer;
+                    let Some(last_clause) = x.elif_else_clauses.last() else {
+                        unreachable!("checked that the if statement has at least one clause")
+                    };
+                    if last_clause.test.is_none() {
+                        self.stmts(&last_clause.body);
+                    }
+                    return;
+                }
+                for (in_type_checking, body) in sys_info.pruned_if_branches_with_type_checking(x) {
+                    let outer = self.in_type_checking;
+                    self.in_type_checking = outer || in_type_checking;
                     self.stmts(body);
+                    self.in_type_checking = outer;
                 }
                 return; // We went through the relevant branches already
             }

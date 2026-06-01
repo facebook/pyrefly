@@ -302,6 +302,7 @@ pub struct BindingsBuilder<'a> {
     /// set by `stmts()` and consumed by namedtuple synthesis in `stmt()`.
     pub adjacent_namedtuple_defaults: Option<Vec<Expr>>,
     pub promote_ranges: SmallSet<TextRange>,
+    pub in_type_checking: bool,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -625,6 +626,7 @@ impl Bindings {
             subsequently_initialized: SmallSet::new(),
             adjacent_namedtuple_defaults: None,
             promote_ranges: SmallSet::new(),
+            in_type_checking: false,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -700,7 +702,9 @@ impl Bindings {
                     name.key(),
                 ),
             };
-            if exported.contains_key_hashed(name.as_ref()) {
+            if exported.contains_key_hashed(name.as_ref())
+                || exports.is_type_checking_only(name.key())
+            {
                 let key = name.into_key().clone();
                 exported_names.insert(key.clone());
                 builder.table.insert(KeyExport(key), binding);

@@ -49,6 +49,10 @@ pub trait LookupExport {
     /// Get all export names for a module. Records no dependencies.
     fn get_every_export_untracked(&self, module: ModuleName) -> Option<SmallSet<Name>>;
 
+    /// Check if a name exists in a module but is available only under
+    /// `TYPE_CHECKING`. Records a dependency on `name` from `module`.
+    fn is_type_checking_only_export(&self, module: ModuleName, name: &Name) -> bool;
+
     /// Check if a submodule is imported implicitly. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_submodule_imported_implicitly(&self, module: ModuleName, name: &Name) -> bool;
 
@@ -228,6 +232,7 @@ impl Exports {
                         || self_defs.deprecated.get(name) != other_defs.deprecated.get(name)
                         || self_defs.special_exports.get(name)
                             != other_defs.special_exports.get(name)
+                        || self_def.type_checking_only != other_def.type_checking_only
                     {
                         changed.0.names.entry(name.clone()).or_default().metadata = true;
                     }
@@ -348,6 +353,9 @@ impl Exports {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.definitions.definitions.iter_hashed() {
+                if definition.type_checking_only && !self.wildcard(lookup).contains(&**name) {
+                    continue;
+                }
                 let deprecation = self.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.definitions.special_exports.get_hashed(name).copied();
                 let is_final = self.definitions.final_names.contains_key_hashed(name);
@@ -424,6 +432,13 @@ impl Exports {
         self.exports.calculate(f).unwrap_or_default()
     }
 
+    pub fn is_type_checking_only(&self, name: &Name) -> bool {
+        self.definitions
+            .definitions
+            .get(name)
+            .is_some_and(|definition| definition.type_checking_only)
+    }
+
     pub fn is_explicit_reexport(&self, name: &Name) -> bool {
         self.definitions
             .definitions
@@ -460,6 +475,11 @@ mod tests {
         fn export_exists(&self, module: ModuleName, k: &Name) -> bool {
             self.get(&module)
                 .is_some_and(|x| x.exports(self).contains_key(k))
+        }
+
+        fn is_type_checking_only_export(&self, module: ModuleName, name: &Name) -> bool {
+            self.get(&module)
+                .is_some_and(|x| x.is_type_checking_only(name))
         }
 
         fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>> {
@@ -607,6 +627,34 @@ _x = 2
         eq_wildcards(&b, &imports, &[]);
         assert!(!contains(&a, &imports, "magic"));
         assert!(contains(&b, &imports, "magic"));
+    }
+
+    #[test]
+    fn test_type_checking_not_exported() {
+        let exports = mk_exports(
+            r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    x = 1
+"#,
+            ModuleStyle::Executable,
+        );
+        assert!(!contains(&exports, &SmallMap::new(), "x"));
+    }
+
+    #[test]
+    fn test_type_checking_with_runtime_else_exported() {
+        let exports = mk_exports(
+            r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    x = 1
+else:
+    x = 2
+"#,
+            ModuleStyle::Executable,
+        );
+        assert!(contains(&exports, &SmallMap::new(), "x"));
     }
 
     #[test]

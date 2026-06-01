@@ -1194,13 +1194,62 @@ from foo import X as Y
 );
 
 fn env_type_checking_reexport() -> TestEnv {
-    TestEnv::one(
+    let mut t = TestEnv::new();
+    t.add(
         "a",
         r#"
 from typing import TYPE_CHECKING
 "#,
-    )
+    );
+    t.add(
+        "b",
+        r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    x = 1
+"#,
+    );
+    t.add(
+        "c",
+        r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    x = 1
+else:
+    x = 2
+"#,
+    );
+    t
 }
+
+testcase!(
+    test_import_type_checking_name_inside_type_checking,
+    env_type_checking_reexport(),
+    r#"
+from typing import TYPE_CHECKING, assert_type
+if TYPE_CHECKING:
+    from b import x
+    assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_import_type_checking_name_with_runtime_else_exported,
+    env_type_checking_reexport(),
+    r#"
+from typing import assert_type
+from c import x
+assert_type(x, int)
+"#,
+);
+
+testcase!(
+    test_import_from_type_checking_not_exported,
+    env_type_checking_reexport(),
+    r#"
+from b import x  # E: Could not import `x` from `b`
+"#,
+);
 
 testcase!(
     test_star_import_type_checking,
@@ -1208,6 +1257,15 @@ testcase!(
     r#"
 from typing import TYPE_CHECKING
 from a import *
+"#,
+);
+
+testcase!(
+    test_star_import_from_type_checking_not_exported,
+    env_type_checking_reexport(),
+    r#"
+from b import *
+x  # E: Could not find name `x`
 "#,
 );
 

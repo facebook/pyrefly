@@ -24,6 +24,7 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -267,9 +268,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let class_name = Name::new(value.to_str());
                     let module_name = class.module_name();
 
-                    if self.exports.export_exists(module_name, &class_name) {
+                    let key_export = KeyExport(class_name);
+                    if self.exports.export_exists(module_name, &key_export.0)
+                        || module_name == self.module().name()
+                            && self
+                                .bindings()
+                                .key_to_idx_hashed_opt(Hashed::new(&key_export))
+                                .is_some()
+                    {
                         let model_type =
-                            self.get_from_export(module_name, None, &KeyExport(class_name));
+                            self.get_from_export_opt(module_name, None, &key_export)?;
                         Some(self.class_def_to_instance_type(&model_type))
                     } else {
                         None

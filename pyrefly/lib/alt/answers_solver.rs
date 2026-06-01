@@ -2922,9 +2922,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         path: Option<&ModulePath>,
         k: &KeyExport,
     ) -> Arc<Type> {
-        self.get_from_module(module, path, k).unwrap_or_else(|| {
-            panic!("We should have checked Exports before calling this, {module} {k:?}")
-        })
+        self.get_from_export_opt(module, path, k)
+            .unwrap_or_else(|| {
+                panic!("We should have checked Exports before calling this, {module} {k:?}")
+            })
+    }
+
+    pub fn get_from_export_opt(
+        &self,
+        module: ModuleName,
+        path: Option<&ModulePath>,
+        k: &KeyExport,
+    ) -> Option<Arc<Type>> {
+        self.get_from_module(module, path, k)
     }
 
     /// Might return None if the class is no longer present on the underlying module.
