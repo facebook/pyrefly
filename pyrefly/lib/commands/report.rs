@@ -1532,11 +1532,29 @@ impl ReportArgs {
         })
     }
 
-    fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> SmallSet<Name> {
+    /// Names in an explicit, statically-resolvable `__all__`; `None` if inferred or unresolvable.
+    fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> Option<SmallSet<Name>> {
         transaction
             .get_exports_data(handle)
             .get_explicit_dunder_all_names_iter()
-            .map_or_else(SmallSet::new, |it| it.cloned().collect())
+            .map(|it| it.cloned().collect())
+    }
+
+    fn collect_dunder_all_or_empty(transaction: &Transaction, handle: &Handle) -> SmallSet<Name> {
+        Self::collect_dunder_all(transaction, handle).unwrap_or_default()
+    }
+
+    /// The `(module_prefix, __all__ FQNs)` that gate which `.py`-only symbols a stub merge keeps,
+    /// or `None` when the stub has no explicit `__all__` (leaving the merge unfiltered).
+    fn stub_merge_filter(
+        transaction: &Transaction,
+        handle: &Handle,
+    ) -> Option<(String, HashSet<String>)> {
+        Self::collect_dunder_all(transaction, handle).map(|all| {
+            let module_prefix = format!("{}.", handle.module());
+            let fqns = all.iter().map(|n| format!("{module_prefix}{n}")).collect();
+            (module_prefix, fqns)
+        })
     }
 
     /// Collect all class keys that have the `@type_check_only` decorator.
@@ -1816,6 +1834,7 @@ impl ReportArgs {
         py_variables: Vec<Variable>,
         py_classes: Vec<ReportClass>,
         stub_class_members: &SmallSet<String>,
+        stub_filter: Option<&(String, HashSet<String>)>,
     ) {
         // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
         // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
@@ -1826,18 +1845,24 @@ impl ReportArgs {
             .chain(stub_classes.iter().map(|c| &c.name))
             .cloned()
             .collect();
+
+        // Keep py-only names the stub neither defines nor omits from an explicit `__all__`.
+        let keep = |name: &str| {
+            !stub_names.contains(name)
+                && stub_filter.is_none_or(|(prefix, fqns)| Self::is_public_fqn(name, prefix, fqns))
+        };
         for py_func in py_functions {
-            if !stub_names.contains(&py_func.name) && !stub_class_members.contains(&py_func.name) {
+            if keep(&py_func.name) && !stub_class_members.contains(&py_func.name) {
                 stub_functions.push(py_func);
             }
         }
         for py_var in py_variables {
-            if !stub_names.contains(&py_var.name) && !stub_class_members.contains(&py_var.name) {
+            if keep(&py_var.name) && !stub_class_members.contains(&py_var.name) {
                 stub_variables.push(py_var);
             }
         }
         for py_class in py_classes {
-            if !stub_names.contains(&py_class.name) {
+            if keep(&py_class.name) {
                 stub_classes.push(py_class);
             }
         }
@@ -2061,7 +2086,7 @@ impl ReportArgs {
             {
                 let line_count = module.lined_buffer().line_index().line_count();
                 let exports = transaction.get_exports(handle);
-                let dunder_all = Self::collect_dunder_all(transaction, handle);
+                let dunder_all = Self::collect_dunder_all_or_empty(transaction, handle);
                 let tco_classes = Self::collect_type_check_only_classes(&bindings);
                 let mut functions = Self::parse_functions(
                     &module,
@@ -2104,7 +2129,7 @@ impl ReportArgs {
                     && let Some(py_answers) = transaction.get_answers(py_handle)
                 {
                     let py_exports = transaction.get_exports(py_handle);
-                    let py_dunder_all = Self::collect_dunder_all(transaction, py_handle);
+                    let py_dunder_all = Self::collect_dunder_all_or_empty(transaction, py_handle);
                     let py_tco_classes = Self::collect_type_check_only_classes(&py_bindings);
                     let mut py_functions = Self::parse_functions(
                         &py_module,
@@ -2146,6 +2171,7 @@ impl ReportArgs {
                         handle,
                         &tco_classes,
                     );
+                    let stub_filter = Self::stub_merge_filter(transaction, handle);
                     Self::merge_uncovered_py_symbols(
                         &mut functions,
                         &mut variables,
@@ -2154,6 +2180,7 @@ impl ReportArgs {
                         py_variables,
                         py_classes,
                         &stub_class_members,
+                        stub_filter.as_ref(),
                     );
                 }
 
@@ -2280,7 +2307,7 @@ mod tests {
         let exports = transaction.get_exports(&handle);
 
         let line_count = module.lined_buffer().line_index().line_count();
-        let dunder_all = ReportArgs::collect_dunder_all(&transaction, &handle);
+        let dunder_all = ReportArgs::collect_dunder_all_or_empty(&transaction, &handle);
         let tco_classes = ReportArgs::collect_type_check_only_classes(&bindings);
         let mut functions = ReportArgs::parse_functions(
             &module,
@@ -2374,7 +2401,7 @@ mod tests {
         let exports = pyi_txn.get_exports(&pyi_handle);
 
         let line_count = module.lined_buffer().line_index().line_count();
-        let dunder_all = ReportArgs::collect_dunder_all(&pyi_txn, &pyi_handle);
+        let dunder_all = ReportArgs::collect_dunder_all_or_empty(&pyi_txn, &pyi_handle);
         let tco_classes = ReportArgs::collect_type_check_only_classes(&bindings);
         let mut functions = ReportArgs::parse_functions(
             &module,
@@ -2423,7 +2450,7 @@ mod tests {
         let py_answers = py_txn.get_answers(&py_handle).unwrap();
         let py_exports = py_txn.get_exports(&py_handle);
 
-        let py_dunder_all = ReportArgs::collect_dunder_all(&py_txn, &py_handle);
+        let py_dunder_all = ReportArgs::collect_dunder_all_or_empty(&py_txn, &py_handle);
         let py_tco_classes = ReportArgs::collect_type_check_only_classes(&py_bindings);
         let mut py_functions = ReportArgs::parse_functions(
             &py_module,
@@ -2467,6 +2494,7 @@ mod tests {
             &pyi_handle,
             &tco_classes,
         );
+        let stub_filter = ReportArgs::stub_merge_filter(&pyi_txn, &pyi_handle);
         ReportArgs::merge_uncovered_py_symbols(
             &mut functions,
             &mut variables,
@@ -2475,6 +2503,7 @@ mod tests {
             py_variables,
             py_classes,
             &stub_class_members,
+            stub_filter.as_ref(),
         );
 
         ReportArgs::build_module_report(
@@ -2550,6 +2579,13 @@ mod tests {
     fn test_report_stub_reexport() {
         let report = build_stub_module_report("stub_reexport.pyi", "stub_reexport.py");
         compare_snapshot("stub_reexport.expected.json", &report);
+    }
+
+    /// gh-3626: a .py-only symbol the stub omits from an explicit `__all__` must not be merged in.
+    #[test]
+    fn test_report_stub_dunder_all_filters_non_all() {
+        let report = build_stub_module_report("dunder_all_stub.pyi", "dunder_all_stub.py");
+        compare_snapshot("dunder_all_stub.expected.json", &report);
     }
 
     /// gh-3519: don't double-count methods whose stub coverage is inherited.
@@ -3079,7 +3115,7 @@ def g(x: int) -> int:
         let answers = transaction.get_answers(&handle).unwrap();
         let exports = transaction.get_exports(&handle);
 
-        let dunder_all = ReportArgs::collect_dunder_all(&transaction, &handle);
+        let dunder_all = ReportArgs::collect_dunder_all_or_empty(&transaction, &handle);
         let tco_classes = ReportArgs::collect_type_check_only_classes(&bindings);
         let functions = ReportArgs::parse_functions(
             &module,

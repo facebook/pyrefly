@@ -1,0 +1,3 @@
+__all__ = ["one"]
+
+def one() -> None: ...
