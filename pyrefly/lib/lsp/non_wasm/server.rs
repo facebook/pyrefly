@@ -3669,15 +3669,18 @@ impl Server {
             notebook_document.metadata = Some(metadata.clone());
         }
         notebook_document.version = version;
+
+        // Track existing cell contents.
+        // Track cell content even when there are no changes to cells, so that cells inside NotebookDocument struct stay updated after kernal switching.
+        for cell in &notebook_document.cells {
+            let cell_contents = original_notebook
+                .get_cell_contents(&cell.document)
+                .unwrap_or_default();
+            cell_content_map.insert(cell.document.clone(), cell_contents);
+        }
+
         // Changes to cells
         if let Some(change) = &params.change.cells {
-            // Track existing cell contents
-            for cell in &notebook_document.cells {
-                let cell_contents = original_notebook
-                    .get_cell_contents(&cell.document)
-                    .unwrap_or_default();
-                cell_content_map.insert(cell.document.clone(), cell_contents);
-            }
             // Structural changes
             if let Some(structure) = &change.structure {
                 let start = structure.array.start as usize;
