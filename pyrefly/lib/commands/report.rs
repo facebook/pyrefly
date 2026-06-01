@@ -2050,9 +2050,23 @@ impl ReportArgs {
         } else {
             HashMap::new()
         };
+        let config_finder = holder.as_ref().config_finder();
+        let dir_cache = DirEntryCache::new(true);
         for handle in &handles {
             if shadowed.contains(handle.path().as_path()) {
                 continue;
+            }
+
+            // gh-3632: skip files whose module name isn't importable (shadowed parent).
+            let module = handle.module();
+            if module != ModuleName::unknown() {
+                let config = config_finder.python_file(handle.module_kind(), handle.path());
+                if find_import_filtered(&config, module, None, None, &dir_cache, None)
+                    .finding()
+                    .is_none()
+                {
+                    continue;
+                }
             }
 
             if let Some(bindings) = transaction.get_bindings(handle)
@@ -2595,6 +2609,32 @@ mod tests {
         // the merge should produce the same report as the co-located case
         let report = build_stub_module_report("partial_stub.pyi", "partial_stub.py");
         compare_snapshot("partial_stub.expected.json", &report);
+    }
+
+    /// gh-3632: skip a file shadowed by a same-named module (it can't be imported).
+    #[test]
+    fn test_report_skips_unimportable_shadowed_module() {
+        use pyrefly_config::config::ConfigFile;
+
+        let site = tempfile::TempDir::new().unwrap();
+        let dir = site.path();
+        std::fs::write(dir.join("lapack_lite.pyi"), "def f() -> int: ...\n").unwrap();
+        std::fs::create_dir(dir.join("lapack_lite")).unwrap();
+        std::fs::write(dir.join("lapack_lite").join("fortran.pyi"), "x = 1\n").unwrap();
+
+        let mut config = ConfigFile::default();
+        config.python_environment.site_package_path = Some(vec![dir.to_path_buf()]);
+        config.interpreters.skip_interpreter_query = true;
+        config.configure();
+
+        let cache = DirEntryCache::new(true);
+        let find = |m| {
+            find_import_filtered(&config, ModuleName::from_str(m), None, None, &cache, None)
+                .finding()
+                .is_some()
+        };
+        assert!(find("lapack_lite"), "real module importable");
+        assert!(!find("lapack_lite.fortran"), "shadowed file skipped");
     }
 
     /// When both test.py and test.pyi exist, the .py file is shadowed.
