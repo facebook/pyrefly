@@ -40,7 +40,6 @@ use dupe::Dupe;
 use pyrefly_util::lock::Condvar;
 use pyrefly_util::lock::Mutex;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::token::Tokens;
 
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
@@ -58,6 +57,7 @@ use crate::state::load::Load;
 use crate::state::require::AtomicRequire;
 use crate::state::require::Require;
 use crate::state::steps::Context;
+use crate::state::steps::ParsedModule;
 use crate::state::steps::Step;
 use crate::state::steps::Steps;
 use crate::state::steps::StepsMut;
@@ -146,11 +146,11 @@ impl ModuleStateMut {
     }
 
     pub fn get_ast(&self) -> Option<Arc<ModModule>> {
-        self.steps.ast.load_full()
+        self.steps.parsed.load_full().map(|parsed| parsed.module())
     }
 
-    pub fn get_syntax_tokens(&self) -> Option<Arc<Tokens>> {
-        self.steps.syntax_tokens.load_full()
+    pub fn get_parsed_module(&self) -> Option<Arc<ParsedModule>> {
+        self.steps.parsed.load_full()
     }
 
     pub fn get_exports(&self) -> Option<Arc<Exports>> {
@@ -371,8 +371,7 @@ impl PostComputeGuard<'_> {
             self.state.steps.current_step.load() >= Some(Step::Answers),
             "evict_ast called before answers computed"
         );
-        self.state.steps.ast.store(None);
-        self.state.steps.syntax_tokens.store(None);
+        self.state.steps.parsed.store(None);
     }
 
     /// Evict answers after computing solutions (if not needed for retention).
@@ -470,7 +469,7 @@ impl CleanGuard<'_> {
 pub trait ModuleStateReader {
     fn get_load(&self) -> Option<Arc<Load>>;
     fn get_ast(&self) -> Option<Arc<ModModule>>;
-    fn get_syntax_tokens(&self) -> Option<Arc<Tokens>>;
+    fn get_parsed_module(&self) -> Option<Arc<ParsedModule>>;
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>>;
     fn get_solutions(&self) -> Option<Arc<Solutions>>;
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>>;
@@ -482,11 +481,11 @@ impl ModuleStateReader for ModuleState {
     }
 
     fn get_ast(&self) -> Option<Arc<ModModule>> {
-        self.steps.ast.dupe()
+        self.steps.parsed.as_ref().map(|parsed| parsed.module())
     }
 
-    fn get_syntax_tokens(&self) -> Option<Arc<Tokens>> {
-        self.steps.syntax_tokens.dupe()
+    fn get_parsed_module(&self) -> Option<Arc<ParsedModule>> {
+        self.steps.parsed.dupe()
     }
 
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
@@ -518,8 +517,8 @@ impl ModuleStateReader for ModuleStateMut {
         self.get_ast()
     }
 
-    fn get_syntax_tokens(&self) -> Option<Arc<Tokens>> {
-        self.get_syntax_tokens()
+    fn get_parsed_module(&self) -> Option<Arc<ParsedModule>> {
+        self.get_parsed_module()
     }
 
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {

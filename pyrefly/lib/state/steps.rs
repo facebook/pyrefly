@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
@@ -31,7 +32,7 @@ use crate::config::base::RecursionLimitConfig;
 use crate::error::style::ErrorStyle;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
-use crate::module::parse::module_parse_with_tokens;
+use crate::module::parse::module_parse;
 use crate::solver::solver::Solver;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
@@ -70,15 +71,47 @@ pub struct Context<'a, Lookup> {
     pub timing: Option<&'a TransactionTimingCounters>,
 }
 
+/// AST and lexer tokens produced by the same parser invocation.
+#[derive(Debug, Dupe, Clone)]
+pub struct ParsedModule {
+    module: Arc<ModModule>,
+    tokens: Arc<Tokens>,
+}
+
+impl ParsedModule {
+    pub fn module(&self) -> Arc<ModModule> {
+        self.module.dupe()
+    }
+
+    pub fn tokens(&self) -> Arc<Tokens> {
+        self.tokens.dupe()
+    }
+}
+
+impl From<(ModModule, Tokens)> for ParsedModule {
+    fn from(value: (ModModule, Tokens)) -> Self {
+        Self {
+            module: Arc::new(value.0),
+            tokens: Arc::new(value.1),
+        }
+    }
+}
+
+impl Deref for ParsedModule {
+    type Target = ModModule;
+
+    fn deref(&self) -> &Self::Target {
+        self.module.as_ref()
+    }
+}
+
 #[derive(Debug, Default, Dupe, Clone)]
 pub struct Steps {
     /// The last step that was computed.
     /// None means no steps have been computed yet.
     pub last_step: Option<Step>,
     pub load: Option<Arc<Load>>,
-    pub ast: Option<Arc<ModModule>>,
-    /// Tokens from the same parser invocation as `ast`.
-    pub syntax_tokens: Option<Arc<Tokens>>,
+    pub parsed: Option<Arc<ParsedModule>>,
     pub exports: Option<Arc<Exports>>,
     pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
     pub solutions: Option<Arc<Solutions>>,
@@ -206,6 +239,19 @@ macro_rules! compute_step {
         let res = paste! { Step::[<step_ $output>] }($ctx, $($input,)*);
         $steps.$output.store(Some(res));
     }};
+    // AST inputs are stored as part of the parsed module cache.
+    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] ast ? $(, $($rest:tt)*)?) => {{
+        let ast = $steps.parsed.load_full().map(|parsed| parsed.module());
+        compute_step!(@exec $steps, $ctx, $output, [$($acc)* ast] $($($rest)*)?);
+    }};
+    (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] ast $(, $($rest:tt)*)?) => {{
+        let ast = $steps
+            .parsed
+            .load_full()
+            .expect("parsed module must exist after the AST step")
+            .module();
+        compute_step!(@exec $steps, $ctx, $output, [$($acc)* ast] $($($rest)*)?);
+    }};
     // Optional input (name?): load as Option (no unwrap).
     (@exec $steps:ident, $ctx:ident, $output:ident, [$($acc:ident)*] $input:ident ? $(, $($rest:tt)*)?) => {{
         let $input = $steps.$input.load_full();
@@ -231,9 +277,7 @@ macro_rules! compute_step {
 pub struct StepsMut {
     pub current_step: AtomicStep,
     pub load: ArcSwapOption<Load>,
-    pub ast: ArcSwapOption<ModModule>,
-    /// Tokens from the same parser invocation as `ast`.
-    pub syntax_tokens: ArcSwapOption<Tokens>,
+    pub parsed: ArcSwapOption<ParsedModule>,
     pub exports: ArcSwapOption<Exports>,
     pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
     pub solutions: ArcSwapOption<Solutions>,
@@ -252,8 +296,7 @@ impl StepsMut {
         Self {
             current_step: AtomicStep::new(steps.last_step),
             load: ArcSwapOption::new(steps.load.dupe()),
-            ast: ArcSwapOption::new(steps.ast.dupe()),
-            syntax_tokens: ArcSwapOption::new(steps.syntax_tokens.dupe()),
+            parsed: ArcSwapOption::new(steps.parsed.dupe()),
             exports: ArcSwapOption::new(steps.exports.dupe()),
             answers: ArcSwapOption::new(steps.answers.dupe()),
             solutions: ArcSwapOption::new(steps.solutions.dupe()),
@@ -268,8 +311,7 @@ impl StepsMut {
         Self {
             current_step: AtomicStep::new(None),
             load: ArcSwapOption::empty(),
-            ast: ArcSwapOption::empty(),
-            syntax_tokens: ArcSwapOption::empty(),
+            parsed: ArcSwapOption::empty(),
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
@@ -286,8 +328,7 @@ impl StepsMut {
         Self {
             current_step: AtomicStep::new(Some(Step::Load)),
             load: ArcSwapOption::from(Some(load)),
-            ast: ArcSwapOption::empty(),
-            syntax_tokens: ArcSwapOption::empty(),
+            parsed: ArcSwapOption::empty(),
             exports: ArcSwapOption::empty(),
             answers: ArcSwapOption::empty(),
             solutions: ArcSwapOption::empty(),
@@ -325,12 +366,7 @@ impl StepsMut {
     pub fn compute<Lookup: LookupExport + LookupAnswer>(&self, step: Step, ctx: &Context<Lookup>) {
         match step {
             Step::Load => compute_step!(self, ctx, load =),
-            Step::Ast => {
-                let load = self.load.load_full().unwrap();
-                let (ast, syntax_tokens) = Step::step_ast(ctx, load);
-                self.syntax_tokens.store(Some(syntax_tokens));
-                self.ast.store(Some(ast));
-            }
+            Step::Ast => compute_step!(self, ctx, parsed = load),
             Step::Exports => compute_step!(self, ctx, exports = load, ast),
             Step::Answers => compute_step!(self, ctx, answers = load, ast, exports),
             Step::Solutions => compute_step!(self, ctx, solutions = load, ast?, answers),
@@ -346,13 +382,12 @@ impl StepsMut {
     /// on another variable (e.g. `checked` epoch) to make these writes visible.
     pub fn reset_for_rebuild(&self, clear_ast: bool) {
         if clear_ast {
-            self.ast.store(None);
-            self.syntax_tokens.store(None);
+            self.parsed.store(None);
         }
 
         // Determine the new last_step value based on what data remains.
         // This must be computed AFTER clearing/storing data above.
-        let new_last_step = if clear_ast || self.ast.load_full().is_none() {
+        let new_last_step = if clear_ast || self.parsed.load_full().is_none() {
             if self.load.load_full().is_some() {
                 Some(Step::Load)
             } else {
@@ -378,8 +413,7 @@ impl StepsMut {
         Steps {
             last_step: self.current_step.load(),
             load: self.load.into_inner(),
-            ast: self.ast.into_inner(),
-            syntax_tokens: self.syntax_tokens.into_inner(),
+            parsed: self.parsed.into_inner(),
             exports: self.exports.into_inner(),
             answers: self.answers.into_inner(),
             solutions: self.solutions.into_inner(),
@@ -420,14 +454,16 @@ impl Step {
     }
 
     #[inline(never)]
-    fn step_ast<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> (Arc<ModModule>, Arc<Tokens>) {
-        let (ast, tokens) = module_parse_with_tokens(
-            load.module_info.contents(),
-            ctx.sys_info.version(),
-            load.module_info.source_type(),
-            &load.errors,
-        );
-        (Arc::new(ast), Arc::new(tokens))
+    fn step_parsed<Lookup>(ctx: &Context<Lookup>, load: Arc<Load>) -> Arc<ParsedModule> {
+        Arc::new(
+            module_parse(
+                load.module_info.contents(),
+                ctx.sys_info.version(),
+                load.module_info.source_type(),
+                &load.errors,
+            )
+            .into(),
+        )
     }
 
     #[inline(never)]

@@ -40,7 +40,6 @@ use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
 use ruff_python_parser::ParseOptions;
-use ruff_python_parser::Parsed;
 use ruff_python_parser::UnsupportedSyntaxError;
 use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked;
@@ -104,26 +103,17 @@ impl Ast {
         version: PythonVersion,
         source_type: PySourceType,
     ) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
-        let res = Ast::parse_full_with_version(contents, version, source_type);
-        let parse_errors = res.errors().to_owned();
-        let unsupported_syntax_errors = res.unsupported_syntax_errors().to_owned();
-        (res.into_syntax(), parse_errors, unsupported_syntax_errors)
-    }
-
-    pub fn parse_full_with_version(
-        contents: &str,
-        version: PythonVersion,
-        source_type: PySourceType,
-    ) -> Parsed<ModModule> {
         // PySourceType of Python vs Stub doesn't actually change the parsing
         let options = ParseOptions::from(source_type).with_target_version(RuffPythonVersion {
             major: version.major as u8,
             minor: version.minor as u8,
         });
-
-        parse_unchecked(contents, options)
+        let res = parse_unchecked(contents, options)
             .try_into_module()
-            .expect("PySourceType should parse into a module")
+            .unwrap();
+        let parse_errors = res.errors().to_owned();
+        let unsupported_syntax_errors = res.unsupported_syntax_errors().to_owned();
+        (res.into_syntax(), parse_errors, unsupported_syntax_errors)
     }
 
     pub fn parse_expr(contents: &str, pos: TextSize) -> anyhow::Result<Expr> {
