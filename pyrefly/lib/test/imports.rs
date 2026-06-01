@@ -289,6 +289,38 @@ import foo
 "#,
 );
 
+fn env_main_guard() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+x = 1
+if __name__ == "__main__":
+    y = 2
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_main_guard_not_exported,
+    env_main_guard(),
+    r#"
+from foo import x
+from foo import y  # E: Could not import `y` from `foo`
+"#,
+);
+
+testcase!(
+    test_main_guard_not_in_wildcard,
+    env_main_guard(),
+    r#"
+from foo import *
+x
+y  # E: Could not find name `y`
+"#,
+);
+
 fn env_relative_import_star() -> TestEnv {
     let mut t = TestEnv::new();
     t.add_with_path("foo", "foo/__init__.pyi", "from .bar import *");

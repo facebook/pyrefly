@@ -11,10 +11,12 @@ use std::slice;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::AtomicNodeIndex;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBooleanLiteral;
+use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprStringLiteral;
@@ -196,6 +198,43 @@ impl Ast {
             .into_iter()
             .map(|x| (x.range, x.test, x.body));
         first.chain(elses)
+    }
+
+    pub fn is_main_guard(test: &Expr) -> bool {
+        let Expr::Compare(ExprCompare {
+            left,
+            ops,
+            comparators,
+            ..
+        }) = test
+        else {
+            return false;
+        };
+
+        if ops.len() != 1 || comparators.len() != 1 {
+            return false;
+        }
+
+        let op = ops[0];
+        if !matches!(op, CmpOp::Eq | CmpOp::Is) {
+            return false;
+        }
+
+        let left = left.as_ref();
+        let right = &comparators[0];
+        (Self::is_name_dunder_name(left) && Self::is_main_string(right))
+            || (Self::is_main_string(left) && Self::is_name_dunder_name(right))
+    }
+
+    fn is_name_dunder_name(expr: &Expr) -> bool {
+        matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
+    }
+
+    fn is_main_string(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) if value.to_str() == "__main__"
+        )
     }
 
     /// Iterates over parameters, returning the parameters and defaults

@@ -110,6 +110,9 @@ pub struct Definition {
     /// definition, this equals `range`. Used to determine if a variable is
     /// reassigned after a given point (e.g. after a nested function definition).
     pub last_range: TextRange,
+    /// True while every definition site is inside an `if __name__ == "__main__":` body.
+    /// Such names resolve in-module but are not importable, so the export surface excludes them.
+    pub main_guard_only: bool,
 }
 
 impl Definition {
@@ -120,7 +123,8 @@ impl Definition {
         }
     }
 
-    fn merge(&mut self, other: DefinitionStyle, range: TextRange) {
+    fn merge(&mut self, other: DefinitionStyle, range: TextRange, in_main_guard: bool) {
+        self.main_guard_only &= in_main_guard;
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
         if other < self.style {
@@ -274,6 +278,7 @@ struct DefinitionsBuilder {
     is_init: bool,
     sys_info: SysInfo,
     inner: Definitions,
+    in_main_guard: bool,
 }
 
 fn is_private_name(name: &Name) -> bool {
@@ -327,6 +332,7 @@ impl Definitions {
             sys_info,
             is_init,
             inner: Definitions::default(),
+            in_main_guard: false,
         };
         builder.stmts(x);
 
@@ -352,6 +358,7 @@ impl Definitions {
                     needs_anywhere: false,
                     docstring_range: None,
                     last_range: TextRange::default(),
+                    main_guard_only: false,
                 },
             );
         }
@@ -373,6 +380,7 @@ impl Definitions {
         }
         for (name, def) in self.definitions.iter() {
             if !is_private_name(name)
+                && !def.main_guard_only
                 && (style == ModuleStyle::Executable
                     || matches!(
                         def.style,
@@ -427,9 +435,10 @@ impl DefinitionsBuilder {
         if x.is_empty() {
             return;
         }
+        let in_main_guard = self.in_main_guard;
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
-                e.get_mut().merge(style, range);
+                e.get_mut().merge(style, range, in_main_guard);
             }
             Entry::Vacant(e) => {
                 e.insert(Definition {
@@ -438,6 +447,7 @@ impl DefinitionsBuilder {
                     needs_anywhere: false,
                     docstring_range: body.and_then(Docstring::range_from_stmts),
                     last_range: range,
+                    main_guard_only: in_main_guard,
                 });
             }
         }
@@ -862,8 +872,11 @@ impl DefinitionsBuilder {
             Stmt::If(x) => {
                 self.named_in_expr(&x.test);
                 let sys_info = self.sys_info;
-                for (_, body) in sys_info.pruned_if_branches(x) {
+                for (test, body) in sys_info.pruned_if_branches(x) {
+                    let outer = self.in_main_guard;
+                    self.in_main_guard = outer || test.is_some_and(Ast::is_main_guard);
                     self.stmts(body);
+                    self.in_main_guard = outer;
                 }
                 return; // We went through the relevant branches already
             }
