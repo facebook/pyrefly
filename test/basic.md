@@ -279,3 +279,15 @@ $ touch $TMPDIR/pyrefly.toml && \
 warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead
 [0]
 ```
+
+## `pyrefly coverage report` emits modules in a deterministic order across runs
+
+```scrut
+$ cd $TMPDIR && rm -rf detrepo && mkdir detrepo && cd detrepo && touch pyrefly.toml && \
+> for i in 1 2 3 4 5 6; do echo "def f$i() -> int: return $i" > "m$i.py"; done && \
+> $PYREFLY coverage report m1.py m2.py m3.py m4.py m5.py m6.py > a.json 2>/dev/null && \
+> $PYREFLY coverage report m1.py m2.py m3.py m4.py m5.py m6.py > b.json 2>/dev/null && \
+> diff a.json b.json && echo IDENTICAL
+IDENTICAL
+[0]
+```

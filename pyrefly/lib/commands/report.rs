@@ -2198,6 +2198,9 @@ impl ReportArgs {
             module_reports.retain(|r| !r.symbol_reports.is_empty());
         }
 
+        // `handles` iterate in nondeterministic `HashSet` order; path disambiguates `--module`.
+        module_reports.sort_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
+
         let summary = Self::calculate_summary(&module_reports);
         let full_report = FullReport {
             schema_version: format!("{}.{}", REPORT_SCHEMA_VERSION.0, REPORT_SCHEMA_VERSION.1),
