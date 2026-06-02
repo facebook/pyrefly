@@ -913,54 +913,39 @@ fn test_search_exports_cancellation() {
     );
 }
 
+// Symlinking the materialized bundled stdlib into `<custom>/stdlib` is the simplest
+// way to get a *complete* custom typeshed (the `Stdlib` bootstrap needs the full set
+// of stdlib classes); symlink is unix-only.
+#[cfg(unix)]
 #[test]
-fn test_compute_stdlib_uses_bundled_typeshed_even_with_custom_path() {
+fn test_compute_stdlib_uses_custom_typeshed_path() {
     use std::fs;
 
     use tempfile::TempDir;
 
+    use crate::module::bundled::BundledStub;
+    use crate::module::typeshed::typeshed;
+
+    // Build a custom typeshed whose `stdlib` points at the (complete) bundled stdlib,
+    // but at a *different* on-disk location than the bundled snapshot Pyrefly uses by
+    // default. Previously the `Stdlib` object (which supplies the class definitions for
+    // `int`, `str`, ... used during checking) was always loaded from the bundled
+    // typeshed, while the `int` annotation resolved from `typeshed_path`. Those were
+    // different classes, so `x: int = 1` spuriously failed with a Literal[1]/int
+    // mismatch. With the stdlib also loaded from `typeshed_path`, both are the same
+    // class and there is no error.
+    let bundled_stdlib = typeshed().unwrap().materialized_path_on_disk().unwrap();
     let temp_dir = TempDir::new().unwrap();
     let typeshed_path = temp_dir.path().join("custom_typeshed");
-    let stdlib_path = typeshed_path.join("stdlib");
-    fs::create_dir_all(&stdlib_path).unwrap();
-
-    // Create a minimal builtins.pyi that defines int as a class, but very minimally.
-    // The key insight: Stdlib object loads built-in types (int, str, etc.) and their
-    // class definitions for type-checking. Since our custom typeshed's int is used
-    // for imports but bundled typeshed's int is used for Stdlib, we get a type mismatch.
-    let builtins_content = r#"
-class object: ...
-class type: ...
-class int:
-    # This is a minimal int that doesn't have many methods
-    # The bundled typeshed has a full implementation
-    pass
-class str: ...
-class bool(int): ...
-class float: ...
-class list: ...
-class dict: ...
-class tuple: ...
-class None: ...
-"#;
-    fs::write(stdlib_path.join("builtins.pyi"), builtins_content).unwrap();
-
-    fs::write(stdlib_path.join("VERSIONS"), "builtins: 3.0-\n").unwrap();
+    fs::create_dir_all(&typeshed_path).unwrap();
+    std::os::unix::fs::symlink(&bundled_stdlib, typeshed_path.join("stdlib")).unwrap();
 
     let mut config = ConfigFile::default();
     config.python_environment.set_empty_to_default();
     config.typeshed_path = Some(typeshed_path.clone());
     let sys_info = config.get_sys_info();
 
-    // Create a test module. The bug manifests as follows:
-    // - The `int` annotation is resolved from the custom typeshed
-    // - The Stdlib's int (used for Literal[1]) comes from bundled typeshed
-    // - These are different types, causing "Literal[1] is not assignable to int"
     let test_code = r#"
-# This simple assignment demonstrates the bug:
-# - The `int` type annotation is resolved from custom typeshed (builtins.int@4:7-10)
-# - The Literal[1] type comes from bundled Stdlib (builtins.int@420:7-10)
-# - Since these are different types, we get a type error
 x: int = 1
 "#;
     let module_name = ModuleName::from_str("test_module");
@@ -986,32 +971,19 @@ x: int = 1
     transaction.run(&[handle.dupe()], Require::Everything, None);
 
     let errors = transaction.get_errors([&handle]).collect_errors();
-
-    assert!(
-        config.typeshed_path.is_some(),
-        "Test setup error: typeshed_path should be set in config"
-    );
-    assert_eq!(
-        config.typeshed_path.as_ref().unwrap(),
-        &typeshed_path,
-        "Test setup error: typeshed_path should match the custom path"
-    );
-
-    // Verify the specific error is the expected type mismatch. This is specific
-    // error is an indication that we are not using the typeshed bundled with Pyrefly
-    // and not the typeshed provided through the config.
     let error_messages: Vec<String> = errors
         .ordinary
         .iter()
         .map(|e| e.msg().to_string())
         .collect();
-    let has_literal_int_error = error_messages
-        .iter()
-        .any(|msg| msg.contains("Literal[1]") && msg.contains("int"));
+
+    // The stdlib now comes from the custom typeshed, so the annotation's `int` and
+    // `Literal[1]`'s `int` are the same class: `x: int = 1` checks cleanly. Under the
+    // old behavior the stdlib `int` was the bundled class, yielding a Literal[1]/int
+    // mismatch here.
     assert!(
-        has_literal_int_error,
-        "Expected error about Literal[1] not being assignable to int, but got: {:?}. \
-         This error demonstrates the mismatch between bundled Stdlib int and custom typeshed int.",
+        error_messages.is_empty(),
+        "Expected no errors with the stdlib loaded from the custom typeshed, got: {:?}",
         error_messages
     );
 }
