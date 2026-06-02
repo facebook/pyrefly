@@ -1463,8 +1463,8 @@ impl ReportArgs {
             // __exit__/__aexit__(self, exc_type, exc_val, exc_tb)
             "__exit__" | "__aexit__" => non_self_param_pos <= 2,
             // First non-self param is protocol-fixed (str, int, or memoryview)
-            "__getattr__" | "__delattr__" | "__setattr__" | "__format__" | "__buffer__"
-            | "__release_buffer__" => non_self_param_pos == 0,
+            "__getattr__" | "__getattribute__" | "__delattr__" | "__setattr__" | "__format__"
+            | "__buffer__" | "__release_buffer__" => non_self_param_pos == 0,
             // __set_name__(self, owner, name: str) — name at position 1
             "__set_name__" => non_self_param_pos == 1,
             _ => false,
