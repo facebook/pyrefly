@@ -5239,6 +5239,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(cls) => {
                     let mut ty = self.heap.mk_class_def(cls.dupe());
                     for decorator_key in decorators.iter().rev() {
+                        if self.bindings().get(*decorator_key).is_class_metadata {
+                            continue;
+                        }
                         let decorator = self.get_idx(*decorator_key);
                         let range = self.bindings().idx_to_key(*decorator_key).range();
                         ty = self.apply_class_decorator(decorator.ty.clone(), ty, range, errors);
