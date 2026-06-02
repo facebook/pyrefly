@@ -53,7 +53,7 @@ testcase!(
 from typing_extensions import Sentinel
 
 text = 5
-A = Sentinel("A", repr=text)  # E: Invalid type for Sentinel `repr` Literal[5]
+A = Sentinel("A", repr=text)  # E: Invalid type for sentinel `repr` Literal[5]
     "#,
 );
 
@@ -62,7 +62,7 @@ testcase!(
     r#"
 from typing_extensions import Sentinel
 
-A = Sentinel(name="A")  # E: Sentinel requires a name as the first argument # E: Unexpected keyword argument `name` to Sentinel
+A = Sentinel(name="A")  # E: Sentinel requires a name as the first argument # E: Unexpected keyword argument `name` to sentinel
     "#,
 );
 

@@ -1814,7 +1814,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                     arg.range(),
                     ErrorKind::InvalidSentinel,
-                    "Expected first argument of Sentinel to be a string literal".to_owned(),
+                    "Expected first argument of sentinel to be a string literal".to_owned(),
                 );
             }
         } else {
@@ -1853,7 +1853,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 kw.range,
                                 ErrorKind::InvalidSentinel,
-                                format!("Invalid type for Sentinel `repr` {got}"),
+                                format!("Invalid type for sentinel `repr` {got}"),
                             );
                         }
                     }
@@ -1862,7 +1862,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                             kw.range,
                             ErrorKind::InvalidSentinel,
-                            format!("Unexpected keyword argument `{}` to Sentinel", id.id),
+                            format!("Unexpected keyword argument `{}` to sentinel", id.id),
                         );
                     }
                 },
@@ -1871,7 +1871,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         kw.range,
                         ErrorKind::InvalidSentinel,
-                        "Cannot pass unpacked keyword arguments to Sentinel".to_owned(),
+                        "Cannot pass unpacked keyword arguments to sentinel".to_owned(),
                     );
                 }
             }
