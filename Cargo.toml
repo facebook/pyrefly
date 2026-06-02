@@ -8,6 +8,14 @@ lto = true
 codegen-units = 1
 strip = "debuginfo"
 
+# Dev keeps only line tables; use the `dbg` profile for full debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dbg]
+inherits = "dev"
+debug = "full"
+
 [workspace]
 members = [
   "crates/pyrefly_build",

@@ -152,6 +152,10 @@ and inspect variables. Many code editors,
 for breakpoints and variable watch. You can also use the command line debuggers
 like [lldb](https://docs.rs/lldb/latest/lldb/#installation):
 
+`dev` builds carry only line tables to keep `target/` small. When you need to step
+through code in a debugger, build with the `dbg` profile (`cargo build --profile dbg`)
+for full debug info.
+
 ## Making a Pull Request
 
 Contributing a pull request (PR) is the main way to propose changes to Pyrefly. To ensure your PR is reviewed efficiently and has the best chance of being accepted, please make sure you have done the following:
