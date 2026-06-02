@@ -442,11 +442,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// The runtime class an `isinstance` check sees, for types whose runtime identity differs from
+    /// their static type. Only `TypedDict`s qualify: not statically a `dict` subtype (mutability),
+    /// yet a plain `dict` at runtime. `None` otherwise — static type already matches runtime class.
+    fn runtime_class_for_isinstance(&self, ty: &Type) -> Option<&Class> {
+        match ty {
+            Type::TypedDict(_) | Type::PartialTypedDict(_) => Some(self.stdlib.dict_object()),
+            _ => None,
+        }
+    }
+
+    /// Decide `isinstance(left, target)` by `left`'s runtime class when it diverges from `left`'s
+    /// static type — `isinstance` is a runtime-class test, but `intersect`/`subtract` approximate
+    /// it with assignability. `Some(true/false)` = definitely is/isn't; `None` = defer to that
+    /// assignability path. Protocol targets defer too, preserving structural `isinstance`.
+    fn known_runtime_isinstance_result(&self, left: &Type, target: &Type) -> Option<bool> {
+        let runtime_class = self.runtime_class_for_isinstance(left)?;
+        let Type::ClassType(target) = target else {
+            return None;
+        };
+        if self
+            .get_metadata_for_class(target.class_object())
+            .is_protocol()
+        {
+            return None;
+        }
+        Some(self.has_superclass(runtime_class, target.class_object()))
+    }
+
     fn narrow_isinstance(&self, left: &Type, right: &Type) -> Type {
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
             res.push(self.distribute_over_union(left, |l| {
                 if let Some((tparams, right)) = self.unwrap_isinstance_target(l, &right) {
+                    // When `l`'s runtime class diverges from its static type (e.g. a TypedDict is a
+                    // `dict` at runtime), use the runtime-instance answer rather than assignability.
+                    if let Some(is_inst) = self.known_runtime_isinstance_result(l, &right) {
+                        return if is_inst {
+                            l.clone()
+                        } else {
+                            self.heap.mk_never()
+                        };
+                    }
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
@@ -500,6 +537,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     continue;
                 }
                 if let Some((tparams, right)) = self.unwrap_isinstance_target(&result, right) {
+                    // Mirror of the positive branch: when the runtime class is known (e.g. a
+                    // TypedDict is always a `dict`), the negative branch removes it iff it is
+                    // definitely an instance; otherwise it can never be one, so keep it.
+                    if let Some(is_inst) = self.known_runtime_isinstance_result(&result, &right) {
+                        if is_inst {
+                            result = self.heap.mk_never();
+                        }
+                        continue;
+                    }
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);

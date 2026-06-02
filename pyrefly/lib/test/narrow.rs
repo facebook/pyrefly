@@ -2310,6 +2310,100 @@ def g(x, y: tuple[type[int], type[str]]):
 );
 
 testcase!(
+    test_isinstance_dict_narrows_typed_dict,
+    r#"
+from typing import TypedDict
+class Config[T](TypedDict): pass
+def initialize[T](spec: T | type[T] | Config[T], /) -> T:
+    if isinstance(spec, type):
+        raise NotImplementedError
+    if isinstance(spec, dict):
+        raise NotImplementedError
+    return spec
+"#,
+);
+
+testcase!(
+    test_isinstance_dict_narrows_typed_dict_branches,
+    r#"
+from typing import TypedDict, assert_type
+class Config(TypedDict): pass
+def f(spec: int | Config) -> None:
+    if isinstance(spec, dict):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+"#,
+);
+
+testcase!(
+    test_isinstance_typed_dict_mutablemapping_and_mapping,
+    r#"
+from typing import TypedDict, Mapping, MutableMapping, assert_type
+class Config(TypedDict): pass
+def f(spec: int | Config) -> None:
+    if isinstance(spec, MutableMapping):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+def g(spec: int | Config) -> None:
+    # Mapping already worked (a TypedDict is assignable to read-only Mapping);
+    # this is the no-regression check.
+    if isinstance(spec, Mapping):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+"#,
+);
+
+testcase!(
+    test_isinstance_typed_dict_unrelated_class_does_not_narrow,
+    r#"
+from typing import TypedDict, assert_type, Never
+class Config(TypedDict): pass
+def f(spec: Config) -> None:
+    # A TypedDict is not an int at runtime, so the positive branch is Never
+    # and the negative branch keeps the full TypedDict.
+    if isinstance(spec, int):
+        assert_type(spec, Never)
+    else:
+        assert_type(spec, Config)
+"#,
+);
+
+testcase!(
+    test_isinstance_dict_non_typeddict_unchanged,
+    r#"
+from typing import assert_type, Never
+def f(x: int | str) -> None:
+    # Guards against an over-broad change: non-TypedDict narrowing is untouched.
+    if isinstance(x, dict):
+        assert_type(x, Never)
+    else:
+        assert_type(x, int | str)
+"#,
+);
+
+testcase!(
+    test_isinstance_typed_dict_runtime_checkable_protocol,
+    r#"
+from typing import TypedDict, Protocol, runtime_checkable, Iterable, assert_type
+@runtime_checkable
+class HasKeys(Protocol):
+    def keys(self) -> Iterable[str]: ...
+class Config(TypedDict): pass
+def f(spec: int | Config) -> None:
+    # A TypedDict structurally satisfies a method protocol it implements (dict has
+    # `keys()`), so the `dict`-runtime-class shortcut must NOT fire for protocol
+    # targets: it defers to structural narrowing, which keeps Config positive.
+    if isinstance(spec, HasKeys):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+"#,
+);
+
+testcase!(
     test_typeguard_argument_number,
     r#"
 from typing import TypeGuard
