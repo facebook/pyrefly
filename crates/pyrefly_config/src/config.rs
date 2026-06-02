@@ -262,9 +262,10 @@ impl DirectoryRelativeFallbackSearchPathCache {
             return result.dupe();
         }
         drop(read);
+        let up_to = self.up_to.as_deref().filter(|u| path.starts_with(u));
         let ancestors = Arc::new(
             path.ancestors()
-                .take_while(|p| self.up_to.as_ref().is_none_or(|c| p.starts_with(c)))
+                .take_while(|p| up_to.is_none_or(|c| p.starts_with(c)))
                 .map(|p| p.to_owned())
                 .collect::<Vec<_>>(),
         );
@@ -3049,6 +3050,9 @@ output-format = "omit-errors"
                 ],
             )],
         );
+        let tempdir2 = tempfile::tempdir().unwrap();
+        let root2 = tempdir2.path();
+        TestPath::setup_test_directory(root2, vec![TestPath::dir("outside", vec![])]);
 
         let bounded = DirectoryRelativeFallbackSearchPathCache::new(Some(root.to_path_buf()));
         let unbounded = DirectoryRelativeFallbackSearchPathCache::new(None);
@@ -3088,6 +3092,14 @@ output-format = "omit-errors"
         compare_paths(root.join("foo"), vec![root.join("foo"), root.to_path_buf()]);
         compare_paths(root.join("bar"), vec![root.join("bar"), root.to_path_buf()]);
         compare_paths(root.to_path_buf(), vec![root.to_path_buf()]);
+        assert_eq!(
+            *bounded.get_ancestors(&root2.join("outside")),
+            root2
+                .join("outside")
+                .ancestors()
+                .map(|p| p.to_path_buf())
+                .collect::<Vec<_>>(),
+        );
         // test this one again to make sure caching works
         compare_paths(
             root.join("foo/baz/quux"),
