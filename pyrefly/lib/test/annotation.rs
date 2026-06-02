@@ -194,6 +194,15 @@ type Tree = Union[Leaf, Node]
 );
 
 testcase!(
+    test_unquoted_class_self_reference_before_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+class C:
+    c: list[C]  # E: `C` is uninitialized
+"#,
+);
+
+testcase!(
     bug =
         "Function annotations routed through legacy tparam lookup still miss unquoted forward refs",
     test_unquoted_function_annotation_forward_reference_before_py314,

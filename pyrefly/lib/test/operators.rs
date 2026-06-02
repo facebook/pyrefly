@@ -742,7 +742,7 @@ testcase!(
 from typing import Callable, cast, assert_type
 
 class Tensor:
-    __pow__ = cast(Callable[[Tensor, int], Tensor], lambda x, y: x)  # No redundant cast warning - types are not exactly equal
+    __pow__ = cast("Callable[[Tensor, int], Tensor]", lambda x, y: x)  # No redundant cast warning - types are not exactly equal
 
 def f(x: Tensor, i: int):
     assert_type(x ** i, Tensor)

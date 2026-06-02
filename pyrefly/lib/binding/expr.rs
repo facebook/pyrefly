@@ -400,10 +400,6 @@ impl<'a> BindingsBuilder<'a> {
                         self.error(name.range, ErrorKind::UnboundName, error_message);
                     }
                 }
-                let is_enclosing_class_name = self
-                    .scopes
-                    .enclosing_class_name()
-                    .is_some_and(|class_name| class_name.id == name.id);
                 if is_runtime_evaluated_annotation
                     && matches!(
                         usage,
@@ -411,7 +407,6 @@ impl<'a> BindingsBuilder<'a> {
                             is_annotation: true
                         }
                     )
-                    && !is_enclosing_class_name
                     && self.module_info.path().style() == ModuleStyle::Executable
                     && !self.sys_info.version().at_least(3, 14)
                     && !self.scopes.has_future_annotations()

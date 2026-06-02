@@ -714,7 +714,7 @@ class TypedField(Generic[T, V]):
     def __set__(self, instance: T, value: V) -> None: ...
 
 class Base:
-    field: TypedField[Base, str] = TypedField()
+    field: TypedField["Base", str] = TypedField()
 
     def update(self) -> None:
         self.field = "hello"
