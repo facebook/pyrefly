@@ -186,3 +186,20 @@ testcase!(
 A = sentinel("A")  # E: Could not find name `sentinel`
     "#,
 );
+
+testcase!(
+    test_sentinel_in_class_body,
+    r#"
+from typing import assert_type
+from typing_extensions import Sentinel
+
+class Cls:
+    IN_CLASS = Sentinel("Cls.IN_CLASS")
+
+def func3(x: int | Cls.IN_CLASS = Cls.IN_CLASS) -> None:
+    if x is Cls.IN_CLASS:
+        assert_type(x, Cls.IN_CLASS)
+    else:
+        assert_type(x, int)
+    "#,
+);
