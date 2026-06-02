@@ -285,6 +285,25 @@ The two heuristics that are currently supported are:
 
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
+### `enable-fallback-search-path`
+
+When enabled, Pyrefly resolves an otherwise-unresolved import by searching each
+directory from the importing file up to the directory that contains your
+config, using the first match it finds. This is a best-effort way to make
+imports resolve when a module is importable relative to one of its parent
+directories but that directory isn't listed in [`search-path`](#search-path).
+
+- Type: bool
+- Default: false
+- Flag equivalent: `--enable-fallback-search-path`
+- Equivalent configs: none
+- Notes:
+    - Has no effect when [`disable-search-path-heuristics`](#disable-search-path-heuristics)
+      is `true` — that flag suppresses all fallback-path consumption.
+    - The search is bounded by the config root, so it cannot escape the project.
+    - To see the search path Pyrefly resolves for a given file, run
+      `pyrefly dump-config <file>`.
+
 ### `site-package-path`
 
 A file path describing a root from which imports should
@@ -1331,6 +1350,9 @@ use-ignore-files = true
 search-path = ["."]
 # let Pyrefly try to guess your search path
 disable-search-path-heuristics = false
+# do not search parent directories of each file to resolve imports; opt in if
+# imports in your project should resolve relative to any parent directories under root
+enable-fallback-search-path = false
 # do not include any third-party packages (except those provided by an interpreter)
 site-package-path = []
 

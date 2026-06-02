@@ -1317,6 +1317,23 @@ Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
 
+## potential-bad-keyword-argument
+
+A potential conflict between an explicit keyword argument and a NotRequired TypedDict field. The field may be absent at runtime, so the conflict is not guaranteed. This is a separate error code from `bad-keyword-argument` to allow users to opt-in to this stricter check.
+
+```python
+from typing import TypedDict, NotRequired
+
+class Options(TypedDict, total=False):
+    name: str
+
+def f(name: str, **kwargs) -> None: ...
+
+opts: Options = {}
+# Potential conflict: if 'name' is in opts at runtime, this will crash
+f(name="test", **opts)  # E: Multiple values for argument `name`
+```
+
 ## protocol-implicitly-defined-attribute
 
 Protocols must declare the attributes they require directly in the class body. Assigning to a new `self` attribute inside a protocol method introduces a member that implementations of the protocol would never be required to provide.

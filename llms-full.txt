@@ -1462,6 +1462,25 @@ The two heuristics that are currently supported are:
 
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
+### `enable-fallback-search-path`
+
+When enabled, Pyrefly resolves an otherwise-unresolved import by searching each
+directory from the importing file up to the directory that contains your
+config, using the first match it finds. This is a best-effort way to make
+imports resolve when a module is importable relative to one of its parent
+directories but that directory isn't listed in [`search-path`](#search-path).
+
+- Type: bool
+- Default: false
+- Flag equivalent: `--enable-fallback-search-path`
+- Equivalent configs: none
+- Notes:
+    - Has no effect when [`disable-search-path-heuristics`](#disable-search-path-heuristics)
+      is `true` — that flag suppresses all fallback-path consumption.
+    - The search is bounded by the config root, so it cannot escape the project.
+    - To see the search path Pyrefly resolves for a given file, run
+      `pyrefly dump-config <file>`.
+
 ### `site-package-path`
 
 A file path describing a root from which imports should
@@ -2508,6 +2527,9 @@ use-ignore-files = true
 search-path = ["."]
 # let Pyrefly try to guess your search path
 disable-search-path-heuristics = false
+# do not search parent directories of each file to resolve imports; opt in if
+# imports in your project should resolve relative to any parent directories under root
+enable-fallback-search-path = false
 # do not include any third-party packages (except those provided by an interpreter)
 site-package-path = []
 
@@ -4314,6 +4336,23 @@ Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions
 ## parse-error
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.
+
+## potential-bad-keyword-argument
+
+A potential conflict between an explicit keyword argument and a NotRequired TypedDict field. The field may be absent at runtime, so the conflict is not guaranteed. This is a separate error code from `bad-keyword-argument` to allow users to opt-in to this stricter check.
+
+```python
+from typing import TypedDict, NotRequired
+
+class Options(TypedDict, total=False):
+    name: str
+
+def f(name: str, **kwargs) -> None: ...
+
+opts: Options = {}
+# Potential conflict: if 'name' is in opts at runtime, this will crash
+f(name="test", **opts)  # E: Multiple values for argument `name`
+```
 
 ## protocol-implicitly-defined-attribute
 
