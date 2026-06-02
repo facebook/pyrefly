@@ -105,7 +105,8 @@ pub struct Stdlib {
     /// After 3.14, `typing_extensions` reexports from `typing`.
     /// For 3.12 and 3.13 defined separately in both locations.
     type_alias_type: StdlibResult<ClassType>,
-    /// Defined in `typing_extensions` until 3.15, defined in `typing` since 3.15.
+    /// Defined in `typing_extensions` as Sentinel.
+    /// Defined in `builtins` as `sentinel` since 3.15.
     sentinel: StdlibResult<ClassType>,
     traceback_type: StdlibResult<ClassType>,
     builtins_type: StdlibResult<ClassType>,
@@ -259,7 +260,11 @@ impl Stdlib {
             param_spec_kwargs: lookup_concrete(standardised(3, 10), "ParamSpecKwargs"),
             type_var_tuple: lookup_concrete(standardised(3, 11), "TypeVarTuple"),
             type_alias_type: lookup_concrete(standardised(3, 12), "TypeAliasType"),
-            sentinel: lookup_concrete(standardised(3, 15), "Sentinel"),
+            // sentinel: lookup_concrete(typing_extensions, "Sentinel"),
+            sentinel: version
+                .at_least(3, 15)
+                .then(|| lookup_concrete(builtins, "sentinel"))
+                .unwrap_or_else(|| lookup_concrete(typing_extensions, "Sentinel")),
             traceback_type: lookup_concrete(types, "TracebackType"),
             function_type: lookup_concrete(types, "FunctionType"),
             method_type: lookup_concrete(types, "MethodType"),

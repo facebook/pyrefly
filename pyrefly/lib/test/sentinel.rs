@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -118,5 +121,44 @@ testcase!(
 from typing_extensions import Sentinel
 
 MISSING = Sentinel()  # E: Sentinel requires a name as the first argument
+    "#,
+);
+
+testcase!(
+    test_sentinel_typing_extensions_3_15,
+    TestEnv::new().with_version(PythonVersion::new(3, 15, 0)),
+    r#"
+from typing import Literal, assert_type
+from typing_extensions import Sentinel
+
+A = Sentinel("A")
+def foo(a: A | Literal[False]):
+    if a:
+        assert_type(a, A)
+    else:
+        assert_type(a, Literal[False])
+    "#,
+);
+
+testcase!(
+    test_sentinel_lowercase_3_15,
+    TestEnv::new().with_version(PythonVersion::new(3, 15, 0)),
+    r#"
+from typing import Literal, assert_type
+
+A = sentinel("A")
+def foo(a: A | Literal[False]):
+    if a:
+        assert_type(a, A)
+    else:
+        assert_type(a, Literal[False])
+    "#,
+);
+
+testcase!(
+    test_sentinel_lowercase_3_14_error,
+    TestEnv::new().with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+A = sentinel("A")  # E: Could not find name `sentinel`
     "#,
 );

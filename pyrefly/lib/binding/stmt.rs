@@ -626,6 +626,10 @@ impl<'a> BindingsBuilder<'a> {
                                 self.assign_sentinel(name, call);
                                 return;
                             }
+                            SpecialExport::BuiltinsSentinel => {
+                                self.assign_sentinel(name, call);
+                                return;
+                            }
                             SpecialExport::Enum
                             | SpecialExport::IntEnum
                             | SpecialExport::StrEnum => {
