@@ -67,11 +67,35 @@ A = Sentinel(name="A")  # E: Sentinel requires a name as the first argument # E:
 );
 
 testcase!(
-    test_sentinel_construction_different_names,
+    test_sentinel_construction_different_names_allowed,
     r#"
 from typing_extensions import Sentinel
 
-A = Sentinel("B")  # E: Sentinel must be assigned to a variable named `B`
+A = Sentinel("<A>")
+    "#,
+);
+
+testcase!(
+    test_sentinel_uses_sentinel_string_literal_name_in_error_messages,
+    r#"
+from typing_extensions import Sentinel
+
+A = Sentinel("<A>")
+
+def foo(a: A):
+    b: int = a  # E: `<A>` is not assignable to `int`
+    "#,
+);
+
+testcase!(
+    test_sentinel_defaults_to_assignment_name_if_not_constructed_with_name,
+    r#"
+from typing_extensions import Sentinel
+
+A = Sentinel()  # E: Sentinel requires a name as the first argument
+
+def foo(a: A):
+    b: int = a  # E: `A` is not assignable to `int`
     "#,
 );
 

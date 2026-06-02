@@ -1791,24 +1791,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn sentinel_from_call(
         &self,
-        name: Identifier,
+        assignment_name: Identifier,
         x: &ExprCall,
         errors: &ErrorCollector,
     ) -> Sentinel {
+        let mut sentinel_name = assignment_name;
         let mut iargs = x.arguments.args.iter();
         if let Some(arg) = iargs.next() {
             if let Expr::StringLiteral(lit) = arg {
-                if lit.value.to_str() != name.id.as_str() {
-                    self.error(
-                        errors,
-                        x.range,
-                        ErrorKind::InvalidSentinel,
-                        format!(
-                            "Sentinel must be assigned to a variable named `{}`",
-                            lit.value.to_str()
-                        ),
-                    );
-                }
+                sentinel_name = Identifier::new(lit.value.to_str(), lit.range());
             } else {
                 self.error(
                     errors,
@@ -1877,7 +1868,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        Sentinel::new(name, self.module().dupe())
+        Sentinel::new(sentinel_name, self.module().dupe())
     }
 
     pub fn typevar_from_call(
