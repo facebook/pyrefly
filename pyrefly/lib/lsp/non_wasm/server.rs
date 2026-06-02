@@ -3670,8 +3670,7 @@ impl Server {
         }
         notebook_document.version = version;
 
-        // Track existing cell contents.
-        // Track cell content even when there are no changes to cells, so that cells inside NotebookDocument struct stay updated after kernal switching.
+        // Track existing cell contents during both metdata-only (for kernel-switching) changes and cell-content changes
         for cell in &notebook_document.cells {
             let cell_contents = original_notebook
                 .get_cell_contents(&cell.document)
