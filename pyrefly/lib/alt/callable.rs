@@ -688,7 +688,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             Ok(param_list_owner.push(ps).items().iter().rev().collect())
         };
-        for arg in self_arg.iter().chain(args.iter()) {
+        for (arg_idx, arg) in self_arg.iter().chain(args.iter()).enumerate() {
+            // The synthesized receiver (`self`/`cls`) is arg #0 when present; mark it so
+            // the protocol-concrete-class rule exempts it (see CallContext::binding_self).
+            let receiver_ctx;
+            let arg_call_context: &CallContext = if self_arg.is_some() && arg_idx == 0 {
+                receiver_ctx = call_context.clone().with_binding_self();
+                &receiver_ctx
+            } else {
+                call_context
+            };
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -757,7 +766,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             arg_errors,
                             call_errors,
                             context,
-                            call_context,
+                            arg_call_context,
                         );
                         if let Some(name) = name
                             && let Some(ty) = arg_ty
@@ -793,7 +802,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             arg_errors,
                             call_errors,
                             context,
-                            call_context,
+                            arg_call_context,
                         );
                         if bound_args.is_some() {
                             if let Some(name) = name {

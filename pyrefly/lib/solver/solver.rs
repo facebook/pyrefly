@@ -2840,6 +2840,11 @@ pub struct CallContext {
     require_boundary_consumption: Arc<AtomicBool>,
     /// Whether deferred state from this context lineage was consumed/drained.
     boundary_consumed_and_drained: Arc<AtomicBool>,
+    /// Set only while checking a method call's synthesized `self`/`cls` receiver,
+    /// where binding a protocol class object to its own `type[Self]` is valid — so
+    /// `subset.rs` skips the protocol-concrete-class rule here. A call-position fact,
+    /// not general subset state, so `with_outside_context` clears it.
+    binding_self: bool,
 }
 
 impl Default for CallContext {
@@ -2851,6 +2856,7 @@ impl Default for CallContext {
             witness_captures: Default::default(),
             require_boundary_consumption: Arc::new(AtomicBool::new(false)),
             boundary_consumed_and_drained: Arc::new(AtomicBool::new(false)),
+            binding_self: false,
         }
     }
 }
@@ -2870,6 +2876,15 @@ impl CallContext {
         self
     }
 
+    pub(crate) fn with_binding_self(mut self) -> Self {
+        self.binding_self = true;
+        self
+    }
+
+    pub(crate) fn is_binding_self(&self) -> bool {
+        self.binding_self
+    }
+
     pub fn require_boundary_consumption(self) -> Self {
         self.require_boundary_consumption
             .store(true, Ordering::Relaxed);
@@ -2885,6 +2900,7 @@ impl CallContext {
         self.witness = Default::default();
         self.argument_side = Default::default();
         self.witness_captures = Default::default();
+        self.binding_self = false;
         self
     }
 

@@ -2127,7 +2127,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::ClassDef(got), Type::Type(inner))
                 if let Type::ClassType(want_cls) = &**inner
                     && self.type_order.is_protocol(want_cls.class_object())
-                    && self.type_order.is_protocol(got) =>
+                    && self.type_order.is_protocol(got)
+                    // The implicit `self`/`cls` receiver of a classmethod defined on a
+                    // protocol may legitimately be the protocol class object itself;
+                    // only reject protocol class objects in non-receiver positions
+                    // (explicit `type[P]` params/assignments).
+                    && !self.active_call_context.is_binding_self() =>
             {
                 // We only allow concrete class names to be assigned to `type[T]` if `T` is a protocol
                 Err(SubsetError::TypeOfProtocolNeedsConcreteClass(
