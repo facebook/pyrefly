@@ -1823,6 +1823,24 @@ impl ReportArgs {
         members
     }
 
+    /// FQNs the stub re-exports from other modules, so an untyped same-named `.py` def isn't
+    /// merged in over the authoritative re-export.
+    fn collect_reexport_fqns(
+        module: &Module,
+        exports: &SmallMap<Name, ExportLocation>,
+    ) -> SmallSet<String> {
+        let module_prefix = if module.name() != ModuleName::unknown() {
+            format!("{}.", module.name())
+        } else {
+            String::new()
+        };
+        exports
+            .iter()
+            .filter(|(_, loc)| matches!(loc, ExportLocation::OtherModule(..)))
+            .map(|(name, _)| format!("{module_prefix}{name}"))
+            .collect()
+    }
+
     /// When a `.pyi` stub only covers a subset of a `.py` file's public
     /// symbols, add the uncovered symbols from the `.py` so that completeness
     /// metrics reflect the full module interface.
@@ -1835,6 +1853,7 @@ impl ReportArgs {
         py_classes: Vec<ReportClass>,
         stub_class_members: &SmallSet<String>,
         stub_filter: Option<&(String, HashSet<String>)>,
+        stub_reexports: &SmallSet<String>,
     ) {
         // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
         // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
@@ -1843,6 +1862,7 @@ impl ReportArgs {
             .map(|f| &f.name)
             .chain(stub_variables.iter().map(|v| &v.name))
             .chain(stub_classes.iter().map(|c| &c.name))
+            .chain(stub_reexports.iter())
             .cloned()
             .collect();
 
@@ -2186,6 +2206,7 @@ impl ReportArgs {
                         &tco_classes,
                     );
                     let stub_filter = Self::stub_merge_filter(transaction, handle);
+                    let stub_reexports = Self::collect_reexport_fqns(&module, &exports);
                     Self::merge_uncovered_py_symbols(
                         &mut functions,
                         &mut variables,
@@ -2195,6 +2216,7 @@ impl ReportArgs {
                         py_classes,
                         &stub_class_members,
                         stub_filter.as_ref(),
+                        &stub_reexports,
                     );
                 }
 
@@ -2512,6 +2534,7 @@ mod tests {
             &tco_classes,
         );
         let stub_filter = ReportArgs::stub_merge_filter(&pyi_txn, &pyi_handle);
+        let stub_reexports = ReportArgs::collect_reexport_fqns(&module, &exports);
         ReportArgs::merge_uncovered_py_symbols(
             &mut functions,
             &mut variables,
@@ -2521,6 +2544,7 @@ mod tests {
             py_classes,
             &stub_class_members,
             stub_filter.as_ref(),
+            &stub_reexports,
         );
 
         ReportArgs::build_module_report(
@@ -2603,6 +2627,14 @@ mod tests {
     fn test_report_stub_dunder_all_filters_non_all() {
         let report = build_stub_module_report("dunder_all_stub.pyi", "dunder_all_stub.py");
         compare_snapshot("dunder_all_stub.expected.json", &report);
+    }
+
+    /// gh-3641: a stub re-export (import) must not be re-added as untyped by the .py def.
+    #[test]
+    fn test_report_stub_reexport_import() {
+        let report =
+            build_stub_module_report("stub_reexport_import.pyi", "stub_reexport_import.py");
+        compare_snapshot("stub_reexport_import.expected.json", &report);
     }
 
     /// gh-3519: don't double-count methods whose stub coverage is inherited.
