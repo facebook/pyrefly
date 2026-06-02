@@ -74,6 +74,17 @@ pub struct ConfigOverrideArgs {
     )]
     disable_search_path_heuristics: Option<bool>,
 
+    /// Enable walk-up fallback search paths, where Pyrefly walks
+    /// up from each importing file's directory to the config root to
+    /// best-effort resolve imports.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1,
+    )]
+    enable_fallback_search_path: Option<bool>,
+
     /// The Python version any `sys.version` checks should evaluate against.
     #[arg(long)]
     python_version: Option<PythonVersion>,
@@ -315,6 +326,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.disable_search_path_heuristics {
             config.disable_search_path_heuristics = *x;
+        }
+        if let Some(x) = &self.enable_fallback_search_path {
+            config.enable_fallback_search_path = *x;
         }
         if let Some(x) = &self.disable_project_excludes_heuristics {
             config.disable_project_excludes_heuristics = *x;

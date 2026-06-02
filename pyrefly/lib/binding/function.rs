@@ -880,6 +880,8 @@ impl<'a> BindingsBuilder<'a> {
             None
         };
 
+        self.maybe_record_pytest_fixture_definition(&x, class_key);
+
         let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
         self.scopes.push(Scope::annotation(x.range));

@@ -442,12 +442,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 Some(object_type)
             }
-            (l_kwargs @ Some(_), Some(Type::Unpack(u_inner)))
-                if matches!(*u_inner, Type::TypedDict(_)) =>
-            {
+            (l_kwargs, Some(Type::Unpack(u_inner))) if matches!(*u_inner, Type::TypedDict(_)) => {
                 let Type::TypedDict(u_typed_dict) = *u_inner else {
                     unreachable!("guarded by matches! above")
                 };
+                // Allow expanding Unpack[TypedDict] kwargs against explicit keyword params
+                // only when the other side also has **kwargs or the TypedDict is closed.
+                if l_kwargs.is_none()
+                    && !matches!(
+                        self.type_order.typed_dict_extra_items(&u_typed_dict),
+                        ExtraItems::Closed
+                    )
+                {
+                    return Err(SubsetError::OpenTypedDictKwargs(
+                        u_typed_dict.name().clone(),
+                    ));
+                }
                 for (name, ty, required) in self.type_order.typed_dict_kw_param_info(&u_typed_dict)
                 {
                     u_keywords.insert(name, (ty, required == Required::Required));

@@ -2428,7 +2428,7 @@
       "code": -2,
       "column": 19,
       "concise_description": "`(*, v1: int, v3: str, v2: str = '') -> None` is not assignable to `TDProtocol6`",
-      "description": "`(*, v1: int, v3: str, v2: str = '') -> None` is not assignable to `TDProtocol6`",
+      "description": "`(*, v1: int, v3: str, v2: str = '') -> None` is not assignable to `TDProtocol6`\n  Callable without `**kwargs` cannot be assigned to callable with `**kwargs: Unpack[TD2]`, because `TD2` is not closed and may have additional unknown keys",
       "line": 134,
       "name": "bad-assignment",
       "severity": "error",

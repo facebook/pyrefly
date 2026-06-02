@@ -6317,7 +6317,11 @@ impl TspInterface for Server {
         let module_info = transaction.get_module_info(&handle)?;
         let position =
             module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
-        transaction.get_type_at(&handle, position)
+        // For TSP, return the raw declared type without coercing callees in
+        // call position. This keeps the function's `Declaration::Regular`
+        // intact on the wire, which TSP clients need to re-resolve the
+        // signature (parameters, overloads) from source.
+        transaction.get_type_at_preserving_declaration(&handle, position)
     }
 
     fn resolve_func_def_range(

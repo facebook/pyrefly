@@ -150,6 +150,7 @@ struct WitnessCaptures {
 }
 
 impl WitnessCaptures {
+    #[cfg(debug_assertions)]
     fn is_empty(&self) -> bool {
         self.overload.is_empty() && self.generic.is_empty()
     }
@@ -2661,6 +2662,9 @@ pub enum SubsetError {
     TypeOfProtocolNeedsConcreteClass(Name),
     /// A `type` cannot accept special forms like `Callable`
     TypeCannotAcceptSpecialForms(SpecialForm),
+    /// A function without **kwargs is not assignable to a function with Unpack-ed TypedDict **kwargs
+    /// unless the TypedDict is closed.
+    OpenTypedDictKwargs(Name),
     // TODO(rechen): replace this with specific reasons
     Other,
 }
@@ -2692,6 +2696,9 @@ impl SubsetError {
             SubsetError::TypeCannotAcceptSpecialForms(form) => Some(format!(
                 "`type` cannot accept special form `{}` as an argument",
                 form
+            )),
+            SubsetError::OpenTypedDictKwargs(td) => Some(format!(
+                "Callable without `**kwargs` cannot be assigned to callable with `**kwargs: Unpack[{td}]`, because `{td}` is not closed and may have additional unknown keys"
             )),
             SubsetError::Other => None,
         }

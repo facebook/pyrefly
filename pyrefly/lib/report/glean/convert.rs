@@ -128,11 +128,11 @@ fn all_modules_with_range(
 }
 
 fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
-    let decorators_range = decorators
-        .first()
-        .map(|first| first.range().cover(decorators.last().unwrap().range()));
-
-    decorators_range.map_or(range, |x| range.add_start(x.len() + TextSize::from(1)))
+    let Some(last) = decorators.last() else {
+        return range;
+    };
+    let new_start = (last.range().end() + TextSize::from(1)).min(range.end());
+    TextRange::new(new_start, range.end())
 }
 
 fn to_span(range: TextRange) -> src::ByteSpan {

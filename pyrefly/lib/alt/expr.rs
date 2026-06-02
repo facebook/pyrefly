@@ -2587,9 +2587,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let warn_on_not_required_access = matches!(typed_dict, TypedDict::TypedDict(_));
                     self.distribute_over_union(&key_ty, |ty| match ty {
                         Type::Literal(lit) if let Lit::Str(field_name) = &lit.value => {
-                            let fields = self.typed_dict_fields(&typed_dict);
                             let key_name = Name::new(field_name);
-                            if let Some(field) = fields.get(&key_name) {
+                            if let Some(field) = self.typed_dict_field(&typed_dict, &key_name) {
                                 if warn_on_not_required_access && !field.required {
                                     errors
                                         .error_builder(
@@ -2620,6 +2619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         typed_dict.label()
                                     ),
                                 );
+                                let fields = self.typed_dict_fields(&typed_dict);
                                 if let Some(suggestion) = best_suggestion(
                                     &key_name,
                                     fields.keys().map(|candidate| (candidate, 0usize)),

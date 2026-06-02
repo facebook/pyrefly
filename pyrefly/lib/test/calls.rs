@@ -519,3 +519,44 @@ obj = Uncallable()
 obj()  # E: Expected a callable, got `Uncallable`
 "#,
 );
+
+// Verify **kwargs unpacking correctly suppresses missing-argument errors.
+testcase!(
+    test_kwargs_unpacking_provides_required_args,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int) -> None: ...
+
+data = {"name": "test", "value": 42}
+Config(**data)
+
+def make(**kwargs) -> Config:
+    return Config(**kwargs)
+    "#,
+);
+
+// Verify object.__init__(self) is accepted when self is the only argument.
+testcase!(
+    test_object_init_explicit_self,
+    r#"
+class MyClass:
+    def __init__(self) -> None:
+        object.__init__(self)
+
+class MyClass2:
+    def __new__(cls) -> "MyClass2":
+        return object.__new__(cls)
+    "#,
+);
+
+// Verify explicit kwarg + **dict_mapping doesn't falsely report conflicts.
+testcase!(
+    test_explicit_kwarg_with_mapping_kwargs,
+    r#"
+class Config:
+    def __init__(self, name: str, value: int, **kwargs) -> None: ...
+
+extra = {"debug": True}
+Config(name="test", value=42, **extra)
+    "#,
+);

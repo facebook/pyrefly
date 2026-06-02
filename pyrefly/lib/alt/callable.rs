@@ -1022,6 +1022,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         };
         let mut splat_kwargs = Vec::new();
+        // Tracks names added to `seen_names` from NotRequired TypedDict fields.
+        // These entries represent potentially-absent keys, so an explicit kwarg
+        // with the same name is not a guaranteed "Multiple values" conflict.
+        let mut not_required_td_names: SmallSet<&Name> = SmallSet::new();
         for kw in keywords {
             match kw.arg {
                 None => {
@@ -1031,15 +1035,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let name = name_owner.push(name);
                             let mut hint = kwargs.as_ref().map(|(_, ty)| *ty);
                             if let Some(ty) = seen_names.get(name) {
+                                // For Required fields, the conflict is guaranteed, so report
+                                // BadKeywordArgument. For NotRequired fields, the conflict is
+                                // only potential (field may be absent at runtime), so report
+                                // PotentialBadKeywordArgument instead. This allows users to
+                                // opt-in to the stricter check while avoiding false positives
+                                // in basic mode.
+                                let error_kind =
+                                    if field.required && !not_required_td_names.contains(name) {
+                                        ErrorKind::BadKeywordArgument
+                                    } else {
+                                        ErrorKind::PotentialBadKeywordArgument
+                                    };
                                 error(
                                     call_errors,
                                     kw.range,
-                                    ErrorKind::BadKeywordArgument,
+                                    error_kind,
                                     format!("Multiple values for argument `{name}`"),
                                 );
                                 hint = Some(*ty);
                             } else if let Some((ty, _)) = kwparams.get(name) {
                                 seen_names.insert(name, *ty);
+                                if !field.required {
+                                    not_required_td_names.insert(name);
+                                }
                                 hint = Some(*ty)
                             } else if kwargs.is_none() && !kwargs_is_unpack {
                                 unexpected_keyword_error(name, kw.range);
@@ -1118,10 +1137,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let mut hint = kwargs.as_ref().map(|(_, ty)| *ty);
                     let mut has_matching_param = false;
                     if let Some(ty) = seen_names.get(&id.id) {
+                        // Use PotentialBadKeywordArgument when the prior entry came from a
+                        // NotRequired TypedDict field — the conflict is only potential.
+                        let error_kind = if not_required_td_names.contains(&id.id) {
+                            ErrorKind::PotentialBadKeywordArgument
+                        } else {
+                            ErrorKind::BadKeywordArgument
+                        };
                         error(
                             call_errors,
                             kw.range,
-                            ErrorKind::BadKeywordArgument,
+                            error_kind,
                             format!("Multiple values for argument `{}`", id.id),
                         );
                         hint = Some(*ty);

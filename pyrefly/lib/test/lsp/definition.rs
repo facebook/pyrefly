@@ -160,6 +160,153 @@ Definition Result:
 }
 
 #[test]
+fn pytest_fixture_parameter_goes_to_fixture_definition() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+def test_thing(my_fixture):
+#              ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | def test_thing(my_fixture):
+                   ^
+Definition Result:
+5 | def my_fixture():
+        ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_without_fixture_definition_uses_parameter_definition() {
+    let code = r#"
+def test_thing(missing_fixture):
+#              ^
+    assert missing_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | def test_thing(missing_fixture):
+                   ^
+Definition Result:
+2 | def test_thing(missing_fixture):
+                   ^^^^^^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_ignores_non_fixture_function() {
+    let code = r#"
+def my_fixture():
+    return 1
+
+def test_thing(my_fixture):
+#              ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 | def test_thing(my_fixture):
+                   ^
+Definition Result:
+5 | def test_thing(my_fixture):
+                   ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_ignores_non_test_function() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+def helper(my_fixture):
+#          ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | def helper(my_fixture):
+               ^
+Definition Result:
+8 | def helper(my_fixture):
+               ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_uses_pytest_fixture_scope() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+class TestThing:
+    @pytest.fixture
+    def my_fixture(self):
+        return 2
+
+    def test_thing(self, my_fixture):
+#                         ^
+        assert my_fixture == 2
+
+class TestOther:
+    def test_other(self, my_fixture):
+#                         ^
+        assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+13 |     def test_thing(self, my_fixture):
+                               ^
+Definition Result:
+10 |     def my_fixture(self):
+             ^^^^^^^^^^
+
+18 |     def test_other(self, my_fixture):
+                               ^
+Definition Result:
+5 | def my_fixture():
+        ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn narrow_test() {
     let code = r#"
 def f(x: int | None) -> int:
@@ -2772,6 +2919,70 @@ foo(1)
 Definition Result:
 2 | def foo(x: int) -> int:
         ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_cached_function_call_goes_to_function() {
+    let code = r#"
+from functools import cache, lru_cache
+import functools
+
+@cache
+def cached_add(a: int, b: int) -> int:
+    return a + b
+
+@lru_cache
+def bare_lru_add(a: int, b: int) -> int:
+    return a + b
+
+@lru_cache(maxsize=None)
+def called_lru_add(a: int, b: int) -> int:
+    return a + b
+
+@functools.lru_cache(maxsize=128)
+def qualified_lru_add(a: int, b: int) -> int:
+    return a + b
+
+cached_add(1, 2)
+# ^
+bare_lru_add(1, 2)
+# ^
+called_lru_add(1, 2)
+# ^
+qualified_lru_add(1, 2)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+21 | cached_add(1, 2)
+       ^
+Definition Result:
+6 | def cached_add(a: int, b: int) -> int:
+        ^^^^^^^^^^
+
+23 | bare_lru_add(1, 2)
+       ^
+Definition Result:
+10 | def bare_lru_add(a: int, b: int) -> int:
+         ^^^^^^^^^^^^
+
+25 | called_lru_add(1, 2)
+       ^
+Definition Result:
+14 | def called_lru_add(a: int, b: int) -> int:
+         ^^^^^^^^^^^^^^
+
+27 | qualified_lru_add(1, 2)
+       ^
+Definition Result:
+18 | def qualified_lru_add(a: int, b: int) -> int:
+         ^^^^^^^^^^^^^^^^^
 "#
         .trim(),
         report.trim(),

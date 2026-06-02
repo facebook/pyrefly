@@ -720,6 +720,36 @@ f1(1, **x)  # E: Multiple values for argument `x`
 );
 
 testcase!(
+    test_typed_dict_kwargs_expansion_not_required_no_duplicate,
+    r#"
+from typing import TypedDict, NotRequired
+
+class Options(TypedDict, total=False):
+    name: str
+    debug: bool
+
+class AllRequired(TypedDict):
+    name: str
+    debug: bool
+
+def f(name: str, **kwargs) -> None: ...
+
+# NotRequired field "name" may be absent at runtime, so the conflict is only
+# potential, not guaranteed. We report PotentialBadKeywordArgument instead of
+# BadKeywordArgument to allow users to opt-in to this stricter check.
+nr: Options = {"debug": True}
+f(name="test", **nr)  # E: Multiple values for argument `name`
+f(**nr, name="test")  # E: Multiple values for argument `name`
+
+# Required field "name" is always present, so this IS a definite conflict
+# regardless of argument order.
+req: AllRequired = {"name": "test", "debug": True}
+f(name="test", **req)  # E: Multiple values for argument `name`
+f(**req, name="test")  # E: Multiple values for argument `name`
+    "#,
+);
+
+testcase!(
     test_typed_dict_kwargs_unpack,
     r#"
 from typing import TypedDict, NotRequired, Unpack, assert_type

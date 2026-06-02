@@ -532,6 +532,13 @@ pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
     pub disable_search_path_heuristics: bool,
 
+    /// Opt in to the implicit fallback search path: when set, `configure()`
+    /// populates `fallback_search_path` with a `DirectoryRelative` walk
+    /// bounded by the config root (the same mechanism build-system configs
+    /// use). Defaults to `false`.
+    #[serde(default, skip_serializing_if = "crate::util::skip_default_false")]
+    pub enable_fallback_search_path: bool,
+
     /// Override the bundled typeshed with a custom path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
@@ -640,6 +647,7 @@ impl Default for ConfigFile {
             search_path_from_args: Vec::new(),
             search_path_from_file: Vec::new(),
             disable_search_path_heuristics: false,
+            enable_fallback_search_path: false,
             disable_project_excludes_heuristics: false,
             import_root: None,
             fallback_search_path: Default::default(),
@@ -1407,6 +1415,23 @@ impl ConfigFile {
             configure_errors.push(error)
         }
 
+        // Honor `enable-fallback-search-path`: populate
+        // `fallback_search_path` with a `DirectoryRelative` walk bounded by
+        // the config root. The two guard conditions enforce non-clobber and
+        // skip-synthetic invariants — `matches!(_, Empty)` so we don't
+        // overwrite the build-system path's `DirectoryRelative` set above,
+        // and `source.root().is_some()` so we skip the `Synthetic` case
+        // that `init_at_root(fallback = true)` already handles with
+        // `Explicit` paths.
+        if self.enable_fallback_search_path
+            && matches!(self.fallback_search_path, FallbackSearchPath::Empty)
+            && let Some(config_root) = self.source.root()
+        {
+            self.fallback_search_path = FallbackSearchPath::DirectoryRelative(
+                DirectoryRelativeFallbackSearchPathCache::new(Some(config_root.to_path_buf())),
+            );
+        }
+
         fn validate<'a>(
             paths: &'a [PathBuf],
             field: &'a str,
@@ -1682,6 +1707,7 @@ mod tests {
                 search_path_from_args: Vec::new(),
                 search_path_from_file: vec![PathBuf::from("../..")],
                 disable_search_path_heuristics: false,
+                enable_fallback_search_path: false,
                 disable_project_excludes_heuristics: false,
                 import_root: None,
                 preset: None,
@@ -1982,6 +2008,7 @@ mod tests {
             search_path_from_args: Vec::new(),
             search_path_from_file: vec![PathBuf::from("../..")],
             disable_search_path_heuristics: false,
+            enable_fallback_search_path: false,
             disable_project_excludes_heuristics: false,
             import_root: None,
             preset: None,
@@ -2054,6 +2081,7 @@ mod tests {
             search_path_from_args: Vec::new(),
             search_path_from_file: search_path,
             disable_search_path_heuristics: false,
+            enable_fallback_search_path: false,
             disable_project_excludes_heuristics: false,
             use_ignore_files: true,
             output_format: Some(OutputFormat::Json),
@@ -2216,7 +2244,6 @@ output-format = "omit-errors"
 
         // test empty value falls back to next
         assert!(config.ignore_errors_in_generated_code(Path::new("this/is/highest/priority")));
-
         // test no pattern match
         assert!(config.replace_imports_with_any(
             Some(Path::new("this/does/not/match/any")),
@@ -3070,6 +3097,147 @@ output-format = "omit-errors"
                 root.join("foo"),
                 root.to_path_buf(),
             ],
+        );
+    }
+
+    /// Regression test for facebook/pyrefly#3607. With
+    /// `enable-fallback-search-path = true` in the config, `configure()` must
+    /// populate `fallback_search_path` with a `DirectoryRelative` walk bounded
+    /// by the config root, matching what build-system configs already do.
+    /// This unblocks bare imports like `from bar import func` (which Python
+    /// resolves at runtime via `sys.path[0]`) for users who legitimately need
+    /// that behavior despite having a config file present.
+    #[test]
+    fn test_fallback_search_path_enabled_via_opt_in_field() {
+        let root = TempDir::new().unwrap();
+        let pyrefly_path = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(&pyrefly_path, "enable-fallback-search-path = true").unwrap();
+
+        let (mut config, _errors) = ConfigFile::from_file(&pyrefly_path);
+        config.interpreters.skip_interpreter_query = true;
+        config.configure();
+
+        match &config.fallback_search_path {
+            FallbackSearchPath::DirectoryRelative(cache) => {
+                assert_eq!(
+                    cache.up_to.as_deref(),
+                    Some(root.path()),
+                    "fallback walk should be bounded by the config root"
+                );
+            }
+            other => panic!(
+                "expected DirectoryRelative fallback_search_path after configure() \
+                 with enable-fallback-search-path = true, got {other:?}"
+            ),
+        }
+    }
+
+    /// Regression test for facebook/pyrefly#3005. Mirrors the polars repro:
+    /// a src-layout project where the import root is `src/` but a test file
+    /// imports from `tests.conftest`. With `enable-fallback-search-path =
+    /// true`, the file's parent directory walks up to the config root, which
+    /// contains `tests/`, so `tests.conftest` resolves via the fallback path.
+    #[test]
+    fn test_fallback_search_path_resolves_src_layout_tests_dir_with_opt_in() {
+        // project_root/
+        // ├── pyrefly.toml         (with enable-fallback-search-path = true)
+        // ├── src/
+        // └── tests/
+        //     ├── conftest.py
+        //     └── unit/utils/test_x.py
+        //
+        // The walk is computed purely from the importing file's path (see
+        // `DirectoryRelativeFallbackSearchPathCache::get_ancestors`), so only
+        // the config file and the importing file's path matter here — we don't
+        // need to materialize the rest of the tree on disk.
+        let root = TempDir::new().unwrap();
+        let importing_file = root.path().join("tests/unit/utils/test_x.py");
+        let pyrefly_path = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        fs::write(&pyrefly_path, "enable-fallback-search-path = true").unwrap();
+
+        let (mut config, _errors) = ConfigFile::from_file(&pyrefly_path);
+        config.interpreters.skip_interpreter_query = true;
+        config.configure();
+
+        // Walk from the importing file's parent directory; the resulting paths
+        // must include the config root so that `tests.conftest` is reachable
+        // (since `<config_root>/tests/conftest.py` exists).
+        let walk = config
+            .fallback_search_path
+            .for_directory(importing_file.parent());
+        assert!(
+            walk.iter().any(|p| p == root.path()),
+            "fallback walk must include the config root to resolve \
+             `tests.conftest`; got {walk:?}",
+        );
+    }
+
+    /// The opt-in is explicit, so it must coexist with an explicit
+    /// `search-path`: a user who sets both is affirmatively asking pyrefly to
+    /// look at their listed paths AND to walk up from the importing file. We
+    /// deliberately do not gate the opt-in on "search-path is empty" — that
+    /// would re-introduce the surprising silent-override behavior we are
+    /// trying to avoid.
+    #[test]
+    fn test_fallback_search_path_opt_in_coexists_with_explicit_search_path() {
+        let root = TempDir::new().unwrap();
+        let pyrefly_path = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        // User opts in to BOTH an explicit search path AND the fallback walk.
+        fs::write(
+            &pyrefly_path,
+            "enable-fallback-search-path = true\nsearch-path = [\"src\"]\n",
+        )
+        .unwrap();
+
+        let (mut config, _errors) = ConfigFile::from_file(&pyrefly_path);
+        config.interpreters.skip_interpreter_query = true;
+        config.configure();
+
+        match &config.fallback_search_path {
+            FallbackSearchPath::DirectoryRelative(cache) => {
+                assert_eq!(
+                    cache.up_to.as_deref(),
+                    Some(root.path()),
+                    "fallback walk should be bounded by the config root \
+                     even when an explicit search-path is also set"
+                );
+            }
+            other => panic!(
+                "expected DirectoryRelative fallback_search_path when the user \
+                 explicitly opts in via enable-fallback-search-path, regardless \
+                 of whether search-path is also set; got {other:?}"
+            ),
+        }
+    }
+
+    /// A synthesized config (`ConfigSource::Synthetic`, e.g. an unconfigured
+    /// project or a loose file checked with no `pyrefly.toml`) must never get
+    /// a `DirectoryRelative` fallback from the opt-in, even when the field is
+    /// enabled (e.g. via `--enable-fallback-search-path`). Such configs have
+    /// no config root to bound the walk, and the unconfigured-project path
+    /// (`init_at_root(fallback = true)`) already supplies their fallback as
+    /// `Explicit` paths. The `source.root().is_some()` guard in `configure()`
+    /// enforces this; this test pins the invariant against future refactors.
+    #[test]
+    fn test_fallback_search_path_not_set_for_synthetic_config() {
+        let mut config = ConfigFile {
+            enable_fallback_search_path: true,
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // A default config is synthesized (no on-disk source).
+        assert!(matches!(config.source, ConfigSource::Synthetic));
+
+        config.configure();
+
+        assert!(
+            matches!(config.fallback_search_path, FallbackSearchPath::Empty),
+            "synthetic configs must not get a DirectoryRelative fallback even \
+             when enable-fallback-search-path is set; got {:?}",
+            config.fallback_search_path,
         );
     }
 

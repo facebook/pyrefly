@@ -921,3 +921,156 @@ fn test_get_computed_type_literal_bool_has_literal_value() {
 
     tsp.shutdown();
 }
+
+// =======================================================================
+// Regression: identifiers in call position preserve the original declaration
+//
+// `typeServer/getComputedType` must return the raw declared type for an
+// identifier even when that identifier appears in a call position. The LSP
+// `get_type_at` path coerces callees (substitutes the chosen-overload trace
+// or applies `coerce_type_to_callable`), which strips the original
+// `Declaration::Regular` link. TSP clients (e.g. Pylance) rely on the
+// declaration to re-resolve signatures on their side, so the TSP endpoint
+// uses `get_type_at_preserving_declaration` instead.
+//
+// Pylance bug: https://github.com/microsoft/pylance-release/issues/8020
+// =======================================================================
+
+#[test]
+fn test_get_computed_type_builtin_print_at_call_position_preserves_declaration() {
+    // Regression for pylance-release#8020. Querying `print` inside a call
+    // expression must return the underlying Function with a Regular
+    // declaration pointing at `builtins.pyi`, not a synthesized Callable
+    // and not the return type of the matched overload.
+    let (mut tsp, file_uri, snapshot) = setup_project("print(\"foo\", sep=\"x\")\n");
+
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
+
+    let kind = result
+        .get("kind")
+        .and_then(|v| v.as_u64())
+        .expect("Expected kind on print");
+    assert!(
+        kind == TypeKind::Function as u64 || kind == TypeKind::Overloaded as u64,
+        "Expected Function or Overloaded for `print` in call position, got kind={kind} (result={result})"
+    );
+
+    // The first function-shaped result (the type itself, or the first
+    // overload entry) must carry a Regular declaration that points back
+    // to a real source file (typeshed's builtins.pyi).
+    let function_like = if kind == TypeKind::Overloaded as u64 {
+        result
+            .get("overloads")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .cloned()
+            .expect("Expected at least one entry in overloads array")
+    } else {
+        result.clone()
+    };
+
+    let decl = function_like
+        .get("declaration")
+        .expect("Expected declaration on `print`");
+
+    // DeclarationKind::Regular = 0
+    let decl_kind = decl.get("kind").and_then(|v| v.as_u64());
+    assert_eq!(
+        decl_kind,
+        Some(0),
+        "Expected Regular declaration (kind=0) for `print`, got {decl_kind:?}. \
+         A Synthesized declaration here means the callee was coerced and the \
+         original typeshed declaration was lost."
+    );
+
+    let uri = decl
+        .get("node")
+        .and_then(|n| n.get("uri"))
+        .and_then(|v| v.as_str());
+    assert!(
+        uri.is_some_and(|u| u.contains("builtins.pyi")),
+        "Expected declaration URI to point at builtins.pyi for `print`, got: {uri:?}"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_overloaded_callee_returns_overloaded_not_return_type() {
+    // Querying an overloaded function at a call site must return the full
+    // Overloaded type (so clients see every signature), not the return type
+    // of the matched overload.
+    let code = "\
+from typing import overload
+
+@overload
+def process(value: int) -> str: ...
+@overload
+def process(value: str) -> int: ...
+def process(value):
+    return value
+
+process(1)
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 9 (0-indexed): `process(1)` — query the `process` identifier.
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 9, 0, snapshot);
+    assert_kind(&result, TypeKind::Overloaded);
+
+    let overloads = result
+        .get("overloads")
+        .and_then(|v| v.as_array())
+        .expect("Expected overloads array on `process` at call site");
+    assert_eq!(
+        overloads.len(),
+        2,
+        "Expected 2 overload signatures for `process`, got {}",
+        overloads.len()
+    );
+}
+
+#[test]
+fn test_get_computed_type_local_def_callee_preserves_declaration() {
+    // Querying a locally-defined function at its call site must return a
+    // Function with a Regular declaration that names the function and
+    // points back at the source file.
+    let code = "\
+def greet(name: str) -> str:
+    return name
+
+greet(\"world\")
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 3 (0-indexed): `greet("world")` — query the `greet` identifier.
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 3, 0, snapshot);
+    assert_kind(&result, TypeKind::Function);
+
+    let decl = result
+        .get("declaration")
+        .expect("Expected declaration on `greet` at call site");
+
+    // DeclarationKind::Regular = 0
+    let decl_kind = decl.get("kind").and_then(|v| v.as_u64());
+    assert_eq!(
+        decl_kind,
+        Some(0),
+        "Expected Regular declaration (kind=0) for `greet`, got {decl_kind:?}"
+    );
+
+    let name = decl.get("name").and_then(|v| v.as_str());
+    assert_eq!(name, Some("greet"), "Expected declaration name 'greet'");
+
+    let uri = decl
+        .get("node")
+        .and_then(|n| n.get("uri"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        uri,
+        Some(file_uri.as_str()),
+        "Expected declaration URI to match the source file"
+    );
+
+    tsp.shutdown();
+}

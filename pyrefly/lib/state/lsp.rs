@@ -90,6 +90,7 @@ use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod dict_completions;
+mod pytest;
 mod quick_fixes;
 
 pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
@@ -983,6 +984,16 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         for_display: bool,
     ) -> Option<Type> {
+        self.get_type_at_impl_with_options(handle, position, for_display, true)
+    }
+
+    fn get_type_at_impl_with_options(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        for_display: bool,
+        coerce_callees: bool,
+    ) -> Option<Type> {
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
                 identifier: id,
@@ -1000,20 +1011,24 @@ impl<'a> Transaction<'a> {
                     return None;
                 }
                 let mut ty = self.get_type_for_surface(handle, &key, for_display)?;
-                let call_args_range = self.callee_at(handle, position).and_then(
-                    |ExprCall {
-                         func, arguments, ..
-                     }| (func.range() == id.range).then_some(arguments.range),
-                );
-                if let Some(arguments_range) = call_args_range {
-                    if let Some(ret) = self.get_chosen_overload_trace_for_surface(
-                        handle,
-                        arguments_range,
-                        for_display,
-                    ) {
-                        return Some(ret);
+                if coerce_callees {
+                    let call_args_range = self.callee_at(handle, position).and_then(
+                        |ExprCall {
+                             func, arguments, ..
+                         }| {
+                            (func.range() == id.range).then_some(arguments.range)
+                        },
+                    );
+                    if let Some(arguments_range) = call_args_range {
+                        if let Some(ret) = self.get_chosen_overload_trace_for_surface(
+                            handle,
+                            arguments_range,
+                            for_display,
+                        ) {
+                            return Some(ret);
+                        }
+                        ty = self.coerce_type_to_callable(handle, ty);
                     }
-                    ty = self.coerce_type_to_callable(handle, ty);
                 }
                 Some(ty)
             }
@@ -1182,6 +1197,24 @@ impl<'a> Transaction<'a> {
 
     pub fn get_type_at_for_display(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         self.get_type_at_impl(handle, position, true)
+    }
+
+    /// Like `get_type_at`, but returns the raw bound type of an identifier
+    /// without coercing-to-callable or substituting in the chosen-overload
+    /// trace when the identifier appears in a call position.
+    ///
+    /// This preserves the declaration link (e.g. for `print` in `print(...)`,
+    /// returns the underlying `Function`/`Overload` referencing `builtins.pyi`
+    /// rather than a synthesized `Callable` for the matched overload). It is
+    /// intended for clients (such as the TSP `getComputedType` endpoint) that
+    /// re-resolve declarations on their side and need the wire type to carry
+    /// the original source declaration.
+    pub fn get_type_at_preserving_declaration(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<Type> {
+        self.get_type_at_impl_with_options(handle, position, false, false)
     }
 
     fn get_result_type_at_impl(
@@ -1747,6 +1780,10 @@ impl<'a> Transaction<'a> {
                 );
                 defs
             }
+            // Workaround so functions decorated with `functools.lru_cache` go to definition on the source, not the decorator.
+            Type::ClassType(class) if class.has_qname("functools", "_lru_cache_wrapper") => {
+                vec![]
+            }
             Type::ClassType(_) => self
                 .find_attribute_definition_for_base_type(handle, preference, ty, &dunder::CALL)
                 .map(Vec1::into_vec)
@@ -2297,18 +2334,26 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::Parameter,
             }) => {
-                let item = self.find_definition_for_simple_def(
+                if let Some(pytest_definitions) = self.pytest_fixture_definitions_for_parameter(
                     handle,
                     &identifier,
-                    SymbolKind::Parameter,
-                )?;
-                Ok(vec1![FindDefinitionItemWithDocstring {
-                    metadata: item.metadata,
-                    definition_range: item.definition_range,
-                    module: item.module,
-                    docstring_range: None,
-                    display_name: Some(identifier.id.to_string()),
-                }])
+                    &covering_nodes,
+                ) {
+                    Ok(pytest_definitions)
+                } else {
+                    let item = self.find_definition_for_simple_def(
+                        handle,
+                        &identifier,
+                        SymbolKind::Parameter,
+                    )?;
+                    Ok(vec1![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        definition_range: item.definition_range,
+                        module: item.module,
+                        docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
+                    }])
+                }
             }
             Some(IdentifierWithContext {
                 identifier,
@@ -3301,6 +3346,13 @@ impl<'a> Transaction<'a> {
             ]
             .concat(),
         };
+        if let Some(pytest_references) = self.local_pytest_fixture_parameter_references(
+            handle,
+            definition_range,
+            definition_name,
+        ) {
+            references.extend(pytest_references);
+        }
         if include_declaration {
             references.push(definition_range);
         }

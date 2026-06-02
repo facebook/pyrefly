@@ -8,7 +8,7 @@
 # - Dunder names (__x__) are kept EXCEPT excluded module dunders
 # - Excluded module dunders: __all__, __dir__, __doc__, __getattr__
 
-from typing import Any, List
+from typing import List
 
 
 def public_func(x: int) -> str:

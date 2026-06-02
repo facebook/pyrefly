@@ -1979,3 +1979,87 @@ def repro(p: HasCall):
     takes(p)
     "#,
 );
+
+testcase!(
+    test_overload_unpack_kwargs_with_explicit_impl_params,
+    r#"
+from typing import Literal, Protocol, Required, TypedDict, TypeVar, Unpack, overload
+
+class A: ...
+class B: ...
+class C(Protocol):
+    def member(self) -> str: ...
+
+T = TypeVar("T")
+
+class ExcludeC(TypedDict, closed=True, total=False):
+    pass_through: bool
+    only_a: bool
+    only_c: Literal[False]
+    include_c: Literal[False] | None
+
+class OnlyC(TypedDict, closed=True, total=False):
+    pass_through: bool
+    only_a: bool
+    only_c: Required[Literal[True]]
+    include_c: bool | None
+
+class IncludeC(TypedDict, closed=True, total=False):
+    pass_through: bool
+    only_a: bool
+    only_c: Literal[False]
+    include_c: Required[Literal[True]]
+
+class IncludeB(TypedDict, closed=True, total=False):
+    pass_through: bool
+    only_a: Literal[False]
+    only_c: Literal[False]
+    include_c: bool | None
+
+class IncludeABC(TypedDict, closed=True, total=False):
+    pass_through: bool
+    only_a: Literal[False]
+    only_c: Literal[False]
+    include_c: Required[Literal[True]]
+
+class PassThrough(TypedDict, closed=True, total=False):
+    pass_through: Required[Literal[True]]
+    only_a: bool
+    only_c: bool
+    include_c: bool | None
+
+# This typed dict is open, so it may contain unknown keys and is not safe to match
+# against an implementation signature without **kwargs
+class PassThroughOpen(TypedDict, total=False):
+    pass_through: Required[Literal[True]]
+    only_a: bool
+    only_c: bool
+    include_c: bool | None
+
+@overload
+def func(obj: A, **kwds: Unpack[ExcludeC]) -> A: ...
+@overload
+def func(obj: C, **kwds: Unpack[OnlyC]) -> C: ...
+@overload
+def func(obj: C, **kwds: Unpack[IncludeC]) -> C: ...
+@overload
+def func(obj: B, **kwds: Unpack[IncludeB]) -> B: ...
+@overload
+def func(obj: A | C, **kwds: Unpack[IncludeC]) -> A | C: ...
+@overload
+def func(obj: A | B | C, **kwds: Unpack[IncludeABC]) -> A | B | C: ...
+@overload
+def func(obj: T, **kwds: Unpack[PassThrough]) -> T: ...
+@overload
+def func(obj: T, **kwds: Unpack[PassThroughOpen]) -> T: ... # E:
+def func(
+    obj: A | B | C | T,
+    *,
+    pass_through: bool = False,
+    only_a: bool = False,
+    only_c: bool = False,
+    include_c: bool | None = None,
+) -> A | B | C | T:
+    raise NotImplementedError
+    "#,
+);

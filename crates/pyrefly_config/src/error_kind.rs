@@ -278,6 +278,11 @@ pub enum ErrorKind {
     OpenUnpacking,
     /// An error related to parsing or syntax.
     ParseError,
+    /// A potential conflict between an explicit keyword argument and a NotRequired
+    /// TypedDict field. The field may be absent at runtime, so the conflict is not
+    /// guaranteed. This is a separate error code from BadKeywordArgument to allow
+    /// users to opt-in to this stricter check.
+    PotentialBadKeywordArgument,
     /// A protocol attribute was first defined inside a method instead of the class body.
     ProtocolImplicitlyDefinedAttribute,
     /// Calling `.cuda()` on a `torch.Tensor` hard-codes the target device.

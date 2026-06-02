@@ -97,6 +97,38 @@ References:
 }
 
 #[test]
+fn pytest_fixture_references_include_injected_parameters() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def data():
+#   ^
+    return 1
+
+def test_data(data):
+    assert data == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+5 | def data():
+        ^
+References:
+5 | def data():
+        ^^^^
+9 | def test_data(data):
+                  ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn basic_attribute_test() {
     let code = r#"
 class MyClass:
