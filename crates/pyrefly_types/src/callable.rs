@@ -240,7 +240,7 @@ impl ParamList {
         } else {
             Cow::Owned(ParamList(
                 pre.iter()
-                    .map(|p| p.to_param())
+                    .map(|p| p.to_subset_param())
                     .chain(self.0.iter().cloned())
                     .collect(),
             ))
