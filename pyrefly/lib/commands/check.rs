@@ -437,7 +437,7 @@ fn write_errors_to_file(
     }
 }
 
-fn write_errors_to_console(
+pub(crate) fn write_errors_to_console(
     format: OutputFormat,
     relative_to: &Path,
     errors: &[Error],
