@@ -1913,14 +1913,14 @@ impl Server {
 
                 // These are messages where VS Code will use results from previous document versions,
                 // we really don't want to implicitly cancel those.
-                // `TypeErrorDisplayStatusRequest` is in the list because cancelling it leaves the
-                // status-bar item hidden until the next unrelated event; stale data is fine here.
                 const ONLY_ONCE: &[&str] = &[
                     Completion::METHOD,
                     ResolveCompletionItem::METHOD,
                     SignatureHelpRequest::METHOD,
                     GotoDefinition::METHOD,
                     ProvideType::METHOD,
+                    // `TypeErrorDisplayStatusRequest` is in the list because cancelling it leaves the
+                    // status-bar item hidden until the next unrelated event; stale data is fine here.
                     TypeErrorDisplayStatusRequest::METHOD,
                 ];
 
@@ -2079,7 +2079,10 @@ impl Server {
                         )
                     {
                         self.record_completion_mru(&params);
-                        self.send_response(new_response(x.id, Ok(params)));
+                        self.send_response(new_response(
+                            x.id,
+                            Ok(transaction.resolve_completion_item(params)),
+                        ));
                     }
                 } else if let Some(params) = as_request::<DocumentHighlightRequest>(&x) {
                     if let Some(params) = self

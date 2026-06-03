@@ -8,6 +8,7 @@
 use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::collections::HashSet;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -58,6 +59,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
+use serde::Serialize;
 use starlark_map::ordered_set::OrderedSet;
 use starlark_map::small_map::SmallMap;
 use vec1::Vec1;
@@ -228,6 +230,58 @@ impl From<TypeCheckingMode> for pyrefly_config::resolve_unconfigured::Unconfigur
             TypeCheckingMode::All => Inner::All,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum CompletionResolveData {
+    Export {
+        module: String,
+        symbol: String,
+        path: Option<String>,
+        doc_range: Option<TextRange>,
+    },
+}
+
+impl CompletionResolveData {
+    pub(crate) fn export_value(
+        module: ModuleName,
+        symbol: impl Into<String>,
+        path: Option<String>,
+        doc_range: Option<TextRange>,
+    ) -> serde_json::Value {
+        let module_name = module.as_str().to_owned();
+        let symbol = symbol.into();
+        serde_json::to_value(Self::Export {
+            module: module_name.clone(),
+            symbol: symbol.clone(),
+            path,
+            doc_range,
+        })
+        .unwrap_or_else(|err| {
+            panic!("failed to serialize completion resolve data for {module_name}::{symbol}: {err}")
+        })
+    }
+}
+
+pub(crate) fn completion_data_handle_path(handle: &Handle) -> Option<String> {
+    Some(handle.path().as_path().to_string_lossy().into_owned())
+}
+
+fn filesystem_docstring(range: TextRange, path: &str) -> Option<lsp_types::Documentation> {
+    let contents = fs::read_to_string(path).ok()?;
+    let start = range.start().to_usize();
+    let end = range.end().to_usize();
+    if start > end || end > contents.len() {
+        return None;
+    }
+    let slice = contents.get(start..end)?;
+    Some(lsp_types::Documentation::MarkupContent(
+        lsp_types::MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: Docstring::clean(slice),
+        },
+    ))
 }
 
 const RESOLVE_EXPORT_INITIAL_GAS: Gas = Gas::new(100);
@@ -3747,6 +3801,63 @@ impl<'a> Transaction<'a> {
                 self.resolve_named_import(handle, *module, target_name, FindPreference::default())
             }
         }
+    }
+
+    fn documentation_for_completion_export(
+        &self,
+        module: ModuleName,
+        symbol: &str,
+    ) -> Option<lsp_types::Documentation> {
+        for (handle, export) in self.search_exports_exact(symbol, None).unwrap_or_default() {
+            if handle.module() == module {
+                let docstring_range = export.docstring_range?;
+                let module = self.get_module_info(&handle)?;
+                let docstring = Docstring(docstring_range, module).resolve();
+                return Some(lsp_types::Documentation::MarkupContent(
+                    lsp_types::MarkupContent {
+                        kind: lsp_types::MarkupKind::Markdown,
+                        value: docstring,
+                    },
+                ));
+            }
+        }
+        None
+    }
+
+    pub fn resolve_completion_item(&self, mut item: CompletionItem) -> CompletionItem {
+        if item.documentation.is_some() {
+            return item;
+        }
+        let Some(data_value) = item.data.clone() else {
+            return item;
+        };
+        let data = match serde_json::from_value::<CompletionResolveData>(data_value) {
+            Ok(data) => data,
+            Err(err) => {
+                tracing::debug!("Invalid completion resolve data: {err}");
+                return item;
+            }
+        };
+        match data {
+            CompletionResolveData::Export {
+                module,
+                symbol,
+                path,
+                doc_range,
+            } => {
+                let module = ModuleName::from_str(&module);
+                if let Some(documentation) =
+                    self.documentation_for_completion_export(module, &symbol)
+                {
+                    item.documentation = Some(documentation);
+                } else if let (Some(path), Some(range)) = (path.as_deref(), doc_range)
+                    && let Some(documentation) = filesystem_docstring(range, path)
+                {
+                    item.documentation = Some(documentation);
+                }
+            }
+        }
+        item
     }
 
     /// Used to avoid making use of reexports of private modules for some LSP
