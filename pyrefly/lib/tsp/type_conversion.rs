@@ -362,7 +362,7 @@ impl TypeConverter<'_> {
             PyreflyType::Materialization => builtin("Unknown"),
 
             // --- Sentinel type ---
-            PyreflyType::Sentinel(_) => builtin("Sentinel"),
+            PyreflyType::Sentinel(_) => builtin("sentinel"),
         }
     }
 
