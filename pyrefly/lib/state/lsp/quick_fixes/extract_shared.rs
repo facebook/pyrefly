@@ -379,7 +379,7 @@ pub(super) fn type_to_annotation(ty: Type, stdlib: &Stdlib) -> Option<String> {
         return None;
     }
     let parts = ty.get_types_with_locations(Some(stdlib));
-    Some(parts.into_iter().map(|(part, _)| part).collect())
+    Some(parts.into_iter().map(|part| part.text).collect())
 }
 
 pub(super) fn has_existing_from_import(ast: &ModModule, module_name: &str, name: &str) -> bool {
