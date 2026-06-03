@@ -89,3 +89,89 @@ result = col().isNull()
         &[],
     );
 }
+
+#[test]
+fn test_factory_callable_as_class_method() {
+    // Test the PySpark 3.4+ factory pattern where Callable types from factory
+    // functions are assigned as class attributes and should bind self at runtime
+    check(
+        r#"
+from typing import Callable, Union
+
+def _unary_op(name: str) -> Callable[["Column"], "Column"]: ...
+def _bin_op(name: str) -> Callable[["Column", Union["Column", int]], "Column"]: ...
+
+class Column:
+    isNull = _unary_op("isNull")
+    asc = _unary_op("asc")
+    eqNullSafe = _bin_op("eqNullSafe")
+
+def col(x: str) -> Column: ...
+
+# At runtime these work because the returned functions are descriptors.
+# Pyrefly should now recognize them as methods.
+col("x").isNull()  # No error
+col("x").asc()  # No error
+col("x").eqNullSafe(col("y"))  # No error
+        "#,
+        &[],
+    );
+}
+
+#[test]
+fn test_callable_attribute_without_matching_class_not_method() {
+    // Verify that Callable attributes with parameters that DON'T match the
+    // containing class are NOT treated as methods. This prevents false positives.
+    check(
+        r#"
+from typing import Callable
+
+class Config:
+    # Callable with different parameter type - should NOT bind self
+    validator: Callable[[str], bool] = lambda x: len(x) > 0
+
+cfg = Config()
+# Should work: calling validator(string) without passing self
+result: bool = cfg.validator("test")
+        "#,
+        &[],
+    );
+}
+
+#[test]
+fn test_strategy_pattern_not_method() {
+    // Strategy pattern with Callable - should NOT be treated as a method
+    check(
+        r#"
+from typing import Callable
+
+class Calculator:
+    # Strategy pattern - Callable but not a method
+    operation: Callable[[int, int], int] = lambda a, b: a + b
+
+calc = Calculator()
+# This should work: calling operation(int, int) without self binding
+result: int = calc.operation(5, 3)
+        "#,
+        &[],
+    );
+}
+
+#[test]
+fn test_callable_with_unrelated_type_not_method() {
+    // Callable with parameters of completely different type - should NOT be method
+    check(
+        r#"
+from typing import Callable
+
+class Handler:
+    # This is a callback handler - not a method
+    callback: Callable[[str], None] = lambda x: print(x)
+
+h = Handler()
+# Should work without self binding
+h.callback("message")
+        "#,
+        &[],
+    );
+}
