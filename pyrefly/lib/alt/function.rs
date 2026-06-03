@@ -814,6 +814,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &'a self,
         decorator: &'a Decorator,
     ) -> Option<SpecialDecorator<'a>> {
+        if let Some(field) = decorator.attrs_default_field.as_ref() {
+            return Some(SpecialDecorator::AttrsDefault(field));
+        }
         if decorator
             .ty
             .property_metadata()
@@ -951,6 +954,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // loop in undecorated_function, where uses_shape_dsl_ir_name is
                 // available. Returning true here just filters the decorator out of
                 // the list so it doesn't go through the generic decorator pipeline.
+                true
+            }
+            SpecialDecorator::AttrsDefault(field) => {
+                flags.attrs_default_field = Some((*field).clone());
                 true
             }
             _ => false,
@@ -1344,6 +1351,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialDecorator::Final => "final",
             SpecialDecorator::EnumNonmember => "nonmember",
             SpecialDecorator::AbstractMethod => "abstractmethod",
+            SpecialDecorator::AttrsDefault(_) => "default",
             _ => return,
         };
         self.error(

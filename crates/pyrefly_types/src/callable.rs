@@ -709,6 +709,8 @@ pub struct FuncFlags {
     /// A function decorated with `@uses_shape_dsl`, whose return type should be
     /// refined by evaluating the referenced shape-DSL function at call sites.
     pub shape_transform: Option<Arc<ShapeTransform>>,
+    /// The attrs field name for a method decorated with `@field.default`.
+    pub attrs_default_field: Option<Name>,
 }
 
 impl FuncFlags {

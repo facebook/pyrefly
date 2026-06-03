@@ -74,6 +74,7 @@ pub struct DecoratedFunction {
 pub struct Decorator {
     pub ty: Type,
     pub deprecation: Option<Deprecation>,
+    pub attrs_default_field: Option<Name>,
 }
 
 impl Display for Decorator {
@@ -99,6 +100,7 @@ pub enum SpecialDecorator<'a> {
     EnumNonmember,
     AbstractMethod,
     UsesShapeDsl,
+    AttrsDefault(&'a Name),
 }
 
 impl UndecoratedFunction {
