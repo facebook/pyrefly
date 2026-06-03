@@ -634,7 +634,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         return true;
                     };
                     for t in param_types {
-                        if !self.is_equivalent(first, t) {
+                        if !self.probe(first, t, &placeholder_vars, |s| s.is_equivalent(first, t)) {
                             return true;
                         }
                     }
@@ -689,9 +689,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             let selected_overload = if spec_compliant {
-                self.disambiguate_overloads_spec_compliant(&matched_overloads)
+                self.disambiguate_overloads_spec_compliant(&matched_overloads, &placeholder_vars)
             } else {
-                self.disambiguate_overloads(&matched_overloads)
+                self.disambiguate_overloads(&matched_overloads, &placeholder_vars)
             };
             if let Some(idx) = selected_overload {
                 let overload = matched_overloads
@@ -744,6 +744,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn disambiguate_overloads_spec_compliant(
         &self,
         matched_overloads: &[CalledOverload<'_>],
+        placeholder_vars: &[Var],
     ) -> Option<usize> {
         // Step 5, part 2: are all remaining return types equivalent to one another?
         // If not, the call is ambiguous.
@@ -751,14 +752,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let first_overload = matched_overloads
             .next()
             .expect("Expected at least one overload");
-        if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
+        if matched_overloads.any(|o| {
+            !self.probe(&first_overload.res, &o.res, placeholder_vars, |s| {
+                s.is_equivalent(&first_overload.res, &o.res)
+            })
+        }) {
             return None;
         }
         // Step 6: if there are still multiple matches, pick the first one.
         Some(0)
     }
 
-    fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload<'_>]) -> Option<usize> {
+    fn disambiguate_overloads(
+        &self,
+        matched_overloads: &[CalledOverload<'_>],
+        placeholder_vars: &[Var],
+    ) -> Option<usize> {
         // When a call to an overloaded function may match multiple overloads, the spec says to
         // return Any when the return types are not all equivalent.
         // However, neither mypy nor pyright fully follows this part of the spec, and many
@@ -776,14 +785,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // First, find a candidate return type.
         let mut candidate = 0;
         for (i, o) in matched_overloads.iter().enumerate().skip(1) {
-            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+            let got = o.res.materialize();
+            let want = &matched_overloads[candidate].res;
+            if !self.probe(&got, want, placeholder_vars, |s| s.is_subset_eq(&got, want)) {
                 candidate = i;
             }
         }
         // We've already checked every return type after the candidate.
         // Check every return type before the candidate.
         for o in matched_overloads.iter().take(candidate) {
-            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+            let got = o.res.materialize();
+            let want = &matched_overloads[candidate].res;
+            if !self.probe(&got, want, placeholder_vars, |s| s.is_subset_eq(&got, want)) {
                 return None;
             }
         }
@@ -821,6 +834,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         placeholder_vars
+    }
+
+    /// Compare two candidate overloads without committing side effects.
+    /// `is_equivalent`/`is_subset_eq` can pin/unify vars, but disambiguation must only
+    /// observe, so we snapshot the operands' vars (expanded) plus the call's placeholder
+    /// vars, compare, then restore. Without this, `sum([])` leaks a pin onto the empty
+    /// list's element var. See facebook/pyrefly#1584. Like the solver's
+    /// `is_subset_eq_probe_for_pruning`, this covers syntactically-reachable vars only, not
+    /// bound-only vars; no leak through that gap is known.
+    fn probe<F: FnOnce(&Self) -> bool>(
+        &self,
+        left: &Type,
+        right: &Type,
+        placeholder_vars: &[Var],
+        compare: F,
+    ) -> bool {
+        let mut vars = placeholder_vars.to_vec();
+        for operand in [left, right] {
+            let mut expanded = operand.clone();
+            self.solver().expand_mut(&mut expanded);
+            for var in expanded.collect_all_vars() {
+                if !vars.contains(&var) {
+                    vars.push(var);
+                }
+            }
+        }
+        let snapshot = self.solver().snapshot_vars(&vars);
+        let result = compare(self);
+        self.solver().restore_vars(snapshot);
+        result
     }
 
     fn call_overload<'c>(

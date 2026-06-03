@@ -203,6 +203,19 @@ x2 = {}
 "#,
 );
 
+// A bare covariant read no longer pins an empty container's element type, so
+// the container stays unsolved and the ImplicitAny diagnostic fires. Before the
+// fix for facebook/pyrefly#1584, `sum(x)` pinned the element to typeshed's
+// literal-int union, which silently suppressed this diagnostic.
+testcase!(
+    test_implicit_any_empty_container_covariant_read,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+x = [] # E: Cannot infer type of empty container
+sum(x)
+"#,
+);
+
 testcase!(
     test_explicit_any_default_disabled,
     r#"

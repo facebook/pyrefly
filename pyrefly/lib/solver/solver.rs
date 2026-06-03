@@ -3558,7 +3558,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             }
                         }
                         // Widen None to None | Any for PartialQuantified, matching
-                        // the PartialContained behavior (see comment there).
+                        // the PartialContained write arm below.
                         let variables = self.solver.variables.lock();
                         let v1_current = variables.get(*v1);
                         if let Variable::Answer(t) | Variable::ResidualAnswer { ty: t, .. } =
@@ -3575,19 +3575,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         Ok(())
                     }
                     Variable::PartialContained(_) => {
+                        // A covariant read (upper bound) tells us only that whatever the
+                        // empty container holds must be `<: t2`; it does not tell us the
+                        // element type. Leave the placeholder unsolved so it is pinned only
+                        // by writes (lower bounds), invariant params, or generic type-var
+                        // inference -- and otherwise defaults to `Any`. See
+                        // facebook/pyrefly#1584.
                         drop(v1_ref);
-                        // When an empty container's element is pinned to None, widen to
-                        // None | Any. A bare None in the first use almost always means the
-                        // container will later hold some other (unknown) type, analogous
-                        // to how `self.x = None` is inferred as `None | Any` for attributes.
-                        let answer = if t2.is_none() {
-                            self.solver
-                                .heap
-                                .mk_union(vec![t2.clone(), Type::any_implicit()])
-                        } else {
-                            t2.clone()
-                        };
-                        variables.update(*v1, Variable::Answer(answer));
                         Ok(())
                     }
                     Variable::Recursive => {
@@ -3667,7 +3661,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 .insert(*v2, specialization_error);
                         }
                         // Widen None to None | Any for PartialQuantified, matching
-                        // the PartialContained behavior (see comment there).
+                        // the PartialContained write arm below.
                         let variables = self.solver.variables.lock();
                         if answer.is_none() {
                             let widened = self
@@ -3685,8 +3679,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         drop(v2_ref);
-                        // Widen None to None | Any (see comment at the other
-                        // PartialContained pinning site above).
+                        // This lower-bound (write) arm is the only place an empty
+                        // container's element is pinned -- the upper-bound (read) arm
+                        // above intentionally does not pin (see facebook/pyrefly#1584).
+                        // When the first write is `None`, widen to `None | Any`: a bare
+                        // `None` first use almost always means the container will later
+                        // hold some other (unknown) type, analogous to how `self.x = None`
+                        // is inferred as `None | Any` for attributes.
                         let answer = if t1_p.is_none() {
                             self.solver.heap.mk_union(vec![t1_p, Type::any_implicit()])
                         } else {

@@ -362,7 +362,6 @@ def f(x: int):
 );
 
 testcase!(
-    bug = "Bad interaction between overload resolution and partial type inference",
     test_partial_inference_literalstring_join,
     r#"
 from typing import assert_type, LiteralString, reveal_type
@@ -371,8 +370,10 @@ def f(x1: list[str], x2: list[LiteralString]):
     x3 = []
     assert_type(", ".join(x1), str)
     assert_type(", ".join(x2), LiteralString)
-    # This is wrong: we should not assume `join`'s `LiteralString` overload is matched.
-    reveal_type(", ".join(x3))  # E: revealed type: LiteralString
+    # `x3` is an empty list whose element type is only read (covariant) by `join`,
+    # so it stays unsolved (defaults to `Any`) rather than being pinned to
+    # `join`'s `LiteralString` overload param. See facebook/pyrefly#1584.
+    reveal_type(", ".join(x3))  # E: revealed type: str
     "#,
 );
 
