@@ -8,6 +8,6 @@ FACTORY_BOY_TEST_PATH = { value = "pyrefly/lib/test/factory_boy/third-party", re
 ATTRS_TEST_PATH = { value = "pyrefly/lib/test/attrs/third-party", relative = true }
 MARSHMALLOW_TEST_PATH = { value = "pyrefly/lib/test/marshmallow/third-party", relative = true }
 GLEAN_SNAPSHOTS_PATH = { value = "pyrefly/lib/report/glean/snapshots", relative = true }
-REPORT_TEST_PATH = { value = "pyrefly/lib/test/report/test_files", relative = true }
+COVERAGE_TEST_PATH = { value = "pyrefly/lib/test/coverage/test_files", relative = true }
 STUBGEN_TEST_PATH = { value = "pyrefly/lib/test/stubgen", relative = true }
 SHAPE_DSL_TEST_PATH = { value = "test/tensor_shapes/fixtures", relative = true }

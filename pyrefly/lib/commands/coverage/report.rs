@@ -2270,22 +2270,23 @@ mod tests {
     use crate::state::require::Require;
     use crate::test::util::TestEnv;
 
-    /// Load a checked-in test file from the REPORT_TEST_PATH directory.
+    /// Load a checked-in test file from the COVERAGE_TEST_PATH directory.
     /// Normalizes `\r\n` to `\n` so snapshots pass on Windows.
     fn load_test_file(name: &str) -> String {
-        let path = std::env::var("REPORT_TEST_PATH").expect("REPORT_TEST_PATH env var must be set");
+        let path =
+            std::env::var("COVERAGE_TEST_PATH").expect("COVERAGE_TEST_PATH env var must be set");
         std::fs::read_to_string(PathBuf::from(path).join(name))
             .unwrap_or_else(|e| panic!("failed to read test file {name}: {e}"))
             .replace("\r\n", "\n")
     }
 
     /// Compare serialized JSON output against a checked-in expected file.
-    /// When `REPORT_TEST_WRITE_PATH` is set, writes the actual output to that
+    /// When `COVERAGE_TEST_WRITE_PATH` is set, writes the actual output to that
     /// directory instead of comparing (use this to update snapshots).
     fn compare_snapshot<T: serde::Serialize>(name: &str, actual: &T) {
         let actual_json = serde_json::to_string_pretty(actual).unwrap();
 
-        if let Ok(write_path) = std::env::var("REPORT_TEST_WRITE_PATH") {
+        if let Ok(write_path) = std::env::var("COVERAGE_TEST_WRITE_PATH") {
             let out = PathBuf::from(write_path).join(name);
             std::fs::write(&out, format!("{}\n", actual_json.trim()))
                 .unwrap_or_else(|e| panic!("failed to write snapshot {}: {e}", out.display()));
@@ -2298,7 +2299,7 @@ mod tests {
             actual_json.trim(),
             expected_json.trim(),
             "Snapshot mismatch for {name}. To update, run with \
-             REPORT_TEST_WRITE_PATH set to the test_files directory."
+             COVERAGE_TEST_WRITE_PATH set to the test_files directory."
         );
     }
 
