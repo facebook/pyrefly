@@ -307,6 +307,7 @@ assert_type(b.fn(1), int)
 );
 
 testcase!(
+    bug = "ParamSpec prefix params incorrectly demoted to positional-only",
     test_callable_class_wrapper,
     r#"
 from typing import Callable, assert_type, reveal_type
@@ -321,12 +322,13 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
 
 testcase!(
+    bug = "ParamSpec prefix params incorrectly demoted to positional-only",
     test_callable_class_wrapper_with_helper,
     r#"
 from typing import Callable, assert_type, reveal_type
@@ -344,13 +346,13 @@ def wrap[**P, R](f: Callable[P, R]) -> Wrapper[P, R]:
 def f[S](x: S) -> S: ...
 wrapper = wrap(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
 
 testcase!(
-    bug = "Need better display for callback protocol residuals in class targs",
+    bug = "Need better display for callback protocol residuals in class targs; ParamSpec prefix params incorrectly demoted to positional-only",
     test_callable_class_wrapper_display_without_field,
     r#"
 from typing import Callable, reveal_type
@@ -362,7 +364,7 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper)  # E: revealed type: Wrapper[[x: GenericResidual@R], GenericResidual@R]
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 "#,
 );
 

@@ -873,3 +873,52 @@ def forward(g: Callable[Q, None], *args: Q.args, **kwargs: Q.kwargs) -> None:
     call_fn(g, x=1, *args, **kwargs)
 "#,
 );
+
+// Reproduces pyinfra's @operation decorator pattern: a Protocol whose __call__
+// mixes explicit "global" params with *args: P.args / **kwargs: P.kwargs, and
+// the decorator returns cast(Protocol[P], wrapped_func). Mypy 1.17 handles
+// this correctly; pyrefly currently resolves the P-bound params (from the
+// original function) but drops the Protocol's own explicit params (_sudo, name).
+testcase!(
+    bug = "Protocol's explicit params are lost when ParamSpec is resolved through cast()",
+    test_paramspec_protocol_cast_preserves_binding,
+    r#"
+from typing import Protocol, Generic, Callable, Iterator, cast
+from typing_extensions import ParamSpec
+
+P = ParamSpec("P")
+
+class OperationResult:
+    changed: bool
+
+class OperationProtocol(Generic[P], Protocol):
+    def __call__(
+        self,
+        _sudo: bool = False,
+        name: str | None = None,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> OperationResult: ...
+
+def make_operation(func: Callable[P, Iterator[str]]) -> OperationProtocol[P]:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> OperationResult:
+        return OperationResult()
+    return cast(OperationProtocol[P], wrapper)
+
+def _service_impl(service_name: str, running: bool = True) -> Iterator[str]:
+    yield "test"
+
+service = make_operation(_service_impl)
+
+# P-bound params work correctly:
+service(service_name="nginx")
+service(service_name="nginx", running=True)
+
+# Protocol's explicit params are incorrectly rejected:
+service(service_name="nginx", _sudo=True)  # E: Unexpected keyword argument `_sudo`
+service(service_name="nginx", running=True, _sudo=True, name="Start nginx")  # E: Unexpected keyword argument `_sudo` # E: Unexpected keyword argument `name`
+
+# Correctly rejected — not on the Protocol or in P:
+service(nonexistent_param=True)  # E: Missing argument `service_name` # E: Unexpected keyword argument `nonexistent_param`
+"#,
+);
