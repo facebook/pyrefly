@@ -24,6 +24,21 @@ use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
 use crate::types::Type;
 
+#[derive(Clone, Copy, Dupe, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, TypeEq)]
+pub enum SentinelKind {
+    Builtins,
+    TypingExtensions,
+}
+
+impl SentinelKind {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Builtins => "sentinel",
+            Self::TypingExtensions => "Sentinel",
+        }
+    }
+}
+
 /// Used to represent Sentinel calls. Each Sentinel is unique, so use the ArcId to separate them.
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Sentinel(ArcId<SentinelInner>);
@@ -48,14 +63,20 @@ impl Display for Sentinel {
 #[derive(Debug, PartialEq, TypeEq, Eq, Ord, PartialOrd)]
 struct SentinelInner {
     qname: QName,
+    kind: SentinelKind,
 }
 
 impl Sentinel {
-    pub fn new(name: Identifier, module: Module) -> Self {
+    pub fn new(name: Identifier, module: Module, kind: SentinelKind) -> Self {
         Self(ArcId::new(SentinelInner {
+            kind,
             // TODO: properly take parent from caller of new()
             qname: QName::new(name, NestingContext::toplevel(), module),
         }))
+    }
+
+    pub fn kind(&self) -> SentinelKind {
+        self.0.kind
     }
 
     pub fn qname(&self) -> &QName {

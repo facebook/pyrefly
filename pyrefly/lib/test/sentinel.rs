@@ -203,3 +203,34 @@ def func3(x: int | Cls.IN_CLASS = Cls.IN_CLASS) -> None:
         assert_type(x, int)
     "#,
 );
+
+testcase!(
+    test_typeshed_sentinel_3_15_no_dunder_name,
+    TestEnv::new().with_version(PythonVersion::new(3, 15, 0)),
+    r#"
+from typing_extensions import Sentinel
+
+MISSING = Sentinel("MISSING")
+MISSING.__name__  # E: Object of class `Sentinel` has no attribute `__name__`
+    "#,
+);
+
+testcase!(
+    test_builtin_sentinel_3_15_has_dunder_name,
+    TestEnv::new().with_version(PythonVersion::new(3, 15, 0)),
+    r#"
+MISSING = sentinel("MISSING")
+MISSING.__name__
+    "#,
+);
+
+testcase!(
+    test_typeshed_sentinel_3_14_no_dunder_name,
+    TestEnv::new().with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from typing_extensions import Sentinel
+
+MISSING = Sentinel("MISSING")
+MISSING.__name__  # E: Object of class `Sentinel` has no attribute `__name__`
+    "#,
+);

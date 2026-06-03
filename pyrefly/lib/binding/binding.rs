@@ -24,6 +24,7 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
+use pyrefly_types::sentinel::SentinelKind;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasIndex;
@@ -2354,7 +2355,15 @@ pub enum Binding {
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
-    Sentinel(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
+    /// Last boolean represents if the sentinel is from builtins. If false, then it is from typing_extensions.
+    Sentinel(
+        Box<(
+            Option<Idx<KeyAnnotation>>,
+            Identifier,
+            Box<ExprCall>,
+            SentinelKind,
+        )>,
+    ),
 }
 
 impl DisplayWith<Bindings> for Binding {
@@ -2398,8 +2407,14 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "TypeVarTuple({}, {name}, {})", ann(a), m.display(call))
             }
             Self::Sentinel(x) => {
-                let (a, name, call) = x.as_ref();
-                write!(f, "Sentinel({}, {name}, {})", ann(a), m.display(call))
+                let (a, name, call, kind) = x.as_ref();
+                write!(
+                    f,
+                    "{}({}, {name}, {})",
+                    kind.name(),
+                    ann(a),
+                    m.display(call)
+                )
             }
             Self::ReturnExplicit(x) => {
                 write!(f, "ReturnExplicit({}, ", ann(&x.annot))?;

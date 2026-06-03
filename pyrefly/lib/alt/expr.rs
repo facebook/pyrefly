@@ -21,6 +21,7 @@ use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::literal::LitStyle;
+use pyrefly_types::sentinel::SentinelKind;
 use pyrefly_types::shaped_array::IndexOp;
 use pyrefly_types::shaped_array::ShapedArrayShape;
 use pyrefly_types::shaped_array::ShapedArrayType;
@@ -1793,6 +1794,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         assignment_name: Identifier,
         x: &ExprCall,
+        kind: SentinelKind,
         errors: &ErrorCollector,
     ) -> Sentinel {
         let mut sentinel_name = assignment_name;
@@ -1868,7 +1870,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        Sentinel::new(sentinel_name, self.module().dupe())
+        Sentinel::new(sentinel_name, self.module().dupe(), kind)
     }
 
     pub fn typevar_from_call(

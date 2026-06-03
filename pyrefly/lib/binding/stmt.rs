@@ -10,6 +10,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::sentinel::SentinelKind;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -281,7 +282,12 @@ impl<'a> BindingsBuilder<'a> {
         })
     }
 
-    fn assign_sentinel(&mut self, name: &ExprName, call: &mut ExprCall) {
+    fn assign_sentinel(
+        &mut self,
+        name: &ExprName,
+        call: &mut ExprCall,
+        sentinel_kind: SentinelKind,
+    ) {
         // Type var declarations are static types only; skip them for first-usage type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation {
             is_annotation: false,
@@ -301,6 +307,7 @@ impl<'a> BindingsBuilder<'a> {
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
+                sentinel_kind,
             )))
         })
     }
@@ -623,11 +630,11 @@ impl<'a> BindingsBuilder<'a> {
                                 return;
                             }
                             SpecialExport::Sentinel => {
-                                self.assign_sentinel(name, call);
+                                self.assign_sentinel(name, call, SentinelKind::TypingExtensions);
                                 return;
                             }
                             SpecialExport::BuiltinsSentinel => {
-                                self.assign_sentinel(name, call);
+                                self.assign_sentinel(name, call, SentinelKind::Builtins);
                                 return;
                             }
                             SpecialExport::Enum

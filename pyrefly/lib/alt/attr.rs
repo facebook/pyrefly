@@ -14,6 +14,7 @@ use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitEnum;
+use pyrefly_types::sentinel::SentinelKind;
 use pyrefly_types::shaped_array::ShapedArrayShape;
 use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::special_form::SpecialForm;
@@ -2336,9 +2337,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeVar(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.type_var().clone(),
             )),
-            Type::Sentinel(_) => acc.push(AttributeBase1::ClassInstance(
-                self.stdlib.sentinel().clone(),
-            )),
+            Type::Sentinel(sentinel) => {
+                acc.push(AttributeBase1::ClassInstance(match sentinel.kind() {
+                    SentinelKind::Builtins => self.stdlib.sentinel_builtin().clone(),
+                    SentinelKind::TypingExtensions => {
+                        self.stdlib.sentinel_typing_extensions().clone()
+                    }
+                }))
+            }
             Type::ParamSpec(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.param_spec().clone(),
             )),

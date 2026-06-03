@@ -5344,9 +5344,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Binding::Delete(x) => self.check_del_statement(x, errors),
             Binding::Sentinel(x) => {
-                let (ann, name, call) = x.as_ref();
+                let (ann, name, call, kind) = x.as_ref();
                 let ty = self
-                    .sentinel_from_call(name.clone(), call, errors)
+                    .sentinel_from_call(name.clone(), call, *kind, errors)
                     .to_type(self.heap);
                 if let Some(k) = ann
                     && let AnnotationWithTarget {

@@ -106,8 +106,11 @@ pub struct Stdlib {
     /// For 3.12 and 3.13 defined separately in both locations.
     type_alias_type: StdlibResult<ClassType>,
     /// Defined in `typing_extensions` as Sentinel.
+    /// Different attributes from `builtins` sentinel.
+    sentinel_typing_extensions: StdlibResult<ClassType>,
     /// Defined in `builtins` as `sentinel` since 3.15.
-    sentinel: StdlibResult<ClassType>,
+    /// Different attributes from `typing_extensions` Sentinel.
+    sentinel_builtin: StdlibResult<ClassType>,
     traceback_type: StdlibResult<ClassType>,
     builtins_type: StdlibResult<ClassType>,
     /// Introduced in Python 3.10.
@@ -261,10 +264,8 @@ impl Stdlib {
             type_var_tuple: lookup_concrete(standardised(3, 11), "TypeVarTuple"),
             type_alias_type: lookup_concrete(standardised(3, 12), "TypeAliasType"),
             // sentinel: lookup_concrete(typing_extensions, "Sentinel"),
-            sentinel: version
-                .at_least(3, 15)
-                .then(|| lookup_concrete(builtins, "sentinel"))
-                .unwrap_or_else(|| lookup_concrete(typing_extensions, "Sentinel")),
+            sentinel_builtin: lookup_concrete(builtins, "sentinel"),
+            sentinel_typing_extensions: lookup_concrete(typing_extensions, "Sentinel"),
             traceback_type: lookup_concrete(types, "TracebackType"),
             function_type: lookup_concrete(types, "FunctionType"),
             method_type: lookup_concrete(types, "MethodType"),
@@ -589,8 +590,11 @@ impl Stdlib {
         Self::primitive(&self.type_alias_type)
     }
 
-    pub fn sentinel(&self) -> &ClassType {
-        Self::primitive(&self.sentinel)
+    pub fn sentinel_builtin(&self) -> &ClassType {
+        Self::primitive(&self.sentinel_builtin)
+    }
+    pub fn sentinel_typing_extensions(&self) -> &ClassType {
+        Self::primitive(&self.sentinel_typing_extensions)
     }
 
     pub fn traceback_type(&self) -> &ClassType {
