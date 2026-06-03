@@ -3505,89 +3505,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 self.is_subset_eq(got, want)
                             })
                     }
-                    Variable::PartialQuantified(q) => {
-                        let name = q.name.clone();
-                        let restriction = q.restriction().clone();
-                        let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
+                    Variable::PartialContained(_) | Variable::PartialQuantified(_) => {
+                        // A covariant read (upper bound) constrains the element to `<: t2` but
+                        // does not determine it, so leave the placeholder unsolved -- for both
+                        // literals (`[]`, `{}` -> PartialContained) and constructor calls (`set()`,
+                        // `dict()`, `list()` -> PartialQuantified). The element is pinned only via
+                        // the lower arm (writes, invariant params, generic inference); otherwise it
+                        // defaults to `Any`. See facebook/pyrefly#1584.
                         drop(v1_ref);
-
-                        // For constrained TypeVars, promote to the matching constraint type
-                        // rather than pinning to the raw argument type.
-                        if let Restriction::Constraints(ref constraints) = restriction {
-                            variables.update(*v1, Variable::Answer(t2.clone()));
-                            drop(variables);
-                            if let Some(constraint) = self.find_matching_constraint(t2, constraints)
-                            {
-                                let constraint = constraint.clone();
-                                self.solver
-                                    .variables
-                                    .lock()
-                                    .update(*v1, Variable::Answer(constraint));
-                            } else if let Err(e) = self.is_subset_eq(t2, &bound) {
-                                // No individual constraint matched, but the type may still
-                                // be assignable to the constraint union (e.g. an abstract
-                                // `AnyStr` satisfies `str | bytes`). Only error if it fails
-                                // the union bound check too.
-                                self.solver.instantiation_errors.write().insert(
-                                    *v1,
-                                    TypeVarSpecializationError {
-                                        name,
-                                        got: t2.clone(),
-                                        want: bound,
-                                        error_kind: ErrorKind::BadSpecialization,
-                                        message_override: None,
-                                        error: e,
-                                    },
-                                );
-                            }
-                        } else {
-                            variables.update(*v1, Variable::Answer(t2.clone()));
-                            drop(variables);
-                            if let Err(e) = self.is_subset_eq(t2, &bound) {
-                                self.solver.instantiation_errors.write().insert(
-                                    *v1,
-                                    TypeVarSpecializationError {
-                                        name,
-                                        got: t2.clone(),
-                                        want: bound,
-                                        error_kind: ErrorKind::BadSpecialization,
-                                        message_override: None,
-                                        error: e,
-                                    },
-                                );
-                            }
-                        }
-                        // Widen None to None | Any for PartialQuantified, matching
-                        // the PartialContained behavior (see comment there).
-                        let variables = self.solver.variables.lock();
-                        let v1_current = variables.get(*v1);
-                        if let Variable::Answer(t) | Variable::ResidualAnswer { ty: t, .. } =
-                            &*v1_current
-                            && t.is_none()
-                        {
-                            let widened = self
-                                .solver
-                                .heap
-                                .mk_union(vec![t.clone(), Type::any_implicit()]);
-                            drop(v1_current);
-                            variables.update(*v1, Variable::Answer(widened));
-                        }
-                        Ok(())
-                    }
-                    Variable::PartialContained(_) => {
-                        drop(v1_ref);
-                        // When an empty container's element is pinned to None, widen to
-                        // None | Any. A bare None in the first use almost always means the
-                        // container will later hold some other (unknown) type, analogous
-                        // to how `self.x = None` is inferred as `None | Any` for attributes.
-                        let answer = if t2.is_none() {
-                            self.solver
-                                .heap
-                                .mk_union(vec![t2.clone(), Type::any_implicit()])
-                        } else {
-                            t2.clone()
-                        };
-                        variables.update(*v1, Variable::Answer(answer));
                         Ok(())
                     }
                     Variable::Recursive => {
@@ -3667,7 +3592,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                                 .insert(*v2, specialization_error);
                         }
                         // Widen None to None | Any for PartialQuantified, matching
-                        // the PartialContained behavior (see comment there).
+                        // the PartialContained write arm below.
                         let variables = self.solver.variables.lock();
                         if answer.is_none() {
                             let widened = self
@@ -3685,8 +3610,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                             .clone()
                             .promote_implicit_literals(self.type_order.stdlib());
                         drop(v2_ref);
-                        // Widen None to None | Any (see comment at the other
-                        // PartialContained pinning site above).
+                        // This lower-bound (write) arm is the only place an empty
+                        // container's element is pinned -- the upper-bound (read) arm
+                        // above intentionally does not pin (see facebook/pyrefly#1584).
+                        // When the first write is `None`, widen to `None | Any`: a bare
+                        // `None` first use almost always means the container will later
+                        // hold some other (unknown) type, analogous to how `self.x = None`
+                        // is inferred as `None | Any` for attributes.
                         let answer = if t1_p.is_none() {
                             self.solver.heap.mk_union(vec![t1_p, Type::any_implicit()])
                         } else {

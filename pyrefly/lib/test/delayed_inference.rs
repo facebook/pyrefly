@@ -39,6 +39,152 @@ assert_type(x, list[Any])
 );
 
 testcase!(
+    test_sum_empty_list,
+    r#"
+from typing import assert_type, Any
+x = []
+y = sum(x)
+assert_type(x, list[Any])
+assert_type(y, int)
+"#,
+);
+
+testcase!(
+    test_empty_list_invariant_param,
+    r#"
+from typing import assert_type
+c = []
+def f(z: list[int]) -> None: ...
+f(c)
+assert_type(c, list[int])
+"#,
+);
+
+// CRITICAL: cross-argument generic inference must still pin the element type.
+// A bare covariant read (e.g. `sum(x)`) must NOT pin an empty container's
+// element, but solving a generic type-var against a sibling argument's value
+// MUST. See facebook/pyrefly#1485 and #1584.
+testcase!(
+    test_empty_list_generic_cross_arg,
+    r#"
+from typing import Iterable, assert_type
+def gen[T](xs: Iterable[T], y: T) -> None: ...
+g = []
+gen(g, 1)
+assert_type(g, list[int])
+"#,
+);
+
+// Constructor (`set()`, PartialQuantified) sibling-arg inference: the covariant
+// read of `xs` must not pin, but solving `T` against `y=1` (`int <: T`) MUST, via
+// the lower-bound arm. See facebook/pyrefly#1485 and #1584.
+testcase!(
+    test_empty_set_generic_cross_arg,
+    r#"
+from typing import Iterable, assert_type
+def gen[T](xs: Iterable[T], y: T) -> None: ...
+s = set()
+gen(s, 1)
+assert_type(s, set[int])
+"#,
+);
+
+// Intended behavior change (#1584): a concrete covariant read no longer pins
+// the empty container's element type; it stays unsolved and defaults to Any.
+testcase!(
+    test_empty_list_covariant_read_stays_any,
+    r#"
+from typing import Iterable, assert_type, Any
+d = []
+def take_iter(z: Iterable[int]) -> None: ...
+take_iter(d)
+assert_type(d, list[Any])
+"#,
+);
+
+// #1584 extended from literals to constructor calls: `set()`'s element is a
+// `PartialQuantified` placeholder, but a covariant read still must not pin it ->
+// stays `Any` (pyright: `set[Unknown]`). See facebook/pyrefly#1584.
+testcase!(
+    test_empty_set_covariant_read_stays_any,
+    r#"
+from typing import Iterable, assert_type, Any
+def take_iter(z: Iterable[int]) -> None: ...
+s = set()
+take_iter(s)
+assert_type(s, set[Any])
+"#,
+);
+
+// A covariant read as the FIRST use no longer pins (the #1584 fix). Like any
+// non-pinning first use -- e.g. `print(x)` in
+// `test_inference_when_first_use_does_not_determine_type` -- it still consumes
+// first-use inference, so a *later* write does not pin either; the element
+// defaults to `Any`. This is pyrefly's pre-existing first-use design, not
+// specific to #1584. (Before the fix the read instead pinned `list[str]`, making
+// the `append(1)` a false positive -- so this is strictly an improvement, though
+// pyright is more precise at `list[int]`.)
+testcase!(
+    test_empty_list_covariant_read_then_write,
+    r#"
+from typing import Iterable, assert_type, Any
+x = []
+def take_iter(z: Iterable[str]) -> None: ...
+take_iter(x)
+x.append(1)
+assert_type(x, list[Any])
+"#,
+);
+
+// `{}` is a container literal (PartialContained), so the #1584 fix applies to its
+// *value* (covariant in Mapping -> no longer pinned -> Any). The *key* is still
+// pinned to `str` because Mapping's key parameter is invariant and constrains via
+// the lower-bound (write) path -- the same intended invariant pinning as
+// `test_empty_list_check`. (pyright/mypy leave both Unknown/Any; pyrefly
+// deliberately infers from invariant positions.)
+testcase!(
+    test_empty_dict_covariant_read_value_unpinned,
+    r#"
+from typing import Mapping, assert_type, Any
+d = {}
+def take_map(z: Mapping[str, int]) -> None: ...
+take_map(d)
+assert_type(d, dict[str, Any])
+"#,
+);
+
+// `dict()` constructor (PartialQuantified key/value). Read as `Mapping[str, int]`:
+// the value param is covariant -> read does not pin -> `Any`; the key param is
+// invariant -> pinned to `str` via the lower arm. Cf. the `{}` literal in
+// `test_empty_dict_covariant_read_value_unpinned`. See facebook/pyrefly#1584.
+testcase!(
+    test_empty_dict_constructor_covariant_read,
+    r#"
+from typing import Mapping, assert_type, Any
+d = dict()
+def take_map(z: Mapping[str, int]) -> None: ...
+take_map(d)
+assert_type(d, dict[str, Any])
+"#,
+);
+
+// Covariant read of a BOUNDED first-use placeholder: passes `str` (violates bound
+// `int`) yet neither pins nor errors -> `list[Any]`, matching pyright. Guards that
+// removing the old upper-arm bound validation surfaced no spurious
+// `BadSpecialization`. See facebook/pyrefly#1584.
+testcase!(
+    test_bounded_generic_covariant_read_no_pin,
+    r#"
+from typing import Iterable, assert_type, Any
+def make[T: int](x: T | None) -> list[T]: ...
+xs = make(None)
+def take_str_iter(z: Iterable[str]) -> None: ...
+take_str_iter(xs)  # str violates bound int; covariant read must not pin or error
+assert_type(xs, list[Any])
+"#,
+);
+
+testcase!(
     test_simple_int_operation_in_loop,
     r#"
 from typing import assert_type, Literal
