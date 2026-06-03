@@ -3289,21 +3289,6 @@ def f(x: int | bool | MISSING):
 );
 
 testcase!(
-    sentinel_is_truthy,
-    r#"
-from typing_extensions import Sentinel
-from typing import Literal, assert_type
-
-MISSING = Sentinel("MISSING")
-x: MISSING | None = MISSING
-if x:
-    assert_type(x, MISSING)
-else:
-    assert_type(x, None)
-    "#,
-);
-
-testcase!(
     sentinel_narrow_with_type_param,
     r#"
 from typing_extensions import Sentinel

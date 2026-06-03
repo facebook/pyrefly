@@ -234,3 +234,18 @@ MISSING = Sentinel("MISSING")
 MISSING.__name__  # E: Object of class `Sentinel` has no attribute `__name__`
     "#,
 );
+
+testcase!(
+    sentinel_is_truthy,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+x: MISSING | None = MISSING
+if x:
+    assert_type(x, MISSING)
+else:
+    assert_type(x, None)
+    "#,
+);
