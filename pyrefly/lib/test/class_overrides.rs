@@ -1281,6 +1281,62 @@ class B(A):
 );
 
 testcase!(
+    test_missing_super_call_init,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:  # E: Method `Child.__init__` does not call the method of the same name in a parent class
+        pass
+    "#,
+);
+
+testcase!(
+    test_missing_super_call_special_methods,
+    TestEnv::new().enable_missing_super_call_error(),
+    r#"
+from typing import Self
+
+class Base:
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+
+class CallsSuper(Base):
+    def __new__(cls) -> Self:
+        return super().__new__(cls)
+
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+
+class MissingSuper(Base):
+    def __new__(cls) -> Self:  # E: Method `MissingSuper.__new__` does not call the method of the same name in a parent class
+        return object.__new__(cls)
+
+    def __init_subclass__(cls) -> None:  # E: Method `MissingSuper.__init_subclass__` does not call the method of the same name in a parent class
+        pass
+    "#,
+);
+
+testcase!(
+    test_missing_super_call_disabled_by_default,
+    r#"
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:
+        pass
+    "#,
+);
+
+testcase!(
     test_raise_not_implemented_infers_never_but_allows_override,
     r#"
 from typing import Never, assert_type

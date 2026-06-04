@@ -701,6 +701,8 @@ pub struct FuncFlags {
     /// which lets override-consistency logic relax inferred placeholder returns
     /// without overriding what the user explicitly declared.
     pub is_return_inferred: bool,
+    /// Whether the function body directly calls `super(...).<this function>(...)`.
+    pub calls_super_method: bool,
     /// A function decorated with `typing.dataclass_transform(...)`, turning it into a
     /// `dataclasses.dataclass`-like decorator. Stores the keyword values passed to the
     /// `dataclass_transform` call. See
