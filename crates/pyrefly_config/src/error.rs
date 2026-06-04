@@ -156,15 +156,15 @@ impl<'de> Deserialize<'de> for ErrorDisplayConfig {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ErrorConfig<'a> {
-    pub display_config: &'a ErrorDisplayConfig,
+pub struct ErrorConfig {
+    pub display_config: ErrorDisplayConfig,
     pub ignore_errors_in_generated_code: bool,
     pub enabled_ignores: SmallSet<Tool>,
 }
 
-impl<'a> ErrorConfig<'a> {
+impl ErrorConfig {
     pub fn new(
-        display_config: &'a ErrorDisplayConfig,
+        display_config: ErrorDisplayConfig,
         ignore_errors_in_generated_code: bool,
         enabled_ignores: SmallSet<Tool>,
     ) -> Self {

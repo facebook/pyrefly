@@ -208,6 +208,14 @@ impl SourceDatabase for BuckCheckSourceDatabase {
     fn get_generated_files(&self) -> SmallSet<InternedPath> {
         SmallSet::new()
     }
+
+    fn get_target_config_raw(&self, _: Option<&Path>) -> Option<serde_json::Value> {
+        None
+    }
+
+    fn get_target_root(&self, _: Option<&Path>) -> Option<PathBuf> {
+        None
+    }
 }
 
 impl BuckCheckSourceDatabase {

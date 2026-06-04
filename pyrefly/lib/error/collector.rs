@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    ErrorDisplayConfig::default(),
                     false,
                     Tool::default_enabled(),
                 ))
@@ -504,7 +504,7 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config = ErrorConfig::new(display_config, false, Tool::default_enabled());
 
         assert_eq!(
             errors.collect(&config).ordinary.map(|x| x.msg()),
@@ -528,13 +528,13 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::default();
-        let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config0 = ErrorConfig::new(display_config.clone(), false, Tool::default_enabled());
         assert_eq!(
             errors.collect(&config0).ordinary.map(|x| x.msg()),
             vec!["a"]
         );
 
-        let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled());
+        let config1 = ErrorConfig::new(display_config, true, Tool::default_enabled());
         assert!(
             errors
                 .collect(&config1)
@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    ErrorDisplayConfig::default(),
                     false,
                     Tool::default_enabled(),
                 ))

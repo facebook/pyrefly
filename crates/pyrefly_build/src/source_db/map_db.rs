@@ -8,6 +8,7 @@
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
+use std::path::PathBuf;
 
 use dupe::Dupe as _;
 use pyrefly_python::module_name::ModuleName;
@@ -111,5 +112,13 @@ impl SourceDatabase for MapDatabase {
 
     fn get_generated_files(&self) -> SmallSet<InternedPath> {
         SmallSet::new()
+    }
+
+    fn get_target_config_raw(&self, _: Option<&Path>) -> Option<serde_json::Value> {
+        None
+    }
+
+    fn get_target_root(&self, _: Option<&Path>) -> Option<PathBuf> {
+        None
     }
 }
