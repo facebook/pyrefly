@@ -1908,12 +1908,16 @@ impl<'a> BindingsBuilder<'a> {
         names
     }
 
+    /// Bind `narrow_ops` into the current flow, returning the `Key::Narrow` idxs
+    /// created. Flow-only callers ignore the result; the reachability channel uses
+    /// it to find dead branches (a narrow that solves to `Never`).
     pub fn bind_narrow_ops(
         &mut self,
         narrow_ops: &NarrowOps,
         use_location: NarrowUseLocation,
         usage: &Usage,
-    ) {
+    ) -> Vec<Idx<Key>> {
+        let mut narrowed_idxs = Vec::new();
         for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
             // Narrowing operations should not pin partial types, but they also
             // should not permanently block pinning. Leave the first-use state
@@ -1925,8 +1929,10 @@ impl<'a> BindingsBuilder<'a> {
                     Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
+                narrowed_idxs.push(narrowed_idx);
             }
         }
+        narrowed_idxs
     }
 
     pub fn bind_lambda_param(&mut self, name: &Identifier, owner: Option<Idx<Key>>) {

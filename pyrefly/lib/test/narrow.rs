@@ -129,6 +129,80 @@ def f(x: str):
     "#,
 );
 
+// #3349: a conditional-expression branch whose narrowing is vacuous (narrows the
+// subject to Never) is dead and must be dropped from the result type.
+// `# !E: None` guards against the substring match: `Literal[1]` is a substring of
+// the un-pruned `Literal[1] | None`, so without the negative assertion the test
+// would pass spuriously.
+testcase!(
+    test_ternary_prunes_dead_else_after_guard,
+    r#"
+from typing import reveal_type
+def f(x: int | None) -> None:
+    if x is not None:
+        reveal_type(1 if x is not None else None)  # E: revealed type: Literal[1]  # !E: None
+    "#,
+);
+
+testcase!(
+    test_ternary_prunes_dead_else_concrete,
+    r#"
+from typing import reveal_type
+def f(x: int) -> None:
+    reveal_type(1 if x is not None else None)  # E: revealed type: Literal[1]  # !E: None
+    "#,
+);
+
+testcase!(
+    test_ternary_prunes_dead_body_concrete,
+    r#"
+from typing import reveal_type
+def f(x: int) -> None:
+    reveal_type(1 if x is None else 2)  # E: revealed type: Literal[2]  # !E: Literal[1, 2]
+    "#,
+);
+
+// Genuinely optional subject: neither branch is dead, both are kept.
+testcase!(
+    test_ternary_keeps_live_branches,
+    r#"
+from typing import reveal_type
+def f(x: int | None) -> None:
+    reveal_type(1 if x is not None else None)  # E: revealed type: Literal[1] | None
+    "#,
+);
+
+// Literal-True pruning (solver-side `as_bool`) must keep working.
+testcase!(
+    test_ternary_literal_true_still_prunes,
+    r#"
+from typing import reveal_type
+def f() -> None:
+    reveal_type(1 if True else None)  # E: revealed type: Literal[1]  # !E: None
+    "#,
+);
+
+// `Any & None` is not Never, so an `Any` subject does not make a branch dead.
+testcase!(
+    test_ternary_any_subject_not_pruned,
+    r#"
+from typing import Any, reveal_type
+def f(x: Any) -> None:
+    reveal_type(1 if x is not None else None)  # E: revealed type: Literal[1] | None
+    "#,
+);
+
+// Equality narrows that produce Never (negating `== "x"` on a literal) must NOT
+// prune: that branch stays live. #3349.
+testcase!(
+    test_ternary_equality_branch_not_pruned,
+    r#"
+from typing import Literal, reveal_type
+def f(x: Literal["hello"]) -> None:
+    reveal_type("a" if x == "hello" else 42)  # E: revealed type: Literal['a', 42]
+    "#,
+);
+
 testcase!(
     test_is_not_bool_literal,
     r#"
@@ -3229,4 +3303,16 @@ def b():
         def inner() -> None:
             assert_type(val, int)
 "#,
+);
+
+// A ternary in a type-expression position is inferred outside the normal
+// expression-binding path, so the #3349 reachability channel binding is absent.
+// The branch-pruning lookup must fall back gracefully (keep both branches)
+// instead of panicking.
+testcase!(
+    test_ternary_in_type_position_does_not_panic,
+    r#"
+x: int if 1 < 3 else str  # E: If expression cannot be used in annotations
+type T = int if 1 < 3 else str  # E: If expression cannot be used in annotations
+    "#,
 );

@@ -923,6 +923,9 @@ pub enum Key {
     Delete(TextRange),
     /// Match statement or if/elif chain that needs type-based exhaustiveness checking
     Exhaustive(ExhaustivenessKind, TextRange),
+    /// Reachability channel for a ternary, keyed by its range: the per-branch
+    /// `Key::Narrow` idxs, so the solver can drop a branch whose narrow is `Never`.
+    ConditionalReachability(TextRange),
 }
 
 impl Ranged for Key {
@@ -956,6 +959,7 @@ impl Ranged for Key {
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
+            Self::ConditionalReachability(r) => *r,
         }
     }
 }
@@ -999,6 +1003,9 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
             Self::Exhaustive(kind, r) => {
                 write!(f, "Key::Exhaustive({:?}, {})", kind, ctx.display(r))
+            }
+            Self::ConditionalReachability(r) => {
+                write!(f, "Key::ConditionalReachability({})", ctx.display(r))
             }
         }
     }
@@ -2253,6 +2260,11 @@ pub enum Binding {
     AugAssign(Option<Idx<KeyAnnotation>>, Box<StmtAugAssign>),
     /// The None type, constructed lazily with TypeHeap during solving.
     None,
+    /// Reachability channel for a ternary: the `(body, orelse)` `Key::Narrow` idxs.
+    /// A branch is dead iff one of its narrows is identity-vs-`None` (`is` /
+    /// `is not None`) and solves to `Never`. Read raw to prune the dead branch;
+    /// never solved through the normal path.
+    ConditionalReachability(Box<(Vec<Idx<Key>>, Vec<Idx<Key>>)>),
     /// An Any type with a specific style, constructed lazily with TypeHeap during solving.
     Any(AnyStyle),
     /// A global variable.
@@ -2477,6 +2489,15 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
             Self::None => write!(f, "None"),
+            Self::ConditionalReachability(x) => {
+                let (body, orelse) = x.as_ref();
+                write!(
+                    f,
+                    "ConditionalReachability(body={} orelse={})",
+                    body.len(),
+                    orelse.len(),
+                )
+            }
             Self::Any(style) => write!(f, "Any({style:?})"),
             Self::Global(g) => write!(f, "Global({})", g.name()),
             Self::TypeParameter(tp) => {
@@ -2742,7 +2763,8 @@ impl Binding {
             | Binding::AssignToSubscript(_)
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
-            | Binding::Exhaustive(_) => None,
+            | Binding::Exhaustive(_)
+            | Binding::ConditionalReachability(_) => None,
         }
     }
 }

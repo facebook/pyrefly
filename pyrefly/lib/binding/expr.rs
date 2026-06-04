@@ -728,12 +728,18 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.start_fork_and_branch(x.range);
-                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
+                // Capture each branch's narrow idxs so the solver can prune a branch
+                // whose narrow solves to `Never` (e.g. `1 if x is not None else None`).
+                let body_narrows = self.bind_narrow_ops(
+                    &narrow_ops,
+                    NarrowUseLocation::Span(x.body.range()),
+                    usage,
+                );
                 self.ensure_expr(&mut x.body, usage);
                 // Negate the narrow ops for the `orelse`, then merge the Flows.
                 // TODO(stroxler): We eventually want to drop all narrows but merge values.
                 self.next_branch();
-                self.bind_narrow_ops(
+                let orelse_narrows = self.bind_narrow_ops(
                     &narrow_ops.negate(),
                     NarrowUseLocation::Span(x.range),
                     usage,
@@ -741,6 +747,10 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.orelse, usage);
                 self.finish_branch();
                 self.finish_exhaustive_fork();
+                self.insert_binding(
+                    Key::ConditionalReachability(x.range),
+                    Binding::ConditionalReachability(Box::new((body_narrows, orelse_narrows))),
+                );
             }
             Expr::BoolOp(ExprBoolOp {
                 node_index: _,

@@ -5274,6 +5274,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Binding::None => self.heap.mk_none(),
+            // Read raw by the ternary reachability check, never as a value type;
+            // every binding must still solve, so return a placeholder.
+            Binding::ConditionalReachability(_) => self.heap.mk_none(),
             Binding::Any(style) => self.heap.mk_any(*style),
             Binding::Global(global) => global.as_type(self.stdlib, self.heap),
             Binding::TypeParameter(tp) => {
