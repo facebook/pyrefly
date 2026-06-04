@@ -2278,8 +2278,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match base {
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
-                        let tys = xs
-                            .map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
+                        let tys = self.type_arguments_for_class_subscript(slice, errors);
                         self.specialize_forall(*forall, tys, range, errors)
                     } else {
                         let name = forall.body.name();
@@ -2411,9 +2410,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(result) = class_getitem_result.or(metaclass_getitem_result) {
                         result
                     } else {
+                        let targs = self.type_arguments_for_class_subscript(slice, errors);
                         self.heap.mk_type_of(self.specialize(
                             &cls,
-                            xs.map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+                            targs,
                             range,
                             errors,
                         ))
@@ -2666,6 +2666,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             }
         })
+    }
+
+    fn type_arguments_for_class_subscript(
+        &self,
+        slice: &Expr,
+        errors: &ErrorCollector,
+    ) -> Vec<Type> {
+        match slice {
+            Expr::Tuple(tuple) if tuple.parenthesized => {
+                let ty = self.apply_special_form(SpecialForm::Tuple, slice, slice.range(), errors);
+                vec![self.untype(ty, slice.range(), errors)]
+            }
+            _ => Ast::unpack_slice(slice)
+                .map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+        }
     }
 
     /// Handle tensor indexing operations
