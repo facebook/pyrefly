@@ -2030,9 +2030,18 @@ mod tests {
         );
     }
 
-    /// Build a `ModuleReport` from a checked-in Python test file using a custom `TestEnv`,
-    /// mirroring the production pipeline in `collect_module_reports`.
-    fn build_module_report_for_test_with_env(file: &str, mut env: TestEnv) -> ModuleReport {
+    /// Shared input to both the report and error paths.
+    struct ParsedModule {
+        module: Module,
+        functions: Vec<Function>,
+        variables: Vec<Variable>,
+        classes: Vec<ReportClass>,
+        suppressions: Vec<ReportSuppression>,
+        line_count: usize,
+        module_path: String,
+    }
+
+    fn parse_test_module(file: &str, mut env: TestEnv) -> ParsedModule {
         let code = load_test_file(file);
         let module_path = format!(
             "test.{}",
@@ -2088,15 +2097,28 @@ mod tests {
         ));
         let suppressions = parse_suppressions(&module);
 
+        ParsedModule {
+            module,
+            functions,
+            variables,
+            classes,
+            suppressions,
+            line_count,
+            module_path,
+        }
+    }
+
+    fn build_module_report_for_test_with_env(file: &str, env: TestEnv) -> ModuleReport {
+        let p = parse_test_module(file, env);
         build_module_report(
             "test".to_owned(),
-            module_path,
+            p.module_path,
             "test",
-            line_count,
-            &functions,
-            &variables,
-            &classes,
-            suppressions,
+            p.line_count,
+            &p.functions,
+            &p.variables,
+            &p.classes,
+            p.suppressions,
         )
     }
 
@@ -2481,6 +2503,67 @@ mod tests {
         assert!(!is_untyped(&SlotCounts::typed(), true));
         assert!(is_untyped(&SlotCounts::any(), true));
         assert!(is_untyped(&SlotCounts::untyped(), true));
+    }
+
+    #[test]
+    fn test_check_findings_match_report_symbols() {
+        for file in [
+            "any_annotations.py",
+            "any_detection.py",
+            "decorators.py",
+            "dunder_attrs.py",
+            "dunder_implicit.py",
+            "functions.py",
+            "incomplete_methods.py",
+            "inheritance.py",
+            "inherited_attrs.py",
+            "instance_attrs.py",
+            "method_aliases.py",
+            "overloads.py",
+            "overloads_partial.py",
+            "partial_any.py",
+            "property_basic.py",
+            "schema_classes_methods.py",
+            "variables.py",
+        ] {
+            let p = parse_test_module(file, TestEnv::new());
+            let report = build_module_report(
+                "test".to_owned(),
+                p.module_path.clone(),
+                "test",
+                p.line_count,
+                &p.functions,
+                &p.variables,
+                &p.classes,
+                Vec::new(),
+            );
+            for strict in [false, true] {
+                let mut want: Vec<&str> = report
+                    .symbol_reports
+                    .iter()
+                    .filter(|s| is_untyped(s.slots(), strict))
+                    .map(|s| s.name())
+                    .collect();
+                want.sort();
+
+                let mut errors = Vec::new();
+                collect_untyped_errors(
+                    &mut errors,
+                    &p.module,
+                    &p.functions,
+                    &p.variables,
+                    strict,
+                    None,
+                );
+                let mut got: Vec<&str> = errors
+                    .iter()
+                    .map(|e| e.msg_header().split('`').nth(1).unwrap())
+                    .collect();
+                got.sort();
+
+                assert_eq!(want, got, "check/report desync in {file} (strict={strict})");
+            }
+        }
     }
 
     #[test]
