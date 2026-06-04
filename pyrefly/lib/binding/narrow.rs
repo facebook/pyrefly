@@ -436,6 +436,32 @@ impl NarrowingSubject {
 }
 
 impl NarrowOp {
+    /// Is this op tree's narrowing-to-`Never` attributable *solely* to identity
+    /// against `None` (`is None` / `is not None`)?
+    ///
+    /// Used to restrict statically-dead branch pruning to identity-vs-`None`
+    /// narrowing (see `AnswersSolver::any_narrow_is_never`). Only then is dropping a
+    /// branch whose narrow is `Never` sound: equality narrows (`== "x"`) can also
+    /// reach `Never`, but those branches must stay live.
+    ///
+    /// `Placeholder` atoms carry no narrowing and are neutral. A compound qualifies
+    /// only if EVERY child qualifies — so the negation of a prior branch's test
+    /// carried into a later `elif`/`else` (wrapped as `And([Placeholder, Is(None)])`)
+    /// qualifies, but a mixed `And([IsNot(None), Eq("x")])`, whose `Never` may come
+    /// from the `Eq`, does not.
+    pub fn tests_identity_none(&self) -> bool {
+        match self {
+            Self::Atomic(
+                _,
+                AtomicNarrowOp::Is(Expr::NoneLiteral(_))
+                | AtomicNarrowOp::IsNot(Expr::NoneLiteral(_))
+                | AtomicNarrowOp::Placeholder,
+            ) => true,
+            Self::And(ops) | Self::Or(ops) => ops.iter().all(Self::tests_identity_none),
+            Self::Atomic(..) => false,
+        }
+    }
+
     /// Produce a Python-like snippet for hover display.
     ///
     /// `base_name` is the variable being narrowed. `snippet` converts a

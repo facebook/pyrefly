@@ -79,6 +79,7 @@ use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
+use crate::binding::binding::MissingBranch;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
@@ -158,9 +159,9 @@ pub enum InitializedInFlow {
     Yes,
     Conditionally,
     No,
-    /// Initialization depends on whether these termination keys have Never type.
-    /// If ALL termination keys are Never, the variable is initialized; otherwise it may be uninitialized.
-    DeferredCheck(Vec<Idx<Key>>),
+    /// Initialization depends on whether every missing branch is statically dead.
+    /// If ALL are dead, the variable is initialized; otherwise it may be uninitialized.
+    DeferredCheck(Vec<MissingBranch>),
 }
 
 impl InitializedInFlow {
@@ -173,9 +174,9 @@ impl InitializedInFlow {
         }
     }
 
-    pub fn deferred_termination_keys(&self) -> Option<&[Idx<Key>]> {
+    pub fn deferred_missing_branches(&self) -> Option<&[MissingBranch]> {
         match self {
-            InitializedInFlow::DeferredCheck(keys) => Some(keys),
+            InitializedInFlow::DeferredCheck(branches) => Some(branches),
             _ => None,
         }
     }
@@ -843,6 +844,7 @@ impl BindingTable {
         let new_branch = BranchInfo {
             value_key: idx,
             termination_key: None,
+            dead_if_any_never: Box::new([]),
         };
         match self.types.1.insert_if_missing(phi_idx, || {
             Binding::Phi(JoinStyle::SimpleMerge, Box::new([]))
@@ -1933,6 +1935,24 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
         narrowed_idxs
+    }
+
+    /// Record an `Stmt::If` branch's entry-narrowing idxs as candidate dead keys, so
+    /// the branch can be pruned at solve time if the narrowing is vacuous. We keep
+    /// only identity-vs-`None` narrows: other narrows (e.g. truthiness on `cond`)
+    /// never make a branch statically dead and would otherwise inflate the
+    /// deferrable-branch count used for uninitialized-variable accounting.
+    pub fn record_dead_narrow_keys(&mut self, narrowed_idxs: Vec<Idx<Key>>) {
+        let identity_none_keys: Vec<Idx<Key>> = narrowed_idxs
+            .into_iter()
+            .filter(|idx| {
+                matches!(
+                    self.idx_to_binding(*idx),
+                    Some(Binding::Narrow(_, op, _)) if op.tests_identity_none(),
+                )
+            })
+            .collect();
+        self.scopes.record_dead_keys(identity_none_keys);
     }
 
     pub fn bind_lambda_param(&mut self, name: &Identifier, owner: Option<Idx<Key>>) {

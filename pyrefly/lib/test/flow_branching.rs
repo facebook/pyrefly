@@ -2799,3 +2799,161 @@ def f(x: T) -> T:  # E: not in scope  # E: not in scope
     return x
     "#,
 );
+
+// #3349 (sibling): an if/else branch whose narrowing is vacuous (subject -> Never)
+// is dead. Its assignments must not contribute to the merged type, and a dead
+// *missing* branch must not trigger a spurious possibly-uninitialized error.
+testcase!(
+    test_if_else_prunes_dead_else_assignment,
+    r#"
+from typing import reveal_type
+def f(x: int) -> None:
+    if x is not None:
+        y = 1
+    else:
+        y = "s"
+    reveal_type(y)  # E: revealed type: Literal[1]  # !E: 's'
+    "#,
+);
+
+// A dead *missing* branch (`if`-body is dead, `y` only set in `else`) must not
+// make `y` look possibly-uninitialized: the `else` is the only reachable path.
+testcase!(
+    test_if_dead_missing_branch_no_spurious_unbound,
+    r#"
+from typing import assert_type, Literal
+def f(x: int) -> None:
+    if x is None:
+        pass
+    else:
+        y = 1
+    assert_type(y, Literal[1])
+    "#,
+);
+
+// An `elif`/`else` made dead by accumulated negated narrows is dropped.
+testcase!(
+    test_if_elif_dead_branches_pruned,
+    r#"
+from typing import reveal_type
+def f(x: int) -> None:
+    if x is None:
+        y = "a"
+    elif x is not None:
+        y = 1
+    else:
+        y = "b"
+    reveal_type(y)  # E: revealed type: Literal[1]  # !E: 'a'  # !E: 'b'
+    "#,
+);
+
+// Guard: a no-`else` if whose implicit else is dead already defines `y`.
+testcase!(
+    test_if_no_else_dead_implicit_defines,
+    r#"
+from typing import assert_type, Literal
+def f(x: int) -> None:
+    if x is not None:
+        y = 1
+    assert_type(y, Literal[1])
+    "#,
+);
+
+// Guard: a dead branch that *defines* `y` must not make `y` look initialized.
+testcase!(
+    test_if_dead_defining_branch_still_unbound,
+    r#"
+from typing import assert_type, Literal
+def f(x: int) -> None:
+    if x is None:
+        y = 1
+    assert_type(y, Literal[1])  # E: `y` may be uninitialized
+    "#,
+);
+
+// Negative: genuinely optional subject keeps both branches and the union.
+testcase!(
+    test_if_else_optional_keeps_union,
+    r#"
+from typing import reveal_type
+def f(x: int | None) -> None:
+    if x is not None:
+        y = 1
+    else:
+        y = "s"
+    reveal_type(y)  # E: revealed type: Literal['s', 1]
+    "#,
+);
+
+// A mixed `is not None and == "b"` test reaches Never via the equality conjunct,
+// so the if-body assignment must stay live. #3349.
+testcase!(
+    test_if_mixed_none_and_equality_keeps_branch,
+    r#"
+from typing import Literal, reveal_type
+def f(x: Literal["a", "b"]) -> None:
+    if x is not None and x == "c":
+        y = 1
+    else:
+        y = "s"
+    reveal_type(y)  # E: revealed type: Literal['s', 1]
+    "#,
+);
+
+// A genuinely-reachable missing branch (`if cond:`) keeps `y` possibly-unbound even
+// when sibling branches are statically dead and would satisfy a mere count. #3349.
+testcase!(
+    test_if_reachable_missing_branch_still_unbound,
+    r#"
+def f(cond: bool, x: int) -> None:
+    if cond:
+        pass
+    elif x is not None:
+        y = 1
+    else:
+        pass
+    print(y)  # E: `y` may be uninitialized
+    "#,
+);
+
+// a variable assigned before the only
+// statements that can raise is initialized on the `except` path; reporting it
+// possibly-uninitialized is a false positive (neither mypy nor pyright flags it).
+// The dead-branch work must not touch uninitialized-variable accounting for
+// branches that carry no deadness signal.
+testcase!(
+    test_try_except_var_assigned_before_raise_not_unbound,
+    r#"
+class Err(Exception): pass
+def get(o: object, n: str) -> str:
+    return ""
+def step(m: str) -> None: ...
+def f(cls: object, modname: str) -> str:
+    try:
+        qualname = get(cls, "__qualname__")
+        step(modname)
+    except Err:
+        pass
+    return qualname
+    "#,
+);
+
+// a variable assigned as the first statement of a `try` is initialized in the // `finally`; reporting it possibly-uninitialized is a false positive.
+testcase!(
+    test_try_finally_var_assigned_first_not_unbound,
+    r#"
+class Err(Exception): pass
+def do() -> None: ...
+class C:
+    subdir: str = ""
+    def f(self, subdir: str) -> None:
+        try:
+            prev = self.subdir
+            self.subdir = subdir
+            do()
+        except Err:
+            pass
+        finally:
+            self.subdir = prev
+    "#,
+);

@@ -13,7 +13,6 @@ use std::slice;
 use dupe::Dupe;
 use itertools::Either;
 use itertools::Itertools;
-use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
@@ -79,7 +78,6 @@ use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::narrow::AtomicNarrowOp;
-use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::int_from_slice;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -1602,32 +1600,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             self.call_method_or_error(ty, &dunder::BOOL, range, &[], &[], errors, None)
                 .as_bool()
-        })
-    }
-
-    /// A ternary branch guarded by these narrow idxs is statically unreachable iff
-    /// any of them is an identity-against-`None` narrow (`is None` / `is not None`)
-    /// whose narrowed subject solves to `Never` (e.g. `int & None`).
-    ///
-    /// We deliberately restrict to identity-vs-`None`: equality narrows (`== "x"`)
-    /// can also produce `Never` (negating `== "x"` on `Literal["x"]`), but mypy and
-    /// pyright keep that branch live, so pruning it would be wrong. Recording fewer
-    /// dead keys only ever under-prunes, so this restriction is always safe.
-    fn any_narrow_is_never(&self, narrows: &[Idx<Key>]) -> bool {
-        narrows.iter().any(|idx| {
-            let is_identity_none = matches!(
-                self.bindings().get(*idx),
-                Binding::Narrow(_, op, _)
-                    if matches!(
-                        op.as_ref(),
-                        NarrowOp::Atomic(
-                            _,
-                            AtomicNarrowOp::Is(Expr::NoneLiteral(_))
-                                | AtomicNarrowOp::IsNot(Expr::NoneLiteral(_)),
-                        )
-                    )
-            );
-            is_identity_none && self.get_idx(*idx).ty().is_never()
         })
     }
 

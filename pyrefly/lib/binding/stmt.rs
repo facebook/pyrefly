@@ -1077,11 +1077,14 @@ impl<'a> BindingsBuilder<'a> {
                 let mut is_first_branch = true;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
-                    self.bind_narrow_ops(
+                    // The negation of prior branches' tests is where a dead `else`/`elif`
+                    // signal lives (e.g. `else` after `if x is None` with `x: int`).
+                    let negated_dead_keys = self.bind_narrow_ops(
                         &negated_prev_ops,
                         NarrowUseLocation::Start(range),
                         &Usage::Narrowing(None),
                     );
+                    self.record_dead_narrow_keys(negated_dead_keys);
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
                         None => {
@@ -1130,11 +1133,14 @@ impl<'a> BindingsBuilder<'a> {
                             BindingExpect::Bool(test_expr),
                         );
                     }
-                    self.bind_narrow_ops(
+                    // The branch's own test is where a dead `if`-body signal lives
+                    // (e.g. `if x is None` with `x: int`).
+                    let own_dead_keys = self.bind_narrow_ops(
                         &new_narrow_ops,
                         NarrowUseLocation::Span(range),
                         &Usage::Narrowing(None),
                     );
+                    self.record_dead_narrow_keys(own_dead_keys);
                     negated_prev_ops.and_all(new_narrow_ops.negate());
                     self.stmts(body, parent);
                     self.finish_branch();

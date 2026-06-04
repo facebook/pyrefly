@@ -203,6 +203,17 @@ def f(x: Literal["hello"]) -> None:
     "#,
 );
 
+// A mixed same-name narrow `x is not None and x == "c"` reaches Never via the
+// equality conjunct, not the `None` test, so the branch must stay live. #3349.
+testcase!(
+    test_ternary_mixed_none_and_equality_not_pruned,
+    r#"
+from typing import Literal, reveal_type
+def f(x: Literal["a", "b"]) -> None:
+    reveal_type(1 if (x is not None and x == "c") else 2)  # E: revealed type: Literal[1, 2]
+    "#,
+);
+
 testcase!(
     test_is_not_bool_literal,
     r#"
@@ -3312,7 +3323,8 @@ def b():
 testcase!(
     test_ternary_in_type_position_does_not_panic,
     r#"
-x: int if 1 < 3 else str  # E: If expression cannot be used in annotations
-type T = int if 1 < 3 else str  # E: If expression cannot be used in annotations
+flag: bool = True
+x: int if flag else str  # E: If expression cannot be used in annotations
+type T = int if flag else str  # E: If expression cannot be used in annotations
     "#,
 );
