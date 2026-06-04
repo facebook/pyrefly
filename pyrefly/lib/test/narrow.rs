@@ -3320,3 +3320,19 @@ def f(x: type[int] | type[type]) -> None:
         assert_type(x, type[int])
 "#,
 );
+
+testcase!(
+    test_isinstance_type_preserves_typevar,
+    r#"
+from typing import assert_type
+class Foo: ...
+def initialize[F: Foo](cls: type[F]) -> F:
+    # isinstance(_, type) must not erase the TypeVar: type[F] & type == type[F].
+    assert isinstance(cls, type)
+    assert_type(cls, type[F])
+    # issubclass(_, Foo) must not erase it either: every F is a Foo, so type[F] & type[Foo] == type[F].
+    assert issubclass(cls, Foo)
+    assert_type(cls, type[F])
+    return cls()
+"#,
+);
