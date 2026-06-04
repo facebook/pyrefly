@@ -1669,18 +1669,23 @@ fn collect_untyped_errors(
     functions: &[Function],
     variables: &[Variable],
     strict: bool,
+    public_fqns: Option<&HashSet<String>>,
 ) {
+    let module_prefix = format!("{}.", module.name());
+    let is_public =
+        |name: &str| public_fqns.is_none_or(|fqns| is_public_fqn(name, &module_prefix, fqns));
     // Property accessors share a name; emit one error per property, as `report` merges them.
     let mut seen_properties = SmallSet::new();
     for func in functions {
         if is_untyped(&func.slots, strict)
+            && is_public(&func.name)
             && (func.property_role.is_none() || seen_properties.insert(&func.name))
         {
             errors.push(untyped_error(module, &func.slots, func.range, &func.name));
         }
     }
     for var in variables {
-        if is_untyped(&var.slots, strict) {
+        if is_untyped(&var.slots, strict) && is_public(&var.name) {
             errors.push(untyped_error(module, &var.slots, var.range, &var.name));
         }
     }
@@ -1717,6 +1722,7 @@ pub fn collect_module_reports(
     let mut module_reports: Vec<ModuleReport> = Vec::new();
     let mut errors: Vec<Error> = Vec::new();
     transaction.run(handles.as_slice(), Require::Everything, None);
+    let public_fqns = public_only.then(|| compute_public_fqns(&handles, transaction));
 
     let shadowed = if prefer_stubs {
         py_paths_shadowed_by_pyi(&handles)
@@ -1838,7 +1844,14 @@ pub fn collect_module_reports(
 
             // Per source module, so stub-merged `.py` symbols render against their own file.
             if let Some(strict) = untyped_strict {
-                collect_untyped_errors(&mut errors, &module, &functions, &variables, strict);
+                collect_untyped_errors(
+                    &mut errors,
+                    &module,
+                    &functions,
+                    &variables,
+                    strict,
+                    public_fqns.as_ref(),
+                );
             }
 
             // When a .pyi stub shadows a .py file, include uncovered .py symbols.
@@ -1917,6 +1930,7 @@ pub fn collect_module_reports(
                         &functions[own_functions..],
                         &variables[own_variables..],
                         strict,
+                        public_fqns.as_ref(),
                     );
                 }
             }
@@ -1954,10 +1968,9 @@ pub fn collect_module_reports(
         }
     }
 
-    if public_only {
-        let public_fqns = compute_public_fqns(&handles, transaction);
+    if let Some(public_fqns) = &public_fqns {
         for report in &mut module_reports {
-            filter_module_report_to_public(report, &public_fqns);
+            filter_module_report_to_public(report, public_fqns);
         }
         module_reports.retain(|r| !r.symbol_reports.is_empty());
     }

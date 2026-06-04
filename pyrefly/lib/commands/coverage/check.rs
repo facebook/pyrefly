@@ -39,6 +39,14 @@ pub struct CheckArgs {
     #[clap(long, short = 'f', value_name = "PERCENT", default_value_t = 100.0)]
     fail_under: f64,
 
+    /// Prefer `.pyi` stubs over `.py` files when both are present.
+    #[clap(long, default_value_t = true, action = clap::ArgAction::Set)]
+    prefer_stubs: bool,
+
+    /// Only check symbols reachable from public modules via re-export chains.
+    #[clap(long)]
+    public_only: bool,
+
     /// Format for the untyped-symbol findings.
     #[arg(long, value_enum)]
     output_format: Option<OutputFormat>,
@@ -63,9 +71,9 @@ impl CheckArgs {
         let (module_reports, errors) = collect_module_reports(
             files_to_check,
             config_finder,
-            true,
+            self.prefer_stubs,
             None,
-            false,
+            self.public_only,
             Some(self.strict),
             thread_count,
         )?;
