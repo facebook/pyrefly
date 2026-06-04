@@ -936,10 +936,71 @@ The command should output a JSON file with the following structure:
 
 Where:
 
-- `root` is the absolute path the root of the repository.
+- `root` is the absolute path to the root of the repository. Source paths in
+  `srcs` are relative to this root (or to the per-target `root`, if set).
 - `db` is a map from target names to either:
     - library target definitions (e.g. `//colorama:py` and `//colorama:py-stubs` here)
     - target aliases (e.g. `//colorama:colorama` here)
+
+Each library target definition has the following fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `srcs` | yes | Map from qualified module names to lists of relative source file paths. |
+| `python_version` | yes | Python version string (e.g. `"3.12"`). |
+| `python_platform` | yes | Python platform string (e.g. `"linux"`). |
+| `deps` | no | List of target names this target depends on. Defaults to `[]`. |
+| `buildfile_path` | no | Relative path to the build file that defines this target. Defaults to `""`. |
+| `root` | no | Absolute path override for absolutizing this target's `srcs` paths. When omitted, the top-level `root` is used. |
+| `config` | no | JSON object with per-target type checking config overrides (e.g. `errors`, `preset`). These are applied in the resolution chain between sub-configs and the root config. |
+
+Here is an example with per-target `config` and `root`:
+
+```json
+{
+    "root": "/src",
+    "db": {
+        "//Project:MyLib": {
+            "srcs": {
+                "Foo": ["Foo.py"],
+                "Bar": ["sub1/Bar.py"]
+            },
+            "root": "/src/Project",
+            "config": {
+                "errors": { "missing-import": "warn" }
+            },
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//Project:MyPkg": {
+            "srcs": {
+                "MyPkg": ["MyPkg/__init__.py"],
+                "MyPkg.Utils": ["MyPkg/Utils.py"]
+            },
+            "deps": ["//Project:MyLib"],
+            "root": "/src/Project",
+            "config": { "preset": "strict" },
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//Project/test:test": {
+            "srcs": {
+                "test.lib": ["test/lib.py"],
+                "test.test": ["test/test.py"]
+            },
+            "deps": ["//Project:MyLib", "//Project:MyPkg"],
+            "python_version": "3.12",
+            "python_platform": "linux"
+        }
+    }
+}
+```
+
+In this example, `MyLib` and `MyPkg` set `root` to `/src/Project`, so their
+`srcs` paths are absolutized relative to that directory (e.g. `Foo.py` becomes
+`/src/Project/Foo.py`). The test target omits `root`, so its paths are
+absolutized relative to the top-level `root` (`/src`). `MyLib` also omits `deps`
+and `buildfile_path`, which default to empty.
 
 For reference, the command invoked as part of the Buck2 integration is:
 

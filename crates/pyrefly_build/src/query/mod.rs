@@ -269,15 +269,25 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct PythonLibraryManifest {
+    #[serde(default)]
     pub deps: SmallSet<Target>,
     pub srcs: SmallMap<ModuleName, Vec1<InternedPath>>,
     #[serde(default)]
     pub relative_to: Option<PathBuf>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
+    #[serde(default)]
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
     pub packages: SmallMap<ModuleName, Vec1<InternedPath>>,
+    /// Per-target override of the top-level `root`. Used for both absolutizing
+    /// `srcs` paths and as the import resolution root for files in this target.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
+    /// Per-target config overrides stored as raw JSON to avoid a circular
+    /// dependency between `pyrefly_build` and `pyrefly_config`.
+    #[serde(default)]
+    pub config: Option<serde_json::Value>,
 }
 
 impl PythonLibraryManifest {
@@ -410,7 +420,8 @@ impl TargetManifestDatabase {
                 TargetManifest::Alias { .. } => continue,
                 TargetManifest::Library(lib) => {
                     lib.replace_alias_deps(&aliases);
-                    lib.rewrite_relative_to_root(&self.root);
+                    let root = lib.root.clone().unwrap_or_else(|| self.root.clone());
+                    lib.rewrite_relative_to_root(&root);
                 }
             }
         }
@@ -728,6 +739,8 @@ mod tests {
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(buildfile),
                 packages: map_implicit_packages(implicit_packages, None),
+                root: None,
+                config: None,
             })
         }
     }
@@ -748,6 +761,8 @@ mod tests {
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(root).join(buildfile),
                 packages: map_implicit_packages(inits, Some(root)),
+                root: None,
+                config: None,
             }
         }
     }
@@ -1391,5 +1406,98 @@ mod tests {
             "Expected packages to contain 'foo', but got: {:?}",
             manifest.packages.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_per_target_config_and_root() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:basic": {
+      "srcs": {
+        "foo": ["foo.py"]
+      },
+      "root": "/src/Package",
+      "config": {
+        "preset": "basic",
+        "errors": { "missing-import": "warn" }
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:strict": {
+      "srcs": {
+        "bar": ["bar.py"]
+      },
+      "root": "/src/Package",
+      "config": {
+        "preset": "strict"
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+
+        let (db, _) = parsed.produce_map();
+
+        let basic = db
+            .get(&Target::from_string("//pkg:basic".to_owned()))
+            .unwrap();
+        assert_eq!(basic.root, Some(PathBuf::from("/src/Package")));
+        assert!(basic.config.is_some());
+        // Paths should be absolutized against per-target root, not top-level root
+        assert_eq!(
+            basic
+                .srcs
+                .get(&ModuleName::from_str("foo"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/src/Package/foo.py"))
+        );
+
+        let strict = db
+            .get(&Target::from_string("//pkg:strict".to_owned()))
+            .unwrap();
+        assert_eq!(strict.root, Some(PathBuf::from("/src/Package")));
+        assert!(strict.config.is_some());
+        assert_eq!(
+            strict
+                .srcs
+                .get(&ModuleName::from_str("bar"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/src/Package/bar.py"))
+        );
+    }
+
+    #[test]
+    fn test_optional_deps_and_buildfile_path() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:minimal": {
+      "srcs": {
+        "main": ["main.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let (db, _) = parsed.produce_map();
+        let minimal = db
+            .get(&Target::from_string("//pkg:minimal".to_owned()))
+            .unwrap();
+        assert!(minimal.deps.is_empty());
+        assert_eq!(minimal.buildfile_path, PathBuf::from("/src"));
+        assert!(minimal.config.is_none());
+        assert!(minimal.root.is_none());
     }
 }

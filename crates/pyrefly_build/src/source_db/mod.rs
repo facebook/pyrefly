@@ -139,4 +139,8 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     fn get_target(&self, origin: Option<&Path>) -> Option<Target>;
     /// Get any generated files for which we might have to override the config finder.
     fn get_generated_files(&self) -> SmallSet<InternedPath>;
+    /// Get the raw JSON config overrides for the target that owns the given file.
+    fn get_target_config_raw(&self, origin: Option<&Path>) -> Option<serde_json::Value>;
+    /// Get the per-target root for the target that owns the given file.
+    fn get_target_root(&self, origin: Option<&Path>) -> Option<PathBuf>;
 }

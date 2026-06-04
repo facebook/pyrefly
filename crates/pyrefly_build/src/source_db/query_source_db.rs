@@ -492,6 +492,20 @@ impl SourceDatabase for QuerySourceDatabase {
             .flatten()
             .collect()
     }
+
+    fn get_target_config_raw(&self, origin: Option<&Path>) -> Option<serde_json::Value> {
+        let target = self.get_target(origin)?;
+        let read = self.inner.read();
+        let manifest = read.db.get(&target)?;
+        manifest.config.clone()
+    }
+
+    fn get_target_root(&self, origin: Option<&Path>) -> Option<PathBuf> {
+        let target = self.get_target(origin)?;
+        let read = self.inner.read();
+        let manifest = read.db.get(&target)?;
+        manifest.root.clone()
+    }
 }
 
 #[cfg(test)]

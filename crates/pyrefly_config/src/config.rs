@@ -884,24 +884,26 @@ impl ConfigFile {
         SysInfo::new(self.python_version(), self.python_platform().clone())
     }
 
-    pub fn errors(&self, path: &Path) -> &ErrorDisplayConfig {
-        self.get_from_sub_configs(ConfigBase::get_errors, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.errors.as_ref().unwrap())
+    pub fn errors(&self, path: &Path) -> ErrorDisplayConfig {
+        if let Some(e) = self.get_from_sub_configs(ConfigBase::get_errors, path) {
+            return e.clone();
+        }
+        if let Some(e) = self.get_from_target_config(|c| c.errors.clone(), path) {
+            return e;
+        }
+        self.root.errors.clone().unwrap()
     }
 
     pub fn replace_imports_with_any(&self, path: Option<&Path>, module: ModuleName) -> bool {
         let wildcards = path
             .and_then(|path| {
                 self.get_from_sub_configs(ConfigBase::get_replace_imports_with_any, path)
+                    .map(|w| w.to_vec())
+                    .or_else(|| {
+                        self.get_from_target_config(|c| c.replace_imports_with_any.clone(), path)
+                    })
             })
-            .unwrap_or_else(||
-             // we can use unwrap here, because the value in the root config must
-             // be set in `ConfigFile::configure()`.
-             self.root.replace_imports_with_any.as_deref().unwrap());
-        // Need to filter out any files that would be a not case.
+            .unwrap_or_else(|| self.root.replace_imports_with_any.clone().unwrap());
         let found_match = wildcards.iter().find_map(|w| {
             if w.matches(module) == Match::Negative {
                 Some(false)
@@ -918,11 +920,12 @@ impl ConfigFile {
         let wildcards = path
             .and_then(|path| {
                 self.get_from_sub_configs(ConfigBase::get_ignore_missing_imports, path)
+                    .map(|w| w.to_vec())
+                    .or_else(|| {
+                        self.get_from_target_config(|c| c.ignore_missing_imports.clone(), path)
+                    })
             })
-            .unwrap_or_else(||
-             // we can use unwrap here, because the value in the root config must
-             // be set in `ConfigFile::configure()`.
-             self.root.ignore_missing_imports.as_deref().unwrap());
+            .unwrap_or_else(|| self.root.ignore_missing_imports.clone().unwrap());
         let found_match = wildcards.iter().find_map(|w| {
             if w.matches(module) == Match::Negative {
                 Some(false)
@@ -937,65 +940,60 @@ impl ConfigFile {
 
     pub fn check_unannotated_defs(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_check_unannotated_defs, path)
+            .or_else(|| self.get_from_target_config(|c| c.check_unannotated_defs, path))
             .unwrap_or_else(|| self.root.check_unannotated_defs.unwrap())
     }
 
     pub fn infer_return_types(&self, path: &Path) -> InferReturnTypes {
         self.get_from_sub_configs(ConfigBase::get_infer_return_types, path)
+            .or_else(|| self.get_from_target_config(|c| c.infer_return_types, path))
             .unwrap_or_else(|| self.root.infer_return_types.unwrap())
     }
 
     pub fn disable_type_errors_in_ide(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_disable_type_errors_in_ide, path)
+            .or_else(|| self.get_from_target_config(|c| c.disable_type_errors_in_ide, path))
             .unwrap_or_else(|| self.root.disable_type_errors_in_ide.unwrap_or_default())
     }
 
     fn ignore_errors_in_generated_code(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_ignore_errors_in_generated_code, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.ignore_errors_in_generated_code.unwrap())
+            .or_else(|| self.get_from_target_config(|c| c.ignore_errors_in_generated_code, path))
+            .unwrap_or_else(|| self.root.ignore_errors_in_generated_code.unwrap())
     }
 
     pub fn infer_with_first_use(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_infer_with_first_use, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.infer_with_first_use.unwrap())
+            .or_else(|| self.get_from_target_config(|c| c.infer_with_first_use, path))
+            .unwrap_or_else(|| self.root.infer_with_first_use.unwrap())
     }
 
     pub fn tensor_shapes(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_tensor_shapes, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.tensor_shapes.unwrap())
+            .or_else(|| self.get_from_target_config(|c| c.tensor_shapes, path))
+            .unwrap_or_else(|| self.root.tensor_shapes.unwrap())
     }
 
     pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_strict_callable_subtyping, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.strict_callable_subtyping.unwrap())
+            .or_else(|| self.get_from_target_config(|c| c.strict_callable_subtyping, path))
+            .unwrap_or_else(|| self.root.strict_callable_subtyping.unwrap())
     }
 
     pub fn spec_compliant_overloads(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_spec_compliant_overloads, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.spec_compliant_overloads.unwrap())
+            .or_else(|| self.get_from_target_config(|c| c.spec_compliant_overloads, path))
+            .unwrap_or_else(|| self.root.spec_compliant_overloads.unwrap())
     }
 
-    pub fn enabled_ignores(&self, path: &Path) -> &SmallSet<Tool> {
-        self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path)
-            .unwrap_or_else(||
-                 // we can use unwrap here, because the value in the root config must
-                 // be set in `ConfigFile::configure()`.
-                 self.root.enabled_ignores.as_ref().unwrap())
+    pub fn enabled_ignores(&self, path: &Path) -> SmallSet<Tool> {
+        if let Some(e) = self.get_from_sub_configs(ConfigBase::get_enabled_ignores, path) {
+            return e.clone();
+        }
+        if let Some(e) = self.get_from_target_config(|c| c.enabled_ignores.clone(), path) {
+            return e;
+        }
+        self.root.enabled_ignores.clone().unwrap()
     }
 
     /// Get the recursion limit configuration.
@@ -1004,11 +1002,11 @@ impl ConfigFile {
         ConfigBase::get_recursion_limit_config(&self.root)
     }
 
-    pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
+    pub fn get_error_config(&self, path: &Path) -> ErrorConfig {
         ErrorConfig::new(
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
-            self.enabled_ignores(path).clone(),
+            self.enabled_ignores(path),
         )
     }
 
@@ -1026,6 +1024,20 @@ impl ConfigFile {
             }
             None
         })
+    }
+
+    /// Look up a per-file config setting from the build system target that owns
+    /// the given file. Returns `None` if there is no source database, the file
+    /// doesn't belong to any target, or the target has no config override.
+    fn get_from_target_config<T>(
+        &self,
+        getter: impl FnOnce(&ConfigBase) -> Option<T>,
+        path: &Path,
+    ) -> Option<T> {
+        let source_db = self.source_db.as_ref()?;
+        let raw = source_db.get_target_config_raw(Some(path))?;
+        let config_base: ConfigBase = serde_json::from_value(raw).ok()?;
+        getter(&config_base)
     }
 
     pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
