@@ -115,6 +115,7 @@ pub struct TestEnv {
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
+    missing_super_call_error: bool,
     not_required_key_access_error: bool,
     pytorch_efficiency_lint_error: bool,
     incompatible_comparison_error: bool,
@@ -149,6 +150,7 @@ impl TestEnv {
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
+            missing_super_call_error: false,
             not_required_key_access_error: false,
             pytorch_efficiency_lint_error: false,
             incompatible_comparison_error: false,
@@ -289,6 +291,11 @@ impl TestEnv {
 
     pub fn enable_missing_override_decorator_error(mut self) -> Self {
         self.missing_override_decorator_error = true;
+        self
+    }
+
+    pub fn enable_missing_super_call_error(mut self) -> Self {
+        self.missing_super_call_error = true;
         self
     }
 
@@ -443,6 +450,9 @@ impl TestEnv {
         }
         if self.missing_override_decorator_error {
             errors.set_error_severity(ErrorKind::MissingOverrideDecorator, Severity::Error);
+        }
+        if self.missing_super_call_error {
+            errors.set_error_severity(ErrorKind::MissingSuperCall, Severity::Error);
         }
         if self.not_required_key_access_error {
             errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
