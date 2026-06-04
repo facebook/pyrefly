@@ -3170,6 +3170,10 @@ Ex = Enum("Ex", [("Red", 1), ("Blue", 2), ("Red", 3)])  # Duplicate field `Red` 
 
 However, it is best practice to use the class syntax if possible, which doesn't treat duplicate names as an error.
 
+It also covers decorators applied to a class kind they cannot be applied to,
+such as `@dataclass` on a `Protocol`, `@disjoint_base` on a `TypedDict` or
+`Protocol`, or `@runtime_checkable` on a non-`Protocol` class.
+
 ## bad-context-manager
 
 This error occurs when a type that cannot be used as a context manager appears in a `with` statement.
@@ -3201,6 +3205,9 @@ y = 10  # Now `y` is defined
 
 Like `bad-class-definition`, this error kind is uncommon because other error kinds are used for more specific issues.
 For example, argument order is enforced by the parser, so `def f(x: int = 1, y: str)` is a `parse-error`.
+
+It also covers decorators applied to a function when the typing spec only
+allows them on classes, such as `@disjoint_base` on a function.
 
 ## bad-index
 
@@ -3781,7 +3788,7 @@ if isinstance(1, UserId):
 
 Default severity: `warn`
 
-This error indicates that a decorator was used incorrectly. For example, using `@typing.final` on a non-method function.
+This error indicates that a method-only decorator (`@final`, `@override`, etc.) was applied to a top-level function. Such usage is harmless at runtime and is sometimes intentional, so the default severity is `warn`.
 
 ```python
 from typing import final
@@ -3789,6 +3796,12 @@ from typing import final
 def f() -> None:
   pass
 ```
+
+Decorator misuse that violates the typing spec — for example, `@dataclass` on a
+`Protocol`, `@disjoint_base` on a `TypedDict` or `Protocol`,
+`@runtime_checkable` on a non-`Protocol` class, or `@disjoint_base` on a
+function — is reported under `bad-class-definition` or
+`bad-function-definition` instead, both of which default to `error`.
 
 ## invalid-inheritance
 
