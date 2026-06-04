@@ -37,6 +37,7 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
 use regex::Regex;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -549,6 +550,16 @@ fn parameter_definition_documentation(
     docs.get(key).cloned().map(|doc| (key.to_owned(), doc))
 }
 
+fn keyword_argument_identifier(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Identifier> {
+    let identifier = transaction.identifier_at(handle, position)?;
+    matches!(identifier.context, IdentifierContext::KeywordArgument(_))
+        .then_some(identifier.identifier)
+}
+
 /// Check if the cursor position is on the `in` keyword within a for loop or comprehension.
 /// Returns Some(iterable_range) if found, None otherwise.
 fn in_keyword_in_iteration_at(
@@ -668,13 +679,8 @@ pub fn get_hover(
     }
 
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
-    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
-        metadata,
-        definition_range: definition_location,
-        module,
-        docstring_range,
-        display_name,
-    }) = transaction
+    let keyword_argument_identifier = keyword_argument_identifier(transaction, handle, position);
+    let definition = transaction
         .find_definition(
             handle,
             position,
@@ -685,9 +691,22 @@ pub fn get_hover(
         )
         .map(Vec1::into_vec)
         .unwrap_or_default()
-        // TODO: handle more than 1 definition
         .into_iter()
         .next()
+        .filter(|item| {
+            keyword_argument_identifier
+                .as_ref()
+                .is_none_or(|identifier| {
+                    item.module.code_at(item.definition_range) == identifier.id.as_str()
+                })
+        });
+    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
+        metadata,
+        definition_range: definition_location,
+        module,
+        docstring_range,
+        display_name,
+    }) = definition
     {
         let kind = metadata.symbol_kind();
         let name = {
