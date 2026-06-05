@@ -5115,16 +5115,24 @@ impl Server {
         }) {
             return Err(EmptyResponseReason::LanguageServicesDisabled);
         }
-        let handle = self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD))?;
-        let symbols = transaction.symbols(&handle, maybe_cell_idx);
-        let supports_hierarchical = self
+
+        // Avoid creating a handle when the client doesn't support document symbols
+        let document_symbols_caps = self
             .initialize_params
             .capabilities
             .text_document
             .as_ref()
-            .and_then(|t| t.document_symbol.as_ref())
+            .and_then(|t| t.document_symbol.as_ref());
+        if document_symbols_caps.is_none() {
+            return Ok(None);
+        }
+
+        let supports_hierarchical = document_symbols_caps
             .and_then(|d| d.hierarchical_document_symbol_support)
             == Some(true);
+
+        let handle = self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD))?;
+        let symbols = transaction.symbols(&handle, maybe_cell_idx);
         Ok(symbols.map(|syms| {
             if supports_hierarchical {
                 DocumentSymbolResponse::Nested(syms)
