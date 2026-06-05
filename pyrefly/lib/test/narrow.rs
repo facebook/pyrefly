@@ -1345,6 +1345,24 @@ def f(x: Cat | Dog):
 );
 
 testcase!(
+    test_iscoroutinefunction_narrows_callable,
+    r#"
+from inspect import iscoroutinefunction
+from types import CoroutineType
+from typing import Any, Awaitable, Callable, assert_type
+
+type MaybeAwaitable = Callable[[], Awaitable[str]] | Callable[[], str]
+
+async def get_value(fn: MaybeAwaitable) -> str:
+    if iscoroutinefunction(fn):
+        assert_type(fn, Callable[[], CoroutineType[Any, Any, Any]])
+        return await fn()
+    assert_type(fn, Callable[[], str])
+    return fn()
+    "#,
+);
+
+testcase!(
     test_typeis,
     r#"
 from typing import TypeIs, assert_type

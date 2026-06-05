@@ -1331,7 +1331,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 ty.clone()
             }
-            AtomicNarrowOp::NotTypeGuard(_, _) => ty.clone(),
+            AtomicNarrowOp::NotTypeGuard(t, _) => {
+                // `iscoroutinefunction` distinguishes async callables from sync callables in
+                // resolver-style unions, but typeshed models it as a `TypeGuard`, not `TypeIs`.
+                if !matches!(
+                    t.callee_kind(),
+                    Some(CalleeKind::Function(FunctionKind::IsCoroutineFunction))
+                ) {
+                    return ty.clone();
+                }
+                let awaitable = self
+                    .heap
+                    .mk_class_type(self.stdlib.awaitable(self.heap.mk_any_implicit()).clone());
+                self.distribute_over_union(ty, |t| {
+                    if t.callable_return_type(self.heap)
+                        .is_some_and(|ret| self.is_subset_eq(&ret, &awaitable))
+                    {
+                        self.heap.mk_never()
+                    } else {
+                        t.clone()
+                    }
+                })
+            }
             AtomicNarrowOp::TypeIs(t, arguments) => {
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);

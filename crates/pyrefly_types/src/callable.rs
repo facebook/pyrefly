@@ -849,6 +849,7 @@ impl FuncId {
 pub enum FunctionKind {
     IsInstance,
     IsSubclass,
+    IsCoroutineFunction,
     Dataclass,
     DataclassField,
     DataclassReplace,
@@ -1240,6 +1241,8 @@ impl FunctionKind {
         match (module.name().as_str(), cls.as_ref(), func.as_str()) {
             ("builtins", None, "isinstance") => Self::IsInstance,
             ("builtins", None, "issubclass") => Self::IsSubclass,
+            ("inspect", None, "iscoroutinefunction") => Self::IsCoroutineFunction,
+            ("asyncio.coroutines", None, "iscoroutinefunction") => Self::IsCoroutineFunction,
             ("builtins", None, "classmethod") => Self::ClassMethod,
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
@@ -1274,6 +1277,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => ModuleName::builtins(),
             Self::IsSubclass => ModuleName::builtins(),
+            Self::IsCoroutineFunction => ModuleName::from_str("inspect"),
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
             Self::DataclassField => ModuleName::dataclasses(),
@@ -1302,6 +1306,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
             Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
+            Self::IsCoroutineFunction => Cow::Owned(Name::new_static("iscoroutinefunction")),
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
             Self::DataclassField => Cow::Owned(Name::new_static("field")),
@@ -1330,6 +1335,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => None,
             Self::IsSubclass => None,
+            Self::IsCoroutineFunction => None,
             Self::ClassMethod => None,
             Self::Dataclass => None,
             Self::DataclassField => None,
