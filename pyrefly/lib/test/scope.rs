@@ -675,6 +675,87 @@ def h(matrix: list[list[int]]) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3670
+// A name assigned by >=2 walrus operators inside comprehensions becomes an
+// `Anywhere` static (phi/SSA) in the enclosing scope. A read that happens
+// before the walrus write must resolve to a populated phi, not panic with
+// "key lacking binding". After the comprehensions, `c` resolves to the
+// last-written value via the enclosing flow (matching pyright's `Literal[2]`).
+testcase!(
+    test_walrus_in_comprehension_anywhere_read_before_write,
+    r#"
+from typing import reveal_type
+print(c)  # E: `c` is uninitialized
+[(c := 1) for _ in []]
+[(c := 2) for _ in []]
+reveal_type(c)  # E: revealed type: Literal[2]
+"#,
+);
+
+// Same read-before-write pattern, but the walrus redirect target is a function
+// scope rather than the module scope. Must not panic.
+testcase!(
+    test_walrus_in_comprehension_anywhere_in_function,
+    r#"
+from typing import reveal_type
+def f() -> None:
+    print(c)  # E: `c` is uninitialized
+    [(c := 1) for _ in []]
+    [(c := 2) for _ in []]
+    reveal_type(c)  # E: revealed type: Literal[2]
+"#,
+);
+
+// Regression guard: two walrus comprehensions with NO early read (the path that
+// already worked before the fix, since the flow write shadowed the phi). The
+// fix must not change this behavior.
+testcase!(
+    test_walrus_in_comprehension_two_walrus_no_early_read,
+    r#"
+from typing import reveal_type
+[(c := 1) for _ in []]
+[(c := 2) for _ in []]
+reveal_type(c)  # E: revealed type: Literal[2]
+"#,
+);
+
+// Raw fuzzer input from #3670. Intentionally malformed; the only hard
+// requirement is that it produces parse errors but does NOT panic.
+testcase!(
+    test_walrus_comprehension_fuzz_no_crash,
+    r#"
+[(c:=)for c+]  # E: Expected an expression  # E: Invalid assignment target  # E: Expected an expression  # E: Expected `in`, found `]`
+[(c:=)for]  # E: Expected an expression  # E: Expected an expression
+"#,
+);
+
+// Nested comprehension: the walrus still binds to the enclosing (module) scope,
+// which the redirect reaches by skipping all comprehension scopes. Read-before-
+// write must populate the enclosing `Anywhere` phi, not panic.
+testcase!(
+    test_walrus_in_comprehension_anywhere_nested,
+    r#"
+from typing import reveal_type
+print(c)  # E: `c` is uninitialized
+[[(c := 1) for _ in inner] for inner in []]
+[[(c := 2) for _ in inner] for inner in []]
+reveal_type(c)  # E: revealed type: Literal[2]
+"#,
+);
+
+// Generator expressions are also comprehension scopes (`is_generator: true`), so
+// the same redirect + read-before-write path applies. Must not panic.
+testcase!(
+    test_walrus_in_comprehension_anywhere_genexp,
+    r#"
+from typing import reveal_type
+print(c)  # E: `c` is uninitialized
+list((c := 1) for _ in [])
+list((c := 2) for _ in [])
+reveal_type(c)  # E: revealed type: Literal[2]
+"#,
+);
+
 testcase!(
     test_forward_reference_ok,
     r#"
