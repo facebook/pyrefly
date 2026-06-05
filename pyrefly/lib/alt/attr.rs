@@ -631,6 +631,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         todo_ctx: &str,
     ) -> Type {
+        if let Some(ty) = self.django_manager_attribute(base, attr_name, range, errors) {
+            return ty;
+        }
         let attr_base = self.as_attribute_base(base.clone());
         let lookup_result = attr_base.clone().map_or_else(
             || LookupResult::internal_error(InternalError::AttributeBaseUndefined(base.clone())),

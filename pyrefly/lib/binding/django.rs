@@ -6,6 +6,7 @@
  */
 
 use ruff_python_ast::Expr;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -19,6 +20,26 @@ const FOREIGN_KEY: Name = Name::new_static("ForeignKey");
 const ONE_TO_ONE_FIELD: Name = Name::new_static("OneToOneField");
 const MANY_TO_MANY_FIELD: Name = Name::new_static("ManyToManyField");
 const CHOICES: Name = Name::new_static("choices");
+
+/// Read explicit method-copy flags once, before class statements are consumed.
+pub fn collect_django_queryset_only(body: &[Stmt]) -> SmallMap<Name, bool> {
+    let mut flags = SmallMap::new();
+    for stmt in body {
+        if let Stmt::Assign(assign) = stmt
+            && let Expr::BooleanLiteral(value) = assign.value.as_ref()
+        {
+            for target in &assign.targets {
+                if let Expr::Attribute(attr) = target
+                    && attr.attr.as_str() == "queryset_only"
+                    && let Expr::Name(method) = attr.value.as_ref()
+                {
+                    flags.insert(method.id.clone(), value.value);
+                }
+            }
+        }
+    }
+    flags
+}
 
 /// Django-specific field information detected during binding phase.
 #[derive(Clone, Debug, Default)]

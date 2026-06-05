@@ -2749,6 +2749,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        let initial_value_expr = match field_definition {
+            ClassFieldDefinition::AssignedInBody { value, .. } => {
+                if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                    Some(expr)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
         self.get_enum_class_field_type(
             class,
             name,
@@ -2762,18 +2773,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         .or_else(|| self.get_property_class_field_type(class, name, field_definition))
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
         .or_else(|| {
-            let initial_value_expr = match field_definition {
-                ClassFieldDefinition::AssignedInBody { value, .. } => {
-                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
-                        Some(expr)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            self.get_django_field_type(ty, class, Some(name), initial_value_expr)
+            direct_annotation
+                .is_none()
+                .then(|| self.get_django_manager_from_queryset_type(class, initial_value_expr))
+                .flatten()
         })
+        .or_else(|| self.get_django_field_type(ty, class, Some(name), initial_value_expr))
     }
 
     /// Recognize `x = property(fget, fset, fdel)` and return the corresponding
@@ -3269,6 +3274,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Otherwise, analyze the value to determine the type
         let (inherited_ty, inherited_annotation) =
             self.get_inherited_type_and_annotation(class, name);
+        if direct_annotation.is_none()
+            && inherited_ty
+                .as_ref()
+                .is_some_and(|ty| self.is_django_manager_type(ty))
+            && let ExprOrBinding::Expr(e) = value
+            && let Some(manager) = self.get_django_manager_from_queryset_type(class, Some(e))
+        {
+            // A manager contributed to a subclass is bound to that subclass's model.
+            self.attribute_expr_infer(e, None, name, errors);
+            return (manager, None, IsInherited::Maybe);
+        }
         let mut is_inherited = if inherited_ty.is_none() {
             IsInherited::No
         } else {
@@ -4394,6 +4410,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         );
                     continue;
                 }
+            }
+            if metadata.is_django_model()
+                && !class_field.has_explicit_annotation()
+                && self.is_django_manager_type(&class_field.ty())
+                && self.is_django_manager_type(&want_class_field.ty())
+            {
+                // Django binds each manager replacement to the receiving model.
+                continue;
             }
             let want_is_static = want_class_field.is_staticmethod();
             let want_is_class = want_class_field.is_classmethod();

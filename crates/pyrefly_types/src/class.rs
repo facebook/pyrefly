@@ -110,6 +110,8 @@ pub struct ClassFieldProperties {
     // The field is defined in the class body (not in a method via self.x = ...)
     is_defined_in_class_body: bool,
     attrs_field_specifier: Option<AttrsFieldSpecifier>,
+    /// An explicit Django method-copy policy set in the class body.
+    django_queryset_only: Option<bool>,
     range: TextRange,
     // The range of the docstring following this field, if present
     docstring_range: Option<TextRange>,
@@ -134,6 +136,7 @@ impl ClassFieldProperties {
             is_initialized_on_class: has_default_value,
             is_defined_in_class_body,
             attrs_field_specifier,
+            django_queryset_only: None,
             range,
             docstring_range,
         }
@@ -143,6 +146,11 @@ impl ClassFieldProperties {
         self.is_initialized_on_class
     }
 
+    /// Attach the method-copy policy found during binding.
+    pub fn with_django_queryset_only(mut self, value: Option<bool>) -> Self {
+        self.django_queryset_only = value;
+        self
+    }
     pub fn is_defined_in_class_body(&self) -> bool {
         self.is_defined_in_class_body
     }
@@ -203,6 +211,11 @@ impl ClassFields {
 
     pub fn is_field_annotated(&self, name: &Name) -> bool {
         self.0.get(name).is_some_and(|prop| prop.is_annotated)
+    }
+
+    /// Return the explicit Django method-copy policy, if present.
+    pub fn django_queryset_only(&self, name: &Name) -> Option<bool> {
+        self.0.get(name).and_then(|prop| prop.django_queryset_only)
     }
 
     pub fn is_attrs_field_specifier(&self, name: &Name) -> bool {
