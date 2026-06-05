@@ -1991,6 +1991,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        let initial_value_expr = match field_definition {
+            ClassFieldDefinition::AssignedInBody { value, .. } => {
+                if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                    Some(expr)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
         self.get_enum_class_field_type(
             class,
             name,
@@ -2004,18 +2015,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         .or_else(|| self.get_property_class_field_type(class, name, field_definition))
         .or_else(|| self.get_pydantic_root_model_class_field_type(class, name))
         .or_else(|| {
-            let initial_value_expr = match field_definition {
-                ClassFieldDefinition::AssignedInBody { value, .. } => {
-                    if let ExprOrBinding::Expr(expr) = value.as_ref() {
-                        Some(expr)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            self.get_django_field_type(ty, class, Some(name), initial_value_expr)
+            direct_annotation
+                .is_none()
+                .then(|| self.get_django_manager_from_queryset_type(class, initial_value_expr))
+                .flatten()
         })
+        .or_else(|| self.get_django_field_type(ty, class, Some(name), initial_value_expr))
     }
 
     /// Recognize `x = property(fget, fset, fdel)` and return the corresponding
@@ -2275,6 +2280,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let inferred_ty = match value {
             ExprOrBinding::Expr(e) => {
                 match inherited_ty {
+                    Some(_)
+                        if direct_annotation.is_none()
+                            && self
+                                .get_django_manager_from_queryset_type(class, Some(e))
+                                .is_some() =>
+                    {
+                        self.attribute_expr_infer(e, None, name, errors)
+                    }
                     Some(inherited_ty) if inferred_from_method => {
                         // Inherit the previous type of the attribute if the only declaration-like
                         // thing the current class does is assign to the attribute in a method.
@@ -3087,6 +3100,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             || class_metadata.is_factory_boy_factory())
             && field_name.as_str() == "Meta"
         {
+            return false;
+        }
+
+        // Django models commonly replace `Model.objects` with a model-specific
+        // manager, which should not be checked as a normal class override.
+        if class_metadata.is_django_model() && field_name.as_str() == "objects" {
             return false;
         }
 
