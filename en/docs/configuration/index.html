@@ -35,8 +35,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.e1ee9829.js" defer="defer"></script>
-<script src="/assets/js/main.bc0742df.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.241624e4.js" defer="defer"></script>
+<script src="/assets/js/main.32220116.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -507,7 +507,7 @@ shown regardless of this threshold.</li>
 <p>Default format for <code>pyrefly check</code> error output when <code>--output-format</code> is not
 set on the CLI.</p>
 <ul>
-<li>Type: <code>&quot;min-text&quot; | &quot;full-text&quot; | &quot;json&quot; | &quot;github&quot; | &quot;omit-errors&quot;</code></li>
+<li>Type: <code>&quot;min-text&quot; | &quot;full-text&quot; | &quot;json&quot; | &quot;github&quot; | &quot;junit-xml&quot; | &quot;omit-errors&quot;</code></li>
 <li>Default: <code>full-text</code></li>
 <li>Flag equivalent: <code>--output-format</code></li>
 <li>Notes:<!-- -->
@@ -515,6 +515,8 @@ set on the CLI.</p>
 <li><code>output-format</code> is a <strong>project-level setting</strong> and cannot be overridden in
 <a href="#sub-configs"><code>sub-config</code></a> sections.</li>
 <li>A CLI <code>--output-format</code> flag still takes precedence over the config value.</li>
+<li><code>&quot;junit-xml&quot;</code> emits a JUnit XML <code>&lt;testsuites&gt;</code> report suitable for CI
+dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).</li>
 </ul>
 </li>
 </ul>
@@ -952,12 +954,14 @@ you&#x27;ve configured yourself, either through CLI flags or a config file.</p>
 <p>We look for an interpreter with the following logic:</p>
 <ol>
 <li>Use <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>,
-<a href="#conda-environment"><code>fallback-python-interpreter-name](#fallback-python-interpreter-name), or [</code>conda-environment`</a> if any are set by a flag.
+<a href="#fallback-python-interpreter-name"><code>fallback-python-interpreter-name</code></a>, or
+<a href="#conda-environment"><code>conda-environment</code></a> if any are set by a flag.
 More than one cannot be set in flags at the same time.</li>
 <li>Determine if there&#x27;s an active <code>venv</code> or <code>conda</code> environment. If both are active at
 the same time, we take <code>venv</code> over <code>conda</code>.</li>
 <li>Use <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>,
-<a href="#conda-environment"><code>fallback-python-interpreter-name](#fallback-python-interpreter-name), or [</code>conda-environment`</a> if either are set in a config file.
+<a href="#fallback-python-interpreter-name"><code>fallback-python-interpreter-name</code></a>, or
+<a href="#conda-environment"><code>conda-environment</code></a> if either are set in a config file.
 Both cannot be set in a config at the same time.</li>
 <li>Find a <code>venv</code> at the root of the project by searching for something that looks like a
 Python interpreter (matches <code>python(\d(\.\d+)?)?(.exe)?</code> regex), and looking
@@ -1003,7 +1007,7 @@ directories under <code>src/</code>, so therefore, we will recursively match eve
 <p>Examples:</p>
 <ul>
 <li><code>src/**/*.py</code>: only match <code>.py</code> files under <code>src/</code></li>
-<li><code>src</code>, <code>src/</code>, <code>src/*</code>, <code>src/**</code>, and <code>src/**/*</code>: match all <code>.py</code> and <code>.pyi</code> files under `src/</li>
+<li><code>src</code>, <code>src/</code>, <code>src/*</code>, <code>src/**</code>, and <code>src/**/*</code>: match all <code>.py</code> and <code>.pyi</code> files under <code>src/</code></li>
 <li><code>?.py</code> and <code>[A-z].py</code>: match any file that looks like <code>&lt;letter&gt;.py</code></li>
 <li><code>src/path/to/my/file.py</code>: only match <code>src/path/to/my/file.py</code></li>
 <li><code>src/**/tests</code>, <code>src/**/tests/</code>, <code>src/**/tests/**</code>, and <code>src/**/tests/**/*</code>: match all <code>.py</code> and <code>.pyi</code> files in <code>src/</code>

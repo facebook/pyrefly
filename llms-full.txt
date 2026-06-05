@@ -1691,13 +1691,15 @@ min-severity = "warn"
 Default format for `pyrefly check` error output when `--output-format` is not
 set on the CLI.
 
-- Type: `"min-text" | "full-text" | "json" | "github" | "omit-errors"`
+- Type: `"min-text" | "full-text" | "json" | "github" | "junit-xml" | "omit-errors"`
 - Default: `full-text`
 - Flag equivalent: `--output-format`
 - Notes:
     - `output-format` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - A CLI `--output-format` flag still takes precedence over the config value.
+    - `"junit-xml"` emits a JUnit XML `<testsuites>` report suitable for CI
+      dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).
 
 ### `preset`
 
@@ -2275,13 +2277,13 @@ you've configured yourself, either through CLI flags or a config file.
 We look for an interpreter with the following logic:
 
 1. Use [`python-interpreter-path`](#python-interpreter-path),
-   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
+   [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set by a flag.
    More than one cannot be set in flags at the same time.
 2. Determine if there's an active `venv` or `conda` environment. If both are active at
    the same time, we take `venv` over `conda`.
 3. Use [`python-interpreter-path`](#python-interpreter-path),
-   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
+   [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if either are set in a config file.
    Both cannot be set in a config at the same time.
 4. Find a `venv` at the root of the project by searching for something that looks like a
@@ -2332,7 +2334,7 @@ directories under `src/`, so therefore, we will recursively match everything und
 Examples:
 
 - `src/**/*.py`: only match `.py` files under `src/`
-- `src`, `src/`, `src/*`, `src/**`, and `src/**/*`: match all `.py` and `.pyi` files under `src/
+- `src`, `src/`, `src/*`, `src/**`, and `src/**/*`: match all `.py` and `.pyi` files under `src/`
 - `?.py` and `[A-z].py`: match any file that looks like `<letter>.py`
 - `src/path/to/my/file.py`: only match `src/path/to/my/file.py`
 - `src/**/tests`, `src/**/tests/`, `src/**/tests/**`, and `src/**/tests/**/*`: match all `.py` and `.pyi` files in `src/`
