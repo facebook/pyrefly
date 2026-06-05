@@ -1096,6 +1096,29 @@ happen if you install the `types-requests` package but forget to install `reques
 
 Pyrefly has bundled stubs for a package, but no corresponding source package was found.
 
+## missing-super-call
+
+Default severity: `ignore`
+
+A constructor-like method overrides a parent class method but does not call `super()`.
+
+```python
+class Base:
+    def __init__(self) -> None:
+        self.value: int = 1
+
+class Child(Base):
+    def __init__(self) -> None:  # missing-super-call
+        pass
+```
+
+To enable this check, set the severity to `error` in your configuration:
+
+```toml
+[tool.pyrefly]
+errors = { missing-super-call = "error" }
+```
+
 ## name-mismatch
 
 Default severity: `warn`

@@ -437,6 +437,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         stub_or_impl: FunctionStubOrImpl,
         placeholder_body_kind: Option<PlaceholderBodyKind>,
         is_return_inferred: bool,
+        calls_super_method: bool,
         class_key: Option<&Idx<KeyClass>>,
         decorators: &[Idx<KeyDecorator>],
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
@@ -465,6 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_async: def.is_async,
             placeholder_body_kind,
             is_return_inferred,
+            calls_super_method,
             ..Default::default()
         };
         let mut found_class_property = false;
