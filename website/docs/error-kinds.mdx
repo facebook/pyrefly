@@ -892,10 +892,11 @@ An error caused by incorrect definition of a Sentinel. A few examples:
 ```python
 from typing_extensions import Sentinel
 
-# Sentinels must be assigned to a matching variable.
-A = Sentinel("B")
+# First argument passed to sentinel constructor isn't a string literal
+my_str: str = "MISSING"
+A = Sentinel(my_str)
 
-# Invalid arguments passed to Sentinel constructor
+# Invalid arguments passed to sentinel constructor
 MISSING = Sentinel("MISSING", non_existent="")
 ```
 
