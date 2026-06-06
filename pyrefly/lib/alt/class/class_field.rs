@@ -4749,6 +4749,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             let attr =
                 self.as_instance_attribute(&dunder::GET, &getter, &Instance::of_class(&x.cls));
+            // `__get__` is bound and called like a method, never re-fed through the
+            // descriptor protocol. If it is itself a descriptor, recursing here would
+            // loop forever, so report no usable getter.
+            if matches!(attr, ClassAttribute::Descriptor(..)) {
+                return None;
+            }
             Some(
                 self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
                     .unwrap_or_else(|e| {

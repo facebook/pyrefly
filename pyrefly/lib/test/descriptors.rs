@@ -912,3 +912,40 @@ def f(c: C):
     assert_type(c.x, str | None)
     "#,
 );
+
+testcase!(
+    // A `__get__` whose type is itself a descriptor must not recurse forever; the
+    // read falls back to the descriptor's instance type, so the call below is reported
+    // as not callable rather than overflowing the stack.
+    test_self_referential_descriptor_get_no_crash,
+    r#"
+class C:
+    def d() -> C:  # E: Function declared to return `C` but is missing an explicit `return`
+        pass
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+C.__get__()  # E: Expected a callable, got `C`
+    "#,
+);
+
+testcase!(
+    // Assignment resolves a descriptor through its getter too, so the same guard keeps
+    // the write path from overflowing the stack.
+    test_self_referential_descriptor_set_no_crash,
+    r#"
+class C:
+    def d() -> C:  # E: Function declared to return `C` but is missing an explicit `return`
+        pass
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __set__():
+        pass
+class Host:
+    x: C = C()
+def f(h: Host) -> None:
+    h.x = 5  # E: Expected a callable, got `C`
+    "#,
+);
