@@ -21,6 +21,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::MutexGuard;
+use std::sync::OnceLock;
 use std::sync::RwLockReadGuard;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -39,6 +40,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_python::sys_info::module_platform_guard;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::demand_tree::DemandCollector;
@@ -443,6 +445,7 @@ impl ModuleDep {
 struct ModuleData {
     handle: Handle,
     config: ArcId<ConfigFile>,
+    effective_sys_info: SysInfo,
     state: ModuleState,
     imports: HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>,
     deps: HashMap<Handle, ModuleDeps>,
@@ -453,6 +456,7 @@ struct ModuleData {
 struct ModuleDataMut {
     handle: Handle,
     config: RwLock<ArcId<ConfigFile>>,
+    effective_sys_info: RwLock<SysInfo>,
     state: ModuleStateMut,
     /// Import resolution cache: module names from import statements → resolved paths.
     /// Only contains deps that were resolved via `find_import`.
@@ -467,12 +471,86 @@ struct ModuleDataMut {
     rdeps: Mutex<HashSet<Handle>>,
 }
 
+fn module_sys_info_override(
+    sys_info: SysInfo,
+    ast: Option<&ruff_python_ast::ModModule>,
+) -> Option<SysInfo> {
+    let ast = ast?;
+    module_platform_guard(&ast.body).map(|platform| sys_info.with_platform(platform))
+}
+
+thread_local! {
+    static COMPUTING_STDLIB: RefCell<Vec<SysInfo>> = const { RefCell::new(Vec::new()) };
+}
+
+struct ComputingStdlibGuard(SysInfo);
+
+impl ComputingStdlibGuard {
+    fn new(sys_info: SysInfo) -> Self {
+        COMPUTING_STDLIB.with(|stack| stack.borrow_mut().push(sys_info));
+        Self(sys_info)
+    }
+}
+
+impl Drop for ComputingStdlibGuard {
+    fn drop(&mut self) {
+        COMPUTING_STDLIB.with(|stack| {
+            let last = stack
+                .borrow_mut()
+                .pop()
+                .expect("computing stdlib stack should not be empty");
+            assert_eq!(
+                last, self.0,
+                "computing stdlib stack should be popped in LIFO order"
+            );
+        });
+    }
+}
+
+fn is_computing_stdlib(sys_info: SysInfo) -> bool {
+    COMPUTING_STDLIB.with(|stack| stack.borrow().contains(&sys_info))
+}
+
+struct StdlibEntry {
+    bootstrap: Arc<Stdlib>,
+    ready: OnceLock<Arc<Stdlib>>,
+}
+
+impl StdlibEntry {
+    fn computing() -> Self {
+        Self {
+            bootstrap: Arc::new(Stdlib::for_bootstrapping()),
+            ready: OnceLock::new(),
+        }
+    }
+
+    fn ready(stdlib: Arc<Stdlib>) -> Self {
+        let entry = Self::computing();
+        assert!(
+            entry.ready.set(stdlib).is_ok(),
+            "new stdlib entry should be empty"
+        );
+        entry
+    }
+
+    fn get(&self, sys_info: SysInfo) -> Arc<Stdlib> {
+        if let Some(stdlib) = self.ready.get() {
+            return stdlib.dupe();
+        }
+        if is_computing_stdlib(sys_info) {
+            return self.bootstrap.dupe();
+        }
+        self.ready.wait().dupe()
+    }
+}
+
 impl ModuleData {
     /// Make a copy of the data that can be mutated.
     fn clone_for_mutation(&self) -> ModuleDataMut {
         ModuleDataMut {
             handle: self.handle.dupe(),
             config: RwLock::new(self.config.dupe()),
+            effective_sys_info: RwLock::new(self.effective_sys_info.dupe()),
             state: self.state.clone_for_mutation(),
             imports: RwLock::new(self.imports.clone()),
             deps: RwLock::new(self.deps.clone()),
@@ -483,9 +561,11 @@ impl ModuleData {
 
 impl ModuleDataMut {
     fn new(handle: Handle, require: Require, config: ArcId<ConfigFile>, now: Epoch) -> Self {
+        let effective_sys_info = handle.sys_info().dupe();
         Self {
             handle,
             config: RwLock::new(config),
+            effective_sys_info: RwLock::new(effective_sys_info),
             state: ModuleStateMut::new(require, now),
             imports: Default::default(),
             deps: Default::default(),
@@ -498,6 +578,7 @@ impl ModuleDataMut {
         let ModuleDataMut {
             handle,
             config,
+            effective_sys_info,
             state,
             imports,
             deps,
@@ -506,10 +587,23 @@ impl ModuleDataMut {
         ModuleData {
             handle,
             config: config.into_inner(),
+            effective_sys_info: effective_sys_info.into_inner(),
             state: state.take_and_freeze(),
             imports: imports.into_inner(),
             deps: deps.into_inner(),
             rdeps: rdeps.into_inner(),
+        }
+    }
+
+    fn effective_sys_info(&self) -> SysInfo {
+        if let Some(ast) = self.state.get_ast().as_deref() {
+            let base = self.handle.sys_info();
+            let effective =
+                module_sys_info_override(*base, Some(ast)).unwrap_or_else(|| base.dupe());
+            *self.effective_sys_info.write() = effective.dupe();
+            effective
+        } else {
+            self.effective_sys_info.read().dupe()
         }
     }
 
@@ -614,7 +708,7 @@ pub struct TransactionTimingCounters {
 /// It is used to store uncommitted transaction state in between transaction runs.
 pub(crate) struct TransactionData<'a> {
     state: &'a State,
-    stdlib: SmallMap<SysInfo, Arc<Stdlib>>,
+    stdlib: LockedMap<SysInfo, StdlibEntry>,
     updated_modules: LockedMap<Handle, ArcId<ModuleDataMut>>,
     updated_loaders: LockedMap<ArcId<ConfigFile>, Arc<LoaderFindCache>>,
     memory_overlay: MemoryFilesOverlay,
@@ -1347,7 +1441,13 @@ impl<'a> Transaction<'a> {
 
             computed = true;
             let require = guard.require();
-            let stdlib = self.get_stdlib(&module_data.handle);
+            let sys_info = if todo >= Step::Exports {
+                module_data.effective_sys_info()
+            } else {
+                module_data.handle.sys_info().dupe()
+            };
+            self.compute_stdlib([sys_info].into_iter().collect());
+            let stdlib = self.get_stdlib_for_sys_info(&sys_info);
             let config = module_data.config.read();
             let pysa_context = self
                 .data
@@ -1362,7 +1462,7 @@ impl<'a> Transaction<'a> {
                 require,
                 module: module_data.handle.module(),
                 path: module_data.handle.path(),
-                sys_info: module_data.handle.sys_info(),
+                sys_info: &sys_info,
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
@@ -1773,7 +1873,9 @@ impl<'a> Transaction<'a> {
 
         // Slow path: need full solve_exported_key for computation.
         let load = module_data.state.get_load().unwrap();
-        let stdlib = self.get_stdlib(&module_data.handle);
+        let sys_info = module_data.effective_sys_info();
+        self.compute_stdlib([sys_info].into_iter().collect());
+        let stdlib = self.get_stdlib_for_sys_info(&sys_info);
         let lookup = self.lookup(module_data);
         answers.1.solve_exported_key(
             &lookup,
@@ -1805,13 +1907,16 @@ impl<'a> Transaction<'a> {
             .dupe()
     }
 
-    pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
-        if self.data.stdlib.len() == 1 {
-            // Since we know our one must exist, we can shortcut
-            return self.data.stdlib.first().unwrap().1.dupe();
-        }
+    pub fn get_stdlib_for_sys_info(&self, sys_info: &SysInfo) -> Arc<Stdlib> {
+        self.data
+            .stdlib
+            .get(sys_info)
+            .unwrap_or_else(|| panic!("stdlib was not computed for {sys_info:?}"))
+            .get(*sys_info)
+    }
 
-        self.data.stdlib.get(handle.sys_info()).unwrap().dupe()
+    pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
+        self.get_stdlib_for_sys_info(handle.sys_info())
     }
 
     /// Compute the `Stdlib` for each requested `SysInfo`.
@@ -1822,41 +1927,43 @@ impl<'a> Transaction<'a> {
     /// redundant single-threaded work on rechecks and multi-epoch runs.
     ///
     /// Returns `true` if all entries were already cached (no work done).
-    fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) -> bool {
-        // Filter out SysInfos that already have a computed stdlib.
-        let missing: SmallSet<SysInfo> = sys_infos
-            .into_iter()
-            .filter(|k| !self.data.stdlib.contains_key(k))
-            .collect();
-        if missing.is_empty() {
-            return true;
-        }
+    fn compute_stdlib(&self, sys_infos: SmallSet<SysInfo>) -> bool {
         let loader = self.get_cached_loader(&BundledTypeshedStdlib::config());
         // Use defaults (disabled) for stdlib - depth limiting is for user code
         let thread_state = ThreadState::new(None);
-        for k in missing.into_iter_hashed() {
-            self.data
-                .stdlib
-                .insert_hashed(k.to_owned(), Arc::new(Stdlib::for_bootstrapping()));
-            let v = Arc::new(Stdlib::new(
-                k.version(),
-                &|module, name| {
-                    let path = loader
-                        .find_import(module, None, Some(&self.timing))
-                        .finding()?;
-                    self.lookup_stdlib(&Handle::new(module, path, (*k).dupe()), name, &thread_state)
-                },
-                &|module, name| {
-                    let path = loader
-                        .find_import(module, None, Some(&self.timing))
-                        .finding()?;
-                    let handle = Handle::new(module, path, (*k).dupe());
-                    self.lookup_export_location(&handle, name)
-                },
-            ));
-            self.data.stdlib.insert_hashed(k, v);
+        let mut cached = true;
+        for k in sys_infos.into_iter_hashed() {
+            let sys_info = *k;
+            let (entry, _) = self.data.stdlib.ensure(&sys_info, StdlibEntry::computing);
+            if entry.ready.get().is_some() || is_computing_stdlib(sys_info) {
+                continue;
+            }
+            cached = false;
+            let _guard = ComputingStdlibGuard::new(sys_info);
+            entry.ready.get_or_init(|| {
+                Arc::new(Stdlib::new(
+                    sys_info.version(),
+                    &|module, name| {
+                        let path = loader
+                            .find_import(module, None, Some(&self.timing))
+                            .finding()?;
+                        self.lookup_stdlib(
+                            &Handle::new(module, path, sys_info.dupe()),
+                            name,
+                            &thread_state,
+                        )
+                    },
+                    &|module, name| {
+                        let path = loader
+                            .find_import(module, None, Some(&self.timing))
+                            .finding()?;
+                        let handle = Handle::new(module, path, sys_info.dupe());
+                        self.lookup_export_location(&handle, name)
+                    },
+                ))
+            });
         }
-        false
+        cached
     }
 
     fn work(&self) -> Result<(), Cancelled> {
@@ -2087,7 +2194,9 @@ impl<'a> Transaction<'a> {
         let load = module_data.state.get_load()?;
         let answers = module_data.state.get_answers()?;
         let errors = &load.errors;
-        let stdlib = self.get_stdlib(handle);
+        let sys_info = module_data.effective_sys_info();
+        self.compute_stdlib([sys_info].into_iter().collect());
+        let stdlib = self.get_stdlib_for_sys_info(&sys_info);
         let recurser = VarRecurser::new();
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
@@ -2345,13 +2454,15 @@ impl<'a> Transaction<'a> {
             let m = self.get_module(&m.handle);
             let alt = StepsMut::new_loaded(m.state.get_load().unwrap());
             let require = m.state.require();
-            let stdlib = self.get_stdlib(&m.handle);
+            let sys_info = m.effective_sys_info();
+            self.compute_stdlib([sys_info].into_iter().collect());
+            let stdlib = self.get_stdlib_for_sys_info(&sys_info);
             let config = m.config.read();
             let ctx = Context {
                 require,
                 module: m.handle.module(),
                 path: m.handle.path(),
-                sys_info: m.handle.sys_info(),
+                sys_info: &sys_info,
                 memory: &self.memory_lookup(),
                 uniques: &self.data.state.uniques,
                 stdlib: &stdlib,
@@ -2542,14 +2653,11 @@ impl<'a> TransactionHandle<'a> {
         path: Option<&ModulePath>,
         dep: ModuleDep,
     ) -> FindingOrError<&'a ArcId<ModuleDataMut>> {
+        let sys_info = self.module_data.effective_sys_info();
         let handle = match path {
             Some(path) => {
                 // Explicit path — already resolved. Bypass imports entirely.
-                FindingOrError::new_finding(Handle::new(
-                    module,
-                    path.dupe(),
-                    self.module_data.handle.sys_info().dupe(),
-                ))
+                FindingOrError::new_finding(Handle::new(module, path.dupe(), sys_info.dupe()))
             }
             None => {
                 // No path — needs find_import. Check imports cache first.
@@ -2583,13 +2691,7 @@ impl<'a> TransactionHandle<'a> {
                         finding
                     }
                 };
-                path.map(|path| {
-                    Handle::new(
-                        module,
-                        path.dupe(),
-                        self.module_data.handle.sys_info().dupe(),
-                    )
-                })
+                path.map(|path| Handle::new(module, path.dupe(), sys_info.dupe()))
             }
         };
 
@@ -2984,7 +3086,10 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                     "target module has Answers but no Load; this should be unreachable \
                      because Load is computed before Answers",
                 );
-                let stdlib = self.transaction.get_stdlib(&module_data.handle);
+                let sys_info = module_data.effective_sys_info();
+                self.transaction
+                    .compute_stdlib([sys_info].into_iter().collect());
+                let stdlib = self.transaction.get_stdlib_for_sys_info(&sys_info);
                 let lookup = self.transaction.lookup(module_data);
                 target_answers.solve_idx_erased(
                     any_idx,
@@ -3205,7 +3310,15 @@ impl State {
         let readable = self.state.read();
         let state_lock_blocked = start.elapsed();
         let now = readable.now;
-        let stdlib = readable.stdlib.clone();
+        let stdlib = LockedMap::new();
+        for (sys_info, cached_stdlib) in readable.stdlib.iter() {
+            assert!(
+                stdlib
+                    .insert(sys_info.dupe(), StdlibEntry::ready(cached_stdlib.dupe()))
+                    .is_none(),
+                "readable stdlib should not contain duplicate SysInfo keys"
+            );
+        }
         Transaction {
             readable,
             stats: Mutex::new(TelemetryTransactionStats {
@@ -3337,7 +3450,16 @@ impl State {
             "Attempted to commit a stale transaction from epoch {:?} into state at epoch {:?}",
             base, state.now
         );
-        state.stdlib = stdlib;
+        state.stdlib = stdlib
+            .into_iter()
+            .map(|(sys_info, entry)| {
+                let stdlib = entry
+                    .ready
+                    .into_inner()
+                    .expect("committed stdlib entry should be fully computed");
+                (sys_info, stdlib)
+            })
+            .collect();
         state.now = now;
         for (handle, new_module_data) in updated_modules {
             state.modules.insert(
