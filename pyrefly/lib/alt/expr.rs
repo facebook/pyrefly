@@ -16,6 +16,7 @@ use itertools::Itertools;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::dimension::SizeExpr;
@@ -1793,6 +1794,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn sentinel_from_call(
         &self,
         assignment_name: Identifier,
+        nesting_context: NestingContext,
         x: &ExprCall,
         kind: SentinelKind,
         errors: &ErrorCollector,
@@ -1870,7 +1872,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
 
-        Sentinel::new(sentinel_name, self.module().dupe(), kind)
+        Sentinel::new(sentinel_name, nesting_context, self.module().dupe(), kind)
     }
 
     pub fn typevar_from_call(

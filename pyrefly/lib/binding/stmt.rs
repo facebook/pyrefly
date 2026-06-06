@@ -299,6 +299,7 @@ impl<'a> BindingsBuilder<'a> {
         for kw in call.arguments.keywords.iter_mut() {
             self.ensure_expr(&mut kw.value, static_type_usage);
         }
+        let nesting_context = self.scopes.nesting_context();
         // Like legacy type var, Sentinel can only be created with a single Sentinel binding to a
         // single variable (https://peps.python.org/pep-0661/#typing). Thus we bind it in the same
         // way legacy type vars are bound.
@@ -306,6 +307,7 @@ impl<'a> BindingsBuilder<'a> {
             Binding::Sentinel(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
+                nesting_context,
                 Box::new(call.clone()),
                 sentinel_kind,
             )))

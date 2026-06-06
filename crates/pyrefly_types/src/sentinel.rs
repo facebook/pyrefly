@@ -67,11 +67,15 @@ struct SentinelInner {
 }
 
 impl Sentinel {
-    pub fn new(name: Identifier, module: Module, kind: SentinelKind) -> Self {
+    pub fn new(
+        name: Identifier,
+        nesting_context: NestingContext,
+        module: Module,
+        kind: SentinelKind,
+    ) -> Self {
         Self(ArcId::new(SentinelInner {
             kind,
-            // TODO: properly take parent from caller of new()
-            qname: QName::new(name, NestingContext::toplevel(), module),
+            qname: QName::new(name, nesting_context, module),
         }))
     }
 

@@ -2360,6 +2360,7 @@ pub enum Binding {
         Box<(
             Option<Idx<KeyAnnotation>>,
             Identifier,
+            NestingContext,
             Box<ExprCall>,
             SentinelKind,
         )>,
@@ -2407,7 +2408,7 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "TypeVarTuple({}, {name}, {})", ann(a), m.display(call))
             }
             Self::Sentinel(x) => {
-                let (a, name, call, kind) = x.as_ref();
+                let (a, name, _, call, kind) = x.as_ref();
                 write!(
                     f,
                     "{}({}, {name}, {})",

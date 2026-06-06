@@ -249,3 +249,16 @@ else:
     assert_type(x, None)
     "#,
 );
+
+testcase!(
+    test_sentinel_in_class_body_reveal_qualified_name,
+    r#"
+from typing import reveal_type
+from typing_extensions import Sentinel
+
+class Cls:
+    IN_CLASS = Sentinel("IN_CLASS")
+
+reveal_type(Cls.IN_CLASS)  # E: Cls.IN_CLASS
+    "#,
+);
