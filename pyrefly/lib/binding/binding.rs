@@ -24,7 +24,6 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
-use pyrefly_types::sentinel::SentinelKind;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasIndex;
@@ -2362,7 +2361,6 @@ pub enum Binding {
             Identifier,
             NestingContext,
             Box<ExprCall>,
-            SentinelKind,
         )>,
     ),
 }
@@ -2408,14 +2406,8 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, "TypeVarTuple({}, {name}, {})", ann(a), m.display(call))
             }
             Self::Sentinel(x) => {
-                let (a, name, _, call, kind) = x.as_ref();
-                write!(
-                    f,
-                    "{}({}, {name}, {})",
-                    kind.name(),
-                    ann(a),
-                    m.display(call)
-                )
+                let (a, name, _, call) = x.as_ref();
+                write!(f, "sentinel({}, {name}, {})", ann(a), m.display(call))
             }
             Self::ReturnExplicit(x) => {
                 write!(f, "ReturnExplicit({}, ", ann(&x.annot))?;
