@@ -1011,19 +1011,6 @@ The following lints are enabled by this flag:
 | [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
 | [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
 
-### `tensor-shapes`
-
-:::warning
-This feature is experimental and may change without notice.
-:::
-
-Enable tensor shape type inference. Supports both native (`Tensor[N, M]`) and
-jaxtyping (`Float[Tensor, "batch channels"]`) syntax.
-
-- Type: `bool`
-- Default: `false`
-- Flag equivalent: `--tensor-shapes`
-
 ### `spec-compliant-overloads`
 
 :::warning

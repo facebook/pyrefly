@@ -2188,19 +2188,6 @@ The following lints are enabled by this flag:
 | [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
 | [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
 
-### `tensor-shapes`
-
-:::warning
-This feature is experimental and may change without notice.
-:::
-
-Enable tensor shape type inference. Supports both native (`Tensor[N, M]`) and
-jaxtyping (`Float[Tensor, "batch channels"]`) syntax.
-
-- Type: `bool`
-- Default: `false`
-- Flag equivalent: `--tensor-shapes`
-
 ### `spec-compliant-overloads`
 
 :::warning
@@ -7113,20 +7100,19 @@ getting your first shape-annotated code running.
 
 ## Configuration
 
-Tensor shape checking requires two settings in your `pyrefly.toml` (or under
-`[tool.pyrefly]` in `pyproject.toml`):
+Tensor shape checking requires shape-aware stubs to be available through normal
+import resolution. For a local setup, add the fixture stub directory to your
+`pyrefly.toml` (or under `[tool.pyrefly]` in `pyproject.toml`):
 
 ```toml
-tensor-shapes = true
-
 search_path = [
     "path/to/fixtures",
 ]
 ```
 
-**`tensor-shapes = true`** enables shape inference for `Tensor`, including
-subscript syntax (`Tensor[B, C, H, W]`), algebraic dimension arithmetic, and
-shape-aware dispatch for operations like `conv2d`, `view`, and `cat`.
+Tensor shape support is enabled automatically when Pyrefly can resolve the
+`shape_extensions` package. The fixture directory provides `shape_extensions`
+and shape-aware versions of library stubs.
 
 **`search_path`** points to a directory of *fixture stubs* — `.pyi` files that
 provide shape-generic type signatures for PyTorch modules and functions. The
@@ -8092,6 +8078,11 @@ description: An overview of Pyrefly's tensor shape type system for static type c
  */}
 
 # Tensor Shapes
+
+
+:::info
+The support described here will be in the *upcoming* Pyrefly version 1.1.0. Experimental tensor shape support in 1.0.0 was more limited and is not recommended.
+:::
 
 :::warning Experimental
 This feature is experimental. The API and behavior may change in future releases without notice.

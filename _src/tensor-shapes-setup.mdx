@@ -17,20 +17,19 @@ getting your first shape-annotated code running.
 
 ## Configuration
 
-Tensor shape checking requires two settings in your `pyrefly.toml` (or under
-`[tool.pyrefly]` in `pyproject.toml`):
+Tensor shape checking requires shape-aware stubs to be available through normal
+import resolution. For a local setup, add the fixture stub directory to your
+`pyrefly.toml` (or under `[tool.pyrefly]` in `pyproject.toml`):
 
 ```toml
-tensor-shapes = true
-
 search_path = [
     "path/to/fixtures",
 ]
 ```
 
-**`tensor-shapes = true`** enables shape inference for `Tensor`, including
-subscript syntax (`Tensor[B, C, H, W]`), algebraic dimension arithmetic, and
-shape-aware dispatch for operations like `conv2d`, `view`, and `cat`.
+Tensor shape support is enabled automatically when Pyrefly can resolve the
+`shape_extensions` package. The fixture directory provides `shape_extensions`
+and shape-aware versions of library stubs.
 
 **`search_path`** points to a directory of *fixture stubs* — `.pyi` files that
 provide shape-generic type signatures for PyTorch modules and functions. The
