@@ -181,7 +181,17 @@ impl<T: TspInterface> TspConnection<T> {
         let module_path_resolver = |module: &pyrefly_types::module::ModuleType| {
             source_uri.and_then(|uri| self.inner().resolve_module_uri(uri, module))
         };
-        convert_type_with_resolvers(ty, Some(&resolver), Some(&module_path_resolver))
+        let export_resolver = |module: pyrefly_python::module_name::ModuleName,
+                               name: &ruff_python_ast::name::Name| {
+            self.inner()
+                .resolve_export_location(source_uri, module, name)
+        };
+        convert_type_with_resolvers(
+            ty,
+            Some(&resolver),
+            Some(&module_path_resolver),
+            Some(&export_resolver),
+        )
     }
 
     fn send_response(&self, response: Response) {

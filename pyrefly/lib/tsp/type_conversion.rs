@@ -35,16 +35,22 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use lsp_types::Url;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncId;
 use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::callable::Params;
 use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType as PyreflyClassType;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Type as PyreflyType;
+use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use tsp_types::BuiltInType;
 use tsp_types::ClassType as TspClassType;
@@ -60,6 +66,7 @@ use tsp_types::OverloadedType as TspOverloadedType;
 use tsp_types::Position as TspPosition;
 use tsp_types::Range as TspRange;
 use tsp_types::RegularDeclaration;
+use tsp_types::SpecializedFunctionTypes;
 use tsp_types::SynthesizedDeclaration;
 use tsp_types::Type as TspType;
 use tsp_types::TypeFlags;
@@ -88,16 +95,26 @@ pub type FuncRangeResolver<'a> = dyn Fn(&FuncId) -> Option<TextRange> + 'a;
 pub type ModulePathResolver<'a> =
     dyn Fn(&pyrefly_types::module::ModuleType) -> Option<PathBuf> + 'a;
 
+/// Callback that resolves an exported symbol (by defining module and name) to
+/// the `ModulePath` and `lsp_types::Range` of its original definition,
+/// following re-exports. Used to give real source locations to special forms,
+/// `typing` classes, and functions whose `FuncId` lacks a `def_index` (e.g.
+/// imported user functions and special functions like `typing.overload`).
+pub type ExportLocationResolver<'a> =
+    dyn Fn(ModuleName, &Name) -> Option<(ModulePath, lsp_types::Range)> + 'a;
+
 /// Convert a pyrefly `Type` to a TSP protocol `Type` using optional
 /// source-range and module-URI resolvers.
 pub fn convert_type_with_resolvers<'a>(
     ty: &PyreflyType,
     func_range_resolver: Option<&'a FuncRangeResolver<'a>>,
     module_path_resolver: Option<&'a ModulePathResolver<'a>>,
+    export_location_resolver: Option<&'a ExportLocationResolver<'a>>,
 ) -> TspType {
     TypeConverter {
         resolve_func_range: func_range_resolver,
         resolve_module_path: module_path_resolver,
+        resolve_export: export_location_resolver,
     }
     .convert(ty)
 }
@@ -109,13 +126,14 @@ pub fn convert_type_with_resolvers<'a>(
 /// locations are needed.
 #[cfg(test)]
 pub fn convert_type(ty: &PyreflyType) -> TspType {
-    convert_type_with_resolvers(ty, None, None)
+    convert_type_with_resolvers(ty, None, None, None)
 }
 
 /// Holds an optional range resolver and drives recursive type conversion.
 struct TypeConverter<'a> {
     resolve_func_range: Option<&'a FuncRangeResolver<'a>>,
     resolve_module_path: Option<&'a ModulePathResolver<'a>>,
+    resolve_export: Option<&'a ExportLocationResolver<'a>>,
 }
 
 impl TypeConverter<'_> {
@@ -212,8 +230,8 @@ impl TypeConverter<'_> {
                         type_args: None,
                     })
                 } else {
-                    // Anonymous TypedDict — no class backing
-                    builtin("TypedDict")
+                    // Anonymous TypedDict — fall back to the typing.TypedDict class
+                    self.typing_class("TypedDict", TypeFlags::INSTANTIABLE)
                 }
             }
 
@@ -290,12 +308,16 @@ impl TypeConverter<'_> {
             }
 
             // --- Quantified / QuantifiedValue (type params during solving) ---
+            // These are TypeVar-like solver-internal placeholders. Emit them as
+            // TSP TypeVar so consumers don't see them as malformed BuiltIns.
             PyreflyType::Quantified(q) | PyreflyType::QuantifiedValue(q) => {
-                builtin(q.name.as_str())
+                self.convert_quantified(q)
             }
 
-            // --- LiteralString → built-in ---
-            PyreflyType::LiteralString(_) => builtin("LiteralString"),
+            // --- LiteralString → typing.LiteralString class ---
+            PyreflyType::LiteralString(_) => {
+                self.typing_class("LiteralString", TypeFlags::INSTANCE)
+            }
 
             // --- Annotated[X, ...] → unwrap to X ---
             PyreflyType::Annotated(inner, _) => self.convert(inner),
@@ -314,16 +336,25 @@ impl TypeConverter<'_> {
             // --- NNModule → ClassType from class ---
             PyreflyType::NNModule(m) => self.convert_class_type(&m.class, TypeFlags::INSTANCE),
 
-            // --- TypeAlias → unwrap to the aliased type, or builtin for refs ---
+            // --- TypeAlias → unwrap to the aliased type, or typing class for refs ---
             PyreflyType::TypeAlias(ta) | PyreflyType::UntypedAlias(ta) => match ta.as_ref() {
                 pyrefly_types::type_alias::TypeAliasData::Value(alias) => {
                     self.convert(&alias.as_type())
                 }
-                pyrefly_types::type_alias::TypeAliasData::Ref(r) => builtin(r.name.as_str()),
+                pyrefly_types::type_alias::TypeAliasData::Ref(r) => {
+                    self.typing_class(r.name.as_str(), TypeFlags::INSTANTIABLE)
+                }
             },
 
-            // --- SpecialForm → built-in with the form name ---
-            PyreflyType::SpecialForm(sf) => builtin(&sf.to_string()),
+            // --- SpecialForm → typing.<form-name> class ---
+            // The TSP protocol restricts BuiltInType.name to a fixed set of
+            // sentinel names (unknown/any/never/etc.), so emitting forms like
+            // `Literal`/`Final`/`ClassVar` as BuiltIn was off-spec and surfaced
+            // as Unknown on the consumer side. Emit them as ClassType
+            // referencing the typing module instead.
+            PyreflyType::SpecialForm(sf) => {
+                self.typing_class(&sf.to_string(), TypeFlags::INSTANTIABLE)
+            }
 
             // --- Unpack(X) → convert inner ---
             PyreflyType::Unpack(inner) => self.convert(inner),
@@ -334,20 +365,24 @@ impl TypeConverter<'_> {
             // --- Intersect → convert the fallback type ---
             PyreflyType::Intersect(pair) => self.convert(&pair.1),
 
-            // --- ElementOfTypeVarTuple → builtin with name ---
-            PyreflyType::ElementOfTypeVarTuple(q) => builtin(q.name.as_str()),
+            // --- ElementOfTypeVarTuple → TypeVar ---
+            PyreflyType::ElementOfTypeVarTuple(q) => synthesized_typevar(q.name.as_str()),
 
-            // --- ParamSpec-related internal types → builtin with name ---
+            // --- ParamSpec-related internal types → TypeVar ---
             PyreflyType::Args(q)
             | PyreflyType::Kwargs(q)
             | PyreflyType::ArgsValue(q)
-            | PyreflyType::KwargsValue(q) => builtin(q.name.as_str()),
+            | PyreflyType::KwargsValue(q) => synthesized_typevar(q.name.as_str()),
 
-            // --- ParamSpecValue → built-in ---
-            PyreflyType::ParamSpecValue(_) => builtin("ParamSpec"),
+            // --- ParamSpecValue → typing.ParamSpec ---
+            PyreflyType::ParamSpecValue(_) => {
+                self.typing_class("ParamSpec", TypeFlags::INSTANTIABLE)
+            }
 
-            // --- Concatenate → built-in ---
-            PyreflyType::Concatenate(..) => builtin("Concatenate"),
+            // --- Concatenate → typing.Concatenate ---
+            PyreflyType::Concatenate(..) => {
+                self.typing_class("Concatenate", TypeFlags::INSTANTIABLE)
+            }
 
             // --- KwCall → convert the return type ---
             PyreflyType::KwCall(kw) => self.convert(&kw.return_ty),
@@ -356,10 +391,11 @@ impl TypeConverter<'_> {
             PyreflyType::Size(_) | PyreflyType::Dim(_) => builtin("int"),
 
             // --- Solver-internal variable → built-in unknown ---
-            PyreflyType::Var(_) => builtin("Unknown"),
+            // Lowercase 'unknown' is the protocol-conformant sentinel name.
+            PyreflyType::Var(_) => builtin("unknown"),
 
             // --- Materialization is a solver artifact ---
-            PyreflyType::Materialization => builtin("Unknown"),
+            PyreflyType::Materialization => builtin("unknown"),
         }
     }
 
@@ -419,29 +455,8 @@ impl TypeConverter<'_> {
         bound_to_type: Option<Box<TspType>>,
     ) -> TspType {
         let ret = self.convert(&callable.ret);
-        let declaration = if let FunctionKind::Def(func_id) = kind {
-            let module_path = func_id.module.path();
-            let uri = path_to_uri(module_path);
-            let range = self
-                .resolve_func_range
-                .and_then(|resolver| resolver(func_id))
-                .unwrap_or_default();
-            let lsp_range = func_id.module.to_lsp_range(range);
-            Declaration::Regular(RegularDeclaration {
-                category: DeclarationCategory::Function,
-                kind: DeclarationKind::Regular,
-                name: Some(func_id.name.to_string()),
-                node: Node {
-                    range: lsp_range_to_tsp(lsp_range),
-                    uri,
-                },
-            })
-        } else {
-            Declaration::Synthesized(SynthesizedDeclaration {
-                kind: DeclarationKind::Synthesized,
-                uri: String::new(),
-            })
-        };
+        let declaration = self.function_declaration(kind);
+        let specialized_types = self.specialized_types(callable, &ret);
 
         TspType::Function(TspFunctionType {
             bound_to_type,
@@ -450,9 +465,184 @@ impl TypeConverter<'_> {
             id: next_id(),
             kind: TypeKind::Function,
             return_type: Some(Box::new(ret)),
-            specialized_types: None,
+            specialized_types,
             type_alias_info: None,
         })
+    }
+
+    /// Build `SpecializedFunctionTypes` carrying the converted parameter and
+    /// return types.
+    ///
+    /// Pylance rebuilds a function's parameter *names* by parsing the source
+    /// declaration, but it cannot evaluate the parameter/return *types* of an
+    /// external type server's file (its in-process evaluator has not parsed
+    /// the typeshed/workspace those declarations live in), so they degrade to
+    /// `Unknown`. Sending the already-converted types here lets Pylance
+    /// overlay real types onto the source-derived parameter list.
+    fn specialized_types(
+        &self,
+        callable: &Callable,
+        ret: &TspType,
+    ) -> Option<SpecializedFunctionTypes> {
+        let Params::List(params) = &callable.params else {
+            return None;
+        };
+
+        let parameter_types: Vec<TspType> = params
+            .items()
+            .iter()
+            .map(|param| self.convert(param.as_type()))
+            .collect();
+
+        Some(SpecializedFunctionTypes {
+            parameter_default_types: None,
+            parameter_types,
+            return_type: Some(Box::new(ret.clone())),
+        })
+    }
+
+    /// Convert a `Quantified` (solver-internal TypeVar placeholder) to a TSP
+    /// `TypeVar`.
+    ///
+    /// A `Quantified` carries a `QuantifiedIdentity` pinning the source module
+    /// and range where its TypeVar was declared. When the export-location
+    /// resolver can map that `(module, name)` back to a real definition we
+    /// build a `RegularDeclaration` with the true source location, so Pylance
+    /// resolves the declaration and renders the TypeVar's name instead of
+    /// `Unknown`. Otherwise we fall back to a synthesized (locationless)
+    /// declaration.
+    fn convert_quantified(&self, q: &Quantified) -> TspType {
+        if let Some(resolve) = self.resolve_export {
+            let identity = q.identity();
+            if let Some((module_path, lsp_range)) = resolve(identity.module, &q.name) {
+                // A PEP 695 type parameter (`def f[T]()`) is a real type-param
+                // declaration; a legacy `T = TypeVar("T")` resolves to a module-
+                // level *variable* in the consumer. Use the matching category so
+                // Pylance's declaration lookup succeeds.
+                let category = match identity.origin {
+                    QuantifiedOrigin::Pep695 => DeclarationCategory::Typeparam,
+                    _ => DeclarationCategory::Variable,
+                };
+                return TspType::Var(DeclaredType {
+                    declaration: Declaration::Regular(RegularDeclaration {
+                        category,
+                        kind: DeclarationKind::Regular,
+                        name: Some(q.name.to_string()),
+                        node: Node {
+                            range: lsp_range_to_tsp(lsp_range),
+                            uri: path_to_uri(&module_path),
+                        },
+                    }),
+                    flags: TypeFlags::NONE,
+                    id: next_id(),
+                    kind: TypeKind::Typevar,
+                    type_alias_info: None,
+                });
+            }
+        }
+
+        synthesized_typevar(q.name.as_str())
+    }
+
+    /// Build a declaration for a function described by `kind`.
+    ///
+    /// Resolution order:
+    ///  1. A `Def` whose `FuncId` carries a `def_index`: use the binding-table
+    ///     range via `resolve_func_range`.
+    ///  2. Otherwise, resolve the function by `(module, name)` through the
+    ///     export-location resolver. This covers imported user functions whose
+    ///     `FuncId` lacks a `def_index`, and special functions that are not
+    ///     `Def` at all (e.g. `typing.overload`).
+    ///  3. Fall back to a zero range pointing at the defining module (for
+    ///     `Def`), or a synthesized declaration when even the module is unknown.
+    fn function_declaration(&self, kind: &FunctionKind) -> Declaration {
+        if let FunctionKind::Def(func_id) = kind {
+            if let Some(range) = self.resolve_func_range.and_then(|resolve| resolve(func_id)) {
+                let lsp_range = func_id.module.to_lsp_range(range);
+                return Declaration::Regular(RegularDeclaration {
+                    category: DeclarationCategory::Function,
+                    kind: DeclarationKind::Regular,
+                    name: Some(func_id.name.to_string()),
+                    node: Node {
+                        range: lsp_range_to_tsp(lsp_range),
+                        uri: path_to_uri(func_id.module.path()),
+                    },
+                });
+            }
+        }
+
+        let name = kind.function_name();
+        if let Some((module_path, lsp_range)) = self
+            .resolve_export
+            .and_then(|resolve| resolve(kind.module_name(), name.as_ref()))
+        {
+            return Declaration::Regular(RegularDeclaration {
+                category: DeclarationCategory::Function,
+                kind: DeclarationKind::Regular,
+                name: Some(name.to_string()),
+                node: Node {
+                    range: lsp_range_to_tsp(lsp_range),
+                    uri: path_to_uri(&module_path),
+                },
+            });
+        }
+
+        if let FunctionKind::Def(func_id) = kind {
+            return Declaration::Regular(RegularDeclaration {
+                category: DeclarationCategory::Function,
+                kind: DeclarationKind::Regular,
+                name: Some(func_id.name.to_string()),
+                node: Node {
+                    range: zero_range(),
+                    uri: path_to_uri(func_id.module.path()),
+                },
+            });
+        }
+
+        Declaration::Synthesized(SynthesizedDeclaration {
+            kind: DeclarationKind::Synthesized,
+            uri: String::new(),
+        })
+    }
+
+    /// Build a TSP `ClassType` whose declaration points at `typing.<name>`,
+    /// resolving the real definition range from the typeshed when possible.
+    /// Used for `SpecialForm`, anonymous `TypedDict`, `LiteralString`,
+    /// `Concatenate`, `ParamSpec`, and `TypeAlias::Ref` where pyrefly does not
+    /// have an explicit `Class` backing but the consumer needs a typed handle
+    /// it can render and resolve via the typeshed.
+    fn typing_class(&self, name: &str, flags: TypeFlags) -> TspType {
+        TspType::Class(TspClassType {
+            declaration: Declaration::Regular(self.typing_class_declaration(name)),
+            flags,
+            id: next_id(),
+            kind: TypeKind::Class,
+            literal_value: None,
+            type_alias_info: None,
+            type_args: None,
+        })
+    }
+
+    /// Build a class declaration for `typing.<name>`. Resolves the real source
+    /// range via the export-location resolver; falls back to a zero range
+    /// pointing at bundled `typing.pyi` when unavailable.
+    fn typing_class_declaration(&self, name: &str) -> RegularDeclaration {
+        let symbol = Name::new(name);
+        if let Some((module_path, lsp_range)) = self
+            .resolve_export
+            .and_then(|resolve| resolve(ModuleName::typing(), &symbol))
+        {
+            return RegularDeclaration {
+                kind: DeclarationKind::Regular,
+                category: DeclarationCategory::Class,
+                name: Some(name.to_owned()),
+                node: Node {
+                    range: lsp_range_to_tsp(lsp_range),
+                    uri: path_to_uri(&module_path),
+                },
+            };
+        }
+        make_typing_class_declaration(name)
     }
 
     /// Convert a pyrefly `Overload` to a TSP `OverloadedType`.
@@ -576,6 +766,42 @@ fn make_builtin_class_declaration(name: &str) -> RegularDeclaration {
     }
 }
 
+/// Build a declaration for a class in `typing.pyi`.
+fn make_typing_class_declaration(name: &str) -> RegularDeclaration {
+    let module_path =
+        pyrefly_python::module_path::ModulePath::bundled_typeshed(PathBuf::from("typing.pyi"));
+    RegularDeclaration {
+        kind: DeclarationKind::Regular,
+        category: DeclarationCategory::Class,
+        name: Some(name.to_owned()),
+        node: Node {
+            range: zero_range(),
+            uri: path_to_uri(&module_path),
+        },
+    }
+}
+
+/// Build a TSP `TypeVar` with a synthesized declaration. Used for
+/// solver-internal TypeVar-like placeholders (Quantified, Args, Kwargs,
+/// ElementOfTypeVarTuple) where there is no real source location.
+fn synthesized_typevar(name: &str) -> TspType {
+    TspType::Var(DeclaredType {
+        declaration: Declaration::Regular(RegularDeclaration {
+            category: DeclarationCategory::Typeparam,
+            kind: DeclarationKind::Regular,
+            name: Some(name.to_owned()),
+            node: Node {
+                range: zero_range(),
+                uri: String::new(),
+            },
+        }),
+        flags: TypeFlags::NONE,
+        id: next_id(),
+        kind: TypeKind::Typevar,
+        type_alias_info: None,
+    })
+}
+
 /// Build a `DeclaredType` with `TypeKind::Typevar` from a `QName`.
 fn make_typevar_declared(qname: &pyrefly_python::qname::QName) -> DeclaredType {
     let module_path = qname.module_path();
@@ -684,16 +910,46 @@ fn builtin(name: &str) -> TspType {
 #[cfg(test)]
 mod tests {
     use pyrefly_python::module_name::ModuleName;
+    use pyrefly_types::callable::FuncFlags;
+    use pyrefly_types::callable::FuncMetadata;
+    use pyrefly_types::callable::Function;
+    use pyrefly_types::callable::Param;
+    use pyrefly_types::callable::ParamList;
+    use pyrefly_types::callable::Required;
     use pyrefly_types::lit_int::LitInt;
     use pyrefly_types::literal::Lit;
+    use pyrefly_types::literal::LitStyle;
     use pyrefly_types::module::ModuleType;
+    use pyrefly_types::quantified::AnchorIndex;
+    use pyrefly_types::quantified::QuantifiedIdentity;
+    use pyrefly_types::special_form::SpecialForm;
+    use pyrefly_types::type_var::PreInferenceVariance;
+    use pyrefly_types::type_var::Restriction;
     use pyrefly_types::types::AnyStyle;
     use pyrefly_types::types::NeverStyle;
     use pyrefly_types::types::Type as PyreflyType;
+    use pyrefly_types::types::Var;
     use tsp_types::SynthesizedType;
     use tsp_types::SynthesizedTypeMetadata;
 
     use super::*;
+
+    /// Build a `Quantified` (solver-internal TypeVar placeholder) anchored at
+    /// `module` with the given `origin`. Used by the conversion tests.
+    fn make_quantified(name: &str, module: &str, origin: QuantifiedOrigin) -> Quantified {
+        let identity = QuantifiedIdentity::new(
+            ModuleName::from_str(module),
+            AnchorIndex::first(TextRange::default()),
+            origin,
+        );
+        Quantified::type_var(
+            Name::new(name),
+            identity,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        )
+    }
 
     /// Build a TSP `SynthesizedType` whose stub content is the type's display
     /// string. Used only in tests.
@@ -1021,7 +1277,7 @@ mod tests {
                 None
             }
         };
-        let tsp = convert_type_with_resolvers(&ty, None, Some(&module_path_resolver));
+        let tsp = convert_type_with_resolvers(&ty, None, Some(&module_path_resolver), None);
         match tsp {
             TspType::Module(m) => {
                 assert_eq!(m.module_name, "pkg");
@@ -1048,6 +1304,332 @@ mod tests {
                 );
             }
             other => panic!("expected Class type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_special_form_emits_typing_class() {
+        // SpecialForm must map to a typing.<name> ClassType, not a BuiltIn:
+        // the TSP BuiltInType.name is restricted to a fixed sentinel set.
+        let ty = PyreflyType::SpecialForm(SpecialForm::Literal);
+        match convert_type(&ty) {
+            TspType::Class(c) => {
+                assert_eq!(c.kind, TypeKind::Class);
+                assert!(c.flags.contains(TypeFlags::INSTANTIABLE));
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("Literal"));
+                assert_eq!(decl.category, DeclarationCategory::Class);
+                assert!(
+                    decl.node.uri.contains("typing.pyi"),
+                    "expected typing URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_special_form_uses_export_resolver_location() {
+        // When an export resolver is available, the typing class declaration
+        // should carry the resolved source location instead of a zero range.
+        let ty = PyreflyType::SpecialForm(SpecialForm::Final);
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 99,
+                character: 0,
+            },
+            end: lsp_types::Position {
+                line: 99,
+                character: 5,
+            },
+        };
+        let resolver = |module: ModuleName, name: &Name| {
+            assert_eq!(module, ModuleName::typing());
+            assert_eq!(name.as_str(), "Final");
+            Some((
+                ModulePath::filesystem(PathBuf::from("/typeshed/typing.pyi")),
+                range,
+            ))
+        };
+        match convert_type_with_resolvers(&ty, None, None, Some(&resolver)) {
+            TspType::Class(c) => {
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.node.range.start.line, 99);
+                assert!(
+                    decl.node.uri.contains("typing.pyi"),
+                    "expected typing URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_literal_string_emits_typing_class() {
+        let ty = PyreflyType::LiteralString(LitStyle::Implicit);
+        match convert_type(&ty) {
+            TspType::Class(c) => {
+                assert!(c.flags.contains(TypeFlags::INSTANCE));
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("LiteralString"));
+                assert!(
+                    decl.node.uri.contains("typing.pyi"),
+                    "expected typing URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_param_spec_value_emits_typing_param_spec_class() {
+        let ty = PyreflyType::ParamSpecValue(ParamList::new(vec![]));
+        match convert_type(&ty) {
+            TspType::Class(c) => {
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("ParamSpec"));
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_concatenate_emits_typing_class() {
+        let ty =
+            PyreflyType::Concatenate(Vec::new().into_boxed_slice(), Box::new(PyreflyType::None));
+        match convert_type(&ty) {
+            TspType::Class(c) => {
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("Concatenate"));
+            }
+            other => panic!("expected Class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_var_is_lowercase_unknown() {
+        // The protocol-conformant sentinel name is lowercase `unknown`.
+        match convert_type(&PyreflyType::Var(Var::ZERO)) {
+            TspType::BuiltInType(b) => assert_eq!(b.name, "unknown"),
+            other => panic!("expected BuiltInType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_materialization_is_lowercase_unknown() {
+        match convert_type(&PyreflyType::Materialization) {
+            TspType::BuiltInType(b) => assert_eq!(b.name, "unknown"),
+            other => panic!("expected BuiltInType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_quantified_without_resolver_is_synthesized_typevar() {
+        // No export resolver → a locationless synthesized TypeVar.
+        let ty = PyreflyType::Quantified(Box::new(make_quantified(
+            "T",
+            "mod",
+            QuantifiedOrigin::Pep695,
+        )));
+        match convert_type(&ty) {
+            TspType::Var(v) => {
+                assert_eq!(v.kind, TypeKind::Typevar);
+                let Declaration::Regular(decl) = v.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("T"));
+                assert_eq!(decl.category, DeclarationCategory::Typeparam);
+                assert_eq!(decl.node.uri, "");
+            }
+            other => panic!("expected Var, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_pep695_quantified_with_resolver_uses_source_location() {
+        // A PEP 695 type parameter resolves to a Typeparam declaration at the
+        // resolved source location.
+        let ty = PyreflyType::Quantified(Box::new(make_quantified(
+            "T",
+            "mymod",
+            QuantifiedOrigin::Pep695,
+        )));
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 3,
+                character: 6,
+            },
+            end: lsp_types::Position {
+                line: 3,
+                character: 7,
+            },
+        };
+        let resolver = |module: ModuleName, name: &Name| {
+            assert_eq!(module, ModuleName::from_str("mymod"));
+            assert_eq!(name.as_str(), "T");
+            Some((
+                ModulePath::filesystem(PathBuf::from("/repo/mymod.py")),
+                range,
+            ))
+        };
+        match convert_type_with_resolvers(&ty, None, None, Some(&resolver)) {
+            TspType::Var(v) => {
+                let Declaration::Regular(decl) = v.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.category, DeclarationCategory::Typeparam);
+                assert_eq!(decl.node.range.start.line, 3);
+                assert!(
+                    decl.node.uri.contains("mymod.py"),
+                    "expected resolved URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Var, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_legacy_quantified_with_resolver_is_variable_category() {
+        // A legacy `T = TypeVar("T")` resolves to a module-level *variable*.
+        let ty = PyreflyType::Quantified(Box::new(make_quantified(
+            "T",
+            "mymod",
+            QuantifiedOrigin::ScopedLegacy,
+        )));
+        let resolver = |_module: ModuleName, _name: &Name| {
+            Some((
+                ModulePath::filesystem(PathBuf::from("/repo/mymod.py")),
+                lsp_types::Range::default(),
+            ))
+        };
+        match convert_type_with_resolvers(&ty, None, None, Some(&resolver)) {
+            TspType::Var(v) => {
+                let Declaration::Regular(decl) = v.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.category, DeclarationCategory::Variable);
+            }
+            other => panic!("expected Var, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_args_is_synthesized_typevar() {
+        // ParamSpec-related internal placeholders become synthesized TypeVars.
+        let ty = PyreflyType::Args(Box::new(make_quantified(
+            "P",
+            "m",
+            QuantifiedOrigin::ScopedLegacy,
+        )));
+        match convert_type(&ty) {
+            TspType::Var(v) => {
+                assert_eq!(v.kind, TypeKind::Typevar);
+                let Declaration::Regular(decl) = v.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("P"));
+                assert_eq!(decl.category, DeclarationCategory::Typeparam);
+            }
+            other => panic!("expected Var, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_function_populates_specialized_types() {
+        // A function's parameter and return types are carried in
+        // specialized_types so Pylance can overlay real types.
+        let callable = Callable::list(
+            ParamList::new(vec![
+                Param::Pos(Name::new_static("x"), PyreflyType::None, Required::Required),
+                Param::Pos(
+                    Name::new_static("y"),
+                    PyreflyType::Ellipsis,
+                    Required::Required,
+                ),
+            ]),
+            PyreflyType::None,
+        );
+        let func = Function {
+            signature: callable,
+            metadata: FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            },
+        };
+        let ty = PyreflyType::Function(Box::new(func));
+        match convert_type(&ty) {
+            TspType::Function(f) => {
+                let specialized = f.specialized_types.expect("expected specialized_types");
+                assert_eq!(specialized.parameter_types.len(), 2);
+                match &specialized.parameter_types[0] {
+                    TspType::BuiltInType(b) => assert_eq!(b.name, "none"),
+                    other => panic!("expected BuiltInType, got {other:?}"),
+                }
+                match &specialized.parameter_types[1] {
+                    TspType::BuiltInType(b) => assert_eq!(b.name, "ellipsis"),
+                    other => panic!("expected BuiltInType, got {other:?}"),
+                }
+                assert!(specialized.return_type.is_some());
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_function_declaration_resolves_special_function_via_export() {
+        // `typing.overload` is FunctionKind::Overload (not a Def). The export
+        // resolver should give it a real declaration location.
+        let callable = Callable::list(ParamList::new(vec![]), PyreflyType::None);
+        let func = Function {
+            signature: callable,
+            metadata: FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            },
+        };
+        let ty = PyreflyType::Function(Box::new(func));
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 12,
+                character: 4,
+            },
+            end: lsp_types::Position {
+                line: 12,
+                character: 12,
+            },
+        };
+        let resolver = |module: ModuleName, name: &Name| {
+            assert_eq!(module, ModuleName::typing());
+            assert_eq!(name.as_str(), "overload");
+            Some((
+                ModulePath::filesystem(PathBuf::from("/typeshed/typing.pyi")),
+                range,
+            ))
+        };
+        match convert_type_with_resolvers(&ty, None, None, Some(&resolver)) {
+            TspType::Function(f) => {
+                let Declaration::Regular(decl) = f.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("overload"));
+                assert_eq!(decl.category, DeclarationCategory::Function);
+                assert_eq!(decl.node.range.start.line, 12);
+            }
+            other => panic!("expected Function, got {other:?}"),
         }
     }
 }

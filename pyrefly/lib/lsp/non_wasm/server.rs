@@ -238,6 +238,7 @@ use pyrefly_util::telemetry::TelemetryServerState;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::watch_pattern::WatchPattern;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -487,6 +488,20 @@ pub trait TspInterface: Send + Sync + 'static {
         source_uri: &str,
         module: &pyrefly_types::module::ModuleType,
     ) -> Option<PathBuf>;
+
+    /// Resolve an exported symbol (by defining module and name) to the
+    /// [`ModulePath`] and [`lsp_types::Range`] of its original definition,
+    /// following re-exports, using the import-resolution context of
+    /// `source_uri`.
+    ///
+    /// Returns `None` when the source URI is invalid, the target module
+    /// cannot be resolved, or the symbol is not exported by it.
+    fn resolve_export_location(
+        &self,
+        source_uri: Option<&str>,
+        module_name: ModuleName,
+        name: &Name,
+    ) -> Option<(ModulePath, lsp_types::Range)>;
 
     /// Resolve a URI to a filesystem path.
     ///
@@ -6413,6 +6428,37 @@ impl TspInterface for Server {
 
         let path = to_real_path(finding.path())?;
         Some(path.canonicalize().unwrap_or(path))
+    }
+
+    fn resolve_export_location(
+        &self,
+        source_uri: Option<&str>,
+        module_name: ModuleName,
+        name: &Name,
+    ) -> Option<(ModulePath, lsp_types::Range)> {
+        let source_uri = source_uri?;
+        let url = Url::parse(source_uri)
+            .ok()
+            .or_else(|| Url::from_file_path(source_uri).ok())?;
+        let source_path = self.path_for_uri_or_notebook_cell(&url)?;
+
+        let source_handle = make_open_handle(&self.state, &source_path);
+        let mut transaction = self.state.transaction();
+        let target_handle = transaction
+            .import_handle(&source_handle, module_name, None)
+            .finding()
+            .map(|finding| handle_from_module_path(&self.state, finding.path().dupe()))?;
+
+        // `lookup_export_location` demands the target module's exports, which in turn
+        // requires the `Stdlib` for the target's `SysInfo` to be present. A bare
+        // transaction inherits stdlib from the last committed run, which may be empty
+        // (e.g. when serving TSP queries against modules not yet committed). Run the
+        // target handle for `Require::Exports` first so `compute_stdlib` populates the
+        // stdlib map before the lookup demands it.
+        transaction.run(&[target_handle.dupe()], Require::Exports, None);
+
+        let (module, range) = transaction.lookup_export_location(&target_handle, name)?;
+        Some((module.path().dupe(), module.to_lsp_range(range)))
     }
 
     fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {
