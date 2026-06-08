@@ -28,12 +28,11 @@ impl<T: TspInterface> TspConnection<T> {
         self.validate_snapshot(params.snapshot)?;
         // Validate the URI is parseable (rejects malformed strings).
         // Any valid scheme is accepted — notebook cell URIs are resolved
-        // to notebook paths inside get_type_at_position.
+        // to notebook paths inside type_at_position.
         parse_uri(params.uri())?;
         let position = params.position();
-        let ty = self
+        Ok(self
             .inner()
-            .get_type_at_position(params.uri(), position.line, position.character);
-        Ok(ty.map(|t| self.convert_type(&t, Some(params.uri()))))
+            .type_at_position(params.uri(), position.line, position.character))
     }
 }
