@@ -758,6 +758,39 @@ p = Point(1, 2)  # should succeed — z defaults to 0
 );
 
 testcase!(
+    test_typing_namedtuple_adjacent_defaults_with_non_trivial_expressions,
+    r#"
+from typing import NamedTuple, assert_type
+
+A = NamedTuple('A', [('x', int)])
+B = NamedTuple('B', [('a', A)])
+B.__new__.__defaults__ = (A(1),)
+b = B()  # should succeed
+assert_type(b.a, A)
+
+D = NamedTuple('D', [('a', A)])
+D.__new__.__defaults__ = (C(),)  # E: Could not find name `C`
+"#,
+);
+
+testcase!(
+    test_collections_namedtuple_adjacent_defaults_with_non_trivial_expressions,
+    r#"
+import collections
+from typing import assert_type, Any
+
+A = collections.namedtuple('A', ['x'])
+B = collections.namedtuple('B', ['a'])
+B.__new__.__defaults__ = (A(1),)
+b = B()  # should succeed
+assert_type(b.a, Any)
+
+D = collections.namedtuple('D', ['a'])
+D.__new__.__defaults__ = (C(),)  # E: Could not find name `C`
+"#,
+);
+
+testcase!(
     test_namedtuple_adjacent_defaults_multiple,
     r#"
 from collections import namedtuple

@@ -1373,7 +1373,7 @@ impl<'a> BindingsBuilder<'a> {
         members: &mut [Expr],
         keywords: &mut [Keyword],
         bind_to_name: bool,
-        adjacent_defaults: Option<Vec<Expr>>,
+        mut adjacent_defaults: Option<Vec<Expr>>,
     ) -> Idx<KeyClass> {
         let (mut class_object, class_indices) = if bind_to_name {
             self.class_object_and_indices(&class_name)
@@ -1427,7 +1427,10 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
         }
-        if let Some(ref default_elts) = adjacent_defaults {
+        if let Some(ref mut default_elts) = adjacent_defaults {
+            for elt in default_elts.iter_mut() {
+                self.ensure_expr(elt, class_object.usage());
+            }
             apply_adjacent_defaults(default_elts, n_members, &mut defaults);
         }
         let member_definitions_with_defaults: Vec<(
@@ -1472,7 +1475,7 @@ impl<'a> BindingsBuilder<'a> {
         func: &mut Expr,
         members: &[Expr],
         bind_to_name: bool,
-        adjacent_defaults: Option<Vec<Expr>>,
+        mut adjacent_defaults: Option<Vec<Expr>>,
     ) -> Idx<KeyClass> {
         let (mut class_object, class_indices) = if bind_to_name {
             self.class_object_and_indices(&class_name)
@@ -1484,7 +1487,10 @@ impl<'a> BindingsBuilder<'a> {
             self.parse_typing_namedtuple_fields(members, class_name.range);
         let n_members = parsed_fields.len();
         let mut defaults: Vec<Option<Expr>> = vec![None; n_members];
-        if let Some(ref default_elts) = adjacent_defaults {
+        if let Some(ref mut default_elts) = adjacent_defaults {
+            for elt in default_elts.iter_mut() {
+                self.ensure_expr(elt, class_object.usage());
+            }
             apply_adjacent_defaults(default_elts, n_members, &mut defaults);
         }
         let member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)> =
