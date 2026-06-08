@@ -12,8 +12,6 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::path::Component;
-use std::path::MAIN_SEPARATOR;
-use std::path::MAIN_SEPARATOR_STR;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -63,6 +61,7 @@ static IGNORE_FILES_SEARCH: LazyLock<Vec<UpwardSearch<Arc<(PathBuf, PathBuf)>>>>
 #[derive(Clone, Eq, Default)]
 
 /// A glob pattern for matching files.
+/// Patterns must use `/` as the path separator for cross-platform consistency.
 ///
 /// Only matches Python files (.py, .pyi, .pyw) and automatically excludes:
 /// - Files that don't have .py, .pyi, or .pyw extensions
@@ -71,11 +70,12 @@ pub struct Glob(Pattern);
 
 impl Glob {
     /// Create a new `Glob`, but do not do absolutizing (since we don't want to do
-    /// that until rewriting with a root)
+    /// that until rewriting with a root).
+    /// Patterns must use `/` as the path separator for cross-platform consistency.
     pub fn new(mut pattern: String) -> anyhow::Result<Self> {
         if pattern.ends_with("**") {
-            pattern.push_str(&format!("{MAIN_SEPARATOR_STR}*"));
-        } else if pattern.ends_with("**/") || pattern.ends_with(r"**\") {
+            pattern.push_str("/*");
+        } else if pattern.ends_with("**/") {
             pattern.push('*');
         }
         Ok(Self(Pattern::new(&pattern).with_context(|| {
@@ -253,8 +253,8 @@ impl Glob {
         // around the glob library we're using, where the end MUST be a wildcard
         let pattern_path = &self.0;
         let mut pattern_str = pattern_path.as_str().to_owned();
-        if !pattern_str.ends_with(['/', '\\']) {
-            pattern_str.push(MAIN_SEPARATOR);
+        if !pattern_str.ends_with('/') {
+            pattern_str.push('/');
         }
         pattern_str.push_str("**");
 
@@ -870,22 +870,6 @@ mod tests {
         f("a/b/*.txt", "a/b");
         f("/**", "/");
         f("/absolute/path/**/files", "/absolute/path");
-
-        if cfg!(windows) {
-            // These all use the \ separator, which only works on Windows.
-            f(r"C:\\windows\project\**\files", r"C:\\windows\project");
-            f(r"c:\windows\project\**\files", r"c:\windows\project");
-            f(r"\windows\project\**\files", r"\windows\project");
-            f(r"c:project\**\files", "c:project");
-            f(r"project\**\files", "project");
-            f(r"**\files", "");
-            f("pattern", "pattern");
-            f("pattern.txt", "");
-            f(r"a\b", r"a\b");
-            f(r"a\b\c.txt", r"a\b");
-            f(r"a\b*\c", "a");
-            f(r"a\b\*.txt", r"a\b");
-        }
     }
 
     #[test]
@@ -909,7 +893,7 @@ mod tests {
 
     #[test]
     fn test_globs_relative_to_root() {
-        let mut inputs: Vec<&str> = vec![
+        let inputs: Vec<&str> = vec![
             "project/**/files",
             "**/files",
             "pattern",
@@ -922,25 +906,13 @@ mod tests {
             "/**/",
             "/absolute/path/**/files",
         ];
-        if cfg!(windows) {
-            inputs.extend([r"c:\absolute\path\**", r"c:relative\path\**"]);
-        }
         let inputs: Vec<String> = inputs.into_iter().map(String::from).collect();
 
-        let f = |root: &str, expected: Vec<&str>, windows_extras: Vec<&str>| {
-            let mut expected: Vec<PathBuf> = expected.into_iter().map(PathBuf::from).collect();
+        let f = |root: &str, expected: Vec<&str>| {
+            let expected: Vec<PathBuf> = expected.into_iter().map(PathBuf::from).collect();
             let inputs = inputs.clone();
             let root = root.to_owned();
 
-            // windows has drives, so add tests for that when applicable
-            if cfg!(windows) {
-                expected.extend(
-                    windows_extras
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect::<Vec<PathBuf>>(),
-                );
-            }
             let globs: Vec<PathBuf> = Globs::new_with_root(Path::new(&root), inputs)
                 .unwrap()
                 .0
@@ -965,53 +937,7 @@ mod tests {
                 "/**/*",
                 "/absolute/path/**/files",
             ],
-            vec![
-                r"c:\absolute\path\**\*",
-                r"c:\my\path\to\relative\path\**\*",
-            ],
         );
-        if cfg!(windows) {
-            f(
-                r"c:\my\path\to",
-                vec![
-                    r"c:\my\path\to\project\**\files",
-                    r"c:\my\path\to\**\files",
-                    r"c:\my\path\to\pattern",
-                    r"c:\my\path\to\pattern.txt",
-                    r"c:\my\path\to\a\b",
-                    r"c:\my\path\to\a\b\c.txt",
-                    r"c:\my\path\to\a\b*\c",
-                    r"c:\my\path\to\a\b\*.txt",
-                    r"c:\**\*",
-                    r"c:\**\*",
-                    r"c:\absolute\path\**\files",
-                ],
-                vec![
-                    r"c:\absolute\path\**\*",
-                    r"c:\my\path\to\relative\path\**\*",
-                ],
-            );
-            f(
-                r"d:\my\path\to",
-                vec![
-                    r"d:\my\path\to\project\**\files",
-                    r"d:\my\path\to\**\files",
-                    r"d:\my\path\to\pattern",
-                    r"d:\my\path\to\pattern.txt",
-                    r"d:\my\path\to\a\b",
-                    r"d:\my\path\to\a\b\c.txt",
-                    r"d:\my\path\to\a\b*\c",
-                    r"d:\my\path\to\a\b\*.txt",
-                    r"d:\**\*",
-                    r"d:\**\*",
-                    r"d:\absolute\path\**\files",
-                ],
-                vec![
-                    r"c:\absolute\path\**\*",
-                    r"c:\my\path\to\relative\path\**\*",
-                ],
-            );
-        }
     }
 
     #[test]

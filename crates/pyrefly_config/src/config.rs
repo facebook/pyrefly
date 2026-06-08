@@ -1629,7 +1629,6 @@ pub fn validate_path(path: &Path) -> anyhow::Result<()> {
 mod tests {
     use std::collections::HashMap;
     use std::fs;
-    use std::path;
 
     use pretty_assertions::assert_eq;
     use pyrefly_util::test_path::TestPath;
@@ -1976,9 +1975,6 @@ mod tests {
 
     #[test]
     fn test_rewrite_with_path_to_config() {
-        fn with_sep(s: &str) -> String {
-            s.replace("/", path::MAIN_SEPARATOR_STR)
-        }
         let typeshed = "path/to/typeshed";
         let mut python_environment = PythonEnvironment {
             site_package_path: Some(vec![PathBuf::from("venv/lib/python1.2.3/site-packages")]),
@@ -2025,8 +2021,7 @@ mod tests {
         };
 
         let current_dir = std::env::current_dir().unwrap();
-        let path_str = with_sep("path/to/my/config");
-        let test_path = current_dir.join(&path_str);
+        let test_path = current_dir.join("path/to/my/config");
 
         let project_includes_vec = vec![
             test_path.join("path1/**").to_string_lossy().into_owned(),
