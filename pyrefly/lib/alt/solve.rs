@@ -2370,15 +2370,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BindingExpect::UninitializedCheck {
                 name,
                 range,
-                termination_keys,
+                missing_branches,
             } => {
-                // Check if all branches that appeared uninitialized at binding time
-                // actually terminate due to Never/NoReturn. If any don't terminate,
-                // the variable may be uninitialized at this use.
-                let all_terminate = termination_keys
-                    .iter()
-                    .all(|key| self.get_idx(*key).ty().is_never());
-                if !all_terminate {
+                // The variable is initialized iff every branch that appeared
+                // uninitialized at binding time is statically dead: its tail
+                // terminates (Never/NoReturn) or its entry narrowing is vacuous
+                // (subject narrowed to `Never` via an identity-vs-`None` test).
+                let all_dead = missing_branches.iter().all(|branch| {
+                    branch
+                        .termination_key
+                        .is_some_and(|key| self.get_idx(key).ty().is_never())
+                        || self.any_narrow_is_never(&branch.dead_keys)
+                });
+                if !all_dead {
                     errors
                         .error_builder(
                             *range,
@@ -4362,6 +4366,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Helper functions for binding_to_type_info
     // -------------------------------------------------------------------------
 
+    /// A branch guarded by these narrow idxs is statically unreachable iff any of
+    /// them is an identity-against-`None` narrow (`is None` / `is not None`) whose
+    /// narrowed subject solves to `Never` (e.g. `int & None`).
+    ///
+    /// Restricted to identity-vs-`None`: an equality narrow (`== "x"`) can also
+    /// produce `Never` (negating `== "x"` on `Literal["x"]`), but its branch must
+    /// stay live, so pruning it would be wrong. Recording fewer dead keys only ever
+    /// under-prunes, which is always safe.
+    pub(crate) fn any_narrow_is_never(&self, narrows: &[Idx<Key>]) -> bool {
+        narrows.iter().any(|idx| {
+            matches!(
+                self.bindings().get(*idx),
+                Binding::Narrow(_, op, _) if op.tests_identity_none(),
+            ) && self.get_idx(*idx).ty().is_never()
+        })
+    }
+
     /// Handle `Binding::Phi` in binding_to_type_info - join multiple branches.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
@@ -4376,11 +4397,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let type_infos: Vec<_> = branches
                 .iter()
                 .filter_map(|branch| {
-                    // Filter branches based on type-based termination (Never/NoReturn)
+                    // Drop a branch that is statically dead. We force the branch value
+                    // first (as the un-pruned path always did) to preserve the solve
+                    // order this deep Phi chain relies on, then test for deadness:
+                    // type-based termination (Never/NoReturn tail) or a vacuous entry
+                    // narrowing (subject narrowed to `Never` via identity-vs-`None`).
                     let t = self.get_idx(branch.value_key);
-                    if let Some(term_key) = branch.termination_key
-                        && self.get_idx(term_key).ty().is_never()
-                    {
+                    let terminates = branch
+                        .termination_key
+                        .is_some_and(|term_key| self.get_idx(term_key).ty().is_never());
+                    if terminates || self.any_narrow_is_never(&branch.dead_if_any_never) {
                         None
                     } else {
                         Some(t)
@@ -5290,6 +5316,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Binding::None => self.heap.mk_none(),
+            // Read raw by the ternary reachability check, never as a value type;
+            // every binding must still solve, so return a placeholder.
+            Binding::ConditionalReachability(_) => self.heap.mk_none(),
             Binding::Any(style) => self.heap.mk_any(*style),
             Binding::Global(global) => global.as_type(self.stdlib, self.heap),
             Binding::TypeParameter(tp) => {

@@ -61,6 +61,7 @@ use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
+use crate::binding::binding::MissingBranch;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::BindingsBuilder;
@@ -504,6 +505,12 @@ pub struct Flow {
     /// The key for the last `Binding::StmtExpr` in this flow, if any.
     /// Used to check for type-based termination (NoReturn/Never) at solve time.
     last_stmt_expr: Option<Idx<Key>>,
+    /// `Key::Narrow` idxs recorded for this branch's entry narrowing (the negation
+    /// of prior branches' tests, plus this branch's own test). The branch is
+    /// statically dead if any of these is an identity-vs-`None` narrow that solves
+    /// to `Never` (checked at solve time via `any_narrow_is_never`). Used to prune
+    /// dead `if`/`elif`/`else` branches from the Phi and from uninit accounting.
+    dead_keys: Vec<Idx<Key>>,
 }
 
 impl Flow {
@@ -670,8 +677,8 @@ impl FlowInfo {
     fn initialized(&self) -> InitializedInFlow {
         self.value()
             .map_or(InitializedInFlow::Yes, |v| match &v.style {
-                FlowStyle::MaybeInitialized(termination_keys) => {
-                    InitializedInFlow::DeferredCheck(termination_keys.clone())
+                FlowStyle::MaybeInitialized(missing_branches) => {
+                    InitializedInFlow::DeferredCheck(missing_branches.clone())
                 }
                 FlowStyle::Uninitialized
                 | FlowStyle::ClassField {
@@ -731,11 +738,12 @@ pub enum FlowStyle {
     ClassDef { class_idx: Idx<Key>, pristine: bool },
     /// The name is possibly uninitialized (perhaps due to merging branches)
     PossiblyUninitialized,
-    /// The name may or may not be initialized depending on whether certain branches
-    /// terminate (have `Never` type). The termination keys are checked at solve time;
-    /// if all of them have `Never` type, the name is considered initialized.
-    /// This is used when some branches don't define a variable but end with a NoReturn call.
-    MaybeInitialized(Vec<Idx<Key>>),
+    /// The name may or may not be initialized depending on whether the branches that
+    /// don't define it are statically dead. The branches are checked at solve time;
+    /// if all are dead (terminating tail or vacuous narrowing), the name is considered
+    /// initialized. Used when some branches don't define a variable but end with a
+    /// NoReturn call or have a vacuous entry narrowing.
+    MaybeInitialized(Vec<MissingBranch>),
     /// The name was in an annotated declaration like `x: int` but not initialized
     Uninitialized,
     /// I'm a speculative binding for a name that was narrowed but not assigned above
@@ -778,11 +786,11 @@ impl FlowStyle {
                         _ => return FlowStyle::PossiblyUninitialized,
                     }
                 }
-                // Two MaybeInitialized: combine termination keys from both branches.
-                // Each branch independently needs its keys to be Never for that path
-                // to be initialized, so we collect all keys.
-                (FlowStyle::MaybeInitialized(keys), FlowStyle::MaybeInitialized(other_keys)) => {
-                    keys.extend(other_keys);
+                // Two MaybeInitialized: combine the missing branches from both sides.
+                // Every missing branch must be statically dead for the merged path to
+                // be initialized, so we collect all of them.
+                (FlowStyle::MaybeInitialized(branches), FlowStyle::MaybeInitialized(other)) => {
+                    branches.extend(other);
                 }
                 // Class-bearing styles stay sticky only when their canonical
                 // class identity matches. The `pristine` bit AND-merges: if
@@ -802,13 +810,13 @@ impl FlowStyle {
                 ) if *l_idx == r_idx => {
                     *l_pristine = *l_pristine && r_pristine;
                 }
-                // MaybeInitialized + a fully initialized style: keep the MaybeInitialized
-                // keys since those paths still need verification at solve time.
-                (FlowStyle::MaybeInitialized(keys), _) => {
-                    merged = FlowStyle::MaybeInitialized(keys.clone());
+                // MaybeInitialized + a fully initialized style: keep the missing
+                // branches since those paths still need verification at solve time.
+                (FlowStyle::MaybeInitialized(branches), _) => {
+                    merged = FlowStyle::MaybeInitialized(branches.clone());
                 }
-                (_, FlowStyle::MaybeInitialized(keys)) => {
-                    merged = FlowStyle::MaybeInitialized(keys);
+                (_, FlowStyle::MaybeInitialized(branches)) => {
+                    merged = FlowStyle::MaybeInitialized(branches);
                 }
                 // Unclear how to merge, default to None
                 _ => {
@@ -2490,6 +2498,16 @@ impl Scopes {
         self.current_mut().flow.last_stmt_expr = key;
     }
 
+    /// Record identity-vs-`None` `Key::Narrow` idxs from a branch's entry narrowing
+    /// so that, at solve time, the branch can be pruned if any of them narrows its
+    /// subject to `Never`. The caller must have already filtered to identity-vs-`None`
+    /// narrows (see `BindingsBuilder::record_dead_narrow_keys`); recording unrelated
+    /// narrows (e.g. truthiness on `cond`) would wrongly inflate the deferrable-branch
+    /// count used for uninitialized-variable accounting.
+    pub fn record_dead_keys(&mut self, keys: impl IntoIterator<Item = Idx<Key>>) {
+        self.current_mut().flow.dead_keys.extend(keys);
+    }
+
     /// Whenever we enter the scope of a method *and* we see a matching
     /// parameter, we record the name of it so that we can detect `self` assignments
     /// that might define class fields.
@@ -3146,17 +3164,18 @@ impl MergeStyle {
 /// The result of analyzing whether a variable is defined after merging branches.
 /// This enum captures the three distinct states:
 /// - `Defined`: Variable is defined in all non-terminating branches
-/// - `DeferredCheck`: Some branches don't define the variable, but they may terminate
-///   (have `Never` type). The check is deferred to solve time.
-/// - `NotDefined`: Variable is not defined in some branches that may not terminate
+/// - `DeferredCheck`: Some branches don't define the variable, but they may be
+///   statically dead (terminate, or have a vacuous entry narrowing). The check is
+///   deferred to solve time.
+/// - `NotDefined`: Variable is not defined in some branches that may be reached
 enum DefinitionStatus {
     /// Variable is defined in all non-terminating branches.
     Defined,
-    /// Variable may be defined if branches with these keys terminate (have `Never` type).
-    /// The keys are checked at solve time; if all have `Never` type, the variable is
+    /// Variable may be defined if every missing branch is statically dead. The
+    /// branches are checked at solve time; if all are dead, the variable is
     /// considered initialized.
-    DeferredCheck(Vec<Idx<Key>>),
-    /// Variable is not defined in some branches that may not terminate.
+    DeferredCheck(Vec<MissingBranch>),
+    /// Variable is not defined in some branches that may be reached.
     NotDefined,
 }
 
@@ -3171,22 +3190,35 @@ fn determine_definition_status(
     n_branches: usize,
     n_missing_branches: usize,
     n_branches_with_termination_key: usize,
-    missing_branch_termination_keys: Vec<Idx<Key>>,
+    missing_branches: Vec<MissingBranch>,
 ) -> DefinitionStatus {
+    // Defer the uninitialized check to solve time when either disjunct holds:
+    //  - EVERY missing branch carries a deadness signal (terminating tail or vacuous
+    //    narrowing); `missing_branches` records exactly those, so a dead `if`/`else`
+    //    branch no longer makes the variable look possibly-uninitialized; or
+    //  - there are at least as many branches with a termination key as missing
+    //    branches — the pre-existing NoReturn-based heuristic, kept so we never newly
+    //    flag a branch it already deferred (e.g. an assignment dominating a `try` body
+    //    that the `except`/`finally` path observes).
+    // The first disjunct only adds deferral; it cannot turn a deferred branch into a
+    // reported one.
+    let all_missing_deferrable = missing_branches.len() == n_missing_branches;
+    let deferrable =
+        all_missing_deferrable || n_missing_branches <= n_branches_with_termination_key;
     match merge_style {
         MergeStyle::LoopDefinitelyRuns if base_has_value => DefinitionStatus::Defined,
         MergeStyle::LoopDefinitelyRuns if n_values == n_branches => DefinitionStatus::Defined,
-        MergeStyle::LoopDefinitelyRuns if n_missing_branches <= n_branches_with_termination_key => {
-            if !missing_branch_termination_keys.is_empty() {
-                DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
+        MergeStyle::LoopDefinitelyRuns if deferrable => {
+            if !missing_branches.is_empty() {
+                DefinitionStatus::DeferredCheck(missing_branches)
             } else {
                 DefinitionStatus::Defined
             }
         }
         _ if n_values == n_branches => DefinitionStatus::Defined,
-        _ if n_missing_branches <= n_branches_with_termination_key => {
-            if !missing_branch_termination_keys.is_empty() {
-                DefinitionStatus::DeferredCheck(missing_branch_termination_keys)
+        _ if deferrable => {
+            if !missing_branches.is_empty() {
+                DefinitionStatus::DeferredCheck(missing_branches)
             } else {
                 DefinitionStatus::Defined
             }
@@ -3203,6 +3235,9 @@ struct MergeBranchEntry {
     /// The last StmtExpr in the flow this branch came from, if any.
     /// Used for type-based termination checking at solve time.
     termination_key: Option<Idx<Key>>,
+    /// The entry-narrowing `Key::Narrow` idxs of the flow this branch came from.
+    /// Used to prune statically-dead `if`/`elif`/`else` branches at solve time.
+    dead_keys: Box<[Idx<Key>]>,
 }
 
 struct MergeItem {
@@ -3276,6 +3311,7 @@ impl<'a> BindingsBuilder<'a> {
             merge_branches.push(MergeBranchEntry {
                 flow_info: Some(base),
                 termination_key: None,
+                dead_keys: Box::new([]),
             });
             (Some(loop_prior), true)
         } else {
@@ -3312,28 +3348,38 @@ impl<'a> BindingsBuilder<'a> {
         let mut branch_infos = Vec::with_capacity(merge_branches.len());
         let mut styles = Vec::with_capacity(merge_branches.len());
         let mut n_values = 0;
-        // Collect termination keys from branches that don't define the variable.
-        // These will be used for deferred uninitialized checks at solve time.
-        let mut missing_branch_termination_keys = Vec::new();
+        // Collect, per branch that doesn't define the variable, the signals that let
+        // us defer the uninitialized check to solve time: the branch is safely-not-
+        // defining iff it is statically dead (terminating tail or vacuous narrowing).
+        let mut missing_branches = Vec::new();
+        // Build a `MissingBranch` record for a branch that doesn't define the variable,
+        // but only if it carries some deadness signal (otherwise it is genuinely
+        // reachable and the variable is not deferrable).
+        let missing_branch = |termination_key: Option<Idx<Key>>, dead_keys: &[Idx<Key>]| {
+            (termination_key.is_some() || !dead_keys.is_empty()).then(|| MissingBranch {
+                termination_key,
+                dead_keys: dead_keys.into(),
+            })
+        };
         for merge_branch in merge_branches.into_iter() {
+            let termination_key = merge_branch.termination_key;
+            let dead_keys = merge_branch.dead_keys;
             // Handle branches that don't have this name at all (flow_info is None)
             let Some(flow_info) = merge_branch.flow_info else {
-                // This branch doesn't have this name - record its termination key if any
-                if let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
-                }
+                missing_branches.extend(missing_branch(termination_key, &dead_keys));
                 continue;
             };
             let branch_idx = flow_info.idx();
 
             // The BranchInfo always sees the branch_idx, which will will be
-            // a narrow if one exists, otherwise the value. Each branch may have a
-            // termination key, which potentially causes us to ignore it in the Phi based
-            // on Never/NoReturn type information.
+            // a narrow if one exists, otherwise the value. Each branch may be dead
+            // due to Never/NoReturn type information or a vacuous entry narrowing,
+            // which causes us to drop it from the Phi.
             if branch_idx != phi_idx {
                 branch_infos.push(BranchInfo {
                     value_key: branch_idx,
-                    termination_key: merge_branch.termination_key,
+                    termination_key,
+                    dead_if_any_never: dead_keys.clone(),
                 });
             }
 
@@ -3346,10 +3392,9 @@ impl<'a> BindingsBuilder<'a> {
                     n_values += 1;
                 }
                 if v.idx == phi_idx {
-                    // If uninitialized, still track termination key before continuing.
-                    if is_uninitialized && let Some(termination_key) = merge_branch.termination_key
-                    {
-                        missing_branch_termination_keys.push(termination_key);
+                    // If uninitialized, still track deadness signal before continuing.
+                    if is_uninitialized {
+                        missing_branches.extend(missing_branch(termination_key, &dead_keys));
                     }
                     continue;
                 }
@@ -3358,16 +3403,13 @@ impl<'a> BindingsBuilder<'a> {
                     // set a value, so duplicate value_idxs always have the same style.
                     styles.push(v.style);
                 }
-                // Treat uninitialized branches like missing branches for termination keys.
-                if is_uninitialized && let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
+                // Treat uninitialized branches like missing branches for deadness signals.
+                if is_uninitialized {
+                    missing_branches.extend(missing_branch(termination_key, &dead_keys));
                 }
             } else {
                 // This branch doesn't have a value for the variable.
-                // If it has a termination key, track it for deferred checking.
-                if let Some(termination_key) = merge_branch.termination_key {
-                    missing_branch_termination_keys.push(termination_key);
-                }
+                missing_branches.extend(missing_branch(termination_key, &dead_keys));
             }
             branch_idxs.insert(branch_idx);
         }
@@ -3387,7 +3429,7 @@ impl<'a> BindingsBuilder<'a> {
             n_branches,
             n_missing_branches,
             n_branches_with_termination_key,
-            missing_branch_termination_keys,
+            missing_branches,
         );
 
         // Helper to compute the final FlowStyle based on definition status.
@@ -3523,13 +3565,20 @@ impl<'a> BindingsBuilder<'a> {
                 0
             };
 
-        // Count how many branches have a last_stmt_expr (potential type-based termination)
-        let n_branches_with_termination_key =
-            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
-
         // Collect all termination keys from flows (for building dense MergeItems)
         let all_termination_keys: Vec<Option<Idx<Key>>> =
             flows.iter().map(|f| f.last_stmt_expr).collect();
+
+        // Count how many branches have a termination key (potential NoReturn/Never tail).
+        // Used by the pre-existing deferral heuristic for uninitialized-variable checks.
+        let n_branches_with_termination_key =
+            flows.iter().filter(|f| f.last_stmt_expr.is_some()).count();
+
+        // Collect each branch's entry-narrowing dead keys (parallel to termination keys).
+        let all_dead_keys: Vec<Box<[Idx<Key>]>> = flows
+            .iter()
+            .map(|f| f.dead_keys.clone().into_boxed_slice())
+            .collect();
 
         // Collect all unique names from base + all flows. We need this before we construct merge items
         // so that we can accurately represent a flow in which some name doesn't appear.
@@ -3554,6 +3603,7 @@ impl<'a> BindingsBuilder<'a> {
                 .map(|(i, flow_info_map)| MergeBranchEntry {
                     flow_info: flow_info_map.get(&name).cloned(),
                     termination_key: all_termination_keys[i],
+                    dead_keys: all_dead_keys[i].clone(),
                 })
                 .collect();
             merge_items.insert(
@@ -3587,6 +3637,7 @@ impl<'a> BindingsBuilder<'a> {
             has_terminated,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
+            dead_keys: Vec::new(),
         };
         self.scopes.current_mut().flow = flow
     }
@@ -3728,8 +3779,10 @@ impl<'a> BindingsBuilder<'a> {
         let fork = scope.forks.last_mut().unwrap();
         fork.branch_started = true;
         scope.flow = fork.base.clone();
-        // Clear last_stmt_expr so this branch tracks only its own terminal statement
+        // Clear per-branch signals so this branch tracks only its own terminal
+        // statement and its own entry narrowing.
         scope.flow.last_stmt_expr = None;
+        scope.flow.dead_keys = Vec::new();
     }
 
     /// Abandon a branch we began without including it in the merge. Used for a few cases

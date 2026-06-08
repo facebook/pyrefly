@@ -445,7 +445,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match self.as_bool(&condition_type, x.test.range(), errors) {
                     Some(true) => body_type,
                     Some(false) => orelse_type,
-                    None => self.union(body_type, orelse_type),
+                    None => {
+                        // Drop a branch whose narrow solves to `Never` (e.g. `1 if x is not
+                        // None else None` when `x: int`), via the reachability channel keyed
+                        // on `x.range`. The channel is absent for ternaries inferred outside
+                        // the expression-binding path (e.g. a type annotation); keep both.
+                        let dead = self
+                            .bindings()
+                            .key_to_idx_hashed_opt(Hashed::new(&Key::ConditionalReachability(
+                                x.range,
+                            )))
+                            .map(|idx| match self.bindings().get(idx) {
+                                Binding::ConditionalReachability(narrows) => {
+                                    let (body, orelse) = narrows.as_ref();
+                                    (
+                                        self.any_narrow_is_never(body),
+                                        self.any_narrow_is_never(orelse),
+                                    )
+                                }
+                                _ => unreachable!(
+                                    "ConditionalReachability key maps to ConditionalReachability binding"
+                                ),
+                            });
+                        match dead {
+                            Some((false, true)) => body_type,
+                            Some((true, false)) => orelse_type,
+                            // No binding, or both live, or both dead: keep the union.
+                            _ => self.union(body_type, orelse_type),
+                        }
+                    }
                 }
             }
             Expr::BoolOp(x) => self.boolop(&x.values, x.op, hint, errors),

@@ -923,6 +923,9 @@ pub enum Key {
     Delete(TextRange),
     /// Match statement or if/elif chain that needs type-based exhaustiveness checking
     Exhaustive(ExhaustivenessKind, TextRange),
+    /// Reachability channel for a ternary, keyed by its range: the per-branch
+    /// `Key::Narrow` idxs, so the solver can drop a branch whose narrow is `Never`.
+    ConditionalReachability(TextRange),
 }
 
 impl Ranged for Key {
@@ -956,6 +959,7 @@ impl Ranged for Key {
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
+            Self::ConditionalReachability(r) => *r,
         }
     }
 }
@@ -999,6 +1003,9 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
             Self::Exhaustive(kind, r) => {
                 write!(f, "Key::Exhaustive({:?}, {})", kind, ctx.display(r))
+            }
+            Self::ConditionalReachability(r) => {
+                write!(f, "Key::ConditionalReachability({})", ctx.display(r))
             }
         }
     }
@@ -1159,10 +1166,10 @@ pub enum BindingExpect {
         name: Name,
         /// The range of the variable usage (for error location).
         range: TextRange,
-        /// Termination keys from branches that don't define the variable.
-        /// At solve time, we check if ALL of these have Never type.
-        /// If any don't, the variable may be uninitialized.
-        termination_keys: Vec<Idx<Key>>,
+        /// The branches that don't define the variable. At solve time, the variable
+        /// is initialized iff EVERY such branch is statically dead (terminates or has
+        /// a vacuous entry narrowing). If any may be reached, it may be uninitialized.
+        missing_branches: Vec<MissingBranch>,
     },
     /// Check for forward reference string literal in union type.
     /// At runtime, `type.__or__` cannot handle string literals, so expressions
@@ -1276,14 +1283,14 @@ impl DisplayWith<Bindings> for BindingExpect {
             Self::UninitializedCheck {
                 name,
                 range,
-                termination_keys,
+                missing_branches,
             } => {
                 write!(
                     f,
                     "UninitializedCheck({}, {}, {:?})",
                     name,
                     ctx.module().display(range),
-                    termination_keys
+                    missing_branches
                 )
             }
             Self::ForwardRefUnion {
@@ -2034,6 +2041,19 @@ pub enum FirstUse {
     UsedBy(Idx<Key>),
 }
 
+/// A branch that does not define some variable, recorded so that a deferred
+/// uninitialized check can decide at solve time whether the branch is reachable.
+/// The branch is safely-not-defining (i.e. it can be ignored for initialization)
+/// iff it is statically dead: its tail terminates (`termination_key` solves to
+/// `Never`) or its entry narrowing is vacuous (`any_narrow_is_never(dead_keys)`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissingBranch {
+    /// The last `Binding::StmtExpr` in this branch, if any (NoReturn/Never tail).
+    pub termination_key: Option<Idx<Key>>,
+    /// The branch's entry-narrowing `Key::Narrow` idxs (identity-vs-`None` deadness).
+    pub dead_keys: Box<[Idx<Key>]>,
+}
+
 /// Information about a branch in a Phi node.
 #[derive(Clone, Debug)]
 pub struct BranchInfo {
@@ -2042,6 +2062,11 @@ pub struct BranchInfo {
     /// The last `Binding::StmtExpr` in this branch, if any.
     /// Used to check for type-based termination (NoReturn/Never) at solve time.
     pub termination_key: Option<Idx<Key>>,
+    /// The branch's entry narrow keys (`Key::Narrow` idxs). The branch is statically
+    /// dead if any of these is an identity-vs-`None` narrow that solves to `Never`
+    /// (checked at solve time via `any_narrow_is_never`). A dead branch is dropped
+    /// from the Phi join.
+    pub dead_if_any_never: Box<[Idx<Key>]>,
 }
 
 #[derive(Clone, Debug)]
@@ -2253,6 +2278,11 @@ pub enum Binding {
     AugAssign(Option<Idx<KeyAnnotation>>, Box<StmtAugAssign>),
     /// The None type, constructed lazily with TypeHeap during solving.
     None,
+    /// Reachability channel for a ternary: the `(body, orelse)` `Key::Narrow` idxs.
+    /// A branch is dead iff one of its narrows is identity-vs-`None` (`is` /
+    /// `is not None`) and solves to `Never`. Read raw to prune the dead branch;
+    /// never solved through the normal path.
+    ConditionalReachability(Box<(Vec<Idx<Key>>, Vec<Idx<Key>>)>),
     /// An Any type with a specific style, constructed lazily with TypeHeap during solving.
     Any(AnyStyle),
     /// A global variable.
@@ -2477,6 +2507,15 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::AugAssign(a, s) => write!(f, "AugAssign({}, {})", ann(a), m.display(s)),
             Self::None => write!(f, "None"),
+            Self::ConditionalReachability(x) => {
+                let (body, orelse) = x.as_ref();
+                write!(
+                    f,
+                    "ConditionalReachability(body={} orelse={})",
+                    body.len(),
+                    orelse.len(),
+                )
+            }
             Self::Any(style) => write!(f, "Any({style:?})"),
             Self::Global(g) => write!(f, "Global({})", g.name()),
             Self::TypeParameter(tp) => {
@@ -2742,7 +2781,8 @@ impl Binding {
             | Binding::AssignToSubscript(_)
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
-            | Binding::Exhaustive(_) => None,
+            | Binding::Exhaustive(_)
+            | Binding::ConditionalReachability(_) => None,
         }
     }
 }
