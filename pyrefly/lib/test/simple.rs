@@ -514,7 +514,6 @@ with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is ma
 
 testcase!(
     test_all_caps_as_final_reassign,
-    TestEnv::new().enable_treat_all_caps_as_final(),
     r#"
 FOO = 1
 FOO = 2  # E: Cannot assign to variable `FOO` because it is marked final

@@ -156,7 +156,7 @@ impl TestEnv {
             string_as_iterable_warning: false,
             strict_callable_subtyping: false,
             spec_compliant_overloads: false,
-            treat_all_caps_as_final: false,
+            treat_all_caps_as_final: true,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -321,11 +321,6 @@ impl TestEnv {
 
     pub fn enable_spec_compliant_overloads(mut self) -> Self {
         self.spec_compliant_overloads = true;
-        self
-    }
-
-    pub fn enable_treat_all_caps_as_final(mut self) -> Self {
-        self.treat_all_caps_as_final = true;
         self
     }
 

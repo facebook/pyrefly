@@ -1364,7 +1364,7 @@ impl ConfigFile {
         }
 
         if self.root.treat_all_caps_as_final.is_none() {
-            self.root.treat_all_caps_as_final = Some(false);
+            self.root.treat_all_caps_as_final = Some(true);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
