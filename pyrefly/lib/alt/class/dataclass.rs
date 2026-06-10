@@ -8,6 +8,9 @@
 use std::sync::Arc;
 
 use pyrefly_python::dunder;
+use pyrefly_types::typed_dict::AnonymousTypedDictInner;
+use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr::EllipsisLiteral;
@@ -411,6 +414,78 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ));
         }
         self.unions(rets)
+    }
+
+    pub fn call_dataclasses_asdict(
+        &self,
+        asdict_ty: &Type,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        const MAX_ASDICT_FIELDS: usize = 20;
+
+        if let [CallArg::Arg(obj_arg)] = args
+            && kws.is_empty()
+            && let Type::ClassType(cls) = &obj_arg.infer(self, errors)
+            && let Some(dataclass) = self
+                .get_metadata_for_class(cls.class_object())
+                .dataclass_metadata()
+        {
+            let kw_only = self.compute_kw_only_fields_by_class(cls.class_object());
+            // excludes InitVar (and ClassVar) members but keeps `init=False` ones.
+            let raw_fields = self.iter_fields(cls.class_object(), dataclass, false, &kw_only);
+            // Decide on field count before doing the per-field work: bail to the freeform
+            // path for wide dataclasses to bound the size of the synthesized TypedDict.
+            if raw_fields.len() <= MAX_ASDICT_FIELDS {
+                let sub = cls.targs().substitution();
+                // At runtime, asdict traverses the object recursively and converts any contained dataclasses into a dict.
+                // Here, we traverse the type & transform any dataclasses into dict[str, Any]
+                let dict_str_any = self.heap.mk_class_type(self.stdlib.dict(
+                    self.heap.mk_class_type(self.stdlib.str().clone()),
+                    self.heap.mk_any_explicit(),
+                ));
+                let fields: Vec<(Name, TypedDictField)> = raw_fields
+                    .into_iter()
+                    .map(|(name, field, _)| {
+                        let mut ty = sub.substitute_into(field.ty());
+                        ty.transform_mut(&mut |t| {
+                            if let Type::ClassType(c) = t
+                                && self
+                                    .get_metadata_for_class(c.class_object())
+                                    .dataclass_metadata()
+                                    .is_some()
+                            {
+                                *t = dict_str_any.clone();
+                            }
+                        });
+                        (
+                            name,
+                            TypedDictField {
+                                ty,
+                                required: true,
+                                read_only_reason: None,
+                            },
+                        )
+                    })
+                    .collect();
+                return self.heap.mk_typed_dict(TypedDict::Anonymous(Box::new(
+                    AnonymousTypedDictInner { fields },
+                )));
+            }
+        }
+        self.freeform_call_infer(
+            asdict_ty.clone(),
+            args,
+            kws,
+            callee_range,
+            arg_range,
+            hint,
+            errors,
+        )
     }
 
     fn get_dataclass_replace(

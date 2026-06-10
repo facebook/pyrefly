@@ -853,7 +853,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
         // Preserve Pos vs PosOnly so that the subset checker can reject name mismatches
         // (e.g. Pos("a", int) vs Pos("self", K) fails, but PosOnly matches any name).
-        let args: Vec<Param> = want_ts.iter().map(|p| p.to_subset_param()).collect();
+        let args: Vec<Param> = want_ts.iter().map(|p| p.to_param_preserve_name()).collect();
         let (pre, post) = got.items().split_at(args.len());
         self.is_subset_param_list(pre, &args)?;
         self.is_subset_eq(
@@ -874,7 +874,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if want.len() < got_ts.len() {
             return Err(SubsetError::Other);
         }
-        let args: Vec<Param> = got_ts.iter().map(|p| p.to_subset_param()).collect();
+        let args: Vec<Param> = got_ts.iter().map(|p| p.to_param_preserve_name()).collect();
         let (pre, post) = want.items().split_at(args.len());
         self.is_subset_param_list(&args, pre)?;
         self.is_subset_eq(
@@ -1738,13 +1738,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     ))
                 }
             }
-            (t1, Type::Quantified(q)) => match q.restriction() {
-                // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
-                Restriction::Constraints(constraints) => any(constraints.iter(), |constraint| {
-                    self.is_subset_eq(t1, constraint)
-                }),
-                _ => Err(SubsetError::Other),
-            },
+            (_, Type::Quantified(_)) => Err(SubsetError::Other),
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Union(u_union)) => {
                 let ordered_us = self.solver.partial_sort_by_vars(&u_union.members);

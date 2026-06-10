@@ -1242,7 +1242,18 @@ fn make_bound_classmethod(heap: &TypeHeap, cls: &ClassBase, attr: Type) -> Resul
 fn make_bound_method(heap: &TypeHeap, instance: &Instance, attr: Type) -> Result<Type, Type> {
     let should_bind =
         |meta: &FuncMetadata| !meta.flags.is_staticmethod && !meta.flags.is_classmethod;
-    make_bound_method_helper(heap, instance.to_type(heap), attr, &should_bind)
+    make_bound_method_helper(heap, instance.to_type(heap), attr, &should_bind).map(|mut method| {
+        method.transform_toplevel_callable(|callable| {
+            if let InstanceKind::TypeVar(q) = &instance.kind &&
+            matches!(q.restriction(), Restriction::Constraints(_)) &&
+            matches!(&callable.ret, Type::ClassType(cls) if cls.class_object() == instance.class && cls.targs() == instance.targs) {
+                // We're binding this method to a constrained TypeVar, and its return type matches
+                // the currently active constraint. Treat this method as returning the TypeVar.
+                callable.ret = instance.to_type(heap);
+            }
+        });
+        method
+    })
 }
 
 /// Result of looking up a member of a class in the MRO, including a handle to the defining
@@ -3931,23 +3942,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         upper_bound: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
-        let quantified_with_specific_upper_bound = match quantified.restriction() {
-            Restriction::Constraints(_) => {
-                quantified.with_restriction(Restriction::Constraints(vec![
-                    self.heap.mk_class_type(upper_bound.clone()),
-                ]))
-            }
-            Restriction::Bound(_) => quantified.with_restriction(Restriction::Bound(
-                self.heap.mk_class_type(upper_bound.clone()),
-            )),
-            Restriction::Unrestricted => quantified,
-        };
         self.get_class_member(upper_bound.class_object(), name)
             .map(|field| {
                 self.as_instance_attribute(
                     name,
                     &field,
-                    &Instance::of_type_var(quantified_with_specific_upper_bound, upper_bound),
+                    &Instance::of_type_var(quantified, upper_bound),
                 )
             })
     }

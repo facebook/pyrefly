@@ -16,6 +16,7 @@ use itertools::Itertools;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::dimension::SizeExpr;
@@ -96,6 +97,7 @@ use crate::types::literal::Lit;
 use crate::types::param_spec::ParamSpec;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
+use crate::types::sentinel::Sentinel;
 use crate::types::special_form::SpecialForm;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
@@ -1777,6 +1779,89 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 false
             }
         }
+    }
+
+    pub fn sentinel_from_call(
+        &self,
+        assignment_name: Identifier,
+        nesting_context: NestingContext,
+        x: &ExprCall,
+        errors: &ErrorCollector,
+    ) -> Sentinel {
+        let mut sentinel_name = assignment_name;
+        let mut iargs = x.arguments.args.iter();
+        if let Some(arg) = iargs.next() {
+            if let Expr::StringLiteral(lit) = arg {
+                sentinel_name = Identifier::new(lit.value.to_str(), lit.range());
+            } else {
+                self.error(
+                    errors,
+                    arg.range(),
+                    ErrorKind::InvalidSentinel,
+                    "Expected first argument of sentinel to be a string literal".to_owned(),
+                );
+            }
+        } else {
+            self.error(
+                errors,
+                x.range,
+                ErrorKind::InvalidSentinel,
+                "Sentinel requires a name as the first argument".to_owned(),
+            );
+        }
+        if let Some(arg) = iargs.next() {
+            let args_range_end = x.arguments.args.last().map(|arg| arg.range().end());
+            let range = TextRange::new(
+                arg.range().start(),
+                // args_range_end should never be None as it should only be None if there are
+                // no args, but no reason not to have a default here anyway.
+                args_range_end.unwrap_or_else(|| arg.range().end()),
+            );
+            self.error(
+                errors,
+                range,
+                ErrorKind::InvalidSentinel,
+                "Sentinel only takes one positional argument".to_owned(),
+            );
+        }
+
+        for kw in &x.arguments.keywords {
+            match &kw.arg {
+                Some(id) => match id.id.as_str() {
+                    "repr" => {
+                        let got = self.expr_infer(&kw.value, errors);
+                        if !self
+                            .is_subset_eq(&got, &self.heap.mk_class_type(self.stdlib.str().clone()))
+                        {
+                            self.error(
+                                errors,
+                                kw.range,
+                                ErrorKind::InvalidSentinel,
+                                format!("Invalid type for sentinel `repr` {got}"),
+                            );
+                        }
+                    }
+                    _ => {
+                        self.error(
+                            errors,
+                            kw.range,
+                            ErrorKind::InvalidSentinel,
+                            format!("Unexpected keyword argument `{}` to sentinel", id.id),
+                        );
+                    }
+                },
+                _ => {
+                    self.error(
+                        errors,
+                        kw.range,
+                        ErrorKind::InvalidSentinel,
+                        "Cannot pass unpacked keyword arguments to sentinel".to_owned(),
+                    );
+                }
+            }
+        }
+
+        Sentinel::new(sentinel_name, nesting_context, self.module().dupe())
     }
 
     pub fn typevar_from_call(

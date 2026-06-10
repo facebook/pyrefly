@@ -336,11 +336,11 @@ impl PythonLibraryManifest {
             .deps
             .iter()
             .map(|t| {
-                if let Some(replace) = aliases.get(t) {
-                    replace.dupe()
-                } else {
-                    t.dupe()
+                let mut current = t;
+                while let Some(replace) = aliases.get(current) {
+                    current = replace;
                 }
+                current.dupe()
             })
             .collect();
     }
@@ -1434,6 +1434,45 @@ mod tests {
                 .packages
                 .contains_key(&ModuleName::from_str("generated")),
             "generated:main should have synthesized 'generated' package"
+        );
+    }
+
+    #[test]
+    fn test_chained_aliases_resolved_transitively() {
+        let db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//click/8.1.7/sources:py".to_owned()) => TargetManifest::lib(
+                    &[("click", &["click/__init__.py"])],
+                    &[],
+                    "click/BUCK",
+                    &[],
+                    None,
+                ),
+                Target::from_string("//click/8.1.7:py".to_owned()) => TargetManifest::alias(
+                    "//click/8.1.7/sources:py"
+                ),
+                Target::from_string("//click:click".to_owned()) => TargetManifest::alias(
+                    "//click/8.1.7:py"
+                ),
+                Target::from_string("//app:main".to_owned()) => TargetManifest::lib(
+                    &[("app.main", &["app/main.py"])],
+                    &["//click:click"],
+                    "app/BUCK",
+                    &[],
+                    None,
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+
+        let (result, _) = db.produce_map();
+        let app = result
+            .get(&Target::from_string("//app:main".to_owned()))
+            .unwrap();
+        assert_eq!(
+            app.deps,
+            map_deps(&["//click/8.1.7/sources:py"]),
+            "dep on //click:click should resolve through two alias levels to //click/8.1.7/sources:py"
         );
     }
 

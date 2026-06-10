@@ -71,6 +71,7 @@ use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
+use crate::error::suppress::detect_line_ending;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
@@ -2788,13 +2789,16 @@ impl<'a> Transaction<'a> {
         range: TextRange,
         import_format: ImportFormat,
         custom_thread_pool: Option<&ThreadPool>,
-    ) -> Option<Vec<(String, Module, TextRange, String)>> {
+    ) -> Option<Vec<(String, Vec<(Module, TextRange, String)>)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
+        // Actions that carry more than one edit (e.g. the missing-`@override` fix,
+        // which inserts both the decorator and an import).
+        let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         for error in errors {
             let error_range = error.range();
@@ -2918,6 +2922,30 @@ impl<'a> Transaction<'a> {
                         }
                     }
                 }
+                ErrorKind::MissingOverrideDecorator if error_range.contains_range(range) => {
+                    if let Some((title, module, decorator_range, insert_text)) =
+                        quick_fixes::add_override::add_override_code_action(
+                            &module_info,
+                            &ast,
+                            error_range,
+                        )
+                    {
+                        let mut edits = vec![(module, decorator_range, insert_text)];
+                        // Import `typing.override` if necessary.
+                        if !quick_fixes::add_override::override_in_scope(ast.as_ref())
+                            && let Some(import_edit) = self.override_import_edit(
+                                handle,
+                                &module_info,
+                                &ast,
+                                import_format,
+                                custom_thread_pool,
+                            )
+                        {
+                            edits.push(import_edit);
+                        }
+                        multi_actions.push((title, edits));
+                    }
+                }
                 _ => {}
             }
         }
@@ -2928,12 +2956,68 @@ impl<'a> Transaction<'a> {
         // this will be the public/non-deprecated version)
         import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
 
-        // Drop the deprecated flag and return
-        let mut actions: Vec<(String, Module, TextRange, String)> =
-            import_actions.into_iter().map(|a| a.to_tuple()).collect();
-        actions.extend(generate_actions);
-        actions.extend(other_actions);
+        // Every quick-fix producer except the missing-`@override` fix yields a single
+        // edit; wrap those in a one-element edit list so they share the multi-edit shape
+        // that `multi_actions` and the LSP layer expect.
+        fn wrap_single(
+            (title, module, range, insert_text): (String, Module, TextRange, String),
+        ) -> (String, Vec<(Module, TextRange, String)>) {
+            (title, vec![(module, range, insert_text)])
+        }
+
+        let mut actions: Vec<(String, Vec<(Module, TextRange, String)>)> = import_actions
+            .into_iter()
+            .map(|a| wrap_single(a.to_tuple()))
+            .collect();
+        actions.extend(generate_actions.into_iter().map(wrap_single));
+        actions.extend(other_actions.into_iter().map(wrap_single));
+        actions.extend(multi_actions);
+
+        // The edit builders above emit `\n`-terminated text. Normalize each edit's
+        // inserted text to the line ending used by the file it targets, so the edits
+        // are correct on CRLF files instead of mixing line endings.
+        for (_, edits) in &mut actions {
+            for (module, _, insert_text) in edits {
+                let line_ending = detect_line_ending(module.contents().as_str());
+                if line_ending != "\n" {
+                    *insert_text = insert_text.replace('\n', line_ending);
+                }
+            }
+        }
+
         (!actions.is_empty()).then_some(actions)
+    }
+
+    /// Builds an edit inserting `from typing import override` (preferring `typing`
+    /// over `typing_extensions`) at the top of the file. Returns `None` when no
+    /// module in scope exports `override`.
+    fn override_import_edit(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &ModModule,
+        import_format: ImportFormat,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Option<(Module, TextRange, String)> {
+        let handle_to_import_from = self
+            .search_exports_exact("override", custom_thread_pool)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(handle_to_import_from, _)| handle_to_import_from)
+            .min_by_key(|candidate| usize::from(candidate.module().as_str() != "typing"))?;
+        let (position, insert_text, _) = insert_import_edit(
+            ast,
+            self.config_finder(),
+            handle.dupe(),
+            handle_to_import_from,
+            "override",
+            import_format,
+        );
+        Some((
+            module_info.dupe(),
+            TextRange::at(position, TextSize::new(0)),
+            insert_text,
+        ))
     }
 
     fn create_quickfix_action_for_common_alias_import(

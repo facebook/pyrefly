@@ -2516,14 +2516,22 @@ output-format = "omit-errors"
         // `Warn`) avoids the surprise of switching presets changing
         // `min-severity` requirements.
         for kind in [
+            ErrorKind::BadClassDefinition,
+            ErrorKind::BadInstantiation,
+            ErrorKind::BadKeywordArgument,
+            ErrorKind::BadRaise,
+            ErrorKind::BadUnpacking,
             ErrorKind::DivisionByZero,
+            ErrorKind::InvalidAnnotation,
+            ErrorKind::InvalidLiteral,
+            ErrorKind::InvalidSuperCall,
             ErrorKind::InvalidSyntax,
             ErrorKind::MissingImport,
+            ErrorKind::NotAsync,
             ErrorKind::ParseError,
             ErrorKind::UnexpectedKeyword,
+            ErrorKind::UnexpectedPositionalArgument,
             ErrorKind::UnknownName,
-            ErrorKind::InvalidAnnotation,
-            ErrorKind::NotAsync,
             ErrorKind::UnusedCoroutine,
         ] {
             assert_eq!(
@@ -2536,8 +2544,14 @@ output-format = "omit-errors"
         // enumeration is covered by `test_preset_fields_propagate`.
         for kind in [
             ErrorKind::BadArgumentType,
+            ErrorKind::BadAssignment,
+            ErrorKind::BadReturn,
             ErrorKind::BadOverride,
+            ErrorKind::Deprecated,
+            ErrorKind::InvalidInheritance,
+            ErrorKind::MissingArgument,
             ErrorKind::MissingAttribute,
+            ErrorKind::MissingModuleAttribute,
             ErrorKind::NotCallable,
             ErrorKind::NotIterable,
             ErrorKind::RedundantCast,

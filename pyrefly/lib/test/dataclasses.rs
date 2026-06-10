@@ -431,12 +431,458 @@ testcase!(
     test_asdict,
     r#"
 import dataclasses
+from typing import assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+    y: str
+    items: list[int]
+
+d = dataclasses.asdict(A(3, "a", [1]))
+# Subscripting the synthesized TypedDict recovers each field's precise type...
+assert_type(d["x"], int)
+assert_type(d["y"], str)
+assert_type(d["items"], list[int])
+# ...preserved all the way down: the list element type is not widened to Any.
+assert_type(d["items"][0], int)
+# The whole value coerces to dict[str, <field-type union>].
+assert_type(d, dict[str, int | str | list[int]])
+    "#,
+);
+
+testcase!(
+    test_asdict_generic,
+    r#"
+import dataclasses
+from typing import Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+
+@dataclasses.dataclass
+class Box(Generic[T]):
+    item: T
+    items: list[T]
+
+def f(b: Box[int]):
+    # The type argument is substituted into the field types, including nested ones.
+    d = dataclasses.asdict(b)
+    assert_type(d["item"], int)
+    assert_type(d["items"], list[int])
+    assert_type(d["items"][0], int)
+    "#,
+);
+
+testcase!(
+    test_asdict_union,
+    r#"
+import dataclasses
+from typing import Any, assert_type
 
 @dataclasses.dataclass
 class A:
     x: int
 
-print(dataclasses.asdict(A(x=3)))
+@dataclasses.dataclass
+class B:
+    x: str
+
+def f(ab: A | B):
+    # A union argument is not a single dataclass type, so the anonymous-TypedDict
+    # special-case does not fire and we fall back to the declared signature, which
+    # widens the value type to Any.
+    d = dataclasses.asdict(ab)
+    assert_type(d, dict[str, Any])
+    assert_type(d["x"], Any)
+    "#,
+);
+
+testcase!(
+    test_asdict_dict_factory,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+
+def factory(items: list[tuple[str, Any]]) -> list[str]:
+    return []
+
+# The `dict_factory=` overload returns the factory's result type, so the
+# anonymous-TypedDict special-case does not fire.
+result = dataclasses.asdict(A(x=3), dict_factory=factory)
+assert_type(result, list[str])
+assert_type(result[0], str)
+    "#,
+);
+
+testcase!(
+    test_asdict_nested,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class Inner:
+    a: int
+
+@dataclasses.dataclass
+class Outer:
+    inner: Inner
+    items: list[Inner]
+    n: int
+
+d = dataclasses.asdict(Outer(Inner(1), [Inner(2)], 3))
+# asdict recurses at runtime: nested dataclass instances become dicts, including
+# those inside containers, so their types collapse to dict[str, Any]. A
+# non-recursive implementation would instead type d["inner"] as `Inner`.
+assert_type(d["inner"], dict[str, Any])
+assert_type(d["items"], list[dict[str, Any]])
+assert_type(d["n"], int)
+assert_type(d, dict[str, dict[str, Any] | int | list[dict[str, Any]]])
+    "#,
+);
+
+testcase!(
+    test_asdict_recursive,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class One:
+    x: "One"
+    y: int
+
+def f(o: One):
+    # `One` is not a runtime value type -- asdict(o)["x"] is a dict -- so the
+    # self-referential field collapses to dict[str, Any] instead of expanding
+    # forever.
+    d = dataclasses.asdict(o)
+    assert_type(d["x"], dict[str, Any])
+    assert_type(d["y"], int)
+    assert_type(d, dict[str, dict[str, Any] | int])
+    "#,
+);
+
+testcase!(
+    test_asdict_mutually_recursive,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    b: "B"
+    n: int
+
+@dataclasses.dataclass
+class B:
+    a: "A"
+    m: str
+
+def f(o: A):
+    # Mutual recursion: each nested dataclass collapses to dict[str, Any].
+    d = dataclasses.asdict(o)
+    assert_type(d["b"], dict[str, Any])
+    assert_type(d["n"], int)
+    assert_type(d, dict[str, dict[str, Any] | int])
+    "#,
+);
+
+testcase!(
+    test_asdict_only_dataclasses_replaced,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class Inner:
+    a: int
+
+class Plain:  # not a dataclass: must be left untouched
+    pass
+
+@dataclasses.dataclass
+class C:
+    p: Plain
+    inner: Inner
+
+def f(o: C):
+    # Only dataclass types are rewritten; an ordinary class field is preserved.
+    d = dataclasses.asdict(o)
+    assert_type(d["p"], Plain)
+    assert_type(d["inner"], dict[str, Any])
+    assert_type(d, dict[str, Plain | dict[str, Any]])
+    "#,
+);
+
+testcase!(
+    test_asdict_dataclass_in_containers,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class Inner:
+    a: int
+
+@dataclasses.dataclass
+class C:
+    md: dict[str, Inner]
+    tp: tuple[Inner, int]
+    un: Inner | int
+    op: Inner | None
+    deep: list[dict[str, list[Inner]]]
+
+def f(o: C):
+    # The replacement traverses into every position of the type tree.
+    d = dataclasses.asdict(o)
+    assert_type(d["md"], dict[str, dict[str, Any]])
+    assert_type(d["tp"], tuple[dict[str, Any], int])
+    assert_type(d["un"], dict[str, Any] | int)
+    assert_type(d["op"], dict[str, Any] | None)
+    assert_type(d["deep"], list[dict[str, list[dict[str, Any]]]])
+    "#,
+);
+
+testcase!(
+    test_asdict_union_of_dataclasses_collapses,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    a: int
+
+@dataclasses.dataclass
+class B:
+    b: str
+
+@dataclasses.dataclass
+class C:
+    field: A | B
+
+def f(o: C):
+    # Distinct dataclasses in a union all collapse to the same dict[str, Any], so
+    # they merge into a single value type.
+    d = dataclasses.asdict(o)
+    assert_type(d["field"], dict[str, Any])
+    assert_type(d, dict[str, dict[str, Any]])
+    "#,
+);
+
+testcase!(
+    test_asdict_field_selection,
+    r#"
+import dataclasses
+from typing import ClassVar, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+    cv: ClassVar[float] = 0.0  # ClassVar: not an instance field, excluded
+    no_init: str = dataclasses.field(init=False, default="")  # init=False: still included
+    iv: dataclasses.InitVar[bytes] = b""  # InitVar: not an instance field, excluded
+
+    def __post_init__(self, iv: bytes) -> None:
+        pass
+
+d = dataclasses.asdict(A(0))
+assert_type(d["x"], int)
+assert_type(d["no_init"], str)
+# Only the instance fields x and no_init appear: the value union is int | str, so
+# the excluded ClassVar(float) and InitVar(bytes) do not leak into the type.
+assert_type(d, dict[str, int | str])
+    "#,
+);
+
+testcase!(
+    test_asdict_inherited,
+    r#"
+import dataclasses
+from typing import assert_type
+
+@dataclasses.dataclass
+class Base:
+    a: int
+
+@dataclasses.dataclass
+class Derived(Base):
+    b: str
+
+d = dataclasses.asdict(Derived(1, "x"))
+assert_type(d["a"], int)  # inherited field
+assert_type(d["b"], str)  # own field
+assert_type(d, dict[str, int | str])
+    "#,
+);
+
+testcase!(
+    test_asdict_optional,
+    r#"
+import dataclasses
+from typing import Optional, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: Optional[int]
+    y: int | None
+
+d = dataclasses.asdict(A(1, 2))
+assert_type(d["x"], int | None)
+assert_type(d["y"], int | None)
+assert_type(d, dict[str, int | None])
+    "#,
+);
+
+testcase!(
+    test_asdict_many_same_type_fields,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+# 25 fields: over the field-count cap, so we fall back to dict[str, Any]. The cap is
+# on field count (decided before building the TypedDict), so we lose precision here
+# even though every field shares a single type and could have stayed int.
+@dataclasses.dataclass
+class Many:
+    a0: int
+    a1: int
+    a2: int
+    a3: int
+    a4: int
+    a5: int
+    a6: int
+    a7: int
+    a8: int
+    a9: int
+    a10: int
+    a11: int
+    a12: int
+    a13: int
+    a14: int
+    a15: int
+    a16: int
+    a17: int
+    a18: int
+    a19: int
+    a20: int
+    a21: int
+    a22: int
+    a23: int
+    a24: int
+
+def f(o: Many):
+    d = dataclasses.asdict(o)
+    assert_type(d["a0"], Any)
+    assert_type(d, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_asdict_field_count_limit_within,
+    r#"
+import dataclasses
+from typing import assert_type
+
+# Exactly 20 fields: at the cap, so the special-case still fires and every field
+# keeps its precise type.
+@dataclasses.dataclass
+class Within:
+    a0: int
+    a1: str
+    a2: bytes
+    a3: float
+    a4: bool
+    a5: complex
+    a6: list[int]
+    a7: list[str]
+    a8: dict[str, int]
+    a9: set[int]
+    a10: frozenset[str]
+    a11: tuple[int, str]
+    a12: list[bytes]
+    a13: dict[int, str]
+    a14: set[str]
+    a15: list[float]
+    a16: list[bool]
+    a17: dict[str, bytes]
+    a18: set[bytes]
+    a19: memoryview
+
+def f(o: Within):
+    d = dataclasses.asdict(o)
+    assert_type(d["a0"], int)
+    assert_type(d["a19"], memoryview)
+    "#,
+);
+
+testcase!(
+    test_asdict_field_count_limit_exceeded,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+# 21 fields: over the cap, so we fall back to `dict[str, Any]` rather than
+# synthesize an unwieldy 21-member TypedDict.
+@dataclasses.dataclass
+class Exceeded:
+    a0: int
+    a1: str
+    a2: bytes
+    a3: float
+    a4: bool
+    a5: complex
+    a6: list[int]
+    a7: list[str]
+    a8: dict[str, int]
+    a9: set[int]
+    a10: frozenset[str]
+    a11: tuple[int, str]
+    a12: list[bytes]
+    a13: dict[int, str]
+    a14: set[str]
+    a15: list[float]
+    a16: list[bool]
+    a17: dict[str, bytes]
+    a18: set[bytes]
+    a19: memoryview
+    a20: range
+
+def f(o: Exceeded):
+    d = dataclasses.asdict(o)
+    assert_type(d["a0"], Any)
+    assert_type(d, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_asdict_mixed_union,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+
+def f(a: A | int):
+    # A union argument is not a single dataclass type, so it falls back to the
+    # declared signature (which also flags the non-dataclass member as a bad argument).
+    d = dataclasses.asdict(a)  # E: is not assignable to parameter
+    assert_type(d, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_asdict_not_dataclass,
+    r#"
+import dataclasses
+dataclasses.asdict(42)  # E: is not assignable to parameter
     "#,
 );
 

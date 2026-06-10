@@ -2620,3 +2620,47 @@ C.create(42)
 C.create(a=42)
 "#,
 );
+
+testcase!(
+    test_method_preserves_typevar,
+    r#"
+def f[T: (bytes, str)](x: T, y: T) -> T: ...
+def g[T: (bytes, str)](x: T) -> T:
+    y = x.lower()
+    return f(y, y)
+    "#,
+);
+
+testcase!(
+    test_method_returning_self_preserves_typevar,
+    r#"
+from typing import reveal_type, Self
+
+class A:
+    def f(self) -> Self:
+        return self
+
+def f[T](x: T) -> T:
+    if isinstance(x, A):
+        return x.f()
+    return x
+    "#,
+);
+
+testcase!(
+    test_getitem_on_constrained_typevar,
+    r#"
+from typing import assert_type
+
+class A:
+    def __getitem__(self, key) -> "A": ...
+
+class B:
+    def __getitem__(self, key: str) -> A: ...
+
+class C[T: (A, B)]:
+    def f(self) -> T: ...
+    def g(self):
+        return self.f()[""][0]
+    "#,
+);

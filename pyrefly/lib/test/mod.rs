@@ -67,6 +67,7 @@ mod redundant_cast;
 mod returns;
 mod scope;
 mod semantic_syntax_errors;
+mod sentinel;
 mod shape_dsl;
 mod simple;
 mod slots;

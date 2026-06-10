@@ -12,8 +12,10 @@ use crate::class::Class;
 use crate::class::ClassType;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
+use crate::quantified::Quantified;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
+use crate::type_var::Restriction;
 use crate::typed_dict::TypedDict;
 use crate::types::Type;
 
@@ -81,6 +83,7 @@ fn unions_internal(
         collapse_tuple_unions_with_empty(&mut res, heap);
         collapse_builtins_type(&mut res, heap);
         collapse_wide_tuple_unions(&mut res, heap);
+        collapse_quantifieds(&mut res, heap);
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
         try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
     })
@@ -362,6 +365,57 @@ fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
     }
 }
 
+/// A restricted quantified `Q` whose restriction consists of the types `c_1, ..., c_n` is fully
+/// covered by the union `(Q & c_1) | ... | (Q & c_n)`: every value of `Q` satisfies one of its
+/// restrictions, so the union collapses to just `Q`.
+fn collapse_quantifieds(types: &mut Vec<Type>, heap: &TypeHeap) {
+    // For each quantified appearing in a `Q & t` member, gather the `t`s.
+    let mut quantified_intersects: SmallMap<&Quantified, Vec<(usize, &Type)>> = SmallMap::new();
+    for (idx, ty) in types.iter().enumerate() {
+        if let Some((q, Some(t))) = ty.as_quantified() {
+            quantified_intersects.entry(q).or_default().push((idx, t));
+        }
+    }
+
+    // A quantified collapses when its restriction is fully covered by the types it is intersected with.
+    let mut indices_to_remove = SmallSet::new();
+    let mut quantifieds_to_collapse = Vec::new();
+    for (q, ts) in quantified_intersects {
+        let restrictions = match q.restriction() {
+            Restriction::Constraints(cs) => cs.iter().collect(),
+            Restriction::Bound(Type::Union(u)) => u.members.iter().collect(),
+            Restriction::Bound(b) => vec![b],
+            Restriction::Unrestricted => continue,
+        };
+        if restrictions.iter().all(|r| ts.iter().any(|(_, t)| t == r)) {
+            for (idx, t) in ts {
+                if restrictions.contains(&t) {
+                    indices_to_remove.insert(idx);
+                }
+            }
+            quantifieds_to_collapse.push(q.clone());
+        }
+    }
+    if quantifieds_to_collapse.is_empty() {
+        return;
+    }
+
+    // Drop the `Q & t` members of every collapsed quantified, then add `Q`.
+    let mut idx = 0;
+    types.retain(|_| {
+        let keep = !indices_to_remove.contains(&idx);
+        idx += 1;
+        keep
+    });
+    types.extend(
+        quantifieds_to_collapse
+            .into_iter()
+            .map(|q| heap.mk_quantified(q)),
+    );
+    types.sort();
+    types.dedup();
+}
+
 // After a TypeVarTuple gets substituted with a tuple type, try to simplify the type
 pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
     match tuple {
@@ -479,10 +533,21 @@ fn collect_unpacked_member(ty: &Type, heap: &TypeHeap, out: &mut Vec<Type>) {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_python::module_name::ModuleName;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+
     use crate::heap::TypeHeap;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
     use crate::simplify::intersect;
     use crate::simplify::unions;
     use crate::tuple::Tuple;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
     use crate::types::NeverStyle;
     use crate::types::Type;
 
@@ -554,6 +619,48 @@ mod tests {
             )),
         ];
         assert_eq!(unions(xs, &heap), Type::unbounded_tuple(Type::None));
+    }
+
+    fn mk_quantified(restriction: Restriction) -> Quantified {
+        Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::new(TextRange::default(), 0),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("T"),
+            QuantifiedKind::TypeVar,
+            None,
+            restriction,
+            PreInferenceVariance::Invariant,
+        )
+    }
+
+    #[test]
+    fn test_collapse_quantified_constraints() {
+        // For `T: (None, tuple)`, `(T & None) | (T & tuple)` collapses to `T`.
+        let heap = TypeHeap::new();
+        let (c1, c2) = (Type::None, Type::any_tuple());
+        let q = mk_quantified(Restriction::Constraints(vec![c1.clone(), c2.clone()]));
+        let xs = vec![
+            intersect(vec![q.clone().to_type(&heap), c1], Type::never(), &heap),
+            intersect(vec![q.clone().to_type(&heap), c2], Type::never(), &heap),
+        ];
+        assert_eq!(unions(xs, &heap), q.to_type(&heap));
+    }
+
+    #[test]
+    fn test_collapse_quantified_bound() {
+        // For `T: None | tuple`, `(T & None) | (T & tuple)` collapses to `T`.
+        let heap = TypeHeap::new();
+        let (b1, b2) = (Type::None, Type::any_tuple());
+        let bound = unions(vec![b1.clone(), b2.clone()], &heap);
+        let q = mk_quantified(Restriction::Bound(bound));
+        let xs = vec![
+            intersect(vec![q.clone().to_type(&heap), b1], Type::never(), &heap),
+            intersect(vec![q.clone().to_type(&heap), b2], Type::never(), &heap),
+        ];
+        assert_eq!(unions(xs, &heap), q.to_type(&heap));
     }
 
     #[test]

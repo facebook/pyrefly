@@ -16,6 +16,7 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::types::TArgs;
+use pyrefly_util::display::count;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
@@ -419,61 +420,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 closest_overload.func.1.signature.clone(),
             )
         } else {
-            // Build a string showing the argument types for error messages
-            let mut arg_type_strs = Vec::new();
-            for arg in &args {
-                let (ty, prefix) = match arg {
-                    CallArg::Arg(value) => (value.infer(self, errors), ""),
-                    CallArg::Star(value, _) => (value.infer(self, errors), "*"),
-                };
-                let ty_display = self.for_display(ty);
-                arg_type_strs.push(format!("{}{}", prefix, ty_display));
+            if let Ok(specialization_errors) =
+                Vec1::try_from_vec(closest_overload.specialization_errors)
+            {
+                self.add_specialization_errors(
+                    specialization_errors,
+                    arguments_range,
+                    &closest_overload.call_errors,
+                    None,
+                );
             }
-            for kw in &keywords {
-                let ty = kw.value.infer(self, errors);
-                let ty_display = self.for_display(ty);
-                if let Some(arg_name) = kw.arg {
-                    arg_type_strs.push(format!("{}={}", arg_name.as_str(), ty_display));
-                } else {
-                    arg_type_strs.push(format!("**{}", ty_display));
-                }
-            }
-            let args_display = format!("({})", arg_type_strs.join(", "));
-
-            let header = format!(
-                "No matching overload found for function `{}` called with arguments: {}",
-                metadata.kind.format(self.module().name()),
-                args_display
+            self.overload_error(
+                &overloads,
+                metadata,
+                self_obj.as_ref(),
+                &args,
+                &keywords,
+                arguments_range,
+                errors,
+                context,
+                &closest_overload.func.1.signature,
+                closest_overload.call_errors,
             );
-            let mut details = vec!["Possible overloads:".to_owned()];
-            for overload in &overloads {
-                let suffix = if overload.1.signature == closest_overload.func.1.signature {
-                    " [closest match]"
-                } else {
-                    ""
-                };
-                let signature = match self_obj {
-                    Some(_) => overload
-                        .1
-                        .signature
-                        .split_first_param(&mut Owner::new())
-                        .map(|(_, signature)| signature)
-                        .unwrap_or_else(|| overload.1.signature.clone()),
-                    None => overload.1.signature.clone(),
-                };
-                let signature = self
-                    .solver()
-                    .for_display(self.heap.mk_callable_from(signature));
-                details.push(format!("{signature}{suffix}"));
-            }
-            // We intentionally discard closest_overload.call_errors. When no overload matches,
-            // there's a high likelihood that the "closest" one by our heuristic isn't the right
-            // one, in which case the call errors are just noise.
-            errors
-                .error_builder(arguments_range, ErrorKind::NoMatchingOverload, header)
-                .with_details(details)
-                .with_context(context)
-                .emit();
             (
                 self.heap.mk_any_error(),
                 closest_overload.func.1.signature.clone(),
@@ -520,6 +488,117 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // overall_mismatch will double-count, but this is ok because all we care about is whether
         // the mismatch is 0 (correct arity) and relative mismatch sizes between overloads
         pos_mismatch + kw_mismatch + overall_mismatch
+    }
+
+    fn overload_error(
+        &self,
+        overloads: &[TargetWithTParams<Function>],
+        metadata: &FuncMetadata,
+        self_obj: Option<&Type>,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        arguments_range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+        closest_overload_signature: &Callable,
+        closest_overload_call_errors: ErrorCollector,
+    ) {
+        // Build a string showing the argument types for error messages
+        let mut arg_type_strs = Vec::new();
+        for arg in args {
+            let (ty, prefix) = match arg {
+                CallArg::Arg(value) => (value.infer(self, errors), ""),
+                CallArg::Star(value, _) => (value.infer(self, errors), "*"),
+            };
+            let ty_display = self.for_display(ty);
+            arg_type_strs.push(format!("{}{}", prefix, ty_display));
+        }
+        for kw in keywords {
+            let ty = kw.value.infer(self, errors);
+            let ty_display = self.for_display(ty);
+            if let Some(arg_name) = kw.arg {
+                arg_type_strs.push(format!("{}={}", arg_name.as_str(), ty_display));
+            } else {
+                arg_type_strs.push(format!("**{}", ty_display));
+            }
+        }
+        let args_display = format!("({})", arg_type_strs.join(", "));
+
+        let header = format!(
+            "No matching overload found for function `{}` called with arguments: {}",
+            metadata.kind.format(self.module().name()),
+            args_display
+        );
+        let mut details = vec!["Possible overloads:".to_owned()];
+        for overload in overloads {
+            let suffix = if overload.1.signature == *closest_overload_signature {
+                " [closest match]"
+            } else {
+                ""
+            };
+            let signature = match self_obj {
+                Some(_) => overload
+                    .1
+                    .signature
+                    .split_first_param(&mut Owner::new())
+                    .map(|(_, signature)| signature)
+                    .unwrap_or_else(|| overload.1.signature.clone()),
+                None => overload.1.signature.clone(),
+            };
+            let signature = self
+                .solver()
+                .for_display(self.heap.mk_callable_from(signature));
+            details.push(format!("  {signature}{suffix}"));
+        }
+        let mut builder = errors
+            .error_builder(arguments_range, ErrorKind::NoMatchingOverload, header)
+            .with_context(context)
+            .with_details(details);
+        if closest_overload_call_errors.is_empty() {
+            // If there were no call errors, the failure must have been an arity mismatch.
+            let mut arg_counts = closest_overload_signature.arg_counts();
+            let nposargs = args.len();
+            let nkwargs = keywords.len();
+            if self_obj.is_some() {
+                arg_counts.positional.min = arg_counts.positional.min.saturating_sub(1);
+                if let Some(max) = arg_counts.positional.max {
+                    arg_counts.positional.max = Some(max.saturating_sub(1));
+                }
+                arg_counts.overall.min = arg_counts.overall.min.saturating_sub(1);
+                if let Some(max) = arg_counts.overall.max {
+                    arg_counts.overall.max = Some(max.saturating_sub(1));
+                }
+            }
+            let check = |actual, expected: ArgCount, descriptor_prefix| {
+                let descriptor = format!("{descriptor_prefix}argument");
+                if actual < expected.min {
+                    Some(format!(
+                        "Expected at least {}, got {actual}",
+                        count(expected.min, &descriptor)
+                    ))
+                } else if let Some(max) = expected.max
+                    && actual > max
+                {
+                    Some(format!(
+                        "Expected at most {}, got {actual}",
+                        count(max, &descriptor)
+                    ))
+                } else {
+                    None
+                }
+            };
+            let arity_mismatch =
+                check(nposargs + nkwargs, arg_counts.overall, "").unwrap_or_else(|| {
+                    check(nposargs, arg_counts.positional, "positional ").unwrap_or_else(|| {
+                        check(nkwargs, arg_counts.keyword, "keyword ")
+                            .expect("Overload evaluation: expected arity mismatch not found")
+                    })
+                });
+            builder = builder.with_detail(arity_mismatch);
+        } else {
+            builder = builder.with_errors_as_details(closest_overload_call_errors);
+        }
+        builder.emit();
     }
 
     /// Returns the overload that matches the given arguments, or the one that produces the fewest

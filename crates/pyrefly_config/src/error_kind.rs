@@ -146,6 +146,10 @@ pub enum ErrorKind {
     /// An error caused by unpacking.
     /// e.g. attempting to unpack an iterable into the wrong number of variables.
     BadUnpacking,
+    /// A symbol has no type coverage. Emitted only by `pyrefly coverage check`.
+    CoverageMissing,
+    /// A symbol has partial type coverage. Emitted only by `pyrefly coverage check`.
+    CoveragePartial,
     /// Calling a function marked with `@deprecated`
     Deprecated,
     /// Division, floor division, or modulo by a literal zero value.
@@ -225,6 +229,8 @@ pub enum ErrorKind {
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
+    /// An error caused by incorrect usage or definition of a Sentinel.
+    InvalidSentinel,
     /// Attempting to call `super()` in a way that is not allowed.
     /// e.g. calling `super(Y, x)` on an object `x` that does not match the class `Y`.
     InvalidSuperCall,
@@ -453,6 +459,8 @@ impl ErrorKind {
     pub fn default_severity(self) -> Severity {
         // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
+            ErrorKind::CoverageMissing => Severity::Warn,
+            ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ExplicitAny => Severity::Ignore,
@@ -511,6 +519,14 @@ impl ErrorKind {
         matches!(self, ErrorKind::StringAsIterable)
     }
 
+    /// Coverage kinds are emitted only by `pyrefly coverage check`.
+    pub fn is_coverage(self) -> bool {
+        matches!(
+            self,
+            ErrorKind::CoverageMissing | ErrorKind::CoveragePartial
+        )
+    }
+
     /// Returns the public documentation URL for this error kind.
     /// Example: https://pyrefly.org/en/docs/error-kinds/#bad-context-manager
     pub fn docs_url(self) -> String {
@@ -550,7 +566,11 @@ mod tests {
     #[test]
     fn test_doc_headers() {
         // Verifies that the secondary headers in error-kinds.mdx contain the same variants as the ErrorKind enum and are sorted lexicographically.
-        let mut all_error_kinds = all::<ErrorKind>();
+
+        // Coverage kinds are only emitted by `pyrefly coverage check`, non-configurable, and
+        // therefore intentionally undocumented.
+        let mut all_error_kinds = all::<ErrorKind>().filter(|k| !k.is_coverage());
+
         let doc_path = std::env::var("ERROR_KINDS_DOC_PATH").expect(
             "ERROR_KINDS_DOC_PATH env var not set: cargo or buck should set this automatically",
         );
@@ -613,7 +633,7 @@ mod tests {
         );
         let doc_contents = std::fs::read_to_string(&doc_path)
             .unwrap_or_else(|e| panic!("Failed to read {doc_path}: {e}"));
-        for kind in all::<ErrorKind>() {
+        for kind in all::<ErrorKind>().filter(|k| !k.is_coverage()) {
             let header = format!("## {}", kind.to_name());
             let section_start = doc_contents.find(&header).expect(
                 "could not validate documented severities due to missing error kind header",

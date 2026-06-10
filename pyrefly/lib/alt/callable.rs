@@ -1605,7 +1605,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // function definition should remain keyword-passable in direct calls.
                     Type::Var(var) => self.callable_infer_params(
                         callable_name,
-                        &ParamList::new(concatenate.iter().map(|p| p.to_subset_param()).collect()),
+                        &ParamList::new(
+                            concatenate
+                                .iter()
+                                .map(|p| p.to_param_preserve_name())
+                                .collect(),
+                        ),
                         Some(var),
                         self_arg,
                         self_qs,

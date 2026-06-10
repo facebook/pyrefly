@@ -1945,6 +1945,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                 }
+                Some(CalleeKind::Function(FunctionKind::DataclassAsdict)) => {
+                    self.call_dataclasses_asdict(
+                        ty,
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    )
+                }
                 None if matches!(
                     &ty,
                     Type::Type(f) if matches!(&**f, Type::SpecialForm(SpecialForm::TypeForm))

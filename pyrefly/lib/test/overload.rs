@@ -1143,7 +1143,25 @@ def f(x: int, y: int) -> int: ...
 def f(x: int, y: int = 0) -> int:
     return x + y
 
-f(0, 1, 2)  # E: (x: int, y: int) -> int [closest match]
+f(0, 1, 2)  # E: (x: int, y: int) -> int [closest match]\n  Expected at most 2 arguments, got 3
+    "#,
+);
+
+testcase!(
+    test_wrong_method_arity,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: int, y: str = ..., /, *, z: float = ...) -> int: ...
+    @overload
+    def f(self, x: str, y: int = ..., /, *, z: float = ...) -> str: ...
+    def f(self, x: int | str, y: int | str = "", /, *, z: float = 0.0) -> int | str: ...
+
+A().f()  # E: Expected at least 1 argument, got 0
+A().f(0, "1", 0.0)  # E: Expected at most 2 positional arguments, got 3
+A().f(0, y="1", z=0.0)  # E: Expected at most 1 keyword argument, got 2
     "#,
 );
 
@@ -1416,6 +1434,21 @@ def g(x, y): return x
 
 g(1, "hello")  # E: No matching overload found for function `g` called with arguments: (Literal[1], Literal['hello'])
 g(x=1, y="hello")  # E: No matching overload found for function `g` called with arguments: (x=Literal[1], y=Literal['hello'])
+    "#,
+);
+
+testcase!(
+    test_overload_error_shows_call_error,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> str: ...
+def f(x): return x
+
+f(3.14)  # E: `float` is not assignable to parameter `x` with type `int`
     "#,
 );
 

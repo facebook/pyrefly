@@ -61,7 +61,6 @@ use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::type_info::TypeInfo;
-use crate::types::type_var::Restriction;
 use crate::types::types::CalleeKind;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -288,6 +287,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 self.heap.mk_never()
             }
+            (Type::Sentinel(s1), Type::Sentinel(s2)) if s1 == s2 => self.heap.mk_never(),
             (Type::ClassType(cls), Type::Literal(lit))
                 if cls.is_builtin("bool")
                     && let Lit::Bool(b) = &lit.value =>
@@ -497,14 +497,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
-                    // For constrained TypeVars, subtract from the concrete constraints
+                    // For TypeVars, subtract from the concrete constraints
                     // so that e.g. isinstance(x, (int, float)) with T(int, str, float)
                     // narrows the else branch to str instead of leaving it as T.
-                    result = if let Type::Quantified(q) = &result
-                        && let Restriction::Constraints(_) = q.restriction()
-                    {
+                    result = if let Type::Quantified(q) = &result {
                         let concrete = q.upper_bound(self.stdlib, self.heap);
-                        self.subtract(&concrete, &right)
+                        let subtraction = self.subtract(&concrete, &right);
+                        self.intersect_with_fallback(&result, &subtraction, &|| subtraction.clone())
                     } else {
                         self.subtract(&result, &right)
                     };
@@ -844,7 +843,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                     );
                     match right {
-                        Type::None | Type::Ellipsis | Type::Literal(_) => {
+                        Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_) => {
                             if self.is_subset_eq(&right, &facet_ty) {
                                 t.clone()
                             } else {
@@ -866,8 +865,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     match (&facet_ty, &right) {
                         (
-                            Type::None | Type::Ellipsis | Type::Literal(_),
-                            Type::None | Type::Ellipsis | Type::Literal(_),
+                            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_),
+                            Type::None | Type::Ellipsis | Type::Literal(_) | Type::Sentinel(_),
                         ) if self.literal_equal(&right, &facet_ty) => self.heap.mk_never(),
                         _ => t.clone(),
                     }
@@ -1422,7 +1421,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
+                if matches!(
+                    right,
+                    Type::Literal(_) | Type::None | Type::Ellipsis | Type::Sentinel(_)
+                ) {
                     self.intersect(ty, &right)
                 } else {
                     ty.clone()
@@ -1430,7 +1432,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotEq(v) => {
                 let right = self.expr_infer(v, errors);
-                if matches!(right, Type::Literal(_) | Type::None | Type::Ellipsis) {
+                if matches!(
+                    right,
+                    Type::Literal(_) | Type::None | Type::Ellipsis | Type::Sentinel(_)
+                ) {
                     self.distribute_over_union(ty, |t| match (t, &right) {
                         (_, _) if self.literal_equal(t, &right) => self.heap.mk_never(),
                         (Type::ClassType(cls), Type::Literal(lit))
@@ -2175,6 +2180,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match (left, right) {
             (Type::None, Type::None) => true,
             (Type::Ellipsis, Type::Ellipsis) => true,
+            (Type::Sentinel(s1), Type::Sentinel(s2)) => s1 == s2,
             (Type::Literal(left), Type::Literal(right)) => left.value == right.value,
             _ => false,
         }

@@ -3321,10 +3321,10 @@ T = TypeVar("T", int, str, float)
 
 def test(x: T) -> T:
     if isinstance(x, (int, float)):
-        reveal_type(x)  # E: revealed type: float | int
+        reveal_type(x)  # E: revealed type: (float & T) | (int & T)
         return x
     else:
-        reveal_type(x)  # E: revealed type: str
+        reveal_type(x)  # E: revealed type: str & T
         return x
 
 # Single constraint subtraction
@@ -3332,10 +3332,10 @@ U = TypeVar("U", int, str)
 
 def test2(x: U) -> U:
     if isinstance(x, int):
-        assert_type(x, int)
+        reveal_type(x)  # E: revealed type: int & U
         return x
     else:
-        assert_type(x, str)
+        reveal_type(x)  # E: revealed type: str & U
         return x
 
 # All constraints matched - else branch is Never
@@ -3344,7 +3344,7 @@ V = TypeVar("V", int, str)
 
 def test3(x: V) -> V:
     if isinstance(x, (int, str)):
-        assert_type(x, int | str)
+        assert_type(x, V)
         return x
     else:
         assert_type(x, Never)
@@ -3437,4 +3437,145 @@ def b():
         def inner() -> None:
             assert_type(val, int)
 "#,
+);
+
+testcase!(
+    test_isinstance_on_bounded_typevar,
+    r#"
+from typing import reveal_type
+def f[T: int | str](x: T) -> T:
+    if isinstance(x, int):
+        reveal_type(x)  # E: revealed type: int & T
+        return x
+    else:
+        reveal_type(x)  # E: revealed type: str & T
+        return x
+    "#,
+);
+
+testcase!(
+    test_isinstance_on_unrestricted_typevar,
+    r#"
+from typing import reveal_type
+def f[T](x: T) -> T:
+    if isinstance(x, int):
+        reveal_type(x)  # E: revealed type: int & T
+        return x
+    else:
+        reveal_type(x)  # E: revealed type: T
+        return x
+    "#,
+);
+
+testcase!(
+    test_narrow_after_method_call_on_typevar,
+    r#"
+from typing import reveal_type, Self
+class A:
+    def lower(self) -> Self: ...
+class B:
+    def lower(self) -> Self: ...
+def f[T: A | B](x: T):
+    x = x.lower()
+    if isinstance(x, A):
+        reveal_type(x)  # E: revealed type: A & T
+    else:
+        reveal_type(x)  # E: revealed type: B & T
+    "#,
+);
+
+testcase!(
+    bug = "We can't handle a quantified intersected with multiple concrete types",
+    test_narrow_typevar_multiple_times,
+    r#"
+class A:
+    def __add__(self, other) -> "A": ...
+    def f(self) -> "A": ...
+
+class B:
+    def __add__(self, other) -> "B": ...
+    def f(self) -> "B": ...
+
+def f[T: (A, B)](x: T, y: T) -> T | None:
+    if isinstance(x, A):
+        if isinstance(x, B):
+            return x + y  # E: `B` is not assignable to declared return type `T | None`
+
+def g[T: (A, B)](x: T) -> T | None:
+    if isinstance(x, A):
+        if isinstance(x, B):
+            return x.f()  # E: `B` is not assignable to declared return type `T | None`
+    "#,
+);
+
+testcase!(
+    test_sentinel_type_narrow_to_boolean,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: bool | MISSING):
+    if x is MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, bool)
+    if x is not MISSING:
+        assert_type(x, bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    test_sentinel_type_narrow_to_boolean_eq,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: bool | MISSING):
+    if x == MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, bool)
+    if x != MISSING:
+        assert_type(x, bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    sentinel_narrow_from_union,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: int | bool | MISSING):
+    if x is MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, int | bool)
+    if x is not MISSING:
+        assert_type(x, int | bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    sentinel_narrow_with_type_param,
+    r#"
+from typing_extensions import Sentinel
+
+MIS = Sentinel("MIS", repr="MISSING")
+
+def a[T](x: T | MIS) -> T:
+    if x is not MIS:
+        return x
+    else:
+        raise ValueError("a")
+    "#,
 );

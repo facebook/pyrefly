@@ -38,7 +38,7 @@ fn apply_patch(info: &ModuleInfo, range: TextRange, patch: String) -> (String, S
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let mut report = "Code Actions Results:\n".to_owned();
     let transaction = state.transaction();
-    for (title, info, range, patch) in transaction
+    for (title, edits) in transaction
         .local_quickfix_code_actions_sorted(
             handle,
             TextRange::new(position, position),
@@ -47,7 +47,10 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         )
         .unwrap_or_default()
     {
-        let (before, after) = apply_patch(&info, range, patch);
+        // All quick-fix edits target the triggering file; apply them together.
+        let info = edits[0].0.clone();
+        let before = info.contents().as_str().to_owned();
+        let after = apply_refactor_edits_for_module(&info, &edits);
         report.push_str("# Title: ");
         report.push_str(&title);
         report.push('\n');
@@ -835,16 +838,45 @@ np
             None,
         )
         .unwrap_or_default();
-    let (_, _, _, insert_text) = actions
+    let (_, edits) = actions
         .iter()
-        .find(|(title, _, _, _)| title == "Use common alias: `import numpy as np`")
+        .find(|(title, _)| title == "Use common alias: `import numpy as np`")
         .expect("expected common alias import code action");
-    assert_eq!(insert_text.trim(), "import numpy as np");
+    assert_eq!(edits[0].2.trim(), "import numpy as np");
     assert!(
-        !actions
+        !actions.iter().any(|(_, edits)| edits
             .iter()
-            .any(|(_, _, _, insert_text)| insert_text.trim() == "import numpy"),
+            .any(|(_, _, insert_text)| insert_text.trim() == "import numpy")),
         "expected alias import to suppress non-aliased import code action"
+    );
+}
+
+#[test]
+fn insert_import_uses_file_line_ending() {
+    // The file uses Windows (CRLF) line endings; an inserted import must match the
+    // file's line ending instead of emitting a bare `\n` and mixing endings.
+    let code = "my_export\r\n";
+    let files = [("a", "my_export = 3\n"), ("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    // Cursor on `my_export` (offset 0), the unknown name.
+    let position = TextSize::new(0);
+    let actions = state
+        .transaction()
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default();
+    let (_, edits) = actions
+        .iter()
+        .find(|(title, _)| title == "Insert import: `from a import my_export`")
+        .expect("expected an import quick fix for `my_export`");
+    assert_eq!(
+        edits[0].2, "from a import my_export\r\n",
+        "import inserted into a CRLF file should use CRLF line endings"
     );
 }
 
@@ -1338,9 +1370,10 @@ fn redundant_cast_action_after(code: &str, cursor_offset: usize) -> Option<Strin
             None,
         )
         .unwrap_or_default();
-    let (_, module, range, patch) = actions
+    let (_, edits) = actions
         .into_iter()
-        .find(|(title, _, _, _)| title == "Remove redundant cast")?;
+        .find(|(title, _)| title == "Remove redundant cast")?;
+    let (module, range, patch) = edits.into_iter().next()?;
     if module.path() != module_info.path() {
         return None;
     }
@@ -4779,4 +4812,178 @@ def test_one(answer: int, user: str):
     print(answer, user)
 "#;
     assert_eq!(expected.trim(), updated_all.trim());
+}
+
+/// Returns the edits of the "Add `@override` decorator" quick fix for the method
+/// at the last `def foo` in `code`, or `None` if the fix is not offered.
+fn add_override_quickfix_edits(
+    code: &str,
+) -> Option<(ModuleInfo, Vec<(Module, TextRange, String)>)> {
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_module) = env.enable_missing_override_decorator_error().to_state();
+    let handle = handle_for_module("main");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+
+    // Put the cursor on the overriding method (last `def foo`).
+    let derived_foo = code.rfind("def foo").unwrap() + "def ".len();
+    let position = TextSize::try_from(derived_foo).unwrap();
+
+    let (_, edits) = transaction
+        .local_quickfix_code_actions_sorted(
+            &handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(title, _)| title == "Add `@override` decorator")?;
+    Some((module_info, edits))
+}
+
+#[test]
+fn quickfix_add_override_decorator_adds_import() {
+    // `override` is not in scope, so the fix inserts both the decorator and the
+    // import in a single action.
+    let code = "\
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    def foo(self) -> None:
+        pass
+";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    assert_eq!(edits.len(), 2, "expected decorator + import edits");
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "\
+from typing import override
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    @override
+    def foo(self) -> None:
+        pass
+";
+    assert_eq!(expected, after);
+}
+
+#[test]
+fn quickfix_add_override_decorator_uses_file_line_ending() {
+    // The file uses Windows (CRLF) line endings. Both inserted edits (the
+    // decorator and the import) must use CRLF instead of emitting a bare `\n`
+    // and mixing line endings.
+    let code = "class Base:\r\n    def foo(self) -> None:\r\n        pass\r\n\r\nclass Derived(Base):\r\n    def foo(self) -> None:\r\n        pass\r\n";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    assert_eq!(edits.len(), 2, "expected decorator + import edits");
+    for (_, _, insert_text) in &edits {
+        assert!(
+            !insert_text.replace("\r\n", "").contains('\n'),
+            "inserted text must not contain a bare `\\n` on a CRLF file: {insert_text:?}"
+        );
+    }
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "from typing import override\r\nclass Base:\r\n    def foo(self) -> None:\r\n        pass\r\n\r\nclass Derived(Base):\r\n    @override\r\n    def foo(self) -> None:\r\n        pass\r\n";
+    assert_eq!(expected, after);
+}
+
+#[test]
+fn quickfix_add_override_decorator_skips_import_when_in_scope() {
+    // `override` is already imported, so only the decorator edit is produced.
+    let code = "\
+from typing import override
+
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    def foo(self) -> None:
+        pass
+";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    assert_eq!(
+        edits.len(),
+        1,
+        "decorator only when `override` already imported"
+    );
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "\
+from typing import override
+
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    @override
+    def foo(self) -> None:
+        pass
+";
+    assert_eq!(expected, after);
+}
+
+#[test]
+fn quickfix_add_override_decorator_not_offered_when_present() {
+    // The method already has `@override`, so no quick fix is offered.
+    let code = "\
+from typing import override
+
+class Base:
+    def foo(self) -> None:
+        pass
+
+class Derived(Base):
+    @override
+    def foo(self) -> None:
+        pass
+";
+    assert!(
+        add_override_quickfix_edits(code).is_none(),
+        "no override quick fix when the decorator is already present"
+    );
+}
+
+#[test]
+fn quickfix_add_override_decorator_inserted_above_existing_decorators() {
+    // `@override` is inserted above an existing decorator, becoming the outermost one.
+    let code = "\
+from typing import override
+
+class Base:
+    @property
+    def foo(self) -> int:
+        return 1
+
+class Derived(Base):
+    @property
+    def foo(self) -> int:
+        return 2
+";
+    let (module_info, edits) =
+        add_override_quickfix_edits(code).expect("expected override quick fix");
+    let after = apply_refactor_edits_for_module(&module_info, &edits);
+    let expected = "\
+from typing import override
+
+class Base:
+    @property
+    def foo(self) -> int:
+        return 1
+
+class Derived(Base):
+    @override
+    @property
+    def foo(self) -> int:
+        return 2
+";
+    assert_eq!(expected, after);
 }

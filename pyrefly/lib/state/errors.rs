@@ -22,9 +22,8 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Stmt;
 use ruff_python_ast::visitor::Visitor;
-use ruff_python_ast::visitor::walk_stmt;
+use ruff_python_ast::visitor::walk_expr;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -160,19 +159,25 @@ pub fn find_containing_range(
     }
 }
 
-/// Extracts `(start_line, end_line)` ranges for *simple* statements (those
-/// without an indented suite, e.g. assignments, returns, expression statements,
-/// `del`, `assert`) that span more than one physical line via bracketed
-/// (parenthesized/implicit) line continuation.
+/// Extracts `(start_line, end_line)` line ranges for multi-line expressions
+/// where a suppression comment placed on the line *above* an interior line
+/// would be relocated by a formatter (e.g. Black) out of the bracketed group,
+/// so the checker would no longer associate it with the error. These are the
+/// conditional and operator expressions — ternaries (`a if c else b`), boolean
+/// operators (`a and b`), binary operators (`a + b`), and comparisons
+/// (`a < b`) — split across physical lines via bracketed continuation. Errors
+/// on a non-first line of such a range must be suppressed inline instead.
 ///
-/// Compound statements (`def`, `class`, `if`, `for`, `while`, `with`, `try`,
-/// `match`) are intentionally *not* recorded: their range covers an indented
-/// body, so a suppression placed above the header must not stand in for an
-/// error deep inside the body. We still recurse into them to find nested simple
-/// statements.
+/// Collection literals (dicts, lists, sets, tuples, comprehensions) are
+/// intentionally *not* recorded: each element sits on its own line, so a
+/// comment on the line above an element is stable under formatting and should
+/// be kept. We still recurse into them, so an operator expression used *as* an
+/// element (e.g. a multi-line ternary dict value) is still captured.
 ///
-/// The returned list is sorted by start line. Simple statements never nest, so
-/// the ranges are non-overlapping.
+/// The returned list is sorted by start line and non-overlapping: nested
+/// expressions (e.g. a binary operator inside a ternary) are merged into a
+/// single enclosing range, preserving the binary-search invariant of
+/// `find_containing_range`.
 pub fn sorted_bracketed_continuation_ranges(
     ast: &ModModule,
     module: &Module,
@@ -182,27 +187,21 @@ pub fn sorted_bracketed_continuation_ranges(
         ranges: Vec<(LineNumber, LineNumber)>,
     }
     impl<'a> Visitor<'a> for Collector<'a> {
-        fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            let is_compound = matches!(
-                stmt,
-                Stmt::FunctionDef(_)
-                    | Stmt::ClassDef(_)
-                    | Stmt::If(_)
-                    | Stmt::For(_)
-                    | Stmt::While(_)
-                    | Stmt::With(_)
-                    | Stmt::Try(_)
-                    | Stmt::Match(_)
-            );
-            if !is_compound {
-                let display = self.module.display_range(stmt.range());
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            // Conditional/operator expressions float an interior own-line
+            // comment when split across lines; collection literals do not.
+            if matches!(
+                expr,
+                Expr::If(_) | Expr::BoolOp(_) | Expr::BinOp(_) | Expr::Compare(_)
+            ) {
+                let display = self.module.display_range(expr.range());
                 let start = display.start.line_within_file();
                 let end = display.end.line_within_file();
                 if start != end {
                     self.ranges.push((start, end));
                 }
             }
-            walk_stmt(self, stmt);
+            walk_expr(self, expr);
         }
     }
     let mut collector = Collector {
@@ -211,7 +210,21 @@ pub fn sorted_bracketed_continuation_ranges(
     };
     collector.visit_body(&ast.body);
     collector.ranges.sort();
-    collector.ranges
+
+    // Merge overlapping/nested ranges so the result stays non-overlapping and
+    // sorted, as `find_containing_range` requires.
+    let mut merged: Vec<(LineNumber, LineNumber)> = Vec::new();
+    for (start, end) in collector.ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => {
+                if end > last.1 {
+                    last.1 = end;
+                }
+            }
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
 }
 
 /// Per-module multi-line ranges and ignore-all directives, computed after parsing.

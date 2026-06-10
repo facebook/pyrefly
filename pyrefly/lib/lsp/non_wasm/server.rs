@@ -4434,8 +4434,13 @@ impl Server {
                 import_format,
                 Some(&self.lsp_thread_pool),
             ) {
-                actions.extend(quickfixes.into_iter().filter_map(
-                    |(title, info, range, insert_text)| {
+                actions.extend(quickfixes.into_iter().filter_map(|(title, edits)| {
+                    // A quick fix may carry more than one edit (e.g. the missing
+                    // `@override` fix inserts both the decorator and an import). Group
+                    // every edit by the document it targets into a single workspace edit
+                    // so the whole fix applies in one action.
+                    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                    for (info, range, insert_text) in edits {
                         let lsp_location = self.to_lsp_location(&TextRangeWithModule {
                             module: info.clone(),
                             range,
@@ -4472,23 +4477,21 @@ impl Server {
                                 }
                             }
                         };
-                        Some(CodeActionOrCommand::CodeAction(CodeAction {
-                            title,
-                            kind: Some(CodeActionKind::QUICKFIX),
-                            edit: Some(WorkspaceEdit {
-                                changes: Some(HashMap::from([(
-                                    edit_uri,
-                                    vec![TextEdit {
-                                        range: edit_range,
-                                        new_text: insert_text,
-                                    }],
-                                )])),
-                                ..Default::default()
-                            }),
+                        changes.entry(edit_uri).or_default().push(TextEdit {
+                            range: edit_range,
+                            new_text: insert_text,
+                        });
+                    }
+                    Some(CodeActionOrCommand::CodeAction(CodeAction {
+                        title,
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        edit: Some(WorkspaceEdit {
+                            changes: Some(changes),
                             ..Default::default()
-                        }))
-                    },
-                ));
+                        }),
+                        ..Default::default()
+                    }))
+                }));
             }
             record_code_action_telemetry("quickfix", start);
         }

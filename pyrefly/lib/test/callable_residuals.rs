@@ -321,7 +321,7 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
@@ -344,7 +344,7 @@ def wrap[**P, R](f: Callable[P, R]) -> Wrapper[P, R]:
 def f[S](x: S) -> S: ...
 wrapper = wrap(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 assert_type(wrapper(1), int)
 "#,
 );
@@ -362,7 +362,7 @@ class Wrapper[**P, R]:
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper)  # E: revealed type: Wrapper[[x: GenericResidual@R], GenericResidual@R]
-reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], /, x: R) -> R
+reveal_type(wrapper.__call__)  # E: [R](self: Wrapper[[x: R], R], x: R) -> R
 "#,
 );
 

@@ -2366,6 +2366,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::TypeVar(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.type_var().clone(),
             )),
+            Type::Sentinel(_) => acc.push(AttributeBase1::ClassInstance(
+                self.stdlib.sentinel().clone(),
+            )),
             Type::ParamSpec(_) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.param_spec().clone(),
             )),
@@ -2583,6 +2586,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.stdlib.object().clone(),
                 )),
             },
+            Type::Intersect(_)
+                if let Some((q, Some(Type::ClassType(cls)))) = ty.as_quantified() =>
+            {
+                acc.push(AttributeBase1::Quantified(q.clone(), cls.clone()));
+            }
             Type::Intersect(x) => {
                 let mut acc_intersect = Vec::new();
                 for t in x.0 {
