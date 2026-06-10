@@ -203,18 +203,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn is_type_alias_with_pydantic_strict_metadata(&self, ty: &Type) -> bool {
-        if let Type::TypeAlias(ta) = ty {
-            let alias = self.get_type_alias(ta);
-            if let Type::Annotated(_, metadata) = alias.as_type() {
-                return metadata
-                    .iter()
-                    .any(|metadata| self.is_pydantic_strict_metadata(metadata));
-            }
-        }
-        false
-    }
-
     /// Get the untyped form (in other words, the instance type, after applying
     /// any type arguments) for a base class.
     ///
@@ -229,7 +217,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let range = base_expr.range();
         let (inferred_ty, has_strict_from_infer) = self.base_class_expr_infer(base_expr, errors);
         let has_pydantic_strict_metadata =
-            self.is_type_alias_with_pydantic_strict_metadata(&inferred_ty) || has_strict_from_infer;
+            self.is_pydantic_strict_type_alias(&inferred_ty) || has_strict_from_infer;
         let ty = self.untype(inferred_ty, range, errors);
         (
             self.validate_type_form(ty, range, type_form_context, errors),
