@@ -2372,3 +2372,164 @@ class Mutable:
     def __delattr__(self, name: str) -> None: ...
 "#,
 );
+
+// A `@property` override of an inherited `init=False` field must not turn the
+// field into an `__init__` parameter: the field's spec stays inherited.
+testcase!(
+    test_property_override_init_false_field,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = dataclasses.field(init=False)
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+B()  # foo is init=False, so no argument is expected
+B(foo=2)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+// A `@property` override inherits the parent field's type and keywords, so the
+// field is still an `__init__` param typed by the parent (here `int`).
+testcase!(
+    test_property_override_inherits_field_spec,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = 0
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+B()
+B(5)
+B(foo=5)
+B(foo="x")  # E: Argument `Literal['x']` is not assignable to parameter `foo` with type `int`
+    "#,
+);
+
+// A property override of an inherited field with no default leaves the param
+// required, inheriting the parent's type.
+testcase!(
+    test_property_override_inherits_required_field,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+B()  # E: Missing argument `foo`
+B(5)
+B(foo=5)
+    "#,
+);
+
+// Multi-level: the field declared in A is inherited correctly through B's
+// property override into a grandchild C.
+testcase!(
+    test_property_override_field_multilevel,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = dataclasses.field(init=False)
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+@dataclasses.dataclass
+class C(B):
+    bar: int = 0
+C()
+C(bar=1)
+C(foo=2)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+// A property with a setter still does not reintroduce an inherited init=False
+// field as an `__init__` parameter.
+testcase!(
+    test_property_with_setter_override_init_false_field,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = dataclasses.field(init=False)
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+    @foo.setter
+    def foo(self, value: int) -> None:
+        pass
+B()
+B(foo=2)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+// A property declared alongside a same-class field annotation is left untouched
+// by the inherited-shadow fix: pyrefly keeps treating the property as the member.
+testcase!(
+    test_property_same_class_field_unchanged,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = 0
+    @property
+    def foo(self) -> int:
+        return 1
+A()
+A(foo=2)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+// A property override of an inherited generic field inherits the substituted type
+// arg, so `x` is typed `int` (from `A[int]`) not the type variable `T`.
+testcase!(
+    test_property_override_generic_dataclass,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A[T]:
+    x: T
+@dataclasses.dataclass
+class B(A[int]):
+    @property
+    def x(self) -> int:  # E: Class member `B.x` overrides parent class `A` in an inconsistent manner
+        return 1
+B(1)
+B(x="bad")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int`
+    "#,
+);
+
+// A subclass that both re-annotates the inherited field and shadows it with a
+// property pins the guard branch: the current-class annotation makes
+// `declares_field_here` true, so the resolution is not skipped.
+testcase!(
+    test_property_override_reannotated_field,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = 5
+@dataclasses.dataclass
+class B(A):
+    foo: int  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+    @property
+    def foo(self) -> int:
+        return 1
+B(foo="x")  # E: Argument `Literal['x']` is not assignable to parameter `foo` with type `int`
+    "#,
+);

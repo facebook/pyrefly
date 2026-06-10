@@ -3816,11 +3816,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<WithDefiningClass<Arc<ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
             let field = self.get_non_synthesized_field_from_current_class_only(cls, name)?;
-            if matches!(
+            // Skip members that don't actually declare the dataclass field here, so the
+            // walk continues to the ancestor that does (preserving its type and keywords).
+            let assigned_in_method = matches!(
                 field.initialization(),
                 ClassFieldInitialization::Method | ClassFieldInitialization::ClassMethod
-            ) {
-                // This parent happens to assign to the field in a method but doesn't define it.
+            );
+            let declares_field_here = self
+                .get_class_fields(cls)
+                .is_some_and(|fields| fields.is_field_annotated(name));
+            let shadows_inherited_field = field.is_property() && !declares_field_here;
+            if assigned_in_method || shadows_inherited_field {
                 None
             } else {
                 Some(field)
