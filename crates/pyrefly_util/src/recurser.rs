@@ -75,11 +75,12 @@ mod tests {
                     tree(t, r, res);
                 }
             }
-            Tree::Leaf(i, n) if let Some(_guard) = r.recurse(*i) => {
-                res.push(*i);
-                tree(n, r, res);
+            Tree::Leaf(i, n) => {
+                if let Some(_guard) = r.recurse(*i) {
+                    res.push(*i);
+                    tree(n, r, res);
+                }
             }
-            Tree::Leaf(_, _) => {}
         }
     }
 
