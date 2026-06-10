@@ -73,6 +73,7 @@ use crate::export::definitions::Definition;
 use crate::export::definitions::DefinitionStyle;
 use crate::export::definitions::Definitions;
 use crate::export::definitions::MutableCaptureKind;
+use crate::export::definitions::Reachability;
 use crate::export::exports::LookupExport;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -118,6 +119,8 @@ pub struct NameWriteInfo {
     /// If this name only has one assignment, we will skip the `Anywhere` as
     /// an optimization, and this field will be `None`.
     pub anywhere_range: Option<TextRange>,
+    /// Whether the definition is reachable for the current sys_info configuration.
+    pub reachability: Reachability,
 }
 
 #[derive(Clone, Debug)]
@@ -190,6 +193,7 @@ struct StaticInfo {
     /// The range of the textually last assignment to this name. Used to check
     /// whether a captured variable is reassigned after a nested function definition.
     last_range: TextRange,
+    reachability: Reachability,
 }
 
 #[derive(Clone, Debug)]
@@ -267,7 +271,7 @@ impl StaticStyle {
 
     fn of_definition(
         name: Hashed<&Name>,
-        definition: Definition,
+        definition: &Definition,
         scopes: Option<&Scopes>,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
     ) -> Self {
@@ -333,6 +337,7 @@ impl StaticInfo {
             } else {
                 None
             },
+            reachability: self.reachability,
         }
     }
 }
@@ -352,6 +357,7 @@ impl Static {
         range: TextRange,
         style: StaticStyle,
         last_range: TextRange,
+        reachability: Reachability,
     ) {
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
@@ -359,6 +365,7 @@ impl Static {
                     range,
                     style,
                     last_range,
+                    reachability,
                 });
             }
             Entry::Occupied(mut e) => {
@@ -400,6 +407,7 @@ impl Static {
                         }
                     }
                 }
+                found.reachability = found.reachability.combine(reachability);
             }
         }
     }
@@ -416,12 +424,14 @@ impl Static {
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
         scopes: Option<&Scopes>,
+        include_unreachable_defs: bool,
     ) -> (SmallSet<Name>, SmallSet<Name>, SmallMap<Name, String>) {
         let mut d = Definitions::new(
             x,
             module_info.name(),
             module_info.path().is_init(),
             sys_info,
+            include_unreachable_defs,
         );
         if top_level {
             if module_info.name() != ModuleName::builtins() {
@@ -450,8 +460,8 @@ impl Static {
             let range = definition.range;
             let last_range = definition.last_range;
             let style =
-                StaticStyle::of_definition(name.as_ref(), definition, scopes, get_annotation_idx);
-            self.upsert(name, range, style, last_range);
+                StaticStyle::of_definition(name.as_ref(), &definition, scopes, get_annotation_idx);
+            self.upsert(name, range, style, last_range, definition.reachability);
         }
         for (module, range, wildcard) in all_wildcards {
             // Builtins are a fallback, so they should never shadow an existing definition.
@@ -462,7 +472,13 @@ impl Static {
                 if skip_existing && self.0.get_hashed(name).is_some() {
                     continue;
                 }
-                self.upsert(name.cloned(), range, StaticStyle::MergeableImport, range)
+                self.upsert(
+                    name.cloned(),
+                    range,
+                    StaticStyle::MergeableImport,
+                    range,
+                    Reachability::Reachable,
+                )
             }
         }
         let final_names = d.final_names.keys().cloned().collect();
@@ -481,6 +497,7 @@ impl Static {
                 name.range,
                 StaticStyle::SingleDef(None),
                 name.range,
+                Reachability::Reachable,
             )
         };
         Ast::expr_lvalue(x, &mut add);
@@ -1680,6 +1697,7 @@ impl Scopes {
         lookup: &dyn LookupExport,
         sys_info: SysInfo,
         get_annotation_idx: &mut impl FnMut(ShortIdentifier) -> Idx<KeyAnnotation>,
+        include_unreachable_defs: bool,
     ) {
         let mut initialize = |scope: &mut Scope, myself: Option<&Self>| {
             let (implicit_captures, final_names, final_string_values) = scope.stat.stmts(
@@ -1690,6 +1708,7 @@ impl Scopes {
                 sys_info,
                 get_annotation_idx,
                 myself,
+                include_unreachable_defs,
             );
             scope.implicit_captures = implicit_captures;
             scope.final_names = final_names;
@@ -2044,6 +2063,7 @@ impl Scopes {
         name: Hashed<&Name>,
         idx: Idx<Key>,
         style: FlowStyle,
+        allow_unreachable: bool,
     ) -> Option<NameWriteInfo> {
         let in_loop = self.loop_depth() != 0;
         match self.current_mut().flow.info.entry_hashed(name.cloned()) {
@@ -2055,6 +2075,9 @@ impl Scopes {
             }
         }
         let static_info = self.current().stat.0.get_hashed(name)?;
+        if !allow_unreachable && !static_info.reachability.is_reachable() {
+            return None;
+        }
         Some(static_info.as_name_write_info())
     }
 
@@ -2247,6 +2270,7 @@ impl Scopes {
             name.range,
             StaticStyle::SingleDef(ann),
             name.range,
+            Reachability::Reachable,
         )
     }
 
@@ -2403,6 +2427,7 @@ impl Scopes {
             name.range,
             StaticStyle::PossibleLegacyTParam,
             name.range,
+            Reachability::Reachable,
         )
     }
 
@@ -2416,6 +2441,7 @@ impl Scopes {
             name.range,
             StaticStyle::SingleDef(None),
             name.range,
+            Reachability::Reachable,
         );
     }
 
@@ -2430,6 +2456,22 @@ impl Scopes {
     /// the main AST traversal in bindings.
     pub fn add_lvalue_to_current_static(&mut self, x: &Expr) {
         self.current_mut().stat.expr_lvalue(x);
+    }
+
+    /// Synthesize a static definition entry for `name` in the current scope if it
+    /// is missing. Used when we analyze unreachable code for IDE metadata.
+    pub fn add_synthetic_definition(&mut self, name: &Name, range: TextRange) {
+        let hashed_ref = Hashed::new(name);
+        if self.current().stat.0.get_hashed(hashed_ref).is_some() {
+            return;
+        }
+        self.current_mut().stat.upsert(
+            Hashed::new(name.clone()),
+            range,
+            StaticStyle::SingleDef(None),
+            range,
+            Reachability::Reachable,
+        );
     }
 
     /// Add a loop exit point to the current innermost loop with the current flow.
@@ -3096,6 +3138,9 @@ impl ScopeTrace {
                     Key::Definition(short_identifier)
                         if short_identifier.range().contains_inclusive(position) =>
                     {
+                        definition = Some(key);
+                    }
+                    Key::Anywhere(x) if x.1.contains_inclusive(position) => {
                         definition = Some(key);
                     }
                     _ => {}
