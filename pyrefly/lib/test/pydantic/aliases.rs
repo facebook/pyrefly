@@ -135,6 +135,28 @@ x3 = Example(id="1", someAttribute123="value")
 );
 
 pydantic_testcase!(
+    test_configdict_alias_generator,
+    r#"
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+
+class Model(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel)
+    some_property: str
+
+Model(some_property="foo") # E: Missing argument `someProperty` in function `Model.__init__`
+Model(someProperty="foo")
+
+class ModelByName(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, validate_by_name=True)
+    some_property: str
+
+ModelByName(some_property="foo")
+ModelByName(someProperty="foo")
+    "#,
+);
+
+pydantic_testcase!(
     test_validation_inheritance,
     r#"
 from pydantic import BaseModel, ConfigDict, Field
