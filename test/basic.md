@@ -291,3 +291,13 @@ $ cd $TMPDIR && rm -rf detrepo && mkdir detrepo && cd detrepo && touch pyrefly.t
 IDENTICAL
 [0]
 ```
+
+## Regression test: No OOM on many conditional tuple appends
+
+```scrut {output_stream: stderr}
+$ touch $TMPDIR/pyrefly.toml && \
+> printf 'class D0: pass\nclass D1: pass\nclass D2: pass\nclass D3: pass\nclass D4: pass\nclass D5: pass\nclass D6: pass\nclass D7: pass\nclass D8: pass\nclass D9: pass\nclass D10: pass\nclass D11: pass\nclass D12: pass\nclass D13: pass\nclass D14: pass\nclass D15: pass\nclass D16: pass\nclass D17: pass\nclass D18: pass\nclass D19: pass\nclass D20: pass\nclass D21: pass\nclass D22: pass\nclass D23: pass\nclass D24: pass\nclass D25: pass\nclass D26: pass\nclass D27: pass\nclass D28: pass\nclass D29: pass\n\ndef repro(conds: list[bool]):\n  z = ()\n  if conds[0]: z += (D0(),)\n  if conds[1]: z += (D1(),)\n  if conds[2]: z += (D2(),)\n  if conds[3]: z += (D3(),)\n  if conds[4]: z += (D4(),)\n  if conds[5]: z += (D5(),)\n  if conds[6]: z += (D6(),)\n  if conds[7]: z += (D7(),)\n  if conds[8]: z += (D8(),)\n  if conds[9]: z += (D9(),)\n  if conds[10]: z += (D10(),)\n  if conds[11]: z += (D11(),)\n  if conds[12]: z += (D12(),)\n  if conds[13]: z += (D13(),)\n  if conds[14]: z += (D14(),)\n  if conds[15]: z += (D15(),)\n  if conds[16]: z += (D16(),)\n  if conds[17]: z += (D17(),)\n  if conds[18]: z += (D18(),)\n  if conds[19]: z += (D19(),)\n  if conds[20]: z += (D20(),)\n  if conds[21]: z += (D21(),)\n  if conds[22]: z += (D22(),)\n  if conds[23]: z += (D23(),)\n  if conds[24]: z += (D24(),)\n  if conds[25]: z += (D25(),)\n  if conds[26]: z += (D26(),)\n  if conds[27]: z += (D27(),)\n  if conds[28]: z += (D28(),)\n  if conds[29]: z += (D29(),)\n  return z\n' > $TMPDIR/oom_repro.py && \
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/oom_repro.py
+ INFO 0 errors* (glob)
+[0]
+```
