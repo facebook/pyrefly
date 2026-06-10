@@ -1718,10 +1718,10 @@ Silences every error kind. Other settings (scalar flags, behavior settings) are 
 
 #### Preset: `basic`
 
-A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Only the highest-confidence diagnostics (crashes and clearly broken code) are active. Every other error kind is silenced.
+A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
-- Enables (as errors): [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unknown-name`](./error-kinds.mdx#unknown-name), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`not-async`](./error-kinds.mdx#not-async), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
+- Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
 - All other error kinds are silenced.
 
 #### Preset: `legacy`
@@ -3894,6 +3894,21 @@ from typing import *
 
 class TD(TypedDict):
     x: Option[Self]
+```
+
+## invalid-sentinel
+
+An error caused by incorrect definition of a Sentinel. A few examples:
+
+```python
+from typing_extensions import Sentinel
+
+# First argument passed to sentinel constructor isn't a string literal
+my_str: str = "MISSING"
+A = Sentinel(my_str)
+
+# Invalid arguments passed to sentinel constructor
+MISSING = Sentinel("MISSING", non_existent="")
 ```
 
 ## invalid-super-call
