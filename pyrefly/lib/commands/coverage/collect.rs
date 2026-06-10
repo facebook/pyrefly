@@ -1463,63 +1463,149 @@ fn collect_reexport_fqns(
         .collect()
 }
 
-/// When a `.pyi` stub only covers a subset of a `.py` file's public
-/// symbols, add the uncovered symbols from the `.py` so that completeness
-/// metrics reflect the full module interface.
-fn merge_uncovered_py_symbols(
-    stub_functions: &mut Vec<Function>,
-    stub_variables: &mut Vec<Variable>,
-    stub_classes: &mut Vec<ReportClass>,
-    py_functions: Vec<Function>,
-    py_variables: Vec<Variable>,
-    py_classes: Vec<ReportClass>,
-    stub_class_members: &SmallSet<String>,
-    stub_filter: Option<&(String, HashSet<String>)>,
-    stub_reexports: &SmallSet<String>,
-) {
-    // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
-    // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
-    let stub_names: SmallSet<String> = stub_functions
-        .iter()
-        .map(|f| &f.name)
-        .chain(stub_variables.iter().map(|v| &v.name))
-        .chain(stub_classes.iter().map(|c| &c.name))
-        .cloned()
-        .collect();
-    // Keep py-only names the stub neither defines nor omits from an explicit `__all__`.
-    let keep = |name: &str| {
-        !stub_names.contains(name)
-            && stub_filter.is_none_or(|(prefix, fqns)| is_public_fqn(name, prefix, fqns))
-    };
-    // A re-exported name owns its whole `Name.*` subtree: when the stub re-exports a class,
-    // the .py class AND its attributes must drop together.
-    let is_reexported = |name: &str| {
-        stub_reexports.iter().any(|reexport| {
-            name == reexport.as_str()
-                || name
-                    .strip_prefix(reexport.as_str())
-                    .is_some_and(|rest| rest.starts_with('.'))
+struct ModuleSymbols {
+    module: Module,
+    bindings: Bindings,
+    answers: Arc<Answers>,
+    exports: Arc<SmallMap<Name, ExportLocation>>,
+    dunder_all: SmallSet<Name>,
+    tco_classes: SmallSet<Idx<KeyClass>>,
+    functions: Vec<Function>,
+    variables: Vec<Variable>,
+    classes: Vec<ReportClass>,
+    suppressions: Vec<ReportSuppression>,
+}
+
+impl ModuleSymbols {
+    fn collect(transaction: &Transaction, handle: &Handle) -> Option<Self> {
+        let bindings = transaction.get_bindings(handle)?;
+        let module = transaction.get_module_info(handle)?;
+        let answers = transaction.get_answers(handle)?;
+        let exports = transaction.get_exports(handle);
+        let dunder_all = collect_dunder_all_or_empty(transaction, handle);
+        let tco_classes = collect_type_check_only_classes(&bindings);
+        let mut functions = parse_functions(
+            &module,
+            &bindings,
+            &answers,
+            &exports,
+            &dunder_all,
+            &tco_classes,
+        );
+        merge_overloads(&mut functions);
+        let classes = parse_classes(
+            &module,
+            &bindings,
+            &answers,
+            transaction,
+            handle,
+            &tco_classes,
+        );
+        let mut variables = parse_variables(
+            &module,
+            &bindings,
+            &answers,
+            &exports,
+            &dunder_all,
+            &functions,
+            &classes,
+        );
+        variables.extend(parse_instance_attrs(
+            &module,
+            &bindings,
+            &answers,
+            &tco_classes,
+        ));
+        let suppressions = parse_suppressions(&module);
+        Some(ModuleSymbols {
+            module,
+            bindings,
+            answers,
+            exports,
+            dunder_all,
+            tco_classes,
+            functions,
+            variables,
+            classes,
+            suppressions,
         })
-    };
-    for py_func in py_functions {
-        if keep(&py_func.name)
-            && !stub_class_members.contains(&py_func.name)
-            && !is_reexported(&py_func.name)
-        {
-            stub_functions.push(py_func);
-        }
     }
-    for py_var in py_variables {
-        if keep(&py_var.name)
-            && !stub_class_members.contains(&py_var.name)
-            && !is_reexported(&py_var.name)
-        {
-            stub_variables.push(py_var);
-        }
+
+    fn line_count(&self) -> usize {
+        self.module.lined_buffer().line_index().line_count()
     }
-    for py_class in py_classes {
-        if keep(&py_class.name) && !is_reexported(&py_class.name) {
-            stub_classes.push(py_class);
+
+    /// When this `.pyi` stub only covers a subset of its `.py` counterpart's public
+    /// symbols, add the uncovered `py` symbols so that completeness metrics reflect
+    /// the full module interface. `transaction`/`handle` must be the stub's.
+    fn merge_uncovered_py_symbols(
+        &mut self,
+        transaction: &Transaction,
+        handle: &Handle,
+        py: ModuleSymbols,
+    ) {
+        let stub_class_members = collect_class_members(
+            &self.module,
+            &self.bindings,
+            &self.answers,
+            transaction,
+            handle,
+            &self.tco_classes,
+        );
+        let stub_filter = stub_merge_filter(transaction, handle);
+        let stub_reexports = collect_reexport_fqns(
+            &self.module,
+            &self.exports,
+            &transaction.get_exports_data(handle),
+            &self.dunder_all,
+        );
+        // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
+        // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
+        let stub_names: SmallSet<String> = self
+            .functions
+            .iter()
+            .map(|f| &f.name)
+            .chain(self.variables.iter().map(|v| &v.name))
+            .chain(self.classes.iter().map(|c| &c.name))
+            .cloned()
+            .collect();
+        // Keep py-only names the stub neither defines nor omits from an explicit `__all__`.
+        let keep = |name: &str| {
+            !stub_names.contains(name)
+                && stub_filter
+                    .as_ref()
+                    .is_none_or(|(prefix, fqns)| is_public_fqn(name, prefix, fqns))
+        };
+        // A re-exported name owns its whole `Name.*` subtree: when the stub re-exports a class,
+        // the .py class AND its attributes must drop together.
+        let is_reexported = |name: &str| {
+            stub_reexports.iter().any(|reexport| {
+                name == reexport.as_str()
+                    || name
+                        .strip_prefix(reexport.as_str())
+                        .is_some_and(|rest| rest.starts_with('.'))
+            })
+        };
+        for py_func in py.functions {
+            if keep(&py_func.name)
+                && !stub_class_members.contains(&py_func.name)
+                && !is_reexported(&py_func.name)
+            {
+                self.functions.push(py_func);
+            }
+        }
+        for py_var in py.variables {
+            if keep(&py_var.name)
+                && !stub_class_members.contains(&py_var.name)
+                && !is_reexported(&py_var.name)
+            {
+                self.variables.push(py_var);
+            }
+        }
+        for py_class in py.classes {
+            if keep(&py_class.name) && !is_reexported(&py_class.name) {
+                self.classes.push(py_class);
+            }
         }
     }
 }
@@ -1800,55 +1886,14 @@ pub fn collect_module_reports(
             }
         }
 
-        if let Some(bindings) = transaction.get_bindings(handle)
-            && let Some(module) = transaction.get_module_info(handle)
-            && let Some(answers) = transaction.get_answers(handle)
-        {
-            let line_count = module.lined_buffer().line_index().line_count();
-            let exports = transaction.get_exports(handle);
-            let dunder_all = collect_dunder_all_or_empty(transaction, handle);
-            let tco_classes = collect_type_check_only_classes(&bindings);
-            let mut functions = parse_functions(
-                &module,
-                &bindings,
-                &answers,
-                &exports,
-                &dunder_all,
-                &tco_classes,
-            );
-            merge_overloads(&mut functions);
-            let mut classes = parse_classes(
-                &module,
-                &bindings,
-                &answers,
-                transaction,
-                handle,
-                &tco_classes,
-            );
-            let mut variables = parse_variables(
-                &module,
-                &bindings,
-                &answers,
-                &exports,
-                &dunder_all,
-                &functions,
-                &classes,
-            );
-            variables.extend(parse_instance_attrs(
-                &module,
-                &bindings,
-                &answers,
-                &tco_classes,
-            ));
-            let suppressions = parse_suppressions(&module);
-
+        if let Some(mut symbols) = ModuleSymbols::collect(transaction, handle) {
             // Per source module, so stub-merged `.py` symbols render against their own file.
             if let Some(strict) = untyped_strict {
                 collect_untyped_errors(
                     &mut errors,
-                    &module,
-                    &functions,
-                    &variables,
+                    &symbols.module,
+                    &symbols.functions,
+                    &symbols.variables,
                     strict,
                     public_fqns.as_ref(),
                 );
@@ -1856,79 +1901,18 @@ pub fn collect_module_reports(
 
             // When a .pyi stub shadows a .py file, include uncovered .py symbols.
             if let Some(py_handle) = pyi_to_py.get(&handle.path().as_path().to_path_buf())
-                && let Some(py_bindings) = transaction.get_bindings(py_handle)
-                && let Some(py_module) = transaction.get_module_info(py_handle)
-                && let Some(py_answers) = transaction.get_answers(py_handle)
+                && let Some(py_symbols) = ModuleSymbols::collect(transaction, py_handle)
             {
-                let py_exports = transaction.get_exports(py_handle);
-                let py_dunder_all = collect_dunder_all_or_empty(transaction, py_handle);
-                let py_tco_classes = collect_type_check_only_classes(&py_bindings);
-                let mut py_functions = parse_functions(
-                    &py_module,
-                    &py_bindings,
-                    &py_answers,
-                    &py_exports,
-                    &py_dunder_all,
-                    &py_tco_classes,
-                );
-                merge_overloads(&mut py_functions);
-                let py_classes = parse_classes(
-                    &py_module,
-                    &py_bindings,
-                    &py_answers,
-                    transaction,
-                    py_handle,
-                    &py_tco_classes,
-                );
-                let mut py_variables = parse_variables(
-                    &py_module,
-                    &py_bindings,
-                    &py_answers,
-                    &py_exports,
-                    &py_dunder_all,
-                    &py_functions,
-                    &py_classes,
-                );
-                py_variables.extend(parse_instance_attrs(
-                    &py_module,
-                    &py_bindings,
-                    &py_answers,
-                    &py_tco_classes,
-                ));
-                let stub_class_members = collect_class_members(
-                    &module,
-                    &bindings,
-                    &answers,
-                    transaction,
-                    handle,
-                    &tco_classes,
-                );
-                let stub_filter = stub_merge_filter(transaction, handle);
-                let stub_reexports = collect_reexport_fqns(
-                    &module,
-                    &exports,
-                    &transaction.get_exports_data(handle),
-                    &dunder_all,
-                );
-                let own_functions = functions.len();
-                let own_variables = variables.len();
-                merge_uncovered_py_symbols(
-                    &mut functions,
-                    &mut variables,
-                    &mut classes,
-                    py_functions,
-                    py_variables,
-                    py_classes,
-                    &stub_class_members,
-                    stub_filter.as_ref(),
-                    &stub_reexports,
-                );
+                let py_module = py_symbols.module.dupe();
+                let own_functions = symbols.functions.len();
+                let own_variables = symbols.variables.len();
+                symbols.merge_uncovered_py_symbols(transaction, handle, py_symbols);
                 if let Some(strict) = untyped_strict {
                     collect_untyped_errors(
                         &mut errors,
                         &py_module,
-                        &functions[own_functions..],
-                        &variables[own_variables..],
+                        &symbols.functions[own_functions..],
+                        &symbols.variables[own_variables..],
                         strict,
                         public_fqns.as_ref(),
                     );
@@ -1942,11 +1926,11 @@ pub fn collect_module_reports(
                 name.clone(),
                 path,
                 &derived_name,
-                line_count,
-                &functions,
-                &variables,
-                &classes,
-                suppressions,
+                symbols.line_count(),
+                &symbols.functions,
+                &symbols.variables,
+                &symbols.classes,
+                symbols.suppressions,
             );
             // When --module overrides the name, rewrite symbol prefixes to match.
             if module_name_override.is_some() && name != derived_name {
@@ -2030,18 +2014,8 @@ mod tests {
         );
     }
 
-    /// Shared input to both the report and error paths.
-    struct ParsedModule {
-        module: Module,
-        functions: Vec<Function>,
-        variables: Vec<Variable>,
-        classes: Vec<ReportClass>,
-        suppressions: Vec<ReportSuppression>,
-        line_count: usize,
-        module_path: String,
-    }
-
-    fn parse_test_module(file: &str, mut env: TestEnv) -> ParsedModule {
+    /// Run the production parse pipeline on a checked-in test file, as module `test`.
+    fn parse_test_module(file: &str, mut env: TestEnv) -> (ModuleSymbols, String) {
         let code = load_test_file(file);
         let module_path = format!(
             "test.{}",
@@ -2053,68 +2027,17 @@ mod tests {
             .with_default_require_level(Require::Everything)
             .to_state();
         let handle = handle_fn("test");
-        let transaction = state.transaction();
-
-        let module = transaction.get_module_info(&handle).unwrap();
-        let bindings = transaction.get_bindings(&handle).unwrap();
-        let answers = transaction.get_answers(&handle).unwrap();
-        let exports = transaction.get_exports(&handle);
-
-        let line_count = module.lined_buffer().line_index().line_count();
-        let dunder_all = collect_dunder_all_or_empty(&transaction, &handle);
-        let tco_classes = collect_type_check_only_classes(&bindings);
-        let mut functions = parse_functions(
-            &module,
-            &bindings,
-            &answers,
-            &exports,
-            &dunder_all,
-            &tco_classes,
-        );
-        merge_overloads(&mut functions);
-        let classes = parse_classes(
-            &module,
-            &bindings,
-            &answers,
-            &transaction,
-            &handle,
-            &tco_classes,
-        );
-        let mut variables = parse_variables(
-            &module,
-            &bindings,
-            &answers,
-            &exports,
-            &dunder_all,
-            &functions,
-            &classes,
-        );
-        variables.extend(parse_instance_attrs(
-            &module,
-            &bindings,
-            &answers,
-            &tco_classes,
-        ));
-        let suppressions = parse_suppressions(&module);
-
-        ParsedModule {
-            module,
-            functions,
-            variables,
-            classes,
-            suppressions,
-            line_count,
-            module_path,
-        }
+        let symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
+        (symbols, module_path)
     }
 
     fn build_module_report_for_test_with_env(file: &str, env: TestEnv) -> ModuleReport {
-        let p = parse_test_module(file, env);
+        let (p, module_path) = parse_test_module(file, env);
         build_module_report(
             "test".to_owned(),
-            p.module_path,
+            module_path,
             "test",
-            p.line_count,
+            p.line_count(),
             &p.functions,
             &p.variables,
             &p.classes,
@@ -2154,141 +2077,27 @@ mod tests {
     /// mirroring the production pipeline in `collect_module_reports` when `prefer_stubs` is
     /// true and both files exist for the same module.
     fn build_stub_module_report(pyi_file: &str, py_file: &str) -> ModuleReport {
-        // Parse the stub
+        // Keep the state alive: the merge needs the stub's transaction.
         let pyi_code = load_test_file(pyi_file);
         let (pyi_state, pyi_handle_fn) = TestEnv::one_with_path("test", "test.pyi", &pyi_code)
             .with_default_require_level(Require::Everything)
             .to_state();
         let pyi_handle = pyi_handle_fn("test");
         let pyi_txn = pyi_state.transaction();
+        let mut stub = ModuleSymbols::collect(&pyi_txn, &pyi_handle).unwrap();
 
-        let module = pyi_txn.get_module_info(&pyi_handle).unwrap();
-        let bindings = pyi_txn.get_bindings(&pyi_handle).unwrap();
-        let answers = pyi_txn.get_answers(&pyi_handle).unwrap();
-        let exports = pyi_txn.get_exports(&pyi_handle);
-
-        let line_count = module.lined_buffer().line_index().line_count();
-        let dunder_all = collect_dunder_all_or_empty(&pyi_txn, &pyi_handle);
-        let tco_classes = collect_type_check_only_classes(&bindings);
-        let mut functions = parse_functions(
-            &module,
-            &bindings,
-            &answers,
-            &exports,
-            &dunder_all,
-            &tco_classes,
-        );
-        merge_overloads(&mut functions);
-        let mut classes = parse_classes(
-            &module,
-            &bindings,
-            &answers,
-            &pyi_txn,
-            &pyi_handle,
-            &tco_classes,
-        );
-        let mut variables = parse_variables(
-            &module,
-            &bindings,
-            &answers,
-            &exports,
-            &dunder_all,
-            &functions,
-            &classes,
-        );
-        variables.extend(parse_instance_attrs(
-            &module,
-            &bindings,
-            &answers,
-            &tco_classes,
-        ));
-        let suppressions = parse_suppressions(&module);
-
-        // Parse the .py source
-        let py_code = load_test_file(py_file);
-        let (py_state, py_handle_fn) = TestEnv::one("test", &py_code)
-            .with_default_require_level(Require::Everything)
-            .to_state();
-        let py_handle = py_handle_fn("test");
-        let py_txn = py_state.transaction();
-
-        let py_module = py_txn.get_module_info(&py_handle).unwrap();
-        let py_bindings = py_txn.get_bindings(&py_handle).unwrap();
-        let py_answers = py_txn.get_answers(&py_handle).unwrap();
-        let py_exports = py_txn.get_exports(&py_handle);
-
-        let py_dunder_all = collect_dunder_all_or_empty(&py_txn, &py_handle);
-        let py_tco_classes = collect_type_check_only_classes(&py_bindings);
-        let mut py_functions = parse_functions(
-            &py_module,
-            &py_bindings,
-            &py_answers,
-            &py_exports,
-            &py_dunder_all,
-            &py_tco_classes,
-        );
-        merge_overloads(&mut py_functions);
-        let py_classes = parse_classes(
-            &py_module,
-            &py_bindings,
-            &py_answers,
-            &py_txn,
-            &py_handle,
-            &py_tco_classes,
-        );
-        let mut py_variables = parse_variables(
-            &py_module,
-            &py_bindings,
-            &py_answers,
-            &py_exports,
-            &py_dunder_all,
-            &py_functions,
-            &py_classes,
-        );
-        py_variables.extend(parse_instance_attrs(
-            &py_module,
-            &py_bindings,
-            &py_answers,
-            &py_tco_classes,
-        ));
-
-        // Merge uncovered symbols from .py into the stub report
-        let stub_class_members = collect_class_members(
-            &module,
-            &bindings,
-            &answers,
-            &pyi_txn,
-            &pyi_handle,
-            &tco_classes,
-        );
-        let stub_filter = stub_merge_filter(&pyi_txn, &pyi_handle);
-        let stub_reexports = collect_reexport_fqns(
-            &module,
-            &exports,
-            &pyi_txn.get_exports_data(&pyi_handle),
-            &dunder_all,
-        );
-        merge_uncovered_py_symbols(
-            &mut functions,
-            &mut variables,
-            &mut classes,
-            py_functions,
-            py_variables,
-            py_classes,
-            &stub_class_members,
-            stub_filter.as_ref(),
-            &stub_reexports,
-        );
+        let (py, _) = parse_test_module(py_file, TestEnv::new());
+        stub.merge_uncovered_py_symbols(&pyi_txn, &pyi_handle, py);
 
         build_module_report(
             "test".to_owned(),
             "test.pyi".to_owned(),
             "test",
-            line_count,
-            &functions,
-            &variables,
-            &classes,
-            suppressions,
+            stub.line_count(),
+            &stub.functions,
+            &stub.variables,
+            &stub.classes,
+            stub.suppressions,
         )
     }
 
@@ -2526,12 +2335,12 @@ mod tests {
             "schema_classes_methods.py",
             "variables.py",
         ] {
-            let p = parse_test_module(file, TestEnv::new());
+            let (p, module_path) = parse_test_module(file, TestEnv::new());
             let report = build_module_report(
                 "test".to_owned(),
-                p.module_path.clone(),
+                module_path,
                 "test",
-                p.line_count,
+                p.line_count(),
                 &p.functions,
                 &p.variables,
                 &p.classes,
@@ -2990,27 +2799,11 @@ def g(x: int) -> int:
             .with_default_require_level(Require::Everything)
             .to_state();
         let handle = handle_fn("test");
-        let transaction = state.transaction();
-
-        let module = transaction.get_module_info(&handle).unwrap();
-        let bindings = transaction.get_bindings(&handle).unwrap();
-        let answers = transaction.get_answers(&handle).unwrap();
-        let exports = transaction.get_exports(&handle);
-
-        let dunder_all = collect_dunder_all_or_empty(&transaction, &handle);
-        let tco_classes = collect_type_check_only_classes(&bindings);
-        let functions = parse_functions(
-            &module,
-            &bindings,
-            &answers,
-            &exports,
-            &dunder_all,
-            &tco_classes,
-        );
+        let symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
 
         // Only g should be reported; f is excluded due to @no_type_check.
-        assert_eq!(functions.len(), 1);
-        assert_eq!(functions[0].name, "test.g");
+        assert_eq!(symbols.functions.len(), 1);
+        assert_eq!(symbols.functions[0].name, "test.g");
     }
 
     // ──── --public-only tests ────
