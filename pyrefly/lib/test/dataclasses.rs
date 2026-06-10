@@ -78,6 +78,30 @@ D(4, 5, 6) # E: Expected 2 positional arguments, got 3 in function `D.__init__`
 );
 
 testcase!(
+    test_duplicate_kw_only_sentinel,
+    r#"
+from dataclasses import dataclass, KW_ONLY
+from dataclasses import KW_ONLY as KW_ONLY_ALIAS
+
+@dataclass
+class A:
+    b: int
+    _1: KW_ONLY
+    c: str
+    _2: KW_ONLY  # E: `dataclasses.KW_ONLY` may only appear once in a dataclass
+    d: bytes
+
+@dataclass
+class B:
+    b: int
+    _1: KW_ONLY
+    c: str
+    _2: KW_ONLY_ALIAS  # E: `dataclasses.KW_ONLY` may only appear once in a dataclass
+    d: bytes
+    "#,
+);
+
+testcase!(
     test_fields,
     r#"
 from typing import assert_type
