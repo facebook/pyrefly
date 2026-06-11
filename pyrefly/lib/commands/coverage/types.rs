@@ -171,7 +171,7 @@ pub struct Function {
     /// Property role if this function is a property accessor, `None` otherwise.
     #[serde(skip)]
     pub property_role: Option<PropertyRole>,
-    /// Number of non-self/cls, non-implicit params (for entity counting).
+    /// Number of non-self/cls, non-implicit params (for symbol counting).
     pub n_params: usize,
     pub slots: SlotCounts,
     pub location: Location,
@@ -269,6 +269,34 @@ impl SymbolReport {
     }
 }
 
+/// Per-kind counts of the symbols in a report.
+#[derive(Debug, Serialize, Default, Clone, Copy)]
+pub struct SymbolCounts {
+    pub n_functions: usize,
+    pub n_methods: usize,
+    pub n_function_params: usize,
+    pub n_method_params: usize,
+    pub n_classes: usize,
+    pub n_attrs: usize,
+    pub n_properties: usize,
+    pub n_type_ignores: usize,
+}
+
+impl SymbolCounts {
+    pub fn merge(self, other: SymbolCounts) -> SymbolCounts {
+        SymbolCounts {
+            n_functions: self.n_functions + other.n_functions,
+            n_methods: self.n_methods + other.n_methods,
+            n_function_params: self.n_function_params + other.n_function_params,
+            n_method_params: self.n_method_params + other.n_method_params,
+            n_classes: self.n_classes + other.n_classes,
+            n_attrs: self.n_attrs + other.n_attrs,
+            n_properties: self.n_properties + other.n_properties,
+            n_type_ignores: self.n_type_ignores + other.n_type_ignores,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ModuleReport {
     /// Fully-qualified module name (e.g. "mypackage.submodule").
@@ -284,14 +312,8 @@ pub struct ModuleReport {
     pub slots: SlotCounts,
     pub coverage: f64,
     pub strict_coverage: f64,
-    pub n_functions: usize,
-    pub n_methods: usize,
-    pub n_function_params: usize,
-    pub n_method_params: usize,
-    pub n_classes: usize,
-    pub n_attrs: usize,
-    pub n_properties: usize,
-    pub n_type_ignores: usize,
+    #[serde(flatten)]
+    pub symbols: SymbolCounts,
 }
 
 #[derive(Debug, Serialize)]
@@ -301,14 +323,8 @@ pub struct ReportSummary {
     pub slots: SlotCounts,
     pub coverage: f64,
     pub strict_coverage: f64,
-    pub n_functions: usize,
-    pub n_methods: usize,
-    pub n_function_params: usize,
-    pub n_method_params: usize,
-    pub n_classes: usize,
-    pub n_attrs: usize,
-    pub n_properties: usize,
-    pub n_type_ignores: usize,
+    #[serde(flatten)]
+    pub symbols: SymbolCounts,
 }
 
 #[derive(Debug, Serialize)]
