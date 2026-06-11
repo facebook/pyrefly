@@ -2188,6 +2188,10 @@ pub struct ImportFallback {
     /// Suppress the missing-attribute error in that case — the bind-time
     /// logic did the same via `is_unreachable_from_static_test`.
     pub is_unreachable: bool,
+    /// If true, the import site itself is guarded by `TYPE_CHECKING`, so it
+    /// may resolve names that exist in the imported module only under that
+    /// module's own `TYPE_CHECKING` guard.
+    pub in_type_checking: bool,
 }
 
 #[derive(Clone, Debug)]

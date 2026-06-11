@@ -4240,6 +4240,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !is_self_import && self.exports.export_exists(m, name) {
             return resolve_export();
         }
+        if fallback.in_type_checking && self.exports.is_type_checking_only_export(m, name) {
+            return resolve_export();
+        }
         // Submodule lookup.
         let submodule_name = m.append(name);
         let submodule_error = match self.exports.module_exists(submodule_name) {

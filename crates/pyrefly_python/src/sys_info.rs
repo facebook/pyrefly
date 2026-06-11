@@ -520,6 +520,16 @@ impl SysInfo {
         x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
     }
 
+    pub fn is_type_checking_test(x: &Expr) -> bool {
+        match x {
+            Expr::Name(name) => Self::is_type_checking_constant_name(name.id()),
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+                value.is_name_expr() && Self::is_type_checking_constant_name(attr.as_str())
+            }
+            _ => false,
+        }
+    }
+
     fn evaluate(self, x: &Expr) -> Option<Value> {
         match x {
             Expr::Compare(x) if x.ops.len() == 1 && x.comparators.len() == 1 => Some(Value::Bool(
@@ -725,6 +735,30 @@ impl SysInfo {
             .filter(|x| x.0 != Some(false))
             .map(|x| (x.1, x.2))
             .take_while_inclusive(|x| x.0.is_some())
+    }
+
+    /// Like `Ast::if_branches`, but also identifies branches guarded by `TYPE_CHECKING`.
+    /// The branch bodies are still included according to type-checker semantics; callers
+    /// can use the flag to treat those definitions differently for runtime behavior.
+    pub fn pruned_if_branches_with_type_checking<'a, 'b: 'a>(
+        &'a self,
+        x: &'b StmtIf,
+    ) -> impl Iterator<Item = (bool, &'b [Stmt])> + 'a {
+        Ast::if_branches(x)
+            .map(|(test, body)| {
+                let branch_chosen = match test {
+                    None => Some(true),
+                    Some(test) => self.evaluate_bool(test),
+                };
+                (
+                    branch_chosen,
+                    test.is_some_and(Self::is_type_checking_test),
+                    body,
+                )
+            })
+            .filter(|x| x.0 != Some(false))
+            .take_while_inclusive(|x| x.0 != Some(true))
+            .map(|x| (x.1, x.2))
     }
 }
 

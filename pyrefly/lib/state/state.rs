@@ -2794,6 +2794,15 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         .unwrap_or(false)
     }
 
+    fn is_type_checking_only_export(&self, module: ModuleName, name: &Name) -> bool {
+        self.with_exports(
+            module,
+            |exports, _lookup| exports.is_type_checking_only(name),
+            ModuleDep::NameExists(name.clone()),
+        )
+        .unwrap_or(false)
+    }
+
     fn get_wildcard(&self, module: ModuleName) -> Option<Arc<SmallSet<Name>>> {
         self.with_exports(
             module,

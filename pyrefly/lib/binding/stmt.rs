@@ -134,6 +134,19 @@ fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
     }
 }
 
+fn is_type_checking_test(x: &Expr) -> bool {
+    fn is_type_checking_constant_name(x: &str) -> bool {
+        x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
+    }
+    match x {
+        Expr::Name(name) => is_type_checking_constant_name(name.id.as_str()),
+        Expr::Attribute(attr) => {
+            attr.value.is_name_expr() && is_type_checking_constant_name(attr.attr.as_str())
+        }
+        _ => false,
+    }
+}
+
 impl<'a> BindingsBuilder<'a> {
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
         let test_range = test.range();
@@ -1257,6 +1270,7 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         NarrowOps::from_expr(self, test.as_ref())
                     };
+                    let branch_in_type_checking = test.as_ref().is_some_and(is_type_checking_test);
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
@@ -1270,7 +1284,10 @@ impl<'a> BindingsBuilder<'a> {
                         &Usage::Narrowing(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
+                    let outer_in_type_checking = self.in_type_checking;
+                    self.in_type_checking = outer_in_type_checking || branch_in_type_checking;
                     self.stmts(body, parent);
+                    self.in_type_checking = outer_in_type_checking;
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         exhaustive = true;
@@ -1716,6 +1733,7 @@ impl<'a> BindingsBuilder<'a> {
                     fallback: Some(ImportFallback {
                         stmt_range: x.range,
                         is_unreachable: self.scopes.is_unreachable_from_static_test(),
+                        in_type_checking: self.in_type_checking,
                     }),
                 }));
                 // __future__ imports have side effects even if not explicitly used,
