@@ -1537,7 +1537,8 @@ impl ModuleSymbols {
 
     /// When this `.pyi` stub only covers a subset of its `.py` counterpart's public
     /// symbols, add the uncovered `py` symbols so that completeness metrics reflect
-    /// the full module interface. `transaction`/`handle` must be the stub's.
+    /// the full module interface. Merged symbols count as fully untyped, since type
+    /// checkers ignore the `.py` when a stub exists. `transaction`/`handle` must be the stub's.
     fn merge_uncovered_py_symbols(
         &mut self,
         transaction: &Transaction,
@@ -1586,19 +1587,21 @@ impl ModuleSymbols {
                         .is_some_and(|rest| rest.starts_with('.'))
             })
         };
-        for py_func in py.functions {
+        for mut py_func in py.functions {
             if keep(&py_func.name)
                 && !stub_class_members.contains(&py_func.name)
                 && !is_reexported(&py_func.name)
             {
+                py_func.slots = py_func.slots.as_untyped();
                 self.functions.push(py_func);
             }
         }
-        for py_var in py.variables {
+        for mut py_var in py.variables {
             if keep(&py_var.name)
                 && !stub_class_members.contains(&py_var.name)
                 && !is_reexported(&py_var.name)
             {
+                py_var.slots = py_var.slots.as_untyped();
                 self.variables.push(py_var);
             }
         }
@@ -2073,10 +2076,10 @@ mod tests {
         report
     }
 
-    /// Build a `ModuleReport` that merges a `.pyi` stub with its `.py` source,
-    /// mirroring the production pipeline in `collect_module_reports` when `prefer_stubs` is
-    /// true and both files exist for the same module.
-    fn build_stub_module_report(pyi_file: &str, py_file: &str) -> ModuleReport {
+    /// Merge a `.pyi` stub's symbols with its `.py` source, mirroring the production
+    /// pipeline in `collect_module_reports` when `prefer_stubs` is true and both
+    /// files exist for the same module.
+    fn merged_stub_symbols(pyi_file: &str, py_file: &str) -> ModuleSymbols {
         // Keep the state alive: the merge needs the stub's transaction.
         let pyi_code = load_test_file(pyi_file);
         let (pyi_state, pyi_handle_fn) = TestEnv::one_with_path("test", "test.pyi", &pyi_code)
@@ -2088,7 +2091,11 @@ mod tests {
 
         let (py, _) = parse_test_module(py_file, TestEnv::new());
         stub.merge_uncovered_py_symbols(&pyi_txn, &pyi_handle, py);
+        stub
+    }
 
+    fn build_stub_module_report(pyi_file: &str, py_file: &str) -> ModuleReport {
+        let stub = merged_stub_symbols(pyi_file, py_file);
         build_module_report(
             "test".to_owned(),
             "test.pyi".to_owned(),
@@ -2193,6 +2200,16 @@ mod tests {
     fn test_report_stub_reexport_class() {
         let report = build_stub_module_report("stub_reexport_class.pyi", "stub_reexport_class.py");
         compare_snapshot("stub_reexport_class.expected.json", &report);
+    }
+
+    /// gh-3778: `.py`-only symbols count as fully untyped, even when annotated in the `.py`.
+    #[test]
+    fn test_report_stub_ignores_py_annotations() {
+        let report = build_stub_module_report(
+            "stub_ignores_py_annotations.pyi",
+            "stub_ignores_py_annotations.py",
+        );
+        compare_snapshot("stub_ignores_py_annotations.expected.json", &report);
     }
 
     /// gh-3519: don't double-count methods whose stub coverage is inherited.
@@ -2333,9 +2350,19 @@ mod tests {
             "partial_any.py",
             "property_basic.py",
             "schema_classes_methods.py",
+            "stub_ignores_py_annotations.pyi",
             "variables.py",
         ] {
-            let (p, module_path) = parse_test_module(file, TestEnv::new());
+            // `.pyi` entries are stub-merged with their `.py` source.
+            let (p, module_path) = if let Some(stem) = file.strip_suffix(".pyi") {
+                (
+                    merged_stub_symbols(file, &format!("{stem}.py")),
+                    "test.pyi".to_owned(),
+                )
+            } else {
+                parse_test_module(file, TestEnv::new())
+            };
+
             let report = build_module_report(
                 "test".to_owned(),
                 module_path,
