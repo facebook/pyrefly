@@ -546,6 +546,18 @@ impl<'a> PosParam<'a> {
     }
 }
 
+/// The origin of a name that has been encountered in a function call
+#[derive(Clone, Debug)]
+enum NameOrigin<'a> {
+    /// Named parameter
+    Param,
+    /// An unpacked kwargs parameter, e.g., `**kwargs: Unpack[TD]` where `TD` is a TypedDict`.
+    /// In this example, the encountered name would be the name of a `TD` field, and the origin
+    /// would be the param name "kwargs".
+    #[expect(dead_code)]
+    UnpackedKwargs(Option<&'a Name>),
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn is_param_spec_args(&self, x: &CallArg, q: &Quantified, errors: &ErrorCollector) -> bool {
         match x {
@@ -686,7 +698,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut rparams = params.items().iter().rev().collect::<Vec<_>>();
         let mut num_positional_params = 0;
         let mut extra_positional_args = Vec::new();
-        // Map from seen parameter name to (Type, definitely_seen).
+        // Map from seen parameter name to (Type, NameOrigin, definitely_seen).
         // NotRequired fields of unpacked typed dicts are not definitely seen.
         let mut seen_names = SmallMap::new();
         let mut extra_arg_pos = None;
@@ -781,7 +793,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         {
                             // Remember names of positional parameters to detect duplicates.
                             // We ignore positional-only parameters because they can't be passed in by name.
-                            seen_names.insert(name, (ty, true));
+                            seen_names.insert(name, (ty, NameOrigin::Param, true));
                         }
                         argmap.insert(arg.range(), ty.clone());
                         let unhinted_arg_ty = bound_args
@@ -1031,16 +1043,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Param::Varargs(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {
-                    kwparams.insert(name, (ty, required));
+                    kwparams.insert(name, (ty, NameOrigin::Param, required));
                 }
                 Param::Kwargs(name, Type::Unpack(f)) if let Type::TypedDict(typed_dict) = &**f => {
-                    self.typed_dict_fields(typed_dict)
-                        .into_iter()
-                        .for_each(|(name, field)| {
+                    self.typed_dict_fields(typed_dict).into_iter().for_each(
+                        |(field_name, field)| {
                             kwparams.insert(
-                                name_owner.push(name),
+                                name_owner.push(field_name),
                                 (
                                     type_owner.push(field.ty),
+                                    NameOrigin::UnpackedKwargs(name.as_ref()),
                                     if field.required {
                                         &Required::Required
                                     } else {
@@ -1048,7 +1060,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     },
                                 ),
                             );
-                        });
+                        },
+                    );
                     if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict) {
                         kwargs = Some((name.as_ref(), Some(type_owner.push(extra.ty))))
                     } else {
@@ -1086,7 +1099,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
                             let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
-                            if let Some((ty, definitely_seen)) = seen_names.get(name) {
+                            if let Some((ty, _, definitely_seen)) = seen_names.get(name) {
                                 // For Required fields, the conflict is guaranteed, so report
                                 // BadKeywordArgument. For NotRequired fields, the conflict is
                                 // only potential (field may be absent at runtime), so report
@@ -1105,8 +1118,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     format!("Multiple values for argument `{name}`"),
                                 );
                                 hint = Some(*ty);
-                            } else if let Some((ty, _)) = kwparams.get(name) {
-                                seen_names.insert(name, (*ty, field.required));
+                            } else if let Some((ty, origin, _)) = kwparams.get(name) {
+                                seen_names.insert(name, (*ty, origin.clone(), field.required));
                                 hint = Some(*ty)
                             } else if kwargs.is_none() {
                                 unexpected_keyword_error(name, kw.range);
@@ -1182,7 +1195,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(id) => {
                     let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
                     let mut has_matching_param = false;
-                    if let Some((ty, definitely_seen)) = seen_names.get(&id.id) {
+                    if let Some((ty, _, definitely_seen)) = seen_names.get(&id.id) {
                         // Use PotentialBadKeywordArgument when the prior entry came from a
                         // NotRequired TypedDict field — the conflict is only potential.
                         let error_kind = if !*definitely_seen {
@@ -1198,8 +1211,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         hint = Some(*ty);
                         has_matching_param = true;
-                    } else if let Some((ty, req)) = kwparams.get(&id.id) {
-                        seen_names.insert(&id.id, (*ty, **req == Required::Required));
+                    } else if let Some((ty, origin, req)) = kwparams.get(&id.id) {
+                        seen_names
+                            .insert(&id.id, (*ty, origin.clone(), **req == Required::Required));
                         hint = Some(*ty);
                         has_matching_param = true;
                     } else if kwargs.is_none_or(|(_, ty)| ty.is_none()) {
@@ -1288,7 +1302,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             extra_posargs_iter.next();
         }
         let mut extra_posargs_matched = 0;
-        for (name, (want, required)) in kwparams.iter() {
+        for (name, (want, _, required)) in kwparams.iter() {
             if !seen_names.contains_key(name) {
                 match required {
                     Required::Required => {
