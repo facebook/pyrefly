@@ -2391,6 +2391,19 @@ C(42)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3751
+testcase!(
+    test_dataclass_decorator_on_named_tuple,
+    r#"
+from dataclasses import dataclass
+from typing import NamedTuple
+
+@dataclass
+class Foo(NamedTuple):  # E: Cannot apply `@dataclass` to NamedTuple `Foo`
+    x: int
+    "#,
+);
+
 // https://github.com/facebook/pyrefly/issues/2923
 testcase!(
     bug = "Should reject @dataclass applied to NamedTuple subclass",

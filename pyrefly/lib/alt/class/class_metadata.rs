@@ -444,6 +444,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             pydantic_before_validator_fields,
             is_attrs_class,
             protocol_metadata.is_some(),
+            named_tuple_metadata.is_some(),
             enum_metadata.is_some(),
             is_typed_dict,
             errors,
@@ -1035,6 +1036,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         pydantic_before_validator_fields: &[Name],
         is_attrs_class: bool,
         is_protocol: bool,
+        is_named_tuple: bool,
         is_enum: bool,
         is_typed_dict: bool,
         errors: &ErrorCollector,
@@ -1106,7 +1108,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => {}
             }
         }
-        // @dataclass cannot be applied to Protocol, Enum, or TypedDict classes.
+        // @dataclass cannot be applied to Protocol, NamedTuple, Enum, or TypedDict classes.
         // Emit the error and return None so the class is not treated as a dataclass.
         if has_dataclass_decorator {
             if is_protocol {
@@ -1118,6 +1120,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "`@dataclass` cannot be applied to Protocol `{}`",
                         cls.name()
                     ),
+                );
+                return None;
+            }
+            if is_named_tuple {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorKind::BadClassDefinition,
+                    format!("Cannot apply `@dataclass` to NamedTuple `{}`", cls.name()),
                 );
                 return None;
             }
