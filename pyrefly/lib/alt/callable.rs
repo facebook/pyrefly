@@ -485,9 +485,22 @@ impl CallArgPreEval<'_> {
     }
 }
 
+/// The parameter an argument was matched against.
+#[derive(Debug, Clone)]
+pub struct MatchedParam {
+    pub ty: Type,
+    pub name: Option<Name>,
+}
+
+impl MatchedParam {
+    fn new(ty: Type, name: Option<Name>) -> Self {
+        Self { ty, name }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArgMap {
-    pub range_to_param: HashMap<TextRange, Type>,
+    pub range_to_param: HashMap<TextRange, MatchedParam>,
 }
 
 impl ArgMap {
@@ -497,8 +510,9 @@ impl ArgMap {
         }
     }
 
-    fn insert(&mut self, range: TextRange, param: Type) -> Option<Type> {
-        self.range_to_param.insert(range, param)
+    fn insert(&mut self, range: TextRange, ty: Type, name: Option<Name>) -> Option<MatchedParam> {
+        self.range_to_param
+            .insert(range, MatchedParam::new(ty, name))
     }
 }
 
@@ -554,7 +568,6 @@ enum NameOrigin<'a> {
     /// An unpacked kwargs parameter, e.g., `**kwargs: Unpack[TD]` where `TD` is a TypedDict`.
     /// In this example, the encountered name would be the name of a `TD` field, and the origin
     /// would be the param name "kwargs".
-    #[expect(dead_code)]
     UnpackedKwargs(Option<&'a Name>),
 }
 
@@ -795,7 +808,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name, (ty, NameOrigin::Param, true));
                         }
-                        argmap.insert(arg.range(), ty.clone());
+                        argmap.insert(arg.range(), ty.clone(), name.cloned());
                         let unhinted_arg_ty = bound_args
                             .as_ref()
                             .map(|_| arg_pre.inferred_type(self, arg_errors));
@@ -824,7 +837,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }) => {
                         // Store args that get matched to an unpacked *args param
                         // Matched args are typechecked separately later
-                        argmap.insert(arg.range(), ty.clone());
+                        argmap.insert(arg.range(), ty.clone(), name.cloned());
                         unpacked_vararg = Some((name, ty));
                         unpacked_vararg_matched_args.push(arg_pre.clone());
                         arg_pre.post_skip();
@@ -834,7 +847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: PosParamKind::Variadic,
                     }) => {
-                        argmap.insert(arg.range(), ty.clone());
+                        argmap.insert(arg.range(), ty.clone(), name.cloned());
                         let unhinted_arg_ty = bound_args
                             .as_ref()
                             .map(|_| arg_pre.inferred_type(self, arg_errors));
@@ -1193,9 +1206,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Some(id) => {
-                    let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
+                    let mut hint = kwargs.as_ref().and_then(|(name, ty)| {
+                        ty.map(|ty| (NameOrigin::UnpackedKwargs(*name), ty))
+                    });
                     let mut has_matching_param = false;
-                    if let Some((ty, _, definitely_seen)) = seen_names.get(&id.id) {
+                    if let Some((ty, origin, definitely_seen)) = seen_names.get(&id.id) {
                         // Use PotentialBadKeywordArgument when the prior entry came from a
                         // NotRequired TypedDict field — the conflict is only potential.
                         let error_kind = if !*definitely_seen {
@@ -1209,18 +1224,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             error_kind,
                             format!("Multiple values for argument `{}`", id.id),
                         );
-                        hint = Some(*ty);
+                        hint = Some((origin.clone(), *ty));
                         has_matching_param = true;
                     } else if let Some((ty, origin, req)) = kwparams.get(&id.id) {
                         seen_names
                             .insert(&id.id, (*ty, origin.clone(), **req == Required::Required));
-                        hint = Some(*ty);
+                        hint = Some((origin.clone(), *ty));
                         has_matching_param = true;
                     } else if kwargs.is_none_or(|(_, ty)| ty.is_none()) {
                         unexpected_keyword_error(&id.id, id.range);
                     }
-                    if let Some(expected) = hint {
-                        argmap.insert(kw.range, expected.clone());
+                    if let Some((origin, expected)) = &hint {
+                        let name = match origin {
+                            NameOrigin::Param => Some(id.id.clone()),
+                            NameOrigin::UnpackedKwargs(kwargs_name) => kwargs_name.cloned(),
+                        };
+                        argmap.insert(kw.range, (*expected).clone(), name);
                     }
                     let unhinted_arg_ty = bound_args
                         .as_ref()
@@ -1242,7 +1261,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .expr_with_options(
                                 x,
                                 match hint {
-                                    Some(ty) => ExprOptions::check(
+                                    Some((_, ty)) => ExprOptions::check(
                                         ty,
                                         arg_errors,
                                         call_errors,
@@ -1254,7 +1273,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )
                             .into_ty(),
                         TypeOrExpr::Type(x, range) => {
-                            if let Some(hint) = &hint
+                            if let Some((_, hint)) = &hint
                                 && !hint.is_any()
                             {
                                 self.check_type_with_options(

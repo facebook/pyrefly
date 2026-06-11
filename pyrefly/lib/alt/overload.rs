@@ -706,7 +706,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let mut param_types = matched_overloads
                         .iter()
-                        .filter_map(|o| o.argmap.range_to_param.get(&arg_range));
+                        .filter_map(|o| o.argmap.range_to_param.get(&arg_range).map(|p| &p.ty));
                     let Some(first) = param_types.next() else {
                         // If we can't find the expected type, be conservative and assume there may be multiple.
                         return true;
