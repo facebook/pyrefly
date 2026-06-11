@@ -43,7 +43,6 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
-use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::ClassBinding;
@@ -237,6 +236,28 @@ fn classify_annotation_rank(has_annotation: bool, resolved_is_known: Option<bool
     }
 }
 
+/// Annotation source text and slot classification for an optional annotation binding.
+fn classify_annotation(
+    module: &Module,
+    bindings: &Bindings,
+    answers: &Answers,
+    annotation_idx: Option<Idx<KeyAnnotation>>,
+) -> (Option<String>, SlotCounts) {
+    let annotation_text = annotation_idx.and_then(|idx| match bindings.get(idx) {
+        BindingAnnotation::AnnotateExpr(_, expr, _) => {
+            Some(module.code_at(expr.range()).to_owned())
+        }
+        _ => None,
+    });
+    let resolved_ty = annotation_idx.and_then(|idx| {
+        answers
+            .get_idx(idx)
+            .and_then(|awt| awt.annotation.ty.as_ref().map(is_type_known))
+    });
+    let slots = classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
+    (annotation_text, slots)
+}
+
 /// Returns true if the name is public: does not start with `_`, or is a dunder (`__x__`).
 /// Matches typestats `is_public_name`.
 fn is_public_name(name: &str) -> bool {
@@ -418,35 +439,25 @@ fn has_implicit_receiver(
     }
 }
 
-/// Returns the ClassBinding if the class owning this field is a schema class (dataclass, enum,
+/// Whether the class is a schema class (dataclass, enum,
 /// TypedDict, NamedTuple, pydantic model, or attrs class). Fields of schema classes are
 /// IMPLICIT — they have 0 typable slots because the class definition itself governs their types.
 ///
 /// Only frameworks where annotations are structurally required are included.
 /// Django, marshmallow, and factory_boy use descriptors with optional annotations,
 /// so their fields count toward coverage.
-fn get_cls_binding_if_schema_class_field<'a>(
-    bindings: &'a Bindings,
-    answers: &Answers,
-    field: &BindingClassField,
-) -> Option<&'a ClassBinding> {
-    let cls_binding = match bindings.get(field.class_idx) {
-        BindingClass::ClassDef(cls) => cls,
-        BindingClass::FunctionalClassDef(..) => return None,
-    };
+fn is_schema_class(bindings: &Bindings, answers: &Answers, cls_binding: &ClassBinding) -> bool {
     let metadata_key = KeyClassMetadata(cls_binding.def_index);
-    let metadata = answers.get_idx(bindings.key_to_idx(&metadata_key))?;
-    if metadata.dataclass_metadata().is_some()
-        || metadata.is_enum()
-        || metadata.is_typed_dict()
-        || metadata.named_tuple_metadata().is_some()
-        || metadata.is_pydantic_model()
-        || metadata.is_attrs_class()
-    {
-        Some(cls_binding)
-    } else {
-        None
-    }
+    answers
+        .get_idx(bindings.key_to_idx(&metadata_key))
+        .is_some_and(|metadata| {
+            metadata.dataclass_metadata().is_some()
+                || metadata.is_enum()
+                || metadata.is_typed_dict()
+                || metadata.named_tuple_metadata().is_some()
+                || metadata.is_pydantic_model()
+                || metadata.is_attrs_class()
+        })
 }
 
 fn parse_variables(
@@ -521,84 +532,37 @@ fn parse_variables(
             Some(ExportLocation::ThisModule(export)) => export.location,
             _ => continue,
         };
-        let location = range_to_location(module, range);
-        match binding {
+        let (annotation, slots) = match binding {
             BindingExport::AnnotatedForward(annot_idx, key_idx) => {
                 // IMPLICIT: type aliases are type-level constructs with 0 slots.
                 if matches!(
                     bindings.get(*key_idx),
                     Binding::TypeAlias(_) | Binding::TypeAliasRef(_)
                 ) {
-                    variables.push(Variable {
-                        name: qualified_name,
-                        annotation: None,
-                        slots: SlotCounts::default(),
-                        location,
-                        range,
-                    });
-                    continue;
+                    (None, SlotCounts::default())
+                } else {
+                    classify_annotation(module, bindings, answers, Some(*annot_idx))
                 }
-                let annotation_text = match bindings.get(*annot_idx) {
-                    BindingAnnotation::AnnotateExpr(_, expr, _) => {
-                        Some(module.code_at(expr.range()).to_owned())
-                    }
-                    _ => None,
-                };
-                let resolved_ty = answers
-                    .get_idx(*annot_idx)
-                    .and_then(|awt| awt.annotation.ty.as_ref().map(is_type_known));
-                let slots = classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
-                variables.push(Variable {
-                    name: qualified_name,
-                    annotation: annotation_text,
-                    slots,
-                    location,
-                    range,
-                });
             }
             BindingExport::Forward(idx) | BindingExport::PromoteForward(idx) => {
                 match bindings.get(*idx) {
                     // Skip injected implicit globals
-                    Binding::Global(_) => {}
+                    Binding::Global(_) => continue,
                     // IMPLICIT: special type forms and type aliases have 0 slots
                     Binding::TypeVar(_)
                     | Binding::ParamSpec(_)
                     | Binding::TypeVarTuple(_)
                     | Binding::TypeAlias(_)
-                    | Binding::TypeAliasRef(_) => {
-                        variables.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: SlotCounts::default(),
-                            location,
-                            range,
-                        });
-                    }
+                    | Binding::TypeAliasRef(_) => (None, SlotCounts::default()),
                     // Functions and classes are handled by parse_functions/parse_classes;
                     // skip them here even when excluded (e.g. @type_check_only).
-                    Binding::Function(..) | Binding::ClassDef(..) => {}
+                    Binding::Function(..) | Binding::ClassDef(..) => continue,
                     // IMPLICIT: non-call assignments have 0 slots;
                     // call assignments are untyped (1 slot)
-                    Binding::NameAssign(na) => {
-                        variables.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: untyped_if_call(na.expr.as_ref()),
-                            location,
-                            range,
-                        });
-                    }
+                    Binding::NameAssign(na) => (None, untyped_if_call(na.expr.as_ref())),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
-                        Binding::Function(..) | Binding::ClassDef(..) => {}
-                        Binding::Expr(_, expr) => {
-                            variables.push(Variable {
-                                name: qualified_name,
-                                annotation: None,
-                                slots: untyped_if_call(expr.as_ref()),
-                                location,
-                                range,
-                            });
-                        }
+                        Binding::Function(..) | Binding::ClassDef(..) => continue,
+                        Binding::Expr(_, expr) => (None, untyped_if_call(expr.as_ref())),
                         _ => {
                             unreachable!(
                                 "MultiTargetAssign RHS should be Expr, Function, or ClassDef"
@@ -607,19 +571,21 @@ fn parse_variables(
                     },
                     // Skip optional imports (`try: import x; except _: x = None`) like plain imports.
                     Binding::Phi(..) | Binding::LoopPhi(..)
-                        if involves_import(bindings, *idx, &mut SmallSet::new()) => {}
-                    _ => {
-                        variables.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: SlotCounts::untyped(),
-                            location,
-                            range,
-                        });
+                        if involves_import(bindings, *idx, &mut SmallSet::new()) =>
+                    {
+                        continue;
                     }
+                    _ => (None, SlotCounts::untyped()),
                 }
             }
-        }
+        };
+        variables.push(Variable {
+            name: qualified_name,
+            annotation,
+            slots,
+            location: range_to_location(module, range),
+            range,
+        });
     }
     variables.sort_by_key(|a| a.location);
     variables
@@ -668,81 +634,6 @@ fn parse_instance_attrs(
             continue;
         }
 
-        // Only count instance attrs from recognized methods (__init__, etc.)
-        // or a schema class body field. We handle recognized-method fields with full
-        // slot classification, and schema body fields as IMPLICIT (0 typable).
-        let annotation_idx = match &field.definition {
-            ClassFieldDefinition::DefinedInMethod {
-                annotation, method, ..
-            } => {
-                if !method.recognized_attribute_defining_method {
-                    continue;
-                }
-                *annotation
-            }
-            ClassFieldDefinition::DeclaredByAnnotation {
-                annotation,
-                initialized_in_recognized_method,
-            } => {
-                // Schema class fields are always IMPLICIT regardless of whether they're
-                // also initialized in a recognized method — the class definition governs
-                // their types.
-                if let Some(cls_binding) =
-                    get_cls_binding_if_schema_class_field(bindings, answers, field)
-                {
-                    if !has_function_ancestor(&cls_binding.parent) {
-                        let class_name = class_qualified_name(
-                            module,
-                            &cls_binding.parent,
-                            &cls_binding.def.name,
-                        );
-                        let qualified_name =
-                            format!("{}{}.{}", module_prefix, class_name, field.name);
-                        let range = field.range;
-                        let location = range_to_location(module, range);
-                        attrs.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: SlotCounts::default(),
-                            location,
-                            range,
-                        });
-                    }
-                    continue;
-                }
-                // Non-schema fields only count when initialized in a recognized method,
-                // or declared in a stub.
-                if !initialized_in_recognized_method && !module.path().is_interface() {
-                    continue;
-                }
-                Some(*annotation)
-            }
-            ClassFieldDefinition::AssignedInBody { .. } => {
-                // Check if this is an enum member or other schema class body assignment
-                if let Some(cls_binding) =
-                    get_cls_binding_if_schema_class_field(bindings, answers, field)
-                {
-                    if has_function_ancestor(&cls_binding.parent) {
-                        continue;
-                    }
-                    let class_name =
-                        class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
-                    let qualified_name = format!("{}{}.{}", module_prefix, class_name, field.name);
-                    let range = field.range;
-                    let location = range_to_location(module, range);
-                    attrs.push(Variable {
-                        name: qualified_name,
-                        annotation: None,
-                        slots: SlotCounts::default(),
-                        location,
-                        range,
-                    });
-                }
-                continue;
-            }
-            _ => continue,
-        };
-
         let cls_binding = match bindings.get(field.class_idx) {
             BindingClass::ClassDef(cls) => cls,
             BindingClass::FunctionalClassDef(..) => continue,
@@ -750,29 +641,49 @@ fn parse_instance_attrs(
         if has_function_ancestor(&cls_binding.parent) {
             continue;
         }
-        let class_name = class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
-        let qualified_name = format!("{}{}.{}", module_prefix, class_name, field.name);
-        let range = field.range;
-        let location = range_to_location(module, range);
 
-        let annotation_text = annotation_idx.and_then(|idx| match bindings.get(idx) {
-            BindingAnnotation::AnnotateExpr(_, expr, _) => {
-                Some(module.code_at(expr.range()).to_owned())
+        // Only count instance attrs from recognized methods (__init__, etc.)
+        // or a schema class body field. We handle recognized-method fields with full
+        // slot classification, and schema body fields as IMPLICIT (0 typable).
+        let (annotation, slots) = match &field.definition {
+            ClassFieldDefinition::DefinedInMethod {
+                annotation, method, ..
+            } => {
+                if !method.recognized_attribute_defining_method {
+                    continue;
+                }
+                classify_annotation(module, bindings, answers, *annotation)
             }
-            _ => None,
-        });
-        let resolved_ty = annotation_idx.and_then(|idx| {
-            answers
-                .get_idx(idx)
-                .and_then(|awt| awt.annotation.ty.as_ref().map(is_type_known))
-        });
-        let slots = classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
+            // Schema class fields are always IMPLICIT regardless of whether they're
+            // also initialized in a recognized method — the class definition governs
+            // their types.
+            ClassFieldDefinition::DeclaredByAnnotation { .. }
+            | ClassFieldDefinition::AssignedInBody { .. }
+                if is_schema_class(bindings, answers, cls_binding) =>
+            {
+                (None, SlotCounts::default())
+            }
+            // Non-schema fields only count when initialized in a recognized method,
+            // or declared in a stub.
+            ClassFieldDefinition::DeclaredByAnnotation {
+                annotation,
+                initialized_in_recognized_method,
+            } => {
+                if !initialized_in_recognized_method && !module.path().is_interface() {
+                    continue;
+                }
+                classify_annotation(module, bindings, answers, Some(*annotation))
+            }
+            _ => continue,
+        };
 
+        let class_name = class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
+        let range = field.range;
         attrs.push(Variable {
-            name: qualified_name,
-            annotation: annotation_text,
+            name: format!("{}{}.{}", module_prefix, class_name, field.name),
+            annotation,
             slots,
-            location,
+            location: range_to_location(module, range),
             range,
         });
     }
