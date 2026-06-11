@@ -254,18 +254,24 @@ impl ParamList {
         let mut named_posonly = false;
         let mut kwonly = false;
         for (i, param) in self.0.iter().enumerate() {
-            if i > 0 {
-                output.write_str(", ")?;
-            }
+            // `/` or `*` markers that should be printed before the param
+            let mut marker_prefixes = Vec::new();
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                output.write_str("/, ")?;
+                marker_prefixes.push("/");
             }
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                output.write_str("*, ")?;
+                marker_prefixes.push("*");
+            }
+            if i > 0 {
+                output.write_str(", ")?;
+            }
+            for marker_prefix in marker_prefixes {
+                output.write_str(marker_prefix)?;
+                output.write_str(", ")?;
             }
             param.fmt_with_type(output, write_type)?;
         }
