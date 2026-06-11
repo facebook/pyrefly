@@ -466,6 +466,28 @@ fn parse_variables(
         }
     }
 
+    /// True if the binding resolves to an import in at least one flow branch.
+    fn involves_import(bindings: &Bindings, idx: Idx<Key>, seen: &mut SmallSet<Idx<Key>>) -> bool {
+        if !seen.insert(idx) {
+            return false; // LoopPhi can be cyclic
+        }
+        match bindings.get(idx) {
+            Binding::Module(..) | Binding::Import(..) => true,
+            Binding::Forward(i)
+            | Binding::PromoteForward(i)
+            | Binding::ForwardToFirstUse(i)
+            | Binding::Narrow(i, _, _) => involves_import(bindings, *i, seen),
+            Binding::Phi(_, branches) => branches
+                .iter()
+                .any(|b| involves_import(bindings, b.value_key, seen)),
+            Binding::LoopPhi(prior, members) => {
+                involves_import(bindings, *prior, seen)
+                    || members.iter().any(|i| involves_import(bindings, *i, seen))
+            }
+            _ => false,
+        }
+    }
+
     let module_prefix = if module.name() != ModuleName::unknown() {
         format!("{}.", module.name())
     } else {
@@ -583,6 +605,9 @@ fn parse_variables(
                             );
                         }
                     },
+                    // Skip optional imports (`try: import x; except _: x = None`) like plain imports.
+                    Binding::Phi(..) | Binding::LoopPhi(..)
+                        if involves_import(bindings, *idx, &mut SmallSet::new()) => {}
                     _ => {
                         variables.push(Variable {
                             name: qualified_name,
@@ -2304,6 +2329,13 @@ mod tests {
         compare_snapshot("variables.expected.json", &report);
     }
 
+    /// gh-3773: optional imports must not be reported as untyped variables.
+    #[test]
+    fn test_report_optional_imports() {
+        let report = build_module_report_for_test("optional_imports.py");
+        compare_snapshot("optional_imports.expected.json", &report);
+    }
+
     #[test]
     fn test_report_multi_target_aliases() {
         let report = build_module_report_for_test("multi_target_aliases.py");
@@ -2519,6 +2551,7 @@ mod tests {
             "inherited_attrs.py",
             "instance_attrs.py",
             "method_aliases.py",
+            "optional_imports.py",
             "overloads.py",
             "overloads_partial.py",
             "partial_any.py",
