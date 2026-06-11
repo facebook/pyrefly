@@ -6,7 +6,6 @@
  */
 
 use std::cmp::max;
-use std::collections::HashMap;
 
 use itertools::Either;
 use itertools::Itertools;
@@ -29,6 +28,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::OverloadTrace;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::TargetWithTParams;
+use crate::alt::callable::ArgMap;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
@@ -52,8 +52,8 @@ struct CalledOverload<'f> {
     ctor_targs: Option<TArgs>,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
-    /// Maps each argument's source range to the parameter type it was matched against.
-    expected_types: HashMap<TextRange, Type>,
+    /// Maps each argument's source range to the parameter it was matched against.
+    argmap: ArgMap,
 }
 
 impl CalledOverload<'_> {
@@ -287,7 +287,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ctor_targs: None,
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
-                    expected_types: HashMap::new(),
+                    argmap: ArgMap::new(),
                 },
                 false,
             ),
@@ -339,12 +339,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(first_overload) = matched_overloads.first() {
                         let func = first_overload.func;
                         let ctor_targs = first_overload.ctor_targs.clone();
-                        let expected_types = first_overload.expected_types.clone();
+                        let argmap = first_overload.argmap.clone();
                         let specialization_errors = first_overload.specialization_errors.clone();
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
-                            expected_types,
+                            argmap,
                             res: self.unions(matched_overloads.into_map(|o| o.res)),
                             call_errors: self.error_collector(),
                             specialization_errors,
@@ -706,7 +706,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let mut param_types = matched_overloads
                         .iter()
-                        .filter_map(|o| o.expected_types.get(&arg_range));
+                        .filter_map(|o| o.argmap.range_to_param.get(&arg_range));
                     let Some(first) = param_types.next() else {
                         // If we can't find the expected type, be conservative and assume there may be multiple.
                         return true;
@@ -922,7 +922,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams = callable.0.as_deref();
 
         let call_errors = self.error_collector();
-        let (res, specialization_errors, expected_types) = self.callable_infer(
+        let (res, specialization_errors, argmap) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
             shape_transform,
@@ -947,7 +947,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ctor_targs: overload_ctor_targs,
             call_errors,
             specialization_errors,
-            expected_types,
+            argmap,
         }
     }
 }

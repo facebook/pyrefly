@@ -485,6 +485,23 @@ impl CallArgPreEval<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ArgMap {
+    pub range_to_param: HashMap<TextRange, Type>,
+}
+
+impl ArgMap {
+    pub fn new() -> Self {
+        Self {
+            range_to_param: HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, range: TextRange, param: Type) -> Option<Type> {
+        self.range_to_param.insert(range, param)
+    }
+}
+
 /// Helps track matching of arguments against positional parameters in AnswersSolver::callable_infer_params.
 #[derive(PartialEq, Eq)]
 enum PosParamKind {
@@ -632,13 +649,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         call_context: &CallContext,
         // If Some, records parameter-name → argument-type bindings (for meta-shape inference).
         bound_args: &mut Option<HashMap<String, Type>>,
-    ) -> HashMap<TextRange, Type> {
+    ) -> ArgMap {
         let record = |bound: &mut Option<HashMap<String, Type>>, name: &Name, ty: Type| {
             if let Some(map) = bound.as_mut() {
                 map.insert(name.to_string(), self.canonicalize_shape_dsl_type(ty));
             }
         };
-        let mut expected_types: HashMap<TextRange, Type> = HashMap::new();
+        let mut argmap = ArgMap::new();
         // We want to work mostly with references, but some things are taken from elsewhere,
         // so have some owners to capture them.
         let param_list_owner = Owner::new();
@@ -733,7 +750,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 call_errors,
                                 context,
                             );
-                            return expected_types;
+                            return argmap;
                         }
                     }
                     paramspec = None;
@@ -766,7 +783,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             // We ignore positional-only parameters because they can't be passed in by name.
                             seen_names.insert(name, (ty, true));
                         }
-                        expected_types.insert(arg.range(), ty.clone());
+                        argmap.insert(arg.range(), ty.clone());
                         let unhinted_arg_ty = bound_args
                             .as_ref()
                             .map(|_| arg_pre.inferred_type(self, arg_errors));
@@ -795,7 +812,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }) => {
                         // Store args that get matched to an unpacked *args param
                         // Matched args are typechecked separately later
-                        expected_types.insert(arg.range(), ty.clone());
+                        argmap.insert(arg.range(), ty.clone());
                         unpacked_vararg = Some((name, ty));
                         unpacked_vararg_matched_args.push(arg_pre.clone());
                         arg_pre.post_skip();
@@ -805,7 +822,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         kind: PosParamKind::Variadic,
                     }) => {
-                        expected_types.insert(arg.range(), ty.clone());
+                        argmap.insert(arg.range(), ty.clone());
                         let unhinted_arg_ty = bound_args
                             .as_ref()
                             .map(|_| arg_pre.inferred_type(self, arg_errors));
@@ -984,7 +1001,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 call_errors,
                                 context,
                             );
-                            return expected_types;
+                            return argmap;
                         }
                     }
                     paramspec = None;
@@ -1189,7 +1206,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         unexpected_keyword_error(&id.id, id.range);
                     }
                     if let Some(expected) = hint {
-                        expected_types.insert(kw.range, expected.clone());
+                        argmap.insert(kw.range, expected.clone());
                     }
                     let unhinted_arg_ty = bound_args
                         .as_ref()
@@ -1358,7 +1375,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 format!("Expected {expected}, got {actual}"),
             );
         }
-        expected_types
+        argmap
     }
 
     /// Helper used by `callable_infer` and Expr::Lambda inference to distribute over hints.
@@ -1421,8 +1438,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Callers can pass the same error collector for both, and most callers do. We use two collectors
     // for overload matching.
     //
-    // Returns: (return_type, specialization_errors, expected_types) where expected_types maps each
-    // argument's source range to the parameter type it was matched against.
+    // Returns: (return_type, specialization_errors, argmap) where argmap maps each
+    // argument's source range to the parameter it was matched against.
     pub fn callable_infer(
         &self,
         callable: Callable,
@@ -1438,11 +1455,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         mut ctor_targs: Option<&mut TArgs>,
-    ) -> (
-        Type,
-        Vec<TypeVarSpecializationError>,
-        HashMap<TextRange, Type>,
-    ) {
+    ) -> (Type, Vec<TypeVarSpecializationError>, ArgMap) {
         self.callable_infer_with_hint(
             hint,
             call_errors,
@@ -1482,11 +1495,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<&Type>,
         ctor_targs: &mut Option<&mut TArgs>,
-    ) -> (
-        Type,
-        Vec<TypeVarSpecializationError>,
-        HashMap<TextRange, Type>,
-    ) {
+    ) -> (Type, Vec<TypeVarSpecializationError>, ArgMap) {
         let call_context = CallContext::outside()
             .with_argument_side(ArgumentSide::Got)
             .require_boundary_consumption();
@@ -1552,7 +1561,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             QuantifiedHandle::empty()
         };
         let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
-        let expected_types = match callable.params {
+        let argmap = match callable.params {
             Params::List(params) => self.callable_infer_params(
                 callable_name,
                 &params,
@@ -1573,7 +1582,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 for arg in self_arg.iter().chain(args.iter()) {
                     arg.pre_eval(self, arg_errors).post_infer(self, arg_errors)
                 }
-                HashMap::new()
+                ArgMap::new()
             }
             Params::ParamSpec(concatenate, p) => {
                 let p = self.solver().expand(p);
@@ -1644,10 +1653,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &mut bound_args,
                             )
                         } else {
-                            HashMap::new()
+                            ArgMap::new()
                         }
                     }
-                    Type::Any(_) | Type::Ellipsis => HashMap::new(),
+                    Type::Any(_) | Type::Ellipsis => ArgMap::new(),
                     _ => {
                         // This could well be our error, but not really sure
                         self.error_with_context(
@@ -1657,7 +1666,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             format!("Unexpected ParamSpec type: `{}`", self.for_display(p)),
                             context,
                         );
-                        HashMap::new()
+                        ArgMap::new()
                     }
                 }
             }
@@ -1707,11 +1716,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callable.ret.clone()
         };
 
-        (
-            self.solver().for_return_boundary(ret),
-            errors,
-            expected_types,
-        )
+        (self.solver().for_return_boundary(ret), errors, argmap)
     }
 
     /// Auto-inject module field values into `bound_args` for DSL parameters
