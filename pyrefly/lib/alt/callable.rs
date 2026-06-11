@@ -501,12 +501,15 @@ impl MatchedParam {
 #[derive(Debug, Clone)]
 pub struct ArgMap {
     pub range_to_param: HashMap<TextRange, MatchedParam>,
+    /// Required parameters that were left unmatched
+    pub unmatched_params: SmallSet<Option<Name>>,
 }
 
 impl ArgMap {
     pub fn new() -> Self {
         Self {
             range_to_param: HashMap::new(),
+            unmatched_params: SmallSet::new(),
         }
     }
 
@@ -1321,7 +1324,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             extra_posargs_iter.next();
         }
         let mut extra_posargs_matched = 0;
-        for (name, (want, _, required)) in kwparams.iter() {
+        for (name, (want, origin, required)) in kwparams.iter() {
             if !seen_names.contains_key(name) {
                 match required {
                     Required::Required => {
@@ -1335,6 +1338,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 );
                                 extra_posargs_matched += 1;
                             } else {
+                                argmap.unmatched_params.insert(match origin {
+                                    NameOrigin::Param => Some((*name).clone()),
+                                    NameOrigin::UnpackedKwargs(name) => name.cloned(),
+                                });
                                 error(
                                     call_errors,
                                     arguments_range,
