@@ -478,9 +478,7 @@ impl Errors {
                         continue;
                     }
 
-                    // For Tool::Type (`# type: ignore`), codes are mypy codes (not pyrefly
-                    // codes), so we treat it as a blanket suppression: unused if no errors
-                    // were suppressed on that line.
+                    // For `# type: ignore`, unused if no errors were suppressed on this line.
                     if tool == Tool::Type {
                         if !used_codes.is_empty() {
                             continue; // type: ignore is used
