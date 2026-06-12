@@ -447,7 +447,7 @@ impl Errors {
                         continue;
                     }
                     match tool {
-                        Tool::Pyrefly | Tool::Pyre => {}
+                        Tool::Pyrefly | Tool::Pyre | Tool::Type => {}
                         _ => continue,
                     }
 
@@ -474,6 +474,26 @@ impl Errors {
                             "Unused pyre-fixme comment".to_owned(),
                             Vec::new(),
                             ErrorKind::UnusedIgnore,
+                        ));
+                        continue;
+                    }
+
+                    // For Tool::Type (`# type: ignore`), codes are mypy codes (not pyrefly
+                    // codes), so we treat it as a blanket suppression: unused if no errors
+                    // were suppressed on that line.
+                    if tool == Tool::Type {
+                        if !used_codes.is_empty() {
+                            continue; // type: ignore is used
+                        }
+                        let comment_line = supp.comment_line();
+                        let line_start = module.lined_buffer().line_start(comment_line);
+                        let range = TextRange::new(line_start, line_start + TextSize::new(1));
+                        unused_errors.push(Error::new(
+                            module.dupe(),
+                            range,
+                            "Unused `# type: ignore` comment".to_owned(),
+                            Vec::new(),
+                            ErrorKind::UnusedTypeIgnore,
                         ));
                         continue;
                     }
@@ -557,9 +577,7 @@ impl Errors {
         for error in unused_errors {
             if let Some(config) = config_by_path.get(&error.path()) {
                 let error_config = config.get_error_config(error.path().as_path());
-                let severity = error_config
-                    .display_config
-                    .severity(ErrorKind::UnusedIgnore);
+                let severity = error_config.display_config.severity(error.error_kind());
                 match severity {
                     Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
                     Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
@@ -760,6 +778,45 @@ def g() -> str:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 2);
+    }
+
+    #[test]
+    fn test_unused_type_ignore_no_error() {
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_used_type_ignore_suppresses_error() {
+        let contents = r#"
+def f() -> int:
+    return "hello"  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_unused_type_ignore_with_codes() {
+        // mypy-style codes are not pyrefly codes; treat as blanket ignore
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore[assignment]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
     }
 
     #[test]
