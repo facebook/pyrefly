@@ -1848,7 +1848,9 @@ fn test_unused_type_ignore_diagnostic_default_severity() {
         })
         .unwrap();
 
-    interaction.client.did_open("unused_type_ignore_no_config.py");
+    interaction
+        .client
+        .did_open("unused_type_ignore_no_config.py");
 
     // Without `unused-type-ignore = "error"` in config, the default severity is "ignore", so no
     // `unused-type-ignore` diagnostic should appear.
