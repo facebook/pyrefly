@@ -4572,9 +4572,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 got_is_classvar,
             }));
         }
+        let cached_property_value_type = |getter: &Type| {
+            let ty = getter
+                .callable_return_type(self.heap)
+                .expect("cached_property getter should have a callable return type");
+            if getter.visit_toplevel_func_metadata(&|meta| meta.flags.is_return_inferred) {
+                ty.promote_implicit_literals(self.stdlib)
+            } else {
+                ty
+            }
+        };
         match (got, want) {
             (_, ClassAttribute::NoAccess(_)) | (ClassAttribute::NoAccess(_), _) => {
                 unreachable!("handled above")
+            }
+            (ClassAttribute::Property(got_getter, None, _), ClassAttribute::ReadWrite(want))
+                if got_getter.is_cached_property() =>
+            {
+                let got = cached_property_value_type(got_getter);
+                let subset_error = is_subset(&got, want)
+                    .map_or_else(Some, |_| is_subset(want, &got).map_or_else(Some, |_| None));
+                if let Some(subset_error) = subset_error {
+                    Err(Box::new(AttrSubsetError::Invariant {
+                        got,
+                        want: want.clone(),
+                        subset_error,
+                    }))
+                } else {
+                    Ok(())
+                }
+            }
+            (ClassAttribute::Property(got_getter, None, _), ClassAttribute::ReadOnly(want, _))
+                if got_getter.is_cached_property() =>
+            {
+                let got = cached_property_value_type(got_getter);
+                is_subset(&got, want).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got,
+                        want: want.clone(),
+                        got_is_property: true,
+                        want_is_property: false,
+                        subset_error,
+                    })
+                })
             }
             (
                 ClassAttribute::Property(_, _, _),
