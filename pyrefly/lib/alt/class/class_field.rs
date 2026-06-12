@@ -1304,6 +1304,7 @@ fn has_any_abstract(ty: &Type) -> bool {
 /// - or, it's a Callable initialized on the class body and satisfying some special case:
 ///   - it's marked as a ClassVar
 ///   - it's assigned to a dunder name like `__add__`
+///   - its first parameter type matches the containing class (factory pattern)
 /// - or, it's a union where ANY element satisfies the above rules
 ///
 /// Note: staticmethods and union types that have at least one method type are included.
@@ -1313,6 +1314,7 @@ fn is_method(
     initialization: &ClassFieldInitialization,
     name: &Name,
     annotation: Option<&Annotation>,
+    containing_class: &Class,
 ) -> bool {
     let initialized_in_class_body =
         matches!(initialization, ClassFieldInitialization::ClassBody(_));
@@ -1336,9 +1338,70 @@ fn is_method(
         {
             return true;
         }
+        // Handle PySpark factory pattern - if Callable's first parameter type matches
+        // the containing class, it's likely a method that will bind self at runtime.
+        // This is more precise than just checking for any parameters, avoiding false
+        // positives with regular Callable attributes like callbacks or strategies.
+        if callable_first_param_suggests_method(ty, containing_class) {
+            return true;
+        }
+        // Only treat Callable as method if it has NO explicit type annotation.
+        // Decorated stub methods (e.g., @dispatch_col_method in PySpark) typically lack
+        // annotations, while intentional Callable attributes are explicitly annotated
+        // (e.g., handler: Callable[[int], None]). This prevents false positives from
+        // incorrectly binding callbacks and other Callable attributes.
+        if annotation.is_none() {
+            return true;
+        }
     }
 
     false
+}
+
+/// Check if a Callable type's first parameter matches the containing class type.
+/// 
+/// This handles the PySpark factory pattern:
+///   def _unary_op(name: str) -> Callable[["Column"], "Column"]: ...
+///   class Column:
+///       isNull = _unary_op("isNull")
+///
+/// The heuristic: if a Callable's first parameter type matches the containing class name,
+/// it's likely a method that will bind self at runtime. This is type-aware and avoids
+/// false positives with other Callable attributes (callbacks, strategies, etc).
+fn callable_first_param_suggests_method(ty: &Type, containing_class: &Class) -> bool {
+    match ty {
+        Type::Callable(callable) => {
+            // Get the first parameter type
+            if let Params::List(params) = &callable.params {
+                if let Some(first_param) = params.items().first() {
+                    match first_param {
+                        // Extract the type from positional or positional-only parameters
+                        Param::Pos(_, param_ty, _) | Param::PosOnly(_, param_ty, _) => {
+                            // Check if the parameter type is a ClassType that matches the containing class.
+                            // By the time we're in type checking, string forward references should be
+                            // resolved to actual ClassType instances.
+                            match param_ty {
+                                Type::ClassType(param_cls) => {
+                                    // Compare the class objects - they match if they're the same class
+                                    param_cls.class_object() == containing_class
+                                }
+                                _ => false,
+                            }
+                        }
+                        // Other parameter types (kwargs, varargs) don't suggest methods
+                        _ => false,
+                    }
+                } else {
+                    // No parameters - not a method
+                    false
+                }
+            } else {
+                // Vararg or other parameter style - not a method
+                false
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Error information for class member override inconsistencies.
@@ -1832,7 +1895,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 },
                 is_inherited,
             )
-        } else if is_method(&ty, &initialization, name, annotation.as_ref()) {
+        } else if is_method(&ty, &initialization, name, annotation.as_ref(), class) {
             // Use helper functions to compute flags for unions
             let is_abstract_flag = has_any_abstract(&ty);
             ClassField(

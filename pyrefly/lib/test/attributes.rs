@@ -575,7 +575,7 @@ testcase!(
 from typing import assert_type, Callable
 def get_callback() -> Callable[[object, int], int]: ...
 class C:
-    f = get_callback()
+    f: Callable[[object, int], int] = get_callback()
 assert_type(C.f(None, 1), int)
 assert_type(C().f(None, 1), int)
 # This is why the behavior is ambiguous - at runtime, the default `C.f` is a
