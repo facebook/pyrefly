@@ -8,6 +8,7 @@
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 
 use crate::test::util::TestEnv;
@@ -237,6 +238,14 @@ testcase!(
 from typing import assert_type, Any
 from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
 assert_type(not_a_real_value, Any)
+"#,
+);
+
+testcase!(
+    test_removed_stdlib_module_respects_python_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 12, 0)),
+    r#"
+import distutils  # E: Cannot find module `distutils`
 "#,
 );
 
