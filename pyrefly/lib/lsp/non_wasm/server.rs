@@ -65,7 +65,6 @@ use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
 use lsp_types::DocumentHighlightKind;
 use lsp_types::DocumentHighlightParams;
-use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::FileEvent;
@@ -271,6 +270,7 @@ use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
 use crate::lsp::non_wasm::code_lens::runnable_lsp_code_lens;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
+use crate::lsp::non_wasm::document_symbols::flatten_to_symbol_information;
 use crate::lsp::non_wasm::external_provider::ExternalProvider;
 use crate::lsp::non_wasm::external_provider::compute_qualified_name;
 use crate::lsp::non_wasm::lsp::apply_change_events;
@@ -2274,14 +2274,13 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let response =
-                            match self.hierarchical_document_symbols(&transaction, params) {
-                                Ok(response) => response.map(DocumentSymbolResponse::Nested),
-                                Err(reason) => {
-                                    telemetry_event.set_empty_response_reason(reason);
-                                    None
-                                }
-                            };
+                        let response = match self.document_symbol(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
                 } else if let Some(params) = as_request::<WorkspaceSymbolRequest>(&x) {
@@ -5177,34 +5176,46 @@ impl Server {
         })))
     }
 
-    fn hierarchical_document_symbols(
+    fn document_symbol(
         &self,
         transaction: &Transaction<'_>,
         params: DocumentSymbolParams,
-    ) -> Result<Option<Vec<DocumentSymbol>>, EmptyResponseReason> {
+    ) -> Result<Option<DocumentSymbolResponse>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let path = self
             .path_for_uri_or_notebook_cell(uri)
             .ok_or(EmptyResponseReason::NoFilePath)?;
-        if self
-            .workspaces
-            .get_with(path, |(_, workspace)| workspace.disable_language_services)
-        {
+        if self.workspaces.get_with(path, |(_, workspace)| {
+            workspace.disabled_language_services.is_some()
+        }) {
             return Err(EmptyResponseReason::LanguageServicesDisabled);
         }
-        let Some(true) = self
+
+        // Avoid creating a handle when the client doesn't support document symbols
+        let document_symbols_caps = self
             .initialize_params
             .capabilities
             .text_document
             .as_ref()
-            .and_then(|t| t.document_symbol.as_ref())
-            .and_then(|d| d.hierarchical_document_symbol_support)
-        else {
+            .and_then(|t| t.document_symbol.as_ref());
+        if document_symbols_caps.is_none() {
             return Ok(None);
-        };
+        }
+
+        let supports_hierarchical = document_symbols_caps
+            .and_then(|d| d.hierarchical_document_symbol_support)
+            == Some(true);
+
         let handle = self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD))?;
-        Ok(transaction.symbols(&handle, maybe_cell_idx))
+        let symbols = transaction.symbols(&handle, maybe_cell_idx);
+        Ok(symbols.map(|syms| {
+            if supports_hierarchical {
+                DocumentSymbolResponse::Nested(syms)
+            } else {
+                DocumentSymbolResponse::Flat(flatten_to_symbol_information(syms, uri))
+            }
+        }))
     }
 
     /// Run local and external workspace symbol queries in parallel, merging
