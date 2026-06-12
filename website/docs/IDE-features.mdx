@@ -422,6 +422,12 @@ Flips the value of a boolean and updates all usages to work with new value.
   preload="metadata"
 />
 
+**Convert dict to model**
+
+Creates a `TypedDict`, `dataclass`, or Pydantic model from a selected dict literal.
+Pyrefly inserts the required imports and generates a matching class skeleton from
+the selected fields.
+
 ---
 
 ### [Diagnostics](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_publishDiagnostics)
