@@ -293,7 +293,7 @@ use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
-use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
+use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_actions;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatus;
@@ -4665,13 +4665,13 @@ impl Server {
             record_code_action_telemetry("move_symbol_new_file", start);
         }
         let start = Instant::now();
-        if let Some(action) = safe_delete_file_code_action(
+        if let Some(mut file_actions) = safe_delete_file_code_actions(
             &self.initialize_params.capabilities,
             &self.state,
             transaction,
             uri,
         ) {
-            actions.push(action);
+            actions.append(&mut file_actions);
         }
         record_code_action_telemetry("safe_delete_file", start);
         Ok((!actions.is_empty()).then_some(actions))
