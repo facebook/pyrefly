@@ -975,6 +975,66 @@ zoo(partial(bar, b=99))
 );
 
 testcase!(
+    test_functools_partial_preserves_remaining_signature,
+    r#"
+from functools import partial
+
+def f(a: int, b: str) -> bool:
+    return True
+
+g = partial(f, 1)
+g("foo", "bar")  # E: Expected 1 positional argument, got 2
+g(1)  # E: Argument `Literal[1]` is not assignable to parameter `b` with type `str`
+g("foo")
+"#,
+);
+
+testcase!(
+    test_functools_partial_rejects_too_many_bound_args,
+    r#"
+from functools import partial
+
+def f(a: int, b: str, c: int, d: str) -> tuple[int, str]:
+    return (a + c, b + d)
+
+partial(f, 1, "a", 2, "b", 3, "c", 4, "d")  # E: Expected 4 positional arguments, got 8
+"#,
+);
+
+testcase!(
+    test_functools_partial_preserves_partial_object_type,
+    r#"
+from collections.abc import Callable
+from functools import partial
+from typing import Any, assert_type
+
+def f(a: int, b: str) -> bool:
+    return True
+
+g: partial[bool] = partial(f, 1)
+assert_type(g.args, tuple[Any, ...])
+assert_type(g.keywords, dict[str, Any])
+assert_type(g.func, Callable[..., bool])
+g("foo")
+"#,
+);
+
+testcase!(
+    test_functools_partial_bound_keyword_remains_overrideable,
+    r#"
+from functools import partial
+
+def f(a: int, b: str) -> bool:
+    return True
+
+g = partial(f, b="x")
+g(1)
+g(1, b="y")
+g(1, "y")  # E: Expected 1 positional argument, got 2
+"#,
+);
+
+testcase!(
     bug = "Self in Metaclass should be treated as Any. Any in metaclass call should act like no annot.",
     test_callable_class_substitute_self,
     r#"
