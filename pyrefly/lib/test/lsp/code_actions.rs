@@ -1305,6 +1305,62 @@ x = x
     );
 }
 
+fn unused_import_action_after(code: &str, cursor_offset: usize) -> Option<String> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main")?;
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle)?;
+    let position = TextSize::try_from(cursor_offset).ok()?;
+    let actions = transaction
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default();
+    let (_, module, range, patch) = actions
+        .into_iter()
+        .find(|(title, _, _, _)| title.starts_with("Remove unused import: `"))?;
+    if module.path() != module_info.path() {
+        return None;
+    }
+    let (_before, after) = apply_patch(&module_info, range, patch);
+    Some(after)
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_import_line() {
+    let code = "import os\nx = 1\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_import_alias() {
+    let code = "import os, sys\nprint(sys.version)\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("import sys\nprint(sys.version)\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_from_import_alias() {
+    let code = "from typing import Dict, List\nx: List[int] = []\n";
+    let cursor_offset = code.find("Dict").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import List\nx: List[int] = []\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_aliased_from_import() {
+    let code = "from typing import Dict as D, List\nx: List[int] = []\n";
+    let cursor_offset = code.find("D,").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import List\nx: List[int] = []\n", after);
+}
+
 #[test]
 fn redundant_cast_fix_all() {
     let (handles, state) = mk_multi_file_state(

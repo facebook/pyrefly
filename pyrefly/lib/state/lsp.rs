@@ -2827,6 +2827,20 @@ impl<'a> Transaction<'a> {
         // which inserts both the decorator and an import).
         let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
+        if let Some(bindings) = self.get_bindings(handle) {
+            for unused in bindings.unused_imports() {
+                if (unused.range.contains_range(range) || range.contains_range(unused.range))
+                    && let Some(action) =
+                        quick_fixes::unused_import::remove_unused_import_code_action(
+                            &module_info,
+                            &ast,
+                            unused,
+                        )
+                {
+                    other_actions.push(action);
+                }
+            }
+        }
         for error in errors {
             let error_range = error.range();
             if error_range.contains_range(range)
