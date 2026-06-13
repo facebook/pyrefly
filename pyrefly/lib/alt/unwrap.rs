@@ -19,6 +19,7 @@ use crate::types::callable::Required;
 use crate::types::class::ClassType;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
+use crate::types::types::Union;
 use crate::types::types::Var;
 
 /// Maximum size for a union hint to a function call. Hints wider than this are ignored.
@@ -356,22 +357,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn decompose_async_generator(&self, ty: &Type) -> Option<(Type, Type)> {
-        let yield_ty = self.fresh_var();
-        let send_ty = self.fresh_var();
-        let async_generator_ty = self.heap.mk_class_type(
-            self.stdlib
-                .async_generator(yield_ty.to_type(self.heap), send_ty.to_type(self.heap)),
-        );
-        if self.is_subset_eq(&async_generator_ty, ty) {
-            let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
-            let send_ty = self
-                .resolve_var_opt(ty, send_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
-            Some((yield_ty, send_ty))
-        } else if ty.is_any() {
-            Some((self.heap.mk_any_explicit(), self.heap.mk_any_explicit()))
-        } else {
-            None
+        match ty {
+            Type::Union(u) => {
+                let results: Option<Vec<_>> = u
+                    .members
+                    .iter()
+                    .map(|member| self.decompose_async_generator(member))
+                    .collect();
+                let (yield_tys, send_tys) = results?.into_iter().unzip();
+                Some((self.unions(yield_tys), self.unions(send_tys)))
+            }
+            _ => {
+                let yield_ty = self.fresh_var();
+                let send_ty = self.fresh_var();
+                let async_generator_ty = self.heap.mk_class_type(
+                    self.stdlib
+                        .async_generator(yield_ty.to_type(self.heap), send_ty.to_type(self.heap)),
+                );
+                if self.is_subset_eq(&async_generator_ty, ty) {
+                    let yield_ty: Type = self.resolve_var_opt(ty, yield_ty)?;
+                    let send_ty = self
+                        .resolve_var_opt(ty, send_ty)
+                        .unwrap_or_else(|| self.heap.mk_none());
+                    Some((yield_ty, send_ty))
+                } else if ty.is_any() {
+                    Some((self.heap.mk_any_explicit(), self.heap.mk_any_explicit()))
+                } else {
+                    None
+                }
+            }
         }
     }
 
