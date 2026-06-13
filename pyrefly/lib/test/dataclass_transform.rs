@@ -58,6 +58,23 @@ E(x=0, y="")
 );
 
 testcase!(
+    test_ordered_dataclass_transform_inheritance,
+    r#"
+from typing import dataclass_transform
+
+@dataclass_transform(order_default=True)
+def create[T](cls: type[T]) -> type[T]: ...
+
+@create
+class Parent:
+    x: int
+
+class Child(Parent):
+    pass
+    "#,
+);
+
+testcase!(
     test_metaclass_basic,
     r#"
 from typing import dataclass_transform

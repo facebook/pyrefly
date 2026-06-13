@@ -90,6 +90,20 @@ class A:
 );
 
 attrs_testcase!(
+    test_ordered_attrs_inheritance,
+    r#"
+import attr
+
+@attr.s()
+class Parent:
+    x: int
+
+class Child(Parent):
+    pass
+"#,
+);
+
+attrs_testcase!(
     bug = "auto_attribs=True requires annotations, but we suppress the field-annotation error for all attrs classes",
     test_attrs_unannotated_attrib_auto_attribs,
     r#"

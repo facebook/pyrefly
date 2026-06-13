@@ -557,6 +557,8 @@ pub struct DataclassMetadata {
     /// The dataclass fields, e.g., `{'x'}` for `@dataclass class C: x: int`.
     pub fields: SmallSet<Name>,
     pub kws: DataclassKeywords,
+    /// Whether this metadata originates from stdlib `@dataclass`, rather than a dataclass-like transform.
+    pub is_stdlib_dataclass: bool,
     pub field_specifiers: Vec<CalleeKind>,
     pub alias_keyword: Name,
     pub init_defaults: InitDefaults,
