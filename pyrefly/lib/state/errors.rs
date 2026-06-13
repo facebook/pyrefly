@@ -6,6 +6,7 @@
  */
 
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -312,6 +313,54 @@ impl Errors {
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
         }
         errors
+    }
+
+    pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
+        let collected = self.collect_errors();
+        let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
+            .loads
+            .iter()
+            .map(|(load, _, config)| (load.module_info.path(), config))
+            .collect();
+        let mut baseline_processors: SmallMap<PathBuf, Option<BaselineProcessor>> = SmallMap::new();
+        let mut errors = collected;
+        let mut ordinary = Vec::new();
+
+        for error in errors.ordinary.drain(..) {
+            let Some(config) = config_by_path.get(&error.path()) else {
+                ordinary.push(error);
+                continue;
+            };
+            let Some(baseline_path) = config.baseline.as_deref() else {
+                ordinary.push(error);
+                continue;
+            };
+            let processor = baseline_processors
+                .entry(baseline_path.to_path_buf())
+                .or_insert_with(|| {
+                    let relative_to = config
+                        .source
+                        .root()
+                        .or_else(|| baseline_path.parent())
+                        .unwrap_or_else(|| Path::new(""));
+                    BaselineProcessor::from_file(baseline_path, relative_to).ok()
+                });
+            if processor
+                .as_ref()
+                .is_some_and(|processor| processor.matches_baseline(&error))
+            {
+                errors.baseline.push(error);
+            } else {
+                ordinary.push(error);
+            }
+        }
+
+        ordinary.extend(unused.ordinary);
+        (
+            Self::merge_display_errors(ordinary, errors.directives),
+            Self::merge_display_errors(errors.baseline, Vec::new()),
+        )
     }
 
     pub fn collect_display_errors(&self) -> Vec<Error> {

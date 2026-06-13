@@ -163,6 +163,47 @@ fn test_diagnostics_markdown_messages() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_baseline_diagnostic_is_hint() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_hint");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+
+    interaction
+        .client
+        .diagnostic("bad.py")
+        .expect_response_with(|response| {
+            if let DocumentDiagnosticReportResult::Report(report) = response
+                && let lsp_types::DocumentDiagnosticReport::Full(full) = report
+            {
+                let items = &full.full_document_diagnostic_report.items;
+                if items.len() != 1 {
+                    return false;
+                }
+                let item = &items[0];
+                return item.code
+                    == Some(lsp_types::NumberOrString::String(
+                        "bad-assignment".to_owned(),
+                    ))
+                    && item.severity == Some(lsp_types::DiagnosticSeverity::HINT);
+            }
+            false
+        })
+        .expect("Failed to receive hint diagnostic");
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_stream_diagnostics_after_save() {
     let root = get_test_files_root();
