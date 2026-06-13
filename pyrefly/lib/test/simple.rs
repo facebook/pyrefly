@@ -730,6 +730,23 @@ def test(m: Mapping[str, int]) -> None:
 );
 
 testcase!(
+    test_dict_unpack_descriptor_attribute,
+    r#"
+from typing import Any
+
+class Column[T]:
+    def __get__(self, obj: Any, objtype: Any = None) -> T: ...
+    def __set__(self, obj: Any, value: T) -> None: ...
+
+class CallbackModel:
+    data: Column[dict[str, Any]]
+
+def test(model: CallbackModel) -> None:
+    tags: dict[str, Any] = {"result": "success", **model.data}
+"#,
+);
+
+testcase!(
     test_dict_unpack_subclass,
     r#"
 from typing import assert_type

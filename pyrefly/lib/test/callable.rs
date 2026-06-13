@@ -714,6 +714,25 @@ def test(kwargs: Mapping[str, int]):
 );
 
 testcase!(
+    test_splat_kwargs_descriptor_attribute,
+    r#"
+from typing import Any
+
+class Column[T]:
+    def __get__(self, obj: Any, objtype: Any = None) -> T: ...
+    def __set__(self, obj: Any, value: T) -> None: ...
+
+class CallbackModel:
+    data: Column[dict[str, int]]
+
+def f(**kwargs: int): ...
+
+def test(model: CallbackModel) -> None:
+    f(**model.data)
+"#,
+);
+
+testcase!(
     test_splat_kwargs_subclass,
     r#"
 class Counter[T](dict[T, int]): ...
