@@ -4060,11 +4060,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(reason) = self.super_method_needs_impl_reason(&member) {
                         ClassAttribute::no_access(reason)
                     } else {
-                        self.as_class_attribute(
-                            name,
-                            &member.value,
-                            &ClassBase::SelfType(obj.clone()),
-                        )
+                        let cls = if name == &dunder::NEW {
+                            ClassBase::ClassDef(obj.clone())
+                        } else {
+                            ClassBase::SelfType(obj.clone())
+                        };
+                        self.as_class_attribute(name, &member.value, &cls)
                     }
                 }),
         }
