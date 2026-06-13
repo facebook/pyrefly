@@ -182,6 +182,12 @@ impl Range {
     }
 }
 
+#[derive(Serialize)]
+pub struct DefinitionLocation {
+    pub filename: String,
+    pub range: Range,
+}
+
 #[derive(Serialize, Clone)]
 pub struct Diagnostic {
     #[serde(rename(serialize = "startLineNumber"))]
@@ -605,6 +611,27 @@ impl Playground {
             .collect()
     }
 
+    pub fn goto_definition_locations(&mut self, pos: Position) -> Vec<DefinitionLocation> {
+        let handle = match self.handles.get(&self.active_filename) {
+            Some(handle) => handle,
+            None => return Vec::new(),
+        };
+        let transaction = self.state.transaction();
+        let position = match self.to_text_size(&transaction, pos) {
+            Some(position) => position,
+            None => return Vec::new(),
+        };
+        transaction
+            .goto_definition(handle, position)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| DefinitionLocation {
+                filename: r.module.path().as_path().to_string_lossy().to_string(),
+                range: Range::new(r.module.display_range(r.range)),
+            })
+            .collect()
+    }
+
     pub fn autocomplete(&self, pos: Position) -> Vec<AutoCompletionItem> {
         let handle = match self.handles.get(&self.active_filename) {
             Some(h) => h,
@@ -754,6 +781,68 @@ mod tests {
                 "Filename should end with .py or .pyi"
             );
         }
+    }
+
+    #[test]
+    fn test_cross_file_goto_definition_locations() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        files.insert(
+            "utils.py".to_owned(),
+            "def helper_function() -> str:\n    return \"Hello from utils!\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        let locations = state.goto_definition_locations(Position::new(2, 10));
+
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].filename, "utils.py");
+        assert_eq!(locations[0].range.start_line, 1);
+        assert_eq!(locations[0].range.start_col, 5);
+    }
+
+    #[test]
+    fn test_update_sandbox_files_removes_missing_files() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        files.insert(
+            "utils.py".to_owned(),
+            "def helper_function() -> str:\n    return \"Hello from utils!\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+        assert!(
+            state
+                .get_errors()
+                .into_iter()
+                .all(|e| !e.message_header.contains("Cannot find module `utils`"))
+        );
+
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "from utils import helper_function\nresult = helper_function()".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        assert!(
+            state
+                .get_errors()
+                .into_iter()
+                .any(|e| e.message_header.contains("Cannot find module `utils`"))
+        );
     }
 
     #[test]
