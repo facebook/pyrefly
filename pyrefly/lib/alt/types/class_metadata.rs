@@ -640,6 +640,8 @@ pub struct DataclassMetadata {
     /// duplicating every instance-field name.
     pub pseudo_field_names: SmallSet<Name>,
     pub kws: DataclassKeywords,
+    /// Whether this metadata originates from stdlib `@dataclass`, rather than a dataclass-like transform.
+    pub is_stdlib_dataclass: bool,
     pub alias_keyword: Name,
     pub init_defaults: InitDefaults,
     /// Whether a default can be passed positionally to field specifier calls

@@ -1226,6 +1226,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         fields,
                         pseudo_field_names,
                         kws,
+                        is_stdlib_dataclass: true,
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
@@ -1260,6 +1261,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         fields,
                         pseudo_field_names,
                         kws,
+                        is_stdlib_dataclass: true,
                         alias_keyword: alias_keyword.clone(),
                         init_defaults: init_defaults.clone(),
                         default_can_be_positional,
@@ -1348,6 +1350,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 fields,
                 pseudo_field_names,
                 kws,
+                is_stdlib_dataclass: false,
                 alias_keyword,
                 init_defaults,
                 default_can_be_positional,
@@ -1652,6 +1655,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             range,
                             ErrorKind::InvalidInheritance,
                             format!("Cannot extend final class `{}`", class_object.name()),
+                        );
+                    }
+
+                    if !is_new_type
+                        && let Some(dm) = metadata.dataclass_metadata()
+                        && dm.kws.order
+                        && dm.is_stdlib_dataclass
+                    {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::OrderedDataclassInheritance,
+                            format!(
+                                "Cannot extend dataclass `{}` with `order=True`",
+                                class_object.name()
+                            ),
                         );
                     }
                     if is_new_type {
