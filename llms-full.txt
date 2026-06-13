@@ -3075,7 +3075,7 @@ This error arises when a function is called with the wrong number of arguments.
 def takes_three(one: int, two: int, three: int) -> complex:
   ...
 
-take_three(3, 2)  # Expected 1 more positional argument [bad-argument-count]
+takes_three(1, 2, 3, 4)  # Expected 3 positional arguments, got 4 [bad-argument-count]
 ```
 
 Note that `missing-argument` will be raised if pyrefly can identify that
