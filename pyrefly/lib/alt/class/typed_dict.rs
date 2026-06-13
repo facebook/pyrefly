@@ -466,6 +466,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Get a (key, default: ValueType) -> ValueType overload.
+    fn get_overload_with_value_default(
+        &self,
+        metadata: &FuncMetadata,
+        self_param: &Param,
+        name: Option<&Name>,
+        ty: Type,
+    ) -> OverloadType {
+        OverloadType::Function(Function {
+            signature: Callable::list(
+                ParamList::new(vec![
+                    self_param.clone(),
+                    self.key_param(name),
+                    Param::PosOnly(Some(DEFAULT_PARAM.clone()), ty.clone(), Required::Required),
+                ]),
+                ty,
+            ),
+            metadata: metadata.clone(),
+        })
+    }
+
     /// Get a (key, default: T) -> ValueType | T overload.
     fn get_overload_with_default(
         &self,
@@ -552,6 +573,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     metadata: metadata.clone(),
                 }));
+                // (self, key: Literal["key"], default: ValueType) -> ValueType
+                literal_signatures.push(self.get_overload_with_value_default(
+                    &metadata,
+                    &self_param,
+                    Some(name),
+                    field.ty.clone(),
+                ));
                 // (self, key: Literal["key"], default: T) -> ValueType | T
                 literal_signatures.push(self.get_overload_with_default(
                     cls,
@@ -634,7 +662,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             metadata: metadata.clone(),
         }));
 
-        // 2) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
+        // 2) default: (self, key: Literal["field_name"], default: FieldType) -> FieldType
+        overloads.push(self.get_overload_with_value_default(
+            metadata,
+            self_param,
+            name,
+            ty.clone(),
+        ));
+
+        // 3) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
         overloads.push(self.get_overload_with_default(cls, metadata, self_param, name, ty));
     }
 
