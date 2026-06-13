@@ -810,6 +810,33 @@ class B[T: A]:
 );
 
 testcase!(
+    test_overloaded_descriptor_get_preserves_specialized_owner,
+    r#"
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, overload, reveal_type
+
+Storage: TypeAlias = Literal["python", "pyarrow"]
+StorageT = TypeVar("StorageT", bound=Storage)
+_StorageT = TypeVar("_StorageT", bound=Storage | None, default=None)
+
+class _CatStorageDescriptor:
+    @overload
+    def __get__(self, instance: Cat[None], owner: type[Cat[None]]) -> Storage: ...
+    @overload
+    def __get__(
+        self, instance: Cat[StorageT], owner: type[Cat[StorageT]]
+    ) -> StorageT: ...
+
+    def __get__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Cat(Generic[_StorageT]):
+    storage = _CatStorageDescriptor()
+
+def main(cat: Cat[Literal["pyarrow"]]) -> None:
+    reveal_type(cat.storage)  # E: revealed type: Literal['pyarrow']
+    "#,
+);
+
+testcase!(
     test_property_constructor_non_callable_arg,
     r#"
 from typing import Any, assert_type
