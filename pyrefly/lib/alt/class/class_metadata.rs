@@ -1867,6 +1867,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn calculate_abstract_members(&self, cls: &Class) -> AbstractClassMembers {
         let metadata = self.get_metadata_for_class(cls);
+        // A TypedDict is a concrete `dict`, never abstract — but its synthesized
+        // `TypedDictFallback(Mapping, ...)` base would otherwise leak `Mapping`'s
+        // abstract methods onto it. Short-circuit before that.
+        if metadata.is_typed_dict() {
+            return AbstractClassMembers::new(SmallSet::new());
+        }
         let mut fields_to_check: SmallSet<Name>;
         if metadata.extends_abc() || metadata.is_protocol() {
             fields_to_check = self
@@ -1987,7 +1993,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 return true;
             }
-            if base_metadata.extends_abc() {
+            // A `Protocol` base makes the subclass's metaclass `_ProtocolMeta`,
+            // which derives from `ABCMeta` (see typeshed `typing.pyi`). So a class
+            // that inherits any protocol is an ABC at runtime, even when the
+            // protocol-ness is hidden behind a plain intermediate like `Sequence`.
+            if base_metadata.extends_abc() || base_metadata.is_protocol() {
                 return true;
             }
         }
