@@ -3550,6 +3550,7 @@ impl<'a> Transaction<'a> {
     fn local_references_from_external_definition(
         &self,
         handle: &Handle,
+        definition_metadata: &DefinitionMetadata,
         definition_range: TextRange,
         module: &Module,
     ) -> Option<Vec<TextRange>> {
@@ -3589,6 +3590,20 @@ impl<'a> Transaction<'a> {
                     }
                 }
             }
+        }
+        if let DefinitionMetadata::Variable(Some(kind)) = definition_metadata
+            && (*kind == SymbolKind::Parameter || *kind == SymbolKind::Variable)
+        {
+            let expected_name = Name::new(module.code_at(definition_range));
+            references.extend(
+                self.local_keyword_argument_references_from_parameter_definition(
+                    handle,
+                    definition_range,
+                    module,
+                    &expected_name,
+                )
+                .unwrap_or_default(),
+            );
         }
         Some(references)
     }
@@ -3654,7 +3669,12 @@ impl<'a> Transaction<'a> {
         include_declaration: bool,
     ) -> Option<Vec<TextRange>> {
         let mut references = if handle.path() != module.path() {
-            self.local_references_from_external_definition(handle, definition_range, module)?
+            self.local_references_from_external_definition(
+                handle,
+                &definition_metadata,
+                definition_range,
+                module,
+            )?
         } else {
             let definition_name = Name::new(module.code_at(definition_range));
             self.local_references_from_local_definition(
@@ -3806,35 +3826,23 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         definition_range: TextRange,
+        definition_module: &Module,
         expected_name: &Name,
     ) -> Option<Vec<TextRange>> {
-        let ast = self.get_ast(handle)?;
         let keyword_args = self.collect_local_keyword_arguments_by_name(handle, expected_name);
         let mut references = Vec::new();
 
-        let definition_module = self.get_module_info(handle)?;
-
         for (kw_identifier, callee_kind) in keyword_args {
-            let callee_locations =
-                self.get_callee_location(handle, &callee_kind, FindPreference::default());
-
-            for TextRangeWithModule {
-                module,
-                range: callee_def_range,
-            } in callee_locations
-            {
-                if module.path() == definition_module.path() {
-                    // Refine to get the actual parameter location
-                    if let Some(param_range) = self.refine_param_location_for_callee(
-                        ast.as_ref(),
-                        callee_def_range,
-                        &kw_identifier,
-                    ) {
-                        // If the parameter location matches our definition, this is a valid reference
-                        if param_range == definition_range {
-                            references.push(kw_identifier.range);
-                        }
-                    }
+            for definition in self.find_definition_for_keyword_argument(
+                handle,
+                &kw_identifier,
+                &callee_kind,
+                FindPreference::default(),
+            ) {
+                if definition.module.path() == definition_module.path()
+                    && definition.definition_range == definition_range
+                {
+                    references.push(kw_identifier.range);
                 }
             }
         }
@@ -3890,6 +3898,7 @@ impl<'a> Transaction<'a> {
                 .local_keyword_argument_references_from_parameter_definition(
                     handle,
                     definition_range,
+                    &self.get_module_info(handle)?,
                     expected_name,
                 );
 
