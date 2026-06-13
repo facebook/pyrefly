@@ -355,6 +355,27 @@ house = House(
 );
 
 pydantic_testcase!(
+    test_annotated_field_with_custom_schema_accepts_any_init_param,
+    r#"
+from typing import Annotated, Any, reveal_type
+from pydantic import BaseModel
+
+class DType: ...
+
+class DTypeAdapter:
+    def __get_pydantic_core_schema__(self, source_type: Any, handler: Any) -> Any: ...
+
+class Model(BaseModel, strict=True):
+    dtype: Annotated[DType, DTypeAdapter()]
+    other: DType
+
+reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, dtype: Any, other: DType, **Unknown) -> None
+Model(dtype=">i4", other=DType())
+Model(dtype=DType(), other=">i4")  # E: Argument `Literal['>i4']` is not assignable to parameter `other` with type `DType`
+    "#,
+);
+
+pydantic_testcase!(
     test_model_fields_with_bounded_typevar,
     r#"
 from pydantic import BaseModel

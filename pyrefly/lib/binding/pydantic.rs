@@ -147,6 +147,7 @@ impl PydanticAliasGenerator {
         snake
     }
 }
+pub const GET_PYDANTIC_CORE_SCHEMA: Name = Name::new_static("__get_pydantic_core_schema__");
 
 // An abstraction to iterate over configuration values, whether `ConfigDict()` or a dict display
 // is used.
