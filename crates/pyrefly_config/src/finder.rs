@@ -103,6 +103,13 @@ type LoadCallback = Box<dyn Fn(&Path) -> (ArcId<ConfigFile>, Vec<ConfigError>) +
 type FallbackCallback =
     Box<dyn Fn(ModuleNameWithKind, &ModulePath) -> ArcId<ConfigFile> + Send + Sync>;
 
+/// Function to augment a config for a specific Python file after it has been selected.
+type AfterCallback = Box<
+    dyn Fn(ModuleNameWithKind, &ModulePath, ArcId<ConfigFile>) -> anyhow::Result<ArcId<ConfigFile>>
+        + Send
+        + Sync,
+>;
+
 /// A way to find a config file given a directory or Python file.
 /// Uses a lot of caching.
 pub struct ConfigFinder {
@@ -113,6 +120,8 @@ pub struct ConfigFinder {
     /// If this returns a value, it is _not_ cached.
     /// If this returns anything other than `Ok`, the rest of the functions are used.
     before: BeforeCallback,
+    /// If this returns `Err`, the original config is returned and the error is recorded.
+    after: AfterCallback,
     /// If there is no config file, or loading it fails, use this fallback.
     fallback: FallbackCallback,
     clear_extra_caches: Box<dyn Fn() + Send + Sync>,
@@ -128,6 +137,7 @@ impl ConfigFinder {
         Self::new_custom(
             Box::new(|_, _| Ok(None)),
             load,
+            Box::new(|_, _, config| Ok(config)),
             fallback,
             clear_extra_caches,
         )
@@ -142,6 +152,7 @@ impl ConfigFinder {
         Self::new_custom(
             Box::new(move |_, _| Ok(Some(c1.dupe()))),
             Box::new(move |_| (c2.dupe(), Vec::new())),
+            Box::new(move |_, _, config| Ok(config)),
             Box::new(move |_, _| c3.dupe()),
             Box::new(|| {}),
         )
@@ -153,6 +164,7 @@ impl ConfigFinder {
     pub fn new_custom(
         before: BeforeCallback,
         load: LoadCallback,
+        after: AfterCallback,
         fallback: FallbackCallback,
         clear_extra_caches: Box<dyn Fn() + Send + Sync>,
     ) -> Self {
@@ -208,6 +220,7 @@ impl ConfigFinder {
             ),
             errors,
             before,
+            after,
             fallback,
             clear_extra_caches,
         }
@@ -264,7 +277,7 @@ impl ConfigFinder {
             None => (self.fallback)(name, path),
         };
 
-        match path.details() {
+        let config = match path.details() {
             ModulePathDetails::FileSystem(x) | ModulePathDetails::Memory(x) => {
                 let absolute = x.absolutize();
                 f(absolute.parent())
@@ -273,6 +286,14 @@ impl ConfigFinder {
             ModulePathDetails::BundledTypeshed(_) => f(None),
             ModulePathDetails::BundledTypeshedThirdParty(_) => f(None),
             ModulePathDetails::BundledThirdParty(_) => f(None),
+        };
+
+        match (self.after)(name, path, config.dupe()) {
+            Ok(config) => config,
+            Err(e) => {
+                self.errors.lock().push(ConfigError::warn(e));
+                config
+            }
         }
     }
 
