@@ -215,7 +215,7 @@ impl Transaction<'_> {
     }
 
     /// Adds completion items for literal types (e.g., `Literal["foo", "bar"]`).
-    fn add_literal_completions_from_type(
+    pub(crate) fn add_literal_completions_from_type(
         param_type: &Type,
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
@@ -1176,6 +1176,12 @@ impl Transaction<'_> {
                             &nodes,
                             &mut result,
                             in_string_literal,
+                        );
+                        self.add_dict_value_literal_completions(
+                            handle,
+                            mod_module.as_ref(),
+                            position,
+                            &mut result,
                         );
                         let dict_key_claimed = self.add_dict_key_completions(
                             handle,
