@@ -220,6 +220,29 @@ x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`
 );
 
 testcase!(
+    test_dict_hint_with_wide_literal_alias,
+    r#"
+from typing import Literal, Mapping, TypeAlias
+
+Thing: TypeAlias = Literal[
+    "bat",
+    "cat",
+    "dat",
+    "eat",
+    "fat",
+    "gat",
+    "hat",
+    "jat",
+]
+
+def func(a: Thing | Mapping[str, Thing]) -> None:
+    pass
+
+func({"a": "bat", "c": "cat"})
+    "#,
+);
+
+testcase!(
     test_call_keyword_arg_is_context_even_for_duplicates,
     r#"
 from typing import assert_type, Callable, Any

@@ -433,21 +433,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decompose: impl Fn(&'b Type) -> Option<D>,
         infer: impl Fn(Option<D>) -> Type,
     ) -> Type {
-        if let Some(hint) = hint
-            && hint.types().len() <= MAX_DECOMPOSE_HINT_WIDTH
-        {
-            for (hint, vs) in self.solver().partial_sort_by_vars(hint.types()) {
-                let mut ret = None;
-                match self.solver().with_snapshot(&vs, || {
-                    let d = decompose(hint);
-                    if d.is_none() {
-                        return Err(SubsetError::Other);
+        if let Some(hint) = hint {
+            if hint.types().len() <= MAX_DECOMPOSE_HINT_WIDTH {
+                for (hint, vs) in self.solver().partial_sort_by_vars(hint.types()) {
+                    let mut ret = None;
+                    match self.solver().with_snapshot(&vs, || {
+                        let d = decompose(hint);
+                        if d.is_none() {
+                            return Err(SubsetError::Other);
+                        }
+                        ret = Some(infer(d));
+                        self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
+                    }) {
+                        SubsetWithSnapshotResult::Ok => return ret.unwrap(),
+                        SubsetWithSnapshotResult::Err(_) => {}
                     }
-                    ret = Some(infer(d));
-                    self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
-                }) {
-                    SubsetWithSnapshotResult::Ok => return ret.unwrap(),
-                    SubsetWithSnapshotResult::Err(_) => {}
+                }
+            } else {
+                let mut decomposed_hint = None;
+                for (hint, vs) in self.solver().partial_sort_by_vars(hint.types()) {
+                    let snapshot = self
+                        .solver()
+                        .snapshot_vars(&hint.collect_maybe_placeholder_vars());
+                    let d = decompose(hint);
+                    self.solver().restore_vars(snapshot);
+                    if let Some(d) = d {
+                        if decomposed_hint.is_some() {
+                            return infer(None);
+                        }
+                        decomposed_hint = Some((hint, vs, d));
+                    }
+                }
+                if let Some((hint, vs, d)) = decomposed_hint {
+                    let mut ret = None;
+                    match self.solver().with_snapshot(&vs, || {
+                        ret = Some(infer(Some(d)));
+                        self.is_subset_eq_with_reason(ret.as_ref().unwrap(), hint)
+                    }) {
+                        SubsetWithSnapshotResult::Ok => return ret.unwrap(),
+                        SubsetWithSnapshotResult::Err(_) => {}
+                    }
                 }
             }
         }
