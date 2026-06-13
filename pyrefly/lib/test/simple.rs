@@ -513,6 +513,21 @@ with open("file.txt") as f:  # E: Cannot assign to variable `f` because it is ma
 );
 
 testcase!(
+    test_all_caps_as_final_reassign,
+    r#"
+FOO = 1
+FOO = 2  # E: Cannot assign to variable `FOO` because it is marked final
+
+def f() -> None:
+    LOCAL = 1
+    LOCAL = 2
+
+Bar = 1
+Bar = 2
+"#,
+);
+
+testcase!(
     test_reveal_type,
     r#"
 from typing import reveal_type
