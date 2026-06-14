@@ -130,6 +130,5 @@ fn test_inlay_hints() {
             )
         })
         .unwrap();
-
     interaction.shutdown().unwrap();
 }
