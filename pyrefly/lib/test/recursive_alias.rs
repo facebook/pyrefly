@@ -233,7 +233,7 @@ testcase!(
     test_error_implicit_any,
     TestEnv::new().enable_implicit_any_error(),
     r#"
-type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X`
+type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X[T]`
 def f(x: X[str]) -> X[int]:
     return [x]
     "#,
