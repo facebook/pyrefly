@@ -193,13 +193,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let tparams = self.get_class_tparams(cls);
         let targs = self.create_default_targs(
-            self.get_class_tparams(cls),
+            tparams.dupe(),
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("class `{}`", cls.name()),
+                    format!("class `{}{}`", cls.name(), tparams),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -213,13 +214,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        let tparams = forall.tparams.dupe();
         let targs = self.create_default_targs(
-            forall.tparams.dupe(),
+            tparams.dupe(),
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("type alias `{}`", forall.body.name()),
+                    format!("type alias `{}{}`", forall.body.name(), tparams),
                     Some(tparam.name().as_str()),
                 );
             }),
