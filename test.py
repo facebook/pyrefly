@@ -133,7 +133,21 @@ class CargoExecutor(Executor):
         os.chdir(str(script_dir))
 
     def rustfmt(self) -> None:
-        run(["cargo", "fmt"])
+        # rustfmt.toml's import options are nightly-only; use nightly when present to
+        # apply them and avoid stable rustfmt's "unstable features" warnings.
+        try:
+            # @lint-ignore FIXIT1 NoUnsafeExecRule
+            has_nightly = (
+                subprocess.run(
+                    ["cargo", "+nightly", "fmt", "--version"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                ).returncode
+                == 0
+            )
+        except OSError:
+            has_nightly = False
+        run(["cargo", "+nightly", "fmt"] if has_nightly else ["cargo", "fmt"])
 
     def clippy(self) -> None:
         run(["cargo", "clippy"])
