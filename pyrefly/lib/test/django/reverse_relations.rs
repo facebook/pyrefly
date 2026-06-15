@@ -27,7 +27,6 @@ class Author(models.Model):
 }
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_default_name,
     r#"
 from django.db import models
@@ -40,12 +39,11 @@ class Article(models.Model):
 
 reporter = Reporter()
 # Default reverse name is <model_lowercase>_set
-reporter.article_set  # E: `Reporter` has no attribute `article_set`
+reporter.article_set
 "#,
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_custom_name,
     r#"
 from django.db import models
@@ -58,7 +56,7 @@ class Book(models.Model):
 
 author = Author()
 # Custom related_name should be used instead of default
-author.written_books  # E: `Author` has no attribute `written_books`
+author.written_books
 "#,
 );
 
@@ -82,7 +80,6 @@ author.book_set  # E: `Author` has no attribute `book_set`
 
 // Self-referential FK creates reverse accessor on the same model
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_self_reference,
     r#"
 from django.db import models
@@ -93,12 +90,11 @@ class Person(models.Model):
     parent = models.ForeignKey('self', null=True, on_delete=models.CASCADE)
 
 person = Person()
-person.person_set  # E: `Person` has no attribute `person_set`
+person.person_set
 "#,
 );
 
 testcase!(
-    bug = "Cross-module reverse relations not supported",
     test_foreign_key_reverse_cross_module,
     django_env_with_separate_models(),
     r#"
@@ -110,14 +106,13 @@ class Book(models.Model):
 
 # Author is defined in a different module, so reverse relation won't be synthesized
 author = Author()
-author.book_set  # E: `Author` has no attribute `book_set`
+author.book_set
 "#,
 );
 
 // OneToOneField reverse relation: returns single object (not a manager like FK)
 // Default name is just the lowercase model name without `_set`
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_one_to_one_reverse_default_name,
     r#"
 from django.db import models
@@ -130,13 +125,12 @@ class Restaurant(models.Model):
 
 place = Place()
 # OneToOne reverse is just the lowercase model name (no _set suffix)
-place.restaurant  # E: `Place` has no attribute `restaurant`
+place.restaurant
 "#,
 );
 
 // ManyToManyField reverse relation: returns a manager like FK
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_reverse_default_name,
     r#"
 from django.db import models
@@ -149,12 +143,11 @@ class Article(models.Model):
 
 tag = Tag()
 # ManyToMany default reverse name is <model_lowercase>_set
-tag.article_set  # E: `Tag` has no attribute `article_set`
+tag.article_set
 "#,
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_one_to_one_reverse_custom_name,
     r#"
 from django.db import models
@@ -166,7 +159,7 @@ class Restaurant(models.Model):
     place = models.OneToOneField(Place, on_delete=models.CASCADE, related_name='dining_spot')
 
 place = Place()
-place.dining_spot  # E: `Place` has no attribute `dining_spot`
+place.dining_spot
 "#,
 );
 
@@ -188,7 +181,6 @@ place.restaurant  # E: `Place` has no attribute `restaurant`
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_reverse_custom_name,
     r#"
 from django.db import models
@@ -200,7 +192,7 @@ class Article(models.Model):
     tags = models.ManyToManyField(Tag, related_name='tagged_articles')
 
 tag = Tag()
-tag.tagged_articles  # E: `Tag` has no attribute `tagged_articles`
+tag.tagged_articles
 "#,
 );
 
@@ -240,7 +232,6 @@ person.person_set  # E: `Person` has no attribute `person_set`
 );
 
 django_testcase!(
-    bug = "Reverse relations not yet implemented",
     test_many_to_many_self_reference_asymmetrical,
     r#"
 from django.db import models
@@ -252,6 +243,6 @@ class Person(models.Model):
 
 person = Person()
 # With symmetrical=False, reverse accessor is created
-person.followers  # E: `Person` has no attribute `followers`
+person.followers
 "#,
 );
