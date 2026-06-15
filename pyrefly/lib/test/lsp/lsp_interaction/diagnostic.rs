@@ -438,6 +438,41 @@ fn test_cycle_class() {
     interaction.shutdown().unwrap();
 }
 
+/// Regression test for <https://github.com/facebook/pyrefly/issues/3789>.
+///
+/// Opening `expr.py` — part of a 3-module import cycle
+/// (`expr` -> `add` -> `operations` -> `expr`) whose `expr` module contains a
+/// lambda — used to panic with "a variable has leaked from one module to
+/// another". The lambda parameter's Unwrap `Var` is cached in thread-local
+/// state that is shared across `Solver` instances while a cross-module SCC is
+/// driven iteratively, so a stale `Var` allocated in one module's solver was
+/// returned while solving another module. This reproduces only on the
+/// incremental LSP open path, not on a uniform batch `check`. We only assert
+/// that the server stays alive (does not panic) and answers the diagnostic
+/// request.
+#[test]
+fn test_var_leak_cycle_no_panic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("var_leak_cycle_3789/expr.py");
+
+    interaction
+        .client
+        .diagnostic("var_leak_cycle_3789/expr.py")
+        .expect_response_with(|_| true)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_unexpected_keyword_range() {
     let test_files_root = get_test_files_root();

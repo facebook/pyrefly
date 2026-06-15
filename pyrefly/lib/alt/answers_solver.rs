@@ -1588,7 +1588,10 @@ pub struct ThreadState {
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
     /// Solve-time mapping from per-module lambda parameter IDs to the
     /// thread-local Var that represents that parameter in the current solve.
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, LambdaParamId), Var>>,
+    ///
+    /// The `ModulePath` is needed to distinguish the in-memory and on-disk
+    /// versions of the same module, which can coexist in the IDE (issue #3789).
+    lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1870,14 +1873,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.thread_state
             .lambda_param_vars
             .borrow_mut()
-            .insert((self.module().name(), id), var);
+            .insert((self.module().name(), self.module().path().dupe(), id), var);
     }
 
     fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
-            .get(&(self.module().name(), id))
+            .get(&(self.module().name(), self.module().path().dupe(), id))
             .copied()
     }
 
