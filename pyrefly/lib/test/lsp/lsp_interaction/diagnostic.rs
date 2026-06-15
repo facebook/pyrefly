@@ -1792,3 +1792,76 @@ fn test_unused_ignore_diagnostic_default_severity() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_unused_type_ignore_diagnostic() {
+    let root = get_test_files_root();
+    let test_files_root = root.path().join("unused_type_ignore");
+    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("example.py");
+
+    interaction
+        .client
+        .diagnostic("example.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unused-type-ignore",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-type-ignore"
+                    },
+                    "message": "Unused `# type: ignore` comment",
+                    "range": {
+                        "start": {"line": 5, "character": 0},
+                        "end": {"line": 5, "character": 1}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_type_ignore_diagnostic_default_severity() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("unused_type_ignore_no_config.py");
+
+    // Without `unused-type-ignore = "error"` in config, the default severity is "ignore", so no
+    // `unused-type-ignore` diagnostic should appear.
+    interaction
+        .client
+        .diagnostic("unused_type_ignore_no_config.py")
+        .expect_response(json!({
+            "items": [],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
