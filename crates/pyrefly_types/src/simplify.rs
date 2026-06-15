@@ -33,12 +33,11 @@ fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     let mut flattened = Vec::with_capacity(xs.len());
     flatten(xs, &mut flattened);
     simplify_intersections(&mut flattened, heap);
-    let mut res = Vec::with_capacity(flattened.len());
-    flatten(flattened, &mut res);
-
-    res.sort();
-    res.dedup();
-    res
+    // `simplify_intersections` only ever introduces `Never`s, so dropping them in place suffices.
+    flattened.retain(|x| !x.is_never());
+    flattened.sort();
+    flattened.dedup();
+    flattened
 }
 
 /// Given a list of types to union together,
