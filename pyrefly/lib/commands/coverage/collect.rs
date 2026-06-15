@@ -1193,6 +1193,24 @@ fn parse_classes(
         String::new()
     };
     let deleted = bindings.module_deletes();
+
+    // group method definitions by class
+    let mut methods_by_class: HashMap<Idx<KeyClass>, Vec<Idx<KeyUndecoratedFunction>>> =
+        HashMap::new();
+    for idx in bindings.keys::<Key>() {
+        if let Key::Definition(_) = bindings.idx_to_key(idx)
+            && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
+        {
+            let undecorated_idx = bindings.get(*x).undecorated_idx;
+            if let Some(class_key) = bindings.get(undecorated_idx).class_key {
+                methods_by_class
+                    .entry(class_key)
+                    .or_default()
+                    .push(undecorated_idx);
+            }
+        }
+    }
+
     for class_idx in bindings.keys::<KeyClass>() {
         // Skip @type_check_only classes.
         if tco_classes.contains(&class_idx) {
@@ -1229,25 +1247,12 @@ fn parse_classes(
             .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
         // Check methods defined directly on this class
         let mut incomplete_attributes = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            if let Key::Definition(_id) = bindings.idx_to_key(idx)
-                && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
-            {
-                let decorated = bindings.get(*x);
-                let undecorated_idx = decorated.undecorated_idx;
-                let fun = bindings.get(undecorated_idx);
-                if let Some(func_class_key) = fun.class_key {
-                    if func_class_key != class_idx {
-                        continue;
-                    }
-                    let method_name = fun.def.name.to_string();
-                    if !is_function_completely_annotated(bindings, answers, undecorated_idx) {
-                        incomplete_attributes.push(IncompleteAttribute {
-                            name: method_name.clone(),
-                            declared_in: class_name.clone(),
-                        });
-                    }
-                }
+        for &undecorated_idx in methods_by_class.get(&class_idx).into_iter().flatten() {
+            if !is_function_completely_annotated(bindings, answers, undecorated_idx) {
+                incomplete_attributes.push(IncompleteAttribute {
+                    name: bindings.get(undecorated_idx).def.name.to_string(),
+                    declared_in: class_name.clone(),
+                });
             }
         }
         // Check inherited methods
