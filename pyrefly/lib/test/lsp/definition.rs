@@ -12,12 +12,14 @@ use pyrefly_python::module::TextRangeWithModule;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
+use crate::test::util::mk_multi_file_state_assert_no_errors;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let defs = state
@@ -187,6 +189,37 @@ Definition Result:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_goes_to_conftest_fixture_definition() {
+    let conftest = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def answer():
+    return 42
+"#;
+    let code = r#"
+def test_thing(answer):
+#              ^
+    assert answer == 42
+"#;
+    let (handles, state) = mk_multi_file_state_assert_no_errors(
+        &[("main", code), ("conftest", conftest)],
+        Require::Exports,
+    );
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code).into_iter().next().unwrap();
+    assert_eq!(
+        r#"
+Definition Result:
+5 | def answer():
+        ^^^^^^
+"#
+        .trim(),
+        get_test_report(&state, handle, position).trim(),
     );
 }
 
