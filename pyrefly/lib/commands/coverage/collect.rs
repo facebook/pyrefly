@@ -29,6 +29,7 @@ use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::thread_pool::ThreadCount;
+use rayon::prelude::*;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::name::Name;
@@ -1770,24 +1771,22 @@ pub fn collect_module_reports(
     };
     let config_finder = holder.as_ref().config_finder();
     let dir_cache = DirEntryCache::new(true);
-    for handle in &handles {
+    // Safe to parallelize: per-module collection is read-only and independent.
+    let transaction: &Transaction = transaction;
+    let collect_one = |handle: &Handle| -> Option<(ModuleReport, Vec<Error>)> {
         if shadowed.contains(handle.path().as_path()) {
-            continue;
+            return None;
         }
 
         // gh-3632: skip files whose module name isn't importable (shadowed parent).
         let module = handle.module();
         if module != ModuleName::unknown() {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
-            if find_import_filtered(&config, module, None, None, &dir_cache, None)
-                .finding()
-                .is_none()
-            {
-                continue;
-            }
+            find_import_filtered(&config, module, None, None, &dir_cache, None).finding()?;
         }
 
         if let Some(mut symbols) = ModuleSymbols::collect(transaction, handle) {
+            let mut errors = Vec::new();
             // Per source module, so stub-merged `.py` symbols render against their own file.
             if let Some(strict) = untyped_strict {
                 collect_untyped_errors(
@@ -1849,8 +1848,17 @@ pub fn collect_module_reports(
                     }
                 }
             }
-            module_reports.push(module_report);
+            Some((module_report, errors))
+        } else {
+            None
         }
+    };
+    let collected: Vec<(ModuleReport, Vec<Error>)> = holder
+        .as_ref()
+        .install(|| handles.par_iter().filter_map(collect_one).collect());
+    for (report, module_errors) in collected {
+        module_reports.push(report);
+        errors.extend(module_errors);
     }
 
     if let Some(public_fqns) = &public_fqns {

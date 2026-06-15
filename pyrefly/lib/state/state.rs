@@ -3250,6 +3250,15 @@ impl State {
         self.dir_cache_enabled
     }
 
+    /// Run `op` on the state's thread pool, which has an increased stack size.
+    pub fn install<OP, R>(&self, op: OP) -> R
+    where
+        OP: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.threads.install(op)
+    }
+
     fn get_config(&self, handle: &Handle) -> ArcId<ConfigFile> {
         if matches!(
             handle.path().details(),
