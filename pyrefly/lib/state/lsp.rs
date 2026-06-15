@@ -1251,6 +1251,42 @@ impl<'a> Transaction<'a> {
         self.get_type_at_impl_with_options(handle, position, false, false)
     }
 
+    /// Computed type for the TSP `getComputedType` endpoint, resolved from the
+    /// full requested node range rather than a single position.
+    ///
+    /// TSP clients send the source range of the node they care about, but the
+    /// position-based lookup ([`get_type_at_preserving_declaration`]) resolves
+    /// the identifier sitting at the range's start. For a call expression
+    /// (`Foo()`), that start offset lands on the callee, so the
+    /// declaration-preserving lookup returns the callee (e.g. the constructor)
+    /// instead of the call's result. When the requested range exactly covers a
+    /// call expression, return the recorded result type of that expression so
+    /// the client sees the call's value type (e.g. the constructed instance).
+    ///
+    /// All other ranges keep the declaration-preserving behavior, which clients
+    /// rely on to re-resolve signatures/overloads from a callee's declaration.
+    pub fn get_computed_type_at_range(&self, handle: &Handle, range: TextRange) -> Option<Type> {
+        if self.range_is_call_expr(handle, range)
+            && let Some(ty) = self.get_type_trace(handle, range)
+        {
+            return Some(ty);
+        }
+        self.get_type_at_preserving_declaration(handle, range.start())
+    }
+
+    /// Whether `range` exactly covers a call expression node (`Foo()`).
+    fn range_is_call_expr(&self, handle: &Handle, range: TextRange) -> bool {
+        if range.is_empty() {
+            return false;
+        }
+        let Some(module) = self.get_ast(handle) else {
+            return false;
+        };
+        Ast::locate_node(&module, range.start())
+            .into_iter()
+            .any(|node| node.range() == range && matches!(node, AnyNodeRef::ExprCall(_)))
+    }
+
     fn get_result_type_at_impl(
         &self,
         handle: &Handle,

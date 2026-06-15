@@ -452,6 +452,27 @@ pub trait TspInterface: Send + Sync + 'static {
         character: u32,
     ) -> Option<pyrefly_types::types::Type>;
 
+    /// Return the computed (inferred) type for a node spanning the given range.
+    ///
+    /// Unlike [`get_type_at_position`], which resolves the identifier at a
+    /// single position, this is range-aware: when the requested range covers a
+    /// whole call expression (e.g. `Foo()`), it returns the call's result type
+    /// rather than the callee's declaration sitting at the range's start. Used
+    /// by the TSP `getComputedType` endpoint, where the client sends the full
+    /// source range of the node it cares about.
+    ///
+    /// `start_line`/`start_character` and `end_line`/`end_character` are the
+    /// zero-based bounds of the node range. Falls back to the position-based
+    /// (declaration-preserving) lookup when the range is not a call expression.
+    fn get_computed_type_at_range(
+        &self,
+        uri: &str,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    ) -> Option<pyrefly_types::types::Type>;
+
     /// Return the contextually expected type at the given position.
     ///
     /// The expected type is what the surrounding context demands of the
@@ -6357,6 +6378,41 @@ impl TspInterface for Server {
         // intact on the wire, which TSP clients need to re-resolve the
         // signature (parameters, overloads) from source.
         transaction.get_type_at_preserving_declaration(&handle, position)
+    }
+
+    fn get_computed_type_at_range(
+        &self,
+        uri: &str,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    ) -> Option<pyrefly_types::types::Type> {
+        let url = Url::parse(uri)
+            .ok()
+            .or_else(|| Url::from_file_path(uri).ok())?;
+        let path = self.path_for_uri_or_notebook_cell(&url)?;
+        let notebook_cell = self.maybe_get_code_cell_index(&url);
+
+        let handle = make_open_handle(&self.state, &path);
+        let transaction = self.state.transaction();
+        let module_info = transaction.get_module_info(&handle)?;
+        let start = module_info.from_lsp_position(
+            lsp_types::Position {
+                line: start_line,
+                character: start_character,
+            },
+            notebook_cell,
+        );
+        let end = module_info.from_lsp_position(
+            lsp_types::Position {
+                line: end_line,
+                character: end_character,
+            },
+            notebook_cell,
+        );
+        let range = TextRange::new(start, end);
+        transaction.get_computed_type_at_range(&handle, range)
     }
 
     fn get_expected_type_at_position(

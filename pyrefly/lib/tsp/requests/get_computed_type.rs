@@ -30,10 +30,15 @@ impl<T: TspInterface> TspConnection<T> {
         // Any valid scheme is accepted — notebook cell URIs are resolved
         // to notebook paths inside get_type_at_position.
         parse_uri(params.uri())?;
-        let position = params.position();
-        let ty = self
-            .inner()
-            .get_type_at_position(params.uri(), position.line, position.character);
+        let start = params.position();
+        let end = params.end_position();
+        let ty = self.inner().get_computed_type_at_range(
+            params.uri(),
+            start.line,
+            start.character,
+            end.line,
+            end.character,
+        );
         Ok(ty.map(|t| self.convert_type(&t, Some(params.uri()))))
     }
 }
