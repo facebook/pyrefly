@@ -1692,8 +1692,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
 
-        let read_only_reason =
-            self.determine_read_only_reason(name, annotation.as_ref(), &metadata, field_definition);
+        let read_only_reason = self.determine_read_only_reason(
+            name,
+            annotation.as_ref(),
+            &metadata,
+            field_definition,
+            &initialization,
+        );
 
         // Determine the final type, promoting literals when appropriate.
         // Skip literal promotion for NNModule types: their fields are captured
@@ -2144,6 +2149,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         annotation: Option<&Annotation>,
         metadata: &ClassMetadata,
         field_definition: &ClassFieldDefinition,
+        initialization: &ClassFieldInitialization,
     ) -> Option<ReadOnlyReason> {
         if let Some(ann) = annotation {
             if ann.is_final() {
@@ -2182,6 +2188,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ReadOnlyReason::FrozenDataclass
             };
             return Some(reason);
+        }
+        if metadata.is_pydantic_model()
+            && let ClassFieldInitialization::ClassBody(Some(kws)) = initialization
+            && kws.frozen == Some(true)
+        {
+            return Some(ReadOnlyReason::PydanticFrozenField);
         }
 
         // Nested class definitions are read-only
@@ -4303,7 +4315,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ClassAttribute::ReadOnly(attr_ty, reason) => {
                 // In pydantic, if a non-frozen model inherits from a frozen model,
                 // attributes of the frozen model are no longer readonly.
-                let should_raise_error = if let Some(instance_class) = instance_class {
+                let should_raise_error = if matches!(reason, ReadOnlyReason::PydanticFrozenField) {
+                    true
+                } else if let Some(instance_class) = instance_class {
                     let class = instance_class.class_object();
                     let metadata = self.get_metadata_for_class(class);
                     !(metadata.is_pydantic_model()

@@ -676,6 +676,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let le = map.0.get(&LE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
+        let frozen = map.get_bool(&DataclassFieldKeywords::FROZEN);
 
         let mut converter_param = map
             .0
@@ -710,6 +711,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ge,
             le,
             strict,
+            frozen,
             converter_param,
         }
     }
