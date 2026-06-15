@@ -390,33 +390,28 @@ fn filter_module_report_to_public(report: &mut ModuleReport, public_fqns: &HashS
         .names
         .retain(|n| is_public_fqn(n, &module_prefix, public_fqns));
 
-    // recompute all aggregates in a single pass
+    // recompute all aggregates in a single pass; type ignores attach to the
+    // module itself, not symbols, so their count is unaffected by filtering
     report.slots = SlotCounts::default();
-    report.n_methods = 0;
-    report.n_functions = 0;
-    report.n_method_params = 0;
-    report.n_function_params = 0;
-    report.n_classes = 0;
-    report.n_attrs = 0;
-    report.n_properties = 0;
-    // `n_type_ignores` is not affected by public filtering since type ignores are always
-    // attached to the module itself, not individual symbols, so we don't need to recalculate
-    // it here.
+    report.symbols = SymbolCounts {
+        n_type_ignores: report.symbols.n_type_ignores,
+        ..SymbolCounts::default()
+    };
 
     for sym in &report.symbol_reports {
         report.slots = report.slots.merge(*sym.slots());
         match sym {
             SymbolReport::Function { name, n_params, .. } if is_method(name, &module_prefix) => {
-                report.n_methods += 1;
-                report.n_method_params += *n_params;
+                report.symbols.n_methods += 1;
+                report.symbols.n_method_params += *n_params;
             }
             SymbolReport::Function { n_params, .. } => {
-                report.n_functions += 1;
-                report.n_function_params += *n_params;
+                report.symbols.n_functions += 1;
+                report.symbols.n_function_params += *n_params;
             }
-            SymbolReport::Class { .. } => report.n_classes += 1,
-            SymbolReport::Attr { .. } => report.n_attrs += 1,
-            SymbolReport::Property { .. } => report.n_properties += 1,
+            SymbolReport::Class { .. } => report.symbols.n_classes += 1,
+            SymbolReport::Attr { .. } => report.symbols.n_attrs += 1,
+            SymbolReport::Property { .. } => report.symbols.n_properties += 1,
         }
     }
 
@@ -1137,44 +1132,20 @@ fn is_method(name: &str, module_prefix: &str) -> bool {
     without_prefix.contains('.')
 }
 
-/// Calculate the aggregate summary by summing per-module entity counts.
+/// Calculate the aggregate summary by summing per-module symbol counts.
 pub fn calculate_summary(module_reports: &[ModuleReport]) -> ReportSummary {
-    let n_modules = module_reports.len();
-    let mut total_slots = SlotCounts::default();
-    let mut n_functions = 0usize;
-    let mut n_methods = 0usize;
-    let mut n_function_params = 0usize;
-    let mut n_method_params = 0usize;
-    let mut n_classes = 0usize;
-    let mut n_attrs = 0usize;
-    let mut n_properties = 0usize;
-    let mut n_type_ignores = 0usize;
-
+    let mut slots = SlotCounts::default();
+    let mut symbols = SymbolCounts::default();
     for module in module_reports {
-        total_slots = total_slots.merge(module.slots);
-        n_functions += module.n_functions;
-        n_methods += module.n_methods;
-        n_function_params += module.n_function_params;
-        n_method_params += module.n_method_params;
-        n_classes += module.n_classes;
-        n_attrs += module.n_attrs;
-        n_properties += module.n_properties;
-        n_type_ignores += module.n_type_ignores;
+        slots = slots.merge(module.slots);
+        symbols = symbols.merge(module.symbols);
     }
-
     ReportSummary {
-        n_modules,
-        slots: total_slots,
-        coverage: total_slots.coverage(),
-        strict_coverage: total_slots.strict_coverage(),
-        n_functions,
-        n_methods,
-        n_function_params,
-        n_method_params,
-        n_classes,
-        n_attrs,
-        n_properties,
-        n_type_ignores,
+        n_modules: module_reports.len(),
+        slots,
+        coverage: slots.coverage(),
+        strict_coverage: slots.strict_coverage(),
+        symbols,
     }
 }
 
@@ -1613,37 +1584,33 @@ fn build_module_report(
     let mut seen = SmallSet::new();
     names.retain(|n| seen.insert(n.clone()));
 
-    // Compute per-module entity counts. Use the derived (file-based)
+    // Compute per-module symbol counts. Use the derived (file-based)
     // module name for prefix matching, since symbol names are built from
     // the derived name and only rewritten to the override name later.
     let module_prefix = format!("{}.", derived_name);
-    let mut n_functions = 0usize;
-    let mut n_methods = 0usize;
-    let mut n_function_params = 0usize;
-    let mut n_method_params = 0usize;
-    let mut n_classes = 0usize;
-    let mut n_attrs = 0usize;
-    let mut n_properties = 0usize;
+    let mut symbols = SymbolCounts {
+        n_type_ignores: suppressions.len(),
+        ..SymbolCounts::default()
+    };
     // Count functions/methods using the `Function` list directly so we
     // can use `n_params` (accurate even for implicit-return dunders).
     for func in functions.iter().filter(|f| f.property_role.is_none()) {
         if is_method(&func.name, &module_prefix) {
-            n_methods += 1;
-            n_method_params += func.n_params;
+            symbols.n_methods += 1;
+            symbols.n_method_params += func.n_params;
         } else {
-            n_functions += 1;
-            n_function_params += func.n_params;
+            symbols.n_functions += 1;
+            symbols.n_function_params += func.n_params;
         }
     }
     for sym in &symbol_reports {
         match sym {
-            SymbolReport::Property { .. } => n_properties += 1,
-            SymbolReport::Attr { .. } => n_attrs += 1,
-            SymbolReport::Class { .. } => n_classes += 1,
+            SymbolReport::Property { .. } => symbols.n_properties += 1,
+            SymbolReport::Attr { .. } => symbols.n_attrs += 1,
+            SymbolReport::Class { .. } => symbols.n_classes += 1,
             SymbolReport::Function { .. } => {}
         }
     }
-    let n_type_ignores = suppressions.len();
 
     ModuleReport {
         name,
@@ -1655,14 +1622,7 @@ fn build_module_report(
         coverage: total_slots.coverage(),
         strict_coverage: total_slots.strict_coverage(),
         slots: total_slots,
-        n_functions,
-        n_methods,
-        n_function_params,
-        n_method_params,
-        n_classes,
-        n_attrs,
-        n_properties,
-        n_type_ignores,
+        symbols,
     }
 }
 
@@ -2647,7 +2607,7 @@ mod tests {
         compare_snapshot("del_module_level.expected.json", &report);
     }
 
-    /// --module name override: entity counts (n_functions vs n_methods) must
+    /// --module name override: symbol counts (n_functions vs n_methods) must
     /// be correct even when the output module name differs from the derived name.
     #[test]
     fn test_report_module_name_override() {
@@ -2820,14 +2780,16 @@ def g(x: int) -> int:
             slots: SlotCounts::default(),
             coverage: 100.0,
             strict_coverage: 100.0,
-            n_functions: 2,
-            n_methods: 0,
-            n_function_params: 123,
-            n_method_params: 456,
-            n_classes: 1,
-            n_attrs: 1,
-            n_properties: 0,
-            n_type_ignores: 0,
+            symbols: SymbolCounts {
+                n_functions: 2,
+                n_methods: 0,
+                n_function_params: 123,
+                n_method_params: 456,
+                n_classes: 1,
+                n_attrs: 1,
+                n_properties: 0,
+                n_type_ignores: 0,
+            },
         };
 
         let public_fqns: HashSet<String> = ["pkg.Foo", "pkg.bar"]
@@ -2838,12 +2800,12 @@ def g(x: int) -> int:
 
         assert_eq!(report.names, vec!["pkg.Foo", "pkg.bar"]);
         assert_eq!(report.symbol_reports.len(), 3); // Foo, Foo.method, bar
-        assert_eq!(report.n_functions, 1);
-        assert_eq!(report.n_methods, 1);
-        assert_eq!(report.n_function_params, 1);
-        assert_eq!(report.n_method_params, 2);
-        assert_eq!(report.n_classes, 1);
-        assert_eq!(report.n_attrs, 0);
+        assert_eq!(report.symbols.n_functions, 1);
+        assert_eq!(report.symbols.n_methods, 1);
+        assert_eq!(report.symbols.n_function_params, 1);
+        assert_eq!(report.symbols.n_method_params, 2);
+        assert_eq!(report.symbols.n_classes, 1);
+        assert_eq!(report.symbols.n_attrs, 0);
     }
 
     #[test]
