@@ -66,6 +66,15 @@ impl SlotCounts {
         }
     }
 
+    pub fn as_untyped(self) -> SlotCounts {
+        SlotCounts {
+            n_typable: self.n_typable,
+            n_typed: 0,
+            n_any: 0,
+            n_untyped: self.n_typable,
+        }
+    }
+
     /// Coverage: (n_typed + n_any) / n_typable. Treats Any-annotated slots as covered.
     pub fn coverage(&self) -> f64 {
         if self.n_typable == 0 {
