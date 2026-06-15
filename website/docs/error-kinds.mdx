@@ -1778,8 +1778,7 @@ For example, read-only and required `TypedDict` fields cannot be deleted.
 This error arises when attempting to perform an operation between values of two incompatible types.
 
 ```python
-if "hello" in 1:  # int doesn't support `in`!
-  ...
+x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-operation]
 ```
 
 ## untyped-import
