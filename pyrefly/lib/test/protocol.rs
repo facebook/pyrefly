@@ -1006,3 +1006,135 @@ class Ok(Protocol):
     y: str = "default"
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/3375
+testcase!(
+    test_protocol_classmethod_call,
+    r#"
+from typing import Protocol, assert_type
+
+class DT[T](Protocol):
+    @classmethod
+    def make(cls, x: T) -> "DT[T]":
+        raise RuntimeError()
+
+assert_type(DT.make(5), DT[int])
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3375
+testcase!(
+    test_protocol_classmethod_call_non_generic,
+    r#"
+from typing import Protocol, assert_type
+
+class P(Protocol):
+    @classmethod
+    def make(cls) -> "P":
+        raise RuntimeError()
+
+assert_type(P.make(), P)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3375
+testcase!(
+    test_protocol_classmethod_returns_self,
+    r#"
+from typing import Protocol, Self
+
+class P(Protocol):
+    @classmethod
+    def make(cls) -> Self:
+        raise RuntimeError()
+
+P.make()  # OK: calling a classmethod on a bare protocol class is valid
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3375
+testcase!(
+    test_protocol_overloaded_classmethod_call,
+    r#"
+from typing import Protocol, overload, assert_type
+
+class DT[T](Protocol):
+    @overload
+    @classmethod
+    def now(cls, x: int) -> "DT[int]": ...
+    @overload
+    @classmethod
+    def now(cls, x: str) -> "DT[str]": ...
+    @classmethod
+    def now(cls, x: int | str) -> "DT[int] | DT[str]":
+        raise RuntimeError()
+
+assert_type(DT.now(5), DT[int])
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3375
+// Negative test: passing a protocol class object to an EXPLICIT `type[P]`
+// parameter must still error. The fix only exempts the synthesized self/cls
+// receiver of a classmethod call, not general `type[P]` slots.
+testcase!(
+    test_type_protocol_param_still_rejected,
+    r#"
+from typing import Protocol
+
+class P(Protocol):
+    def fly(self) -> None: ...
+
+class C:
+    def fly(self) -> None: ...
+
+def f(cls: type[P]) -> None:
+    cls()
+
+f(P)  # E: Argument `type[P]` is not assignable to parameter `cls` with type `type[P]`
+f(C)  # OK
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3375
+// Negative test: the exemption is confined to the synthesized receiver (arg #0).
+// A classmethod's *other* parameters annotated `type[P]` must still reject a
+// protocol class object — only the implicit `cls` receiver is exempt.
+testcase!(
+    test_protocol_classmethod_non_receiver_type_param_still_rejected,
+    r#"
+from typing import Protocol
+
+class P(Protocol):
+    def fly(self) -> None: ...
+
+class C:
+    def fly(self) -> None: ...
+
+class Reg(Protocol):
+    @classmethod
+    def register(cls, other: type[P]) -> None:
+        other()
+
+Reg.register(P)  # E: Argument `type[P]` is not assignable to parameter `other` with type `type[P]`
+Reg.register(C)  # OK
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3375
+// The receiver exemption must not make an *abstract* protocol classmethod
+// callable: with a trivial body, `name` is abstract, so the call is still
+// rejected — only the bogus receiver `bad-argument-type` is gone, replaced by
+// the correct `abstract-method-call`.
+testcase!(
+    test_protocol_abstract_classmethod_still_rejected,
+    r#"
+from typing import Protocol
+
+class P(Protocol):
+    @classmethod
+    def name(cls) -> str: ...
+
+P.name()  # E: Cannot call abstract method `P.name`
+"#,
+);
