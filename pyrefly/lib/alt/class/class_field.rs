@@ -4225,6 +4225,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.get_dunder_init_helper(&Instance::of_class(cls), get_object_init)
     }
 
+    /// Get the class's `__init_subclass__` method, excluding `object.__init_subclass__`.
+    pub fn get_dunder_init_subclass(
+        &self,
+        cls: &ClassType,
+        include_ancestors: bool,
+    ) -> Option<Type> {
+        if cls.class_object().is_builtin("object") {
+            return None;
+        }
+        let init_subclass_member = if let Some(field) = self
+            .get_non_synthesized_field_from_current_class_only(
+                cls.class_object(),
+                &dunder::INIT_SUBCLASS,
+            ) {
+            WithDefiningClass {
+                value: field,
+                defining_class: cls.class_object().dupe(),
+            }
+        } else if !include_ancestors {
+            return None;
+        } else {
+            let mro = self.get_mro_for_class(cls.class_object());
+            self.get_field_from_ancestors(
+                cls.class_object(),
+                mro.ancestors_no_object().iter(),
+                &dunder::INIT_SUBCLASS,
+                &|cls, name| self.get_non_synthesized_field_from_current_class_only(cls, name),
+            )?
+        };
+        if init_subclass_member.value.is_init_var() {
+            return None;
+        }
+        Arc::unwrap_or_clone(init_subclass_member.value)
+            .as_raw_special_method_type(self.heap, &Instance::of_class(cls))
+            .and_then(|ty| {
+                make_bound_classmethod(self.heap, &ClassBase::ClassType(cls.clone()), ty).ok()
+            })
+    }
+
     pub fn get_typed_dict_dunder_init(&self, td: &TypedDictInner) -> Type {
         // We synthesize `__init__`, so the lookup will never entirely fail.
         //
