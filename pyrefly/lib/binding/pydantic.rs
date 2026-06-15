@@ -34,6 +34,7 @@ pub const FROZEN: Name = Name::new_static("frozen");
 pub const FROZEN_DEFAULT: bool = false;
 pub const EXTRA: Name = Name::new_static("extra");
 pub const FIELD_VALIDATOR: Name = Name::new_static("field_validator");
+pub const GET_PYDANTIC_CORE_SCHEMA: Name = Name::new_static("__get_pydantic_core_schema__");
 
 // An abstraction to iterate over configuration values, whether `ConfigDict()` or a dict display
 // is used.
