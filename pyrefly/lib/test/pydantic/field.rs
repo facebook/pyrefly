@@ -241,6 +241,22 @@ Foo()  # E: Missing argument `a`
 );
 
 pydantic_testcase!(
+    test_inherited_fields_are_init_fields,
+    r#"
+from pydantic import BaseModel
+
+class SuperBase(BaseModel, extra="forbid"):
+    x: int
+
+class Derived(SuperBase, extra="forbid"):
+    z: int
+
+Derived(x=1, z=1)
+Derived(z=1)  # E: Missing argument `x`
+    "#,
+);
+
+pydantic_testcase!(
     test_pydantic_dataclass_underscore_field_is_init_param,
     r#"
 from pydantic.dataclasses import dataclass
