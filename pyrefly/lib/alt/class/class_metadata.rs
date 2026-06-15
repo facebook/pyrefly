@@ -1584,6 +1584,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             format!("Cannot extend final class `{}`", class_object.name()),
                         );
                     }
+
+                    if !is_new_type
+                        && let Some(dm) = metadata.dataclass_metadata()
+                        && dm.kws.order
+                    {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::InvalidInheritance,
+                            format!(
+                                "Cannot extend dataclass `{}` with `order=True`",
+                                class_object.name()
+                            ),
+                        );
+                    }
                     if is_new_type {
                         // TODO: raise an error for generic classes and other forbidden types such as hashable
                         if metadata.is_protocol() {
