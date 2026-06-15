@@ -193,13 +193,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let tparams = self.get_class_tparams(cls);
+        let generic_entity = if tparams.is_empty() {
+            format!("class `{}`", cls.name())
+        } else {
+            let names = tparams
+                .iter()
+                .map(|t| t.name().as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("class `{}[{}]`", cls.name(), names)
+        };
         let targs = self.create_default_targs(
-            self.get_class_tparams(cls),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("class `{}`", cls.name()),
+                    generic_entity.clone(),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -213,13 +224,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        let tparams = forall.tparams.dupe();
+        let generic_entity = if tparams.is_empty() {
+            format!("type alias `{}`", forall.body.name())
+        } else {
+            let names = tparams
+                .iter()
+                .map(|t| t.name().as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("type alias `{}[{}]`", forall.body.name(), names)
+        };
         let targs = self.create_default_targs(
-            forall.tparams.dupe(),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("type alias `{}`", forall.body.name()),
+                    generic_entity.clone(),
                     Some(tparam.name().as_str()),
                 );
             }),
