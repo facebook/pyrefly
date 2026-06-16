@@ -489,6 +489,21 @@ def f(x: object) -> object:
     return x
 ```
 
+## ignore-without-code
+
+Default severity: `ignore`
+
+A `# pyrefly: ignore` comment suppresses any error on its line without naming the specific error code(s) it silences. This rule is off by default; enable it to require every Pyrefly suppression to be explicit, so a blanket ignore can't silently hide a new, unrelated error introduced later. Only `# pyrefly: ignore` comments are checked, since Pyrefly only honors error codes for its own tool.
+
+```python
+def f() -> int:
+    return "oops"  # pyrefly: ignore  # ignore-without-code
+
+# Fix: name the error code being suppressed.
+def g() -> int:
+    return "oops"  # pyrefly: ignore[bad-return]
+```
+
 ## implicit-abstract-class
 
 Default severity: `ignore`
@@ -782,6 +797,19 @@ Decorator misuse that violates the typing spec — for example, `@dataclass` on 
 `@runtime_checkable` on a non-`Protocol` class, or `@disjoint_base` on a
 function — is reported under `bad-class-definition` or
 `bad-function-definition` instead, both of which default to `error`.
+
+## invalid-ignore-comment
+
+Default severity: `warn`
+
+A comment looks like a type checker ignore directive but is malformed, so it would silently suppress nothing (or not what was intended). Pyrefly recognizes three cases: a typo'd directive keyword (`# pyrefly: ignoree`), an unterminated error-code list (`# pyrefly: ignore[bad-code`), and an empty error-code list (`# pyrefly: ignore[]`). A well-formed comment such as `# type: ignore`, `# pyrefly: ignore[bad-return]`, or `# pyrefly: ignore-errors` is never flagged.
+
+```python
+x: int = "oops"  # pyrefly: ignoree  # invalid-ignore-comment: did you mean `ignore`?
+
+# Fix: use a valid directive.
+y: int = "oops"  # pyrefly: ignore[bad-assignment]
+```
 
 ## invalid-inheritance
 

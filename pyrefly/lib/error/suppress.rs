@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -96,6 +97,13 @@ impl SerializedError {
     /// Returns true if this error is an UnusedIgnore error.
     pub fn is_unused_ignore(&self) -> bool {
         self.name == ErrorKind::UnusedIgnore.to_name()
+    }
+
+    /// Returns true if this error kind cannot be suppressed by an ignore comment
+    /// (see [`ErrorKind::is_unsuppressable`]). Such errors must be excluded when
+    /// writing suppression comments, since the comment would never take effect.
+    pub fn is_unsuppressable(&self) -> bool {
+        <ErrorKind as FromStr>::from_str(&self.name).is_ok_and(|kind| kind.is_unsuppressable())
     }
 
     /// Returns true if this error is a directive (e.g. reveal_type) that

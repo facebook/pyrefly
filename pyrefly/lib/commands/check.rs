@@ -1238,7 +1238,7 @@ impl CheckArgs {
 
         let collected = loads.collect_errors();
         // Pass pre-collected errors to avoid redundant error collection.
-        let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
+        let ignore_diagnostics = loads.collect_ignore_diagnostics_for_display(&collected);
         let errors = loads.apply_baseline(
             collected,
             self.output.baseline.as_deref(),
@@ -1263,7 +1263,7 @@ impl CheckArgs {
         };
         let ordinary_errors: Vec<_> = if let Some(only) = &self.output.only {
             let only = only.iter().collect::<SmallSet<_>>();
-            let filtered: Vec<_> = unused_ignore_errors
+            let filtered: Vec<_> = ignore_diagnostics
                 .ordinary
                 .into_iter()
                 .filter(|e| only.contains(&e.error_kind()))
@@ -1272,7 +1272,7 @@ impl CheckArgs {
         } else {
             ordinary_errors
                 .into_iter()
-                .chain(unused_ignore_errors.ordinary)
+                .chain(ignore_diagnostics.ordinary)
                 .collect()
         };
 
@@ -1294,7 +1294,7 @@ impl CheckArgs {
             let serialized_errors: Vec<SerializedError> = ordinary_errors
                 .iter()
                 .filter_map(SerializedError::from_error)
-                .filter(|e| !e.is_unused_ignore())
+                .filter(|e| !e.is_unsuppressable())
                 .collect();
             suppress::suppress_errors(serialized_errors, CommentLocation::LineBefore);
         }

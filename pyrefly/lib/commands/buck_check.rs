@@ -162,12 +162,12 @@ fn compute_errors(
 
     let errors = transaction.as_ref().get_errors(&modules_to_check);
 
-    // Collect main errors (done once, shared with unused ignore check)
+    // Collect main errors (done once, shared with the ignore-diagnostics check)
     let collected = errors.collect_errors();
-    let unused = errors.collect_unused_ignore_errors_for_display(&collected);
+    let ignore_diagnostics = errors.collect_ignore_diagnostics_for_display(&collected);
     let mut output_errors = collected.ordinary;
     output_errors.extend(collected.directives);
-    output_errors.extend(unused.ordinary);
+    output_errors.extend(ignore_diagnostics.ordinary);
     output_errors.sort_by_cached_key(|e| {
         (
             e.module().name(),
