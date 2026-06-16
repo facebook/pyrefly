@@ -181,7 +181,7 @@ impl<'a> SelfAttrNames<'a> {
                 (
                     n,
                     InstanceAttribute(
-                        ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                        vec![ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))],
                         None,
                         r,
                         MethodSelfKind::Instance,

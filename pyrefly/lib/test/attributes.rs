@@ -2664,3 +2664,215 @@ class C[T: (A, B)]:
         return self.f()[""][0]
     "#,
 );
+
+testcase!(
+    test_multiple_assignments_in_same_method,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self):
+        self.val = "string"
+        self.val = 1
+def f(a: A):
+    assert_type(a.val, str | int)
+
+class B:
+    def __init__(self, x: bool):
+        if x:
+            self.val = "string"
+        else:
+            self.val = 1
+def f2(b: B):
+    assert_type(b.val, str | int)
+    "#,
+);
+
+testcase!(
+    test_assignments_across_multiple_recognized_methods,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self):
+        self.val = "string"
+    def __post_init__(self):
+        self.val = 1
+def f(a: A):
+    assert_type(a.val, str | int)
+    "#,
+);
+
+testcase!(
+    test_class_level_attribute_priority,
+    r#"
+from typing import assert_type
+class A:
+    val: int = 1
+    def __init__(self):
+        self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+def f(a: A):
+    assert_type(a.val, int)
+
+class B:
+    val = 1
+    def __init__(self):
+        self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+def f2(b: B):
+    assert_type(b.val, int)
+    "#,
+);
+
+testcase!(
+    test_recognized_vs_unrecognized_methods,
+    r#"
+from typing import assert_type, reveal_type
+class A:
+    def __init__(self):
+        self.val = 1
+    def do_work(self):
+        self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+def f(a: A):
+    assert_type(a.val, int)
+
+class B:
+    def __init__(self):
+        self.val = None  # W: This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.
+    def do_work(self):
+        self.val = "string"
+def f2(b: B):
+    reveal_type(b.val)  # E: revealed type: Unknown | None
+    "#,
+);
+
+testcase!(
+    test_explicit_annotation_override,
+    r#"
+from typing import assert_type
+
+class A:
+    def __init__(self):
+        self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+        self.val: int = 1
+def f(a: A):
+    assert_type(a.val, int)
+
+class B:
+    def __init__(self):
+        self.val: int = 1
+        self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+def f2(b: B):
+    assert_type(b.val, int)
+
+class C:
+    def __init__(self, cond: bool):
+        self.val: int = 1
+        if cond:
+            self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+def f3(c: C):
+    assert_type(c.val, int)
+
+class D:
+    def __init__(self, cond: bool):
+        self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+        if cond:
+            self.val: int = 1
+def f4(d: D):
+    assert_type(d.val, int)
+
+class E:
+    def __init__(self, cond: bool):
+        self.val = None  # E: `None` is not assignable to attribute `val` with type `int`
+        if cond:
+            self.val: int = 1
+def f5(e: E):
+    assert_type(e.val, int)
+    "#,
+);
+
+testcase!(
+    test_none_union_conditional_initialization,
+    r#"
+from typing import reveal_type
+
+class A:
+    def __init__(self, x: None | int):
+        self._x = None  # W: This expression is implicitly inferred to be `Any | None`. Please provide an explicit type annotation.
+        if x:
+            self._x = x
+def f(a: A):
+    reveal_type(a._x)  # E: revealed type: int | Unknown | None
+
+class B:
+    def __init__(self, x: None | int):
+        if x:
+            self._x = x
+        else:
+            self._x = x
+def f2(b: B):
+    reveal_type(b._x)  # E: revealed type: int | None
+
+class C:
+    def __init__(self, x: None | int):
+        if not x:
+            self._y = x
+        else:
+            self._y = x
+def f3(c: C):
+    reveal_type(c._y)  # E: revealed type: int | None
+    "#,
+);
+
+testcase!(
+    test_class_method_receiver_union,
+    r#"
+from typing import reveal_type, assert_type, Literal
+
+class A:
+    def __new__(cls):
+        cls.val = 1
+        return super().__new__(cls)
+    def __init__(self):
+        self.val = "string"
+def f(a: A):
+    assert_type(a.val, Literal[1, 'string'])
+    reveal_type(A.val)  # E: revealed type: Literal['string', 1]
+
+class B:
+    def __init__(self):
+        self.val = "string"
+    def __new__(cls):
+        cls.val = 1
+        return super().__new__(cls)
+def g(b: B):
+    assert_type(b.val, Literal['string', 1])
+    reveal_type(B.val)  # E: revealed type: Literal['string', 1]
+    "#,
+);
+
+testcase!(
+    test_class_body_with_method_definition,
+    r#"
+from typing import reveal_type, assert_type
+
+class A:
+    val = 0
+    def __new__(cls):
+        cls.val = 1
+        return super().__new__(cls)
+    def __init__(self):
+        self.val = "string"  # E: `Literal['string']` is not assignable to attribute `val` with type `int`
+def f(a: A):
+    reveal_type(a.val)  # E: revealed type: int
+    reveal_type(A.val)  # E: revealed type: int
+
+class B:
+    val: int | str = 0
+    def __new__(cls):
+        cls.val = 1
+        return super().__new__(cls)
+    def __init__(self):
+        self.val = "string"
+def g(b: B):
+    reveal_type(b.val)  # E: revealed type: int | str
+    reveal_type(B.val)  # E: revealed type: int | str
+    "#,
+);

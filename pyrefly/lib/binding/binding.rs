@@ -129,7 +129,7 @@ assert_bytes!(BindingClassChecks, 4);
 assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
-assert_words!(BindingClassField, 11);
+assert_words!(BindingClassField, 13);
 assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
@@ -3028,9 +3028,16 @@ pub enum ClassFieldDefinition {
     /// Implicitly defined in a method, without any explicit reference
     /// in the class body.
     DefinedInMethod {
-        value: Box<ExprOrBinding>,
+        values: Vec<ExprOrBinding>,
         annotation: Option<Idx<KeyAnnotation>>,
+        // Refers to the first method in which the attribute was assigned.
+        // We prioritize recognized constructors over normal methods; if there are multiple
+        // constructors, this refers to the first constructor processed.
         method: MethodThatSetsAttr,
+        // The combined receiver kind of this class field (upgraded to Class if any constructor
+        // assigns to it via `cls.`). We track this separately from `method` to avoid mutating
+        // the method descriptor's own metadata (e.g. keeping `__init__` as an instance method).
+        receiver_kind: MethodSelfKind,
     },
 }
 
@@ -3079,12 +3086,15 @@ impl DisplayWith<Bindings> for ClassFieldDefinition {
                     ctx.display(*definition),
                 )
             }
-            Self::DefinedInMethod { value, .. } => {
-                write!(
-                    f,
-                    "ClassFieldDefinition::DefinedInMethod({}, ..)",
-                    value.display_with(ctx),
-                )
+            Self::DefinedInMethod { values, .. } => {
+                write!(f, "ClassFieldDefinition::DefinedInMethod([")?;
+                for (i, v) in values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", v.display_with(ctx))?;
+                }
+                write!(f, "], ..)")
             }
         }
     }

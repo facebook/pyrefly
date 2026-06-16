@@ -1706,9 +1706,6 @@ impl Query {
                             value,
                             annotation,
                             alias_of: _,
-                        }
-                        | ClassFieldDefinition::DefinedInMethod {
-                            value, annotation, ..
                         } => {
                             annotation
                                 .and_then(|idx| answers.get_idx(idx))
@@ -1716,6 +1713,23 @@ impl Query {
                                 // Fall back to expression type trace
                                 .or_else(|| {
                                     if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                                        answers.get_type_trace(expr.range())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                // Final fallback: ClassField.ty()
+                                .or_else(|| answers.get_idx(class_field_idx).map(|cf| cf.ty()))
+                        }
+                        ClassFieldDefinition::DefinedInMethod {
+                            values, annotation, ..
+                        } => {
+                            annotation
+                                .and_then(|idx| answers.get_idx(idx))
+                                .and_then(|a| a.annotation.ty.clone())
+                                // Fall back to expression type trace
+                                .or_else(|| {
+                                    if let Some(ExprOrBinding::Expr(expr)) = values.first() {
                                         answers.get_type_trace(expr.range())
                                     } else {
                                         None

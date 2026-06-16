@@ -1562,10 +1562,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             }
             ClassFieldDefinition::DefinedInMethod {
-                value,
-                method,
+                values,
+                method: _,
                 annotation: annot,
-                ..
+                receiver_kind,
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
                 // Check if there's an inherited property or descriptor field from a parent class.
@@ -1597,20 +1597,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
 
-                let initialization = match method.instance_or_class {
+                let initialization = match receiver_kind {
                     MethodSelfKind::Class => ClassFieldInitialization::ClassMethod,
                     MethodSelfKind::Instance => ClassFieldInitialization::Method,
                 };
-                let (mut value_ty, annotation, is_inherited) = self.analyze_class_field_value(
-                    value,
-                    class,
-                    name,
-                    direct_annotation.as_ref(),
-                    true,
-                    range,
-                    errors,
-                );
-                if matches!(method.instance_or_class, MethodSelfKind::Instance) {
+
+                // Solve the type of each collected assignment and union them.
+                let mut union_types = Vec::new();
+                let mut overall_annotation = None;
+                let mut overall_is_inherited = IsInherited::No;
+
+                for value in values {
+                    let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(
+                        value,
+                        class,
+                        name,
+                        direct_annotation.as_ref(),
+                        true,
+                        range,
+                        errors,
+                    );
+                    union_types.push(value_ty);
+                    if overall_annotation.is_none() {
+                        overall_annotation = annotation;
+                    }
+                    if matches!(is_inherited, IsInherited::Maybe) {
+                        overall_is_inherited = IsInherited::Maybe;
+                    }
+                }
+
+                // Union all the resolved assignment types.
+                let mut value_ty = unions(union_types, self.heap);
+
+                if matches!(receiver_kind, MethodSelfKind::Instance) {
                     value_ty = self
                         .check_and_sanitize_type_parameters(class, value_ty, name, range, errors);
                 }
@@ -1618,8 +1637,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     initialization,
                     false,
                     value_ty,
-                    annotation,
-                    is_inherited,
+                    overall_annotation,
+                    overall_is_inherited,
                     direct_annotation,
                 )
             }
