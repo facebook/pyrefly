@@ -324,6 +324,44 @@ impl FindResult {
     }
 }
 
+/// Returns `true` if the top-level package directory for the resolved module
+/// contains a `py.typed` marker file (PEP 561).
+fn package_has_py_typed(
+    module: ModuleName,
+    result: &FindResult,
+    dir_cache: &DirEntryCache,
+) -> bool {
+    let depth = module.components().len().saturating_sub(1);
+    let mut package_root = match result {
+        FindResult::RegularPackage(_, dir) => dir.as_path(),
+        FindResult::LegacyNamespacePackage(init_path, _) => {
+            let Some(dir) = init_path.parent() else {
+                return false;
+            };
+            dir
+        }
+        FindResult::SingleFilePyModule(path)
+        | FindResult::SingleFilePyiModule(path)
+        | FindResult::CompiledModule(path) => {
+            // A top-level module cannot carry a `py.typed` marker.
+            if depth == 0 {
+                return false;
+            }
+            path.as_path()
+        }
+        _ => return false,
+    };
+
+    for _ in 0..depth {
+        let Some(parent) = package_root.parent() else {
+            return false;
+        };
+        package_root = parent;
+    }
+
+    dir_cache.file_exists(&package_root.join("py.typed"))
+}
+
 /// In the given root, attempt to find a match for the given [`Name`].
 ///
 /// If `style_filter` is provided, only results matching that style will be returned.
@@ -767,13 +805,15 @@ fn resolve_third_party_stub(
     normal_result: Option<&FindResult>,
     bundled_stub: Option<FindingOrError<ModulePath>>,
     from_real_config_file: bool,
+    dir_cache: &DirEntryCache,
 ) -> Option<FindingOrError<ModulePath>> {
     // This is the case where we do have a config file, the package is installed, but there are no stubs
     // available besides the bundled stubs. In this case
     // return the stub but with the error attached telling the user to install stubs.
     if let Some(ref bundled) = bundled_stub
         && from_real_config_file
-        && normal_result.is_some()
+        && let Some(normal_result) = normal_result
+        && !package_has_py_typed(module, normal_result, dir_cache)
         && stub_result.is_none()
     {
         if let Some(pip_package) = recommended_stubs_package(module) {
@@ -822,6 +862,7 @@ fn combine_normal_and_stub_results(
     stub_result: Option<FindResult>,
     normal_result: Option<FindResult>,
     namespaces_found: &mut Vec<PathBuf>,
+    dir_cache: &DirEntryCache,
 ) -> Option<FindingOrError<ModulePath>> {
     match (normal_result, stub_result) {
         (None, Some(stub_result)) => Some(
@@ -835,7 +876,9 @@ fn combine_normal_and_stub_results(
             None
         }
         (Some(normal_result), None) => {
-            if let Some(missing_stub_result) = recommended_stubs_package(module) {
+            if let Some(missing_stub_result) = recommended_stubs_package(module)
+                && !package_has_py_typed(module, &normal_result, dir_cache)
+            {
                 Some(
                     normal_result
                         .module_path()
@@ -916,11 +959,18 @@ where
                 normal_result.as_ref(),
                 typeshed_third_party_stub,
                 from_real_config_file,
+                dir_cache,
             ) {
                 return Some(result);
             }
 
-            combine_normal_and_stub_results(module, stub_result, normal_result, namespaces_found)
+            combine_normal_and_stub_results(
+                module,
+                stub_result,
+                normal_result,
+                namespaces_found,
+                dir_cache,
+            )
         }
     }
 }
@@ -4136,6 +4186,137 @@ mod tests {
                 "Expected Finding with UntypedImport error, got: {:?}",
                 result
             );
+        }
+    }
+
+    #[test]
+    fn test_typeshed_third_party_with_real_config_and_py_typed_no_recommendation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with typed 'requests' installed but no stubs
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![TestPath::file("py.typed"), TestPath::file("__init__.py")],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::File("".into()));
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests"),
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        );
+
+        if let FindingOrError::Finding(finding) = &result {
+            assert!(
+                finding.error.is_none(),
+                "Expected no UntypedImport error for typed package, got: {:?}",
+                finding.error
+            );
+        } else {
+            panic!("Expected Finding, got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_typeshed_third_party_with_real_config_and_py_typed_submodule_no_recommendation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with typed 'requests' package and submodule
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![
+                        TestPath::file("py.typed"),
+                        TestPath::file("__init__.py"),
+                        TestPath::dir("api", vec![TestPath::file("__init__.py")]),
+                    ],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::File("".into()));
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests.api"),
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        );
+
+        if let FindingOrError::Finding(finding) = &result {
+            assert!(
+                finding.error.is_none(),
+                "Expected no UntypedImport error for typed package submodule, got: {:?}",
+                finding.error
+            );
+        } else {
+            panic!("Expected Finding, got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_typeshed_third_party_with_real_config_and_py_typed_submodule_file_no_recommendation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with typed 'requests' package and submodule file
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![
+                        TestPath::file("py.typed"),
+                        TestPath::file("__init__.py"),
+                        TestPath::file("api.py"),
+                    ],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::File("".into()));
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests.api"),
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        );
+
+        if let FindingOrError::Finding(finding) = &result {
+            assert!(
+                finding.error.is_none(),
+                "Expected no UntypedImport error for typed package submodule file, got: {:?}",
+                finding.error
+            );
+        } else {
+            panic!("Expected Finding, got: {:?}", result);
         }
     }
 
