@@ -6,6 +6,7 @@
  */
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
@@ -167,22 +168,28 @@ impl<'a> Transaction<'a> {
         members
     }
 
-    fn typed_dict_field_type_in_member<'b>(
+    fn typed_dict_member_field_maps<'b>(
         solver: &crate::alt::answers_solver::AnswersSolver<
             crate::state::lsp::TransactionHandle<'b>,
         >,
-        member: &Type,
-        key: &str,
-    ) -> Option<Type> {
-        let typed_dict = match member {
-            Type::TypedDict(td) | Type::PartialTypedDict(td) => td,
-            _ => return None,
-        };
-        solver
-            .type_order()
-            .typed_dict_fields(typed_dict)
-            .iter()
-            .find_map(|(name, field)| (name == key).then(|| field.ty.clone()))
+        members: Vec<Type>,
+    ) -> Vec<(Type, BTreeMap<String, Type>)> {
+        members
+            .into_iter()
+            .filter_map(|member| {
+                let typed_dict = match &member {
+                    Type::TypedDict(td) | Type::PartialTypedDict(td) => td,
+                    _ => return None,
+                };
+                let fields = solver
+                    .type_order()
+                    .typed_dict_fields(typed_dict)
+                    .into_iter()
+                    .map(|(name, field)| (name.to_string(), field.ty))
+                    .collect();
+                Some((member, fields))
+            })
+            .collect()
     }
 
     fn narrowed_typed_dict_members_for_dict_literal(
@@ -199,9 +206,10 @@ impl<'a> Transaction<'a> {
             if members.is_empty() {
                 return Vec::new();
             }
-            let narrowed = members
+            let member_fields = Self::typed_dict_member_field_maps(&solver, members);
+            let narrowed = member_fields
                 .iter()
-                .filter(|member| {
+                .filter(|(_, fields)| {
                     dict.items.iter().all(|item| {
                         let Some(key_expr) = item.key.as_ref() else {
                             return true;
@@ -215,23 +223,22 @@ impl<'a> Transaction<'a> {
                         {
                             return true;
                         }
-                        let Some(field_ty) = Self::typed_dict_field_type_in_member(
-                            &solver,
-                            member,
-                            key_lit.value.to_str(),
-                        ) else {
+                        let Some(field_ty) = fields.get(key_lit.value.to_str()) else {
                             return false;
                         };
                         let Some(value_ty) = self.get_type_trace(handle, value_expr.range()) else {
                             return true;
                         };
-                        solver.is_subset_eq(&value_ty, &field_ty)
+                        solver.is_subset_eq(&value_ty, field_ty)
                     })
                 })
-                .cloned()
+                .map(|(member, _)| member.clone())
                 .collect::<Vec<_>>();
             if narrowed.is_empty() {
-                members
+                member_fields
+                    .into_iter()
+                    .map(|(member, _)| member)
+                    .collect()
             } else {
                 narrowed
             }
@@ -245,9 +252,9 @@ impl<'a> Transaction<'a> {
         key: &str,
     ) -> Option<Type> {
         self.ad_hoc_solve(handle, "typed_dict_field_type", |solver| {
-            let field_types = members
-                .iter()
-                .filter_map(|member| Self::typed_dict_field_type_in_member(&solver, member, key))
+            let field_types = Self::typed_dict_member_field_maps(&solver, members)
+                .into_iter()
+                .filter_map(|(_, fields)| fields.get(key).cloned())
                 .collect::<Vec<_>>();
             match field_types.len() {
                 0 => None,
@@ -261,14 +268,14 @@ impl<'a> Transaction<'a> {
     fn dict_literal_present_keys(
         dict: &ExprDict,
         skip_key_range: Option<TextRange>,
-    ) -> BTreeMap<String, ()> {
+    ) -> BTreeSet<String> {
         dict.items
             .iter()
             .filter_map(|item| {
                 let Expr::StringLiteral(lit) = item.key.as_ref()? else {
                     return None;
                 };
-                (skip_key_range != Some(lit.range())).then(|| (lit.value.to_string(), ()))
+                (skip_key_range != Some(lit.range())).then(|| lit.value.to_string())
             })
             .collect()
     }
@@ -642,10 +649,10 @@ impl<'a> Transaction<'a> {
                     Self::dict_literal_present_keys(dict, Some(literal.range()))
                 }
                 DictKeyLiteralContext::KeyAccess { .. }
-                | DictKeyLiteralContext::BareSubscript { .. } => BTreeMap::new(),
+                | DictKeyLiteralContext::BareSubscript { .. } => BTreeSet::new(),
             };
             for (key, ty) in typed_keys {
-                if present_keys.contains_key(&key) {
+                if present_keys.contains(&key) {
                     continue;
                 }
                 let entry = suggestions.entry(key).or_insert(None);
