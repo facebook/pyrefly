@@ -169,7 +169,6 @@ use crate::types::type_var::TypeVar;
 use crate::types::type_var::Variance;
 use crate::types::type_var_tuple::TypeVarTuple;
 use crate::types::types::AnyStyle;
-use crate::types::types::CalleeKind;
 use crate::types::types::Forallable;
 use crate::types::types::SuperObj;
 use crate::types::types::TParams;
@@ -5311,11 +5310,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 None,
                                 None,
                             );
-                            let decorator_result_is_callable = matches!(
-                                decorated_ty.callee_kind(),
-                                Some(CalleeKind::Callable | CalleeKind::Function(_))
-                            );
-                            if decorator_result_is_callable
+                            if decorated_ty.is_toplevel_callable()
                                 || self
                                     .untype_opt(decorated_ty.clone(), range, errors)
                                     .is_some()
