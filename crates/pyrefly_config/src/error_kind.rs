@@ -156,6 +156,11 @@ pub enum ErrorKind {
     DivisionByZero,
     /// Explicit usage of `typing.Any` in an annotation.
     ExplicitAny,
+    /// A `# pyrefly: ignore` comment suppresses errors without naming a specific
+    /// error code. Off by default; enable it to require every Pyrefly
+    /// suppression to list the code(s) it silences, e.g.
+    /// `# pyrefly: ignore[bad-return]`.
+    IgnoreWithoutCode,
     /// Raised when a class implicitly becomes abstract by defining abstract members without
     /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
     ImplicitAbstractClass,
@@ -214,6 +219,11 @@ pub enum ErrorKind {
     /// is reported under `BadClassDefinition` or `BadFunctionDefinition`
     /// instead, both of which default to `error`.
     InvalidDecorator,
+    /// A comment looks like a type checker ignore directive but is malformed, so
+    /// it silently suppresses nothing (or not what was intended). For example
+    /// `# pyrefly: ignoree` (typo), `# pyrefly: ignore[bad-code` (unterminated
+    /// bracket), or `# pyrefly: ignore[]` (empty code list).
+    InvalidIgnoreComment,
     /// An error caused by incorrect inheritance in a class or type definition.
     /// e.g. a metaclass that is not a subclass of `type`.
     InvalidInheritance,
@@ -464,6 +474,7 @@ impl ErrorKind {
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ExplicitAny => Severity::Ignore,
+            ErrorKind::IgnoreWithoutCode => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
@@ -474,6 +485,7 @@ impl ErrorKind {
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
+            ErrorKind::InvalidIgnoreComment => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::NameMismatch => Severity::Warn,
@@ -510,6 +522,20 @@ impl ErrorKind {
     /// per-kind severity overrides (e.g. `--ignore reveal-type`).
     pub fn is_directive(self) -> bool {
         matches!(self, ErrorKind::RevealType)
+    }
+
+    /// Diagnostics about ignore comments themselves. They cannot be silenced by
+    /// an ignore comment (only by their configured severity), so they must also
+    /// be excluded from automatic suppression-comment insertion — writing a
+    /// `# pyrefly: ignore[...]` for one would produce a comment that can never
+    /// take effect.
+    pub fn is_unsuppressable(self) -> bool {
+        matches!(
+            self,
+            ErrorKind::UnusedIgnore
+                | ErrorKind::InvalidIgnoreComment
+                | ErrorKind::IgnoreWithoutCode
+        )
     }
 
     /// A soft error is a warning that should not influence overload selection

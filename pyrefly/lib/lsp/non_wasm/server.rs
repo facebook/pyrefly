@@ -3004,7 +3004,7 @@ impl Server {
         }
         for e in transaction
             .get_errors(handles)
-            .collect_display_errors_with_unused_ignores()
+            .collect_display_errors_with_ignore_diagnostics()
         {
             if let Some((path, diag)) = self.get_diag_if_shown(&e, &open_files, None) {
                 diags.entry(path.to_owned()).or_default().push(diag);
@@ -5494,7 +5494,7 @@ impl Server {
         let open_files = &self.open_files.read();
         for e in transaction
             .get_errors(once(&handle))
-            .collect_display_errors_with_unused_ignores()
+            .collect_display_errors_with_ignore_diagnostics()
         {
             if let Some((_, diag)) = self.get_diag_if_shown(&e, open_files, cell_uri) {
                 items.push(diag);

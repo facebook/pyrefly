@@ -12,6 +12,7 @@ use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::MalformedReason;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::ignore::parse_ignore_all;
@@ -319,11 +320,11 @@ impl Errors {
         Self::merge_display_errors(errors.ordinary, errors.directives)
     }
 
-    pub fn collect_display_errors_with_unused_ignores(&self) -> Vec<Error> {
+    pub fn collect_display_errors_with_ignore_diagnostics(&self) -> Vec<Error> {
         let collected = self.collect_errors();
-        let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        let ignore_diagnostics = self.collect_ignore_diagnostics_for_display(&collected);
         let mut ordinary = collected.ordinary;
-        ordinary.extend(unused.ordinary);
+        ordinary.extend(ignore_diagnostics.ordinary);
         Self::merge_display_errors(ordinary, collected.directives)
     }
 
@@ -536,15 +537,87 @@ impl Errors {
         unused_errors
     }
 
-    /// Collects unused ignore errors for display, respecting severity configuration.
-    /// Unlike `collect_unused_ignore_errors()`, this applies severity filtering so
-    /// errors with `Severity::Ignore` are not included in the ordinary results.
-    /// Accepts pre-collected errors to avoid redundant error collection.
-    pub fn collect_unused_ignore_errors_for_display(
+    /// Collects the ignore-comment lint diagnostics that are independent of the
+    /// type checker's findings: `invalid-ignore-comment` (#3752) for comments
+    /// that look like an ignore directive but are malformed, and
+    /// `ignore-without-code` (#3450) for a bare `# pyrefly: ignore` that names no
+    /// error code. Both are gated on the relevant tool being enabled, and emitted
+    /// at their default severity; `collect_ignore_diagnostics_for_display` applies
+    /// the configured per-kind severity.
+    pub fn collect_ignore_comment_lint_errors(&self) -> Vec<Error> {
+        let mut errors = Vec::new();
+        for (load, _, config) in &self.loads {
+            // Don't emit lints for files we are told never to report errors on.
+            if load.errors.style() == ErrorStyle::Never {
+                continue;
+            }
+            let module = &load.module_info;
+            let enabled_ignores = config.enabled_ignores(module.path().as_path());
+            let ignore = module.ignore();
+
+            // #3752: comments that look like an ignore directive but are malformed.
+            for malformed in ignore.malformed() {
+                if !enabled_ignores.contains(&malformed.tool()) {
+                    continue;
+                }
+                let tool = malformed.tool().as_str();
+                let msg = match malformed.reason() {
+                    MalformedReason::UnknownDirective => format!(
+                        "Invalid ignore comment; did you mean `# {tool}: ignore` or `# {tool}: ignore[code]`?"
+                    ),
+                    MalformedReason::UnterminatedBracket => {
+                        format!("Unterminated `[` in `# {tool}: ignore[...]` error-code list")
+                    }
+                    MalformedReason::EmptyBracket => {
+                        format!("Empty error-code list in `# {tool}: ignore[]`")
+                    }
+                };
+                let line_start = module.lined_buffer().line_start(malformed.comment_line());
+                let range = TextRange::new(line_start, line_start + TextSize::new(1));
+                errors.push(Error::new(
+                    module.dupe(),
+                    range,
+                    msg,
+                    Vec::new(),
+                    ErrorKind::InvalidIgnoreComment,
+                ));
+            }
+
+            // #3450: a bare `# pyrefly: ignore` that names no error code. Scoped to
+            // Pyrefly, the only tool whose per-line codes Pyrefly honors.
+            if enabled_ignores.contains(&Tool::Pyrefly) {
+                for (_, suppressions) in ignore.iter() {
+                    for supp in suppressions {
+                        if supp.tool() == Tool::Pyrefly && supp.error_codes().is_empty() {
+                            let line_start = module.lined_buffer().line_start(supp.comment_line());
+                            let range = TextRange::new(line_start, line_start + TextSize::new(1));
+                            errors.push(Error::new(
+                                module.dupe(),
+                                range,
+                                "`# pyrefly: ignore` has no error code; specify the code(s) being suppressed, e.g. `# pyrefly: ignore[bad-return]`".to_owned(),
+                                Vec::new(),
+                                ErrorKind::IgnoreWithoutCode,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        errors
+    }
+
+    /// Collects all ignore-comment diagnostics for display, respecting severity
+    /// configuration: `unused-ignore`, plus the `invalid-ignore-comment`
+    /// and `ignore-without-code` lints. Each error is filtered by its own
+    /// kind's configured severity, so kinds set to `Severity::Ignore` land in
+    /// `disabled` rather than `ordinary`. Accepts pre-collected errors to avoid
+    /// redundant error collection.
+    pub fn collect_ignore_diagnostics_for_display(
         &self,
         collected: &CollectedErrors,
     ) -> CollectedErrors {
-        let unused_errors = self.collect_unused_ignore_errors(collected);
+        let mut ignore_errors = self.collect_unused_ignore_errors(collected);
+        ignore_errors.extend(self.collect_ignore_comment_lint_errors());
         let mut result = CollectedErrors::default();
 
         // Build a path-to-config map for O(1) lookup instead of O(loads) per error.
@@ -554,18 +627,19 @@ impl Errors {
             .map(|(load, _, config)| (load.module_info.path(), config))
             .collect();
 
-        for error in unused_errors {
-            if let Some(config) = config_by_path.get(&error.path()) {
-                let error_config = config.get_error_config(error.path().as_path());
-                let severity = error_config
-                    .display_config
-                    .severity(ErrorKind::UnusedIgnore);
-                match severity {
-                    Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
-                    Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
-                    Severity::Info => result.ordinary.push(error.with_severity(Severity::Info)),
-                    Severity::Ignore => result.disabled.push(error),
-                }
+        for error in ignore_errors {
+            // These diagnostics are generated from `self.loads`, so their path is
+            // always present in the map built from the same loads.
+            let config = config_by_path
+                .get(&error.path())
+                .expect("ignore diagnostics are generated from loaded modules");
+            let error_config = config.get_error_config(error.path().as_path());
+            let severity = error_config.display_config.severity(error.error_kind());
+            match severity {
+                Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
+                Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
+                Severity::Info => result.ordinary.push(error.with_severity(Severity::Info)),
+                Severity::Ignore => result.disabled.push(error),
             }
         }
 
@@ -603,6 +677,7 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::error_kind::ErrorKind;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
@@ -760,6 +835,126 @@ def g() -> str:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 2);
+    }
+
+    #[test]
+    fn test_invalid_ignore_comment_emitted() {
+        // A typo'd directive that suppresses nothing is flagged, while the real
+        // error underneath still fires (the lint is purely additive).
+        let contents = r#"
+x: int = "oops"  # pyrefly: ignoree
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let lints = errors.collect_ignore_comment_lint_errors();
+        assert_eq!(lints.len(), 1);
+        assert_eq!(lints[0].error_kind(), ErrorKind::InvalidIgnoreComment);
+
+        // The bad-assignment error is not suppressed by the malformed comment.
+        let ordinary = errors.collect_errors().ordinary;
+        assert!(
+            ordinary
+                .iter()
+                .any(|e| e.error_kind() == ErrorKind::BadAssignment)
+        );
+    }
+
+    #[test]
+    fn test_invalid_ignore_comment_variants() {
+        // Unterminated and empty brackets are flagged; valid forms are not.
+        let contents = r#"
+a: int = "x"  # pyrefly: ignore[bad-assignment
+b: int = "x"  # pyrefly: ignore[]
+c: int = "x"  # pyrefly: ignore[bad-assignment]
+d = list[int]  # type: list[int]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let lints = errors.collect_ignore_comment_lint_errors();
+        assert_eq!(lints.len(), 2);
+        assert!(
+            lints
+                .iter()
+                .all(|e| e.error_kind() == ErrorKind::InvalidIgnoreComment)
+        );
+    }
+
+    #[test]
+    fn test_ignore_without_code_emitted() {
+        // A bare `# pyrefly: ignore` is flagged; a coded one is not.
+        let contents = r#"
+x: int = "oops"  # pyrefly: ignore
+y: int = "oops"  # pyrefly: ignore[bad-assignment]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let lints = errors.collect_ignore_comment_lint_errors();
+        assert_eq!(lints.len(), 1);
+        assert_eq!(lints[0].error_kind(), ErrorKind::IgnoreWithoutCode);
+    }
+
+    #[test]
+    fn test_ignore_without_code_scoped_to_pyrefly() {
+        // `# type: ignore` is bare but belongs to another tool, so it is not flagged.
+        let contents = r#"
+x: int = "oops"  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let lints = errors.collect_ignore_comment_lint_errors();
+        assert!(lints.is_empty());
+    }
+
+    #[test]
+    fn test_empty_bracket_ignore_is_additive() {
+        // `# type: ignore[]` suppressed all errors before (per-line codes are not
+        // checked for `type`), and must continue to — the new lint only adds a
+        // diagnostic on top.
+        let contents = r#"
+x: int = "oops"  # type: ignore[]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let ordinary = errors.collect_errors().ordinary;
+        assert!(
+            !ordinary
+                .iter()
+                .any(|e| e.error_kind() == ErrorKind::BadAssignment),
+            "empty-bracket `# type: ignore[]` must still suppress the error"
+        );
+        let lints = errors.collect_ignore_comment_lint_errors();
+        assert_eq!(lints.len(), 1);
+        assert_eq!(lints[0].error_kind(), ErrorKind::InvalidIgnoreComment);
+    }
+
+    #[test]
+    fn test_invalid_ignore_comment_is_unsuppressable() {
+        // A `# pyrefly: ignore[invalid-ignore-comment]` cannot silence the lint
+        // about a malformed comment on the same line: ignore-comment diagnostics
+        // are unsuppressable, so the lint still fires.
+        let contents = r#"
+x = 1  # pyrefly: ignoree  # pyrefly: ignore[invalid-ignore-comment]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let lints = errors.collect_ignore_comment_lint_errors();
+        assert_eq!(lints.len(), 1);
+        assert_eq!(lints[0].error_kind(), ErrorKind::InvalidIgnoreComment);
+    }
+
+    #[test]
+    fn test_ignore_comment_lints_survive_file_level_ignore_errors() {
+        // A whole-file `# pyrefly: ignore-errors` suppresses ordinary errors but
+        // not the ignore-comment diagnostics, which are unsuppressable.
+        let contents = r#"# pyrefly: ignore-errors
+x: int = "oops"  # pyrefly: ignoree
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        assert!(
+            !errors
+                .collect_errors()
+                .ordinary
+                .iter()
+                .any(|e| e.error_kind() == ErrorKind::BadAssignment),
+            "file-level `# pyrefly: ignore-errors` must still suppress the error"
+        );
+        let lints = errors.collect_ignore_comment_lint_errors();
+        assert_eq!(lints.len(), 1);
+        assert_eq!(lints[0].error_kind(), ErrorKind::InvalidIgnoreComment);
     }
 
     #[test]

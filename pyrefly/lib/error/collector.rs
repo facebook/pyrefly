@@ -222,13 +222,19 @@ impl ErrorCollector {
         ignore_all: &SmallMap<Tool, LineNumber>,
         error_config: &ErrorConfig,
     ) -> bool {
+        // Diagnostics about ignore comments themselves can never be silenced by a
+        // comment (see ErrorKind::is_unsuppressable); only their configured
+        // severity applies. Enforce that once here so every path below — ignore-all,
+        // per-line, and f-string — is covered uniformly, and so a future
+        // unsuppressable kind cannot slip through one of them.
+        if err.error_kind().is_unsuppressable() {
+            return false;
+        }
         // Check whole-file ignore-all directives first.
-        // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
-        if err.error_kind() != ErrorKind::UnusedIgnore
-            && error_config
-                .enabled_ignores
-                .iter()
-                .any(|tool| ignore_all.contains_key(tool))
+        if error_config
+            .enabled_ignores
+            .iter()
+            .any(|tool| ignore_all.contains_key(tool))
         {
             return true;
         }

@@ -474,9 +474,11 @@ impl Error {
     }
 
     pub fn is_ignored(&self, enabled_ignores: &SmallSet<Tool>) -> bool {
-        // UnusedIgnore errors cannot be suppressed - this prevents infinite loops
-        // where suppressing an unused-ignore creates another unused-ignore.
-        if self.error_kind == ErrorKind::UnusedIgnore {
+        // Ignore-comment diagnostics cannot themselves be silenced by an ignore
+        // comment; the only knob is their configured severity. For UnusedIgnore
+        // this also prevents an infinite loop where suppressing an unused-ignore
+        // would create another unused-ignore.
+        if self.error_kind.is_unsuppressable() {
             return false;
         }
         // Check both this kind's name and any parent kind's name, so that e.g.
