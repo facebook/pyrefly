@@ -66,6 +66,7 @@ mod recursive_alias;
 mod redundant_cast;
 mod returns;
 mod scope;
+mod self_cls_default;
 mod semantic_syntax_errors;
 mod sentinel;
 mod shape_dsl;
