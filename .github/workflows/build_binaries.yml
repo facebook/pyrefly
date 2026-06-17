@@ -244,7 +244,18 @@ jobs:
             -v ${{ github.workspace }}:/io -w /io \
             --env PACKAGE_NAME --env BINARY_NAME \
             alpine:latest sh -c '
-              apk add --no-cache python3
+              attempt=1
+              delay=20
+              until apk add --no-cache python3; do
+                status=$?
+                if [ "$attempt" -eq 3 ]; then
+                  exit "$status"
+                fi
+                echo "apk add failed with exit code ${status}; retrying in ${delay}s"
+                sleep "$delay"
+                attempt=$((attempt + 1))
+                delay=$((delay * 2))
+              done
               python3 -m venv .venv
               .venv/bin/pip install "${PACKAGE_NAME}" --no-index --find-links pyrefly/dist/ --force-reinstall
               .venv/bin/"${BINARY_NAME}" --version
