@@ -1855,6 +1855,11 @@ impl<'a> BindingsBuilder<'a> {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
+        // Empty names arise from parser error recovery on invalid syntax.
+        // The definitions phase already skips them, so they won't be in the static scope.
+        if name.is_empty() {
+            return None;
+        }
         self.check_for_type_alias_redefinition(name, idx);
         self.check_for_imported_final_reassignment(name, idx);
         let name = Hashed::new(name);

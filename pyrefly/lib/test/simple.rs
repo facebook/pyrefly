@@ -1290,6 +1290,20 @@ match x:
 );
 
 testcase!(
+    test_syntax_error_empty_import_name,
+    r#"
+from os import , # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_import_python_empty_import_name,
+    r#"
+import_python("a.b.c.cinc", "")
+    "#,
+);
+
+testcase!(
     test_mangled_for,
     r#"
 # This has identical Identifiers in the AST, which seems like the right AST.
