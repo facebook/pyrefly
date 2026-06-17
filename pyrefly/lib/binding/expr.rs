@@ -1224,6 +1224,13 @@ impl<'a> BindingsBuilder<'a> {
             Expr::StringLiteral(literal)
                 if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
             {
+                if literal.flags.prefix().is_raw() {
+                    self.error(
+                        literal.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "Raw string literals are not allowed in type expressions".to_owned(),
+                    );
+                }
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
                         *x = expr;
