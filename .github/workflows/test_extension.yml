@@ -78,6 +78,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: lsp/package-lock.json
       - name: Install extension npm dependencies
         uses: ./.github/actions/retry-command
         with:
