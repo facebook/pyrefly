@@ -41,6 +41,10 @@ jobs:
       with:
         toolchain: stable
         components: clippy, rustfmt
+    - name: Fetch Cargo dependencies
+      uses: ./.github/actions/retry-command
+      with:
+        command: cargo fetch --locked
     - run: cargo fmt -- --check
     - run: cargo clippy --release
     - run: cargo build --release
