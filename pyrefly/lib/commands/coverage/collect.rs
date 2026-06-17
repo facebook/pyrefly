@@ -1094,10 +1094,6 @@ fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> Option<Smal
         .map(|it| it.cloned().collect())
 }
 
-fn collect_dunder_all_or_empty(transaction: &Transaction, handle: &Handle) -> SmallSet<Name> {
-    collect_dunder_all(transaction, handle).unwrap_or_default()
-}
-
 /// The `(module_prefix, __all__ FQNs)` that gate which `.py`-only symbols a stub merge keeps,
 /// or `None` when the stub has no explicit `__all__` (leaving the merge unfiltered).
 fn stub_merge_filter(
@@ -1380,7 +1376,7 @@ impl ModuleSymbols {
         let module = transaction.get_module_info(handle)?;
         let answers = transaction.get_answers(handle)?;
         let exports = transaction.get_exports(handle);
-        let dunder_all = collect_dunder_all_or_empty(transaction, handle);
+        let dunder_all = collect_dunder_all(transaction, handle).unwrap_or_default();
         let tco_classes = collect_type_check_only_classes(&bindings);
         let mut functions = parse_functions(
             &module,
