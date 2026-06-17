@@ -36,9 +36,11 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install dependencies
-        run: |
-          python -m pip install -U pip
-          pip install git+https://github.com/hauntsaninja/mypy_primer.git
+        uses: ./pyrefly_to_test/.github/actions/retry-command
+        with:
+          command: |
+            python -m pip install -U pip
+            pip install git+https://github.com/hauntsaninja/mypy_primer.git
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
