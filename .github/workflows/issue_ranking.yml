@@ -56,6 +56,11 @@ jobs:
         with:
           command: pip install pyright mypy
 
+      - name: Fetch Cargo dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          command: cargo fetch --locked --manifest-path pyrefly/Cargo.toml
+
       - name: Build pyrefly
         run: |
           cargo build --release --manifest-path pyrefly/Cargo.toml
