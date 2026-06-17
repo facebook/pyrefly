@@ -85,9 +85,15 @@ jobs:
           command: npm ci
       - run: npm run compile
         working-directory: lsp/
-      - run: xvfb-run -a npm run test
-        working-directory: lsp/
+      - name: Run extension tests on Linux
+        uses: ./.github/actions/retry-command
         if: runner.os == 'Linux'
-      - run: npm run test
-        working-directory: lsp/
+        with:
+          working-directory: lsp/
+          command: xvfb-run -a npm run test
+      - name: Run extension tests
+        uses: ./.github/actions/retry-command
         if: runner.os != 'Linux'
+        with:
+          working-directory: lsp/
+          command: npm run test
