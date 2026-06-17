@@ -155,6 +155,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: lsp/package-lock.json
       - name: save platform name
         run: echo "platform=${{ matrix.platform }}-${{ matrix.arch }}" >> ${{ matrix.github_env }}
       - name: Install extension npm dependencies
