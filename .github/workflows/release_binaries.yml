@@ -184,12 +184,13 @@ jobs:
 
       - name: Upload to release (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          gh release upload ${{ env.TAG_NAME }} `
-            "${{ matrix.artifact_name }}.zip" `
-            "${{ matrix.artifact_name }}.zip.sha256" `
-            --clobber
+        uses: ./.github/actions/retry-command
+        with:
+          command: |
+            gh release upload "$TAG_NAME" \
+              "${{ matrix.artifact_name }}.zip" \
+              "${{ matrix.artifact_name }}.zip.sha256" \
+              --clobber
 
   wasm:
     name: Build pyrefly-wasm
