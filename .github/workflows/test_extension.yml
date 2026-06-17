@@ -79,6 +79,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: lsp/package-lock.json
+      - name: Set VS Code cache week
+        shell: bash
+        run: echo "VSCODE_CACHE_WEEK=$(date -u +%G-%V)" >> "$GITHUB_ENV"
       - name: Restore VS Code test binary cache
         uses: actions/cache@v4
         with:
@@ -86,8 +89,9 @@ jobs:
             ~/.vscode-test
             .vscode-test
             lsp/.vscode-test
-          key: ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-${{ hashFiles('lsp/package-lock.json') }}
+          key: ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-${{ env.VSCODE_CACHE_WEEK }}-${{ hashFiles('lsp/package-lock.json', 'lsp/.vscode-test.mjs') }}
           restore-keys: |
+            ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-${{ env.VSCODE_CACHE_WEEK }}-
             ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-
       - name: Install extension npm dependencies
         uses: ./.github/actions/retry-command
