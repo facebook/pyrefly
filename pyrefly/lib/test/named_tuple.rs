@@ -1062,3 +1062,100 @@ def f(X: int) -> None:
     N = namedtuple("N", [X])  # E: Expected a string literal
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/3763: a zero-arg `super()` in a method of a class
+// that directly subclasses `NamedTuple` makes the class fail to define at runtime, because the
+// `__class__` cell the compiler creates for `super()` is not propagated by the NamedTuple machinery.
+testcase!(
+    test_named_tuple_super_call_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        super()  # E: NamedTuple
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_super_attr_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super().__repr__()  # E: NamedTuple
+"#,
+);
+
+testcase!(
+    test_named_tuple_classmethod_super_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    @classmethod
+    def c(cls) -> int:
+        super()  # E: NamedTuple
+        return 0
+"#,
+);
+
+// A subclass of a concrete NamedTuple is built by ordinary class machinery, so `super()` is fine.
+testcase!(
+    test_named_tuple_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+// The inherited (non-direct) NamedTuple metadata must not leak `super()` flagging to deeper
+// subclasses either.
+testcase!(
+    test_named_tuple_deep_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    pass
+class H(G):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_no_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        return self.x
+"#,
+);
+
+// We only flag the zero-arg `super()` form, which is what the issue reports and the common case.
+// An explicit `super(F, self)` also fails at runtime (the compiler still creates the `__class__`
+// cell whenever `super` is referenced), but the lexical enclosing class is not threaded into the
+// explicit-args binding, so we do not detect it yet.
+testcase!(
+    bug = "explicit super(F, self) in a NamedTuple also fails at runtime but is not flagged",
+    test_named_tuple_explicit_super_args_not_flagged,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super(F, self).__repr__()
+"#,
+);

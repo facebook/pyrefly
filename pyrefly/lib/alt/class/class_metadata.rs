@@ -702,9 +702,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(NamedTupleMetadata {
                         elements: self.get_named_tuple_elements(cls, errors),
                         has_dynamic_fields,
+                        is_direct: true,
                     })
                 } else {
-                    metadata.named_tuple_metadata().cloned()
+                    // A subclass of a concrete NamedTuple inherits its fields but is created by
+                    // ordinary class machinery, so it does not directly define a NamedTuple.
+                    metadata
+                        .named_tuple_metadata()
+                        .map(|nt| NamedTupleMetadata {
+                            elements: nt.elements.clone(),
+                            has_dynamic_fields: nt.has_dynamic_fields,
+                            is_direct: false,
+                        })
                 }
             })
     }

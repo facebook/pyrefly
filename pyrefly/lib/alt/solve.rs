@@ -3006,6 +3006,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match &self.get_idx(*self_binding).0 {
                     Some(obj_cls) => {
                         let obj_type = self.as_class_type_unchecked(obj_cls);
+                        // A zero-arg `super()` in a method of a class that directly subclasses
+                        // `NamedTuple` makes the class fail to define at runtime: the `__class__`
+                        // cell the compiler creates for `super()` is not propagated by the
+                        // NamedTuple machinery. See https://github.com/facebook/pyrefly/issues/3763.
+                        if self
+                            .get_metadata_for_class(obj_cls)
+                            .named_tuple_metadata()
+                            .is_some_and(|nt| nt.is_direct)
+                        {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::InvalidSuperCall,
+                                "`super` call with no arguments is not allowed in a `NamedTuple` method".to_owned(),
+                            );
+                        }
                         let lookup_cls = self.get_super_lookup_class(obj_cls, &obj_type).unwrap();
                         let obj = if method.id == dunder::NEW {
                             // __new__ is special: it's the only static method in which the
