@@ -1769,6 +1769,19 @@ This error occurs when attempting to `del` something that cannot be deleted.
 Besides obvious things like built-in values (you can't `del True`!), some object attributes are protected from deletion.
 For example, read-only and required `TypedDict` fields cannot be deleted.
 
+## unsupported-dynamic-base
+
+This error is raised for dynamic class definitions created with `type()` when
+the base classes are not statically known class literals.
+
+```python
+class Base: ...
+
+def factory(base: type[Base]) -> type:
+    return type("Dynamic", (base,), {})
+    # Base class `type[Base]` in `type()` call is not a statically known class [unsupported-dynamic-base]
+```
+
 ## unsupported-operation
 
 This error arises when attempting to perform an operation between values of two incompatible types.

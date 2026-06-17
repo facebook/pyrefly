@@ -366,6 +366,8 @@ pub enum ErrorKind {
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
     UnsupportedDelete,
+    /// A dynamically created class has a base that cannot be statically resolved.
+    UnsupportedDynamicBase,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
     /// Import is missing an expected stubs package

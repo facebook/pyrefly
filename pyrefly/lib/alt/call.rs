@@ -1248,6 +1248,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn check_dynamic_type_bases(&self, bases: &Expr, errors: &ErrorCollector) {
+        let Expr::Tuple(tuple) = bases else {
+            self.error(
+                errors,
+                bases.range(),
+                ErrorKind::UnsupportedDynamicBase,
+                "Base classes in `type()` calls must be a tuple literal of statically known classes"
+                    .to_owned(),
+            );
+            return;
+        };
+        for base in &tuple.elts {
+            if matches!(base, Expr::Starred(_)) {
+                self.error(
+                    errors,
+                    base.range(),
+                    ErrorKind::UnsupportedDynamicBase,
+                    "Base classes in `type()` calls cannot use unpacking".to_owned(),
+                );
+                continue;
+            }
+            let base_ty = self.expr_infer(base, errors);
+            if base_ty.is_any() || base_ty.is_error() || matches!(base_ty, Type::ClassDef(_)) {
+                continue;
+            }
+            self.error(
+                errors,
+                base.range(),
+                ErrorKind::UnsupportedDynamicBase,
+                format!(
+                    "Base class `{}` in `type()` call is not a statically known class",
+                    self.for_display(base_ty)
+                ),
+            );
+        }
+    }
+
     fn call_infer_with_callee_range(
         &self,
         call_target: CallTarget,
@@ -2003,6 +2040,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // is called with a single argument.
                     let arg_ty = self.expr_infer(&x.arguments.args[0], errors);
                     self.type_of(arg_ty)
+                }
+                _ if matches!(ty, Type::ClassDef(cls) if cls == self.stdlib.builtins_type().class_object())
+                    && x.arguments.args.len() == 3 =>
+                {
+                    self.check_dynamic_type_bases(&x.arguments.args[1], errors);
+                    self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors)
                 }
                 // Decorators can be applied in two ways:
                 //   - (common, idiomatic) via `@decorator`:
