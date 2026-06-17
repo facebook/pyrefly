@@ -174,11 +174,13 @@ jobs:
 
       - name: Upload to release (Unix)
         if: runner.os != 'Windows'
-        run: |
-          gh release upload ${{ env.TAG_NAME }} \
-            ${{ matrix.artifact_name }}.tar.gz \
-            ${{ matrix.artifact_name }}.tar.gz.sha256 \
-            --clobber
+        uses: ./.github/actions/retry-command
+        with:
+          command: |
+            gh release upload "$TAG_NAME" \
+              ${{ matrix.artifact_name }}.tar.gz \
+              ${{ matrix.artifact_name }}.tar.gz.sha256 \
+              --clobber
 
       - name: Upload to release (Windows)
         if: runner.os == 'Windows'
