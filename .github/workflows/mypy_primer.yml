@@ -45,7 +45,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy, rustfmt
-      - name: Run mypy_primer
+      - name: Prepare mypy_primer comparison
         shell: bash
         run: |
           cd pyrefly_to_test
@@ -57,35 +57,62 @@ jobs:
           echo "base commit"
           git rev-list --format=%s --max-count=1 base_commit
 
+          git checkout "$GITHUB_SHA"
+
           echo ''
           cd ..
 
           BASE_DIR=$(pwd)/primer_base
           mkdir -p $BASE_DIR
+          echo "BASE_DIR=$BASE_DIR" >> "$GITHUB_ENV"
 
-          # Build pyrefly for "new" commit and install wrapper
           NEW_DIR=$BASE_DIR/pyrefly_new
           mkdir -p $NEW_DIR
-          cd pyrefly_to_test && git checkout $GITHUB_SHA
-          CARGO_TARGET_DIR=$NEW_DIR/target cargo build --release --manifest-path pyrefly/Cargo.toml
-          BINARY_DIR=$NEW_DIR/target/release
-          mv $BINARY_DIR/pyrefly $BINARY_DIR/pyrefly-real
-          cp scripts/pyrefly_primer_wrapper.sh $BINARY_DIR/pyrefly
-          chmod +x $BINARY_DIR/pyrefly
+          echo "NEW_DIR=$NEW_DIR" >> "$GITHUB_ENV"
 
-          # Build pyrefly for "old" commit and install wrapper
           OLD_DIR=$BASE_DIR/pyrefly_old
           mkdir -p $OLD_DIR
-          git checkout base_commit
-          CARGO_TARGET_DIR=$OLD_DIR/target cargo build --release --manifest-path pyrefly/Cargo.toml
+          echo "OLD_DIR=$OLD_DIR" >> "$GITHUB_ENV"
+      - name: Fetch new Pyrefly Cargo dependencies
+        uses: ./pyrefly_to_test/.github/actions/retry-command
+        with:
+          working-directory: pyrefly_to_test
+          command: cargo fetch --manifest-path pyrefly/Cargo.toml
+      - name: Build new Pyrefly
+        shell: bash
+        working-directory: pyrefly_to_test
+        run: CARGO_TARGET_DIR="$NEW_DIR/target" cargo build --release --manifest-path pyrefly/Cargo.toml
+      - name: Install new Pyrefly primer wrapper
+        shell: bash
+        run: |
+          BINARY_DIR=$NEW_DIR/target/release
+          mv $BINARY_DIR/pyrefly $BINARY_DIR/pyrefly-real
+          cp pyrefly_to_test/scripts/pyrefly_primer_wrapper.sh $BINARY_DIR/pyrefly
+          chmod +x $BINARY_DIR/pyrefly
+      - name: Fetch old Pyrefly Cargo dependencies
+        uses: ./pyrefly_to_test/.github/actions/retry-command
+        with:
+          working-directory: pyrefly_to_test
+          command: |
+            git checkout base_commit
+            cargo fetch --manifest-path pyrefly/Cargo.toml
+      - name: Build old Pyrefly
+        shell: bash
+        working-directory: pyrefly_to_test
+        run: CARGO_TARGET_DIR="$OLD_DIR/target" cargo build --release --manifest-path pyrefly/Cargo.toml
+      - name: Install old Pyrefly primer wrapper
+        shell: bash
+        run: |
           BINARY_DIR=$OLD_DIR/target/release
           mv $BINARY_DIR/pyrefly $BINARY_DIR/pyrefly-real
           # Use the wrapper from the new commit (old commit may not have it)
-          git checkout $GITHUB_SHA -- scripts/pyrefly_primer_wrapper.sh
+          cd pyrefly_to_test
+          git checkout "$GITHUB_SHA" -- scripts/pyrefly_primer_wrapper.sh
           cp scripts/pyrefly_primer_wrapper.sh $BINARY_DIR/pyrefly
           chmod +x $BINARY_DIR/pyrefly
-
-          cd ..
+      - name: Run mypy_primer
+        shell: bash
+        run: |
           # fail action if exit code isn't zero or one
           (
             MYPY_PRIMER_NO_REBUILD=1 mypy_primer \
