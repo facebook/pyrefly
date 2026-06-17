@@ -45,6 +45,12 @@ jobs:
         with:
           toolchain: stable
           components: clippy, rustfmt
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-mypy-primer
+          cache-targets: false
+          workspaces: pyrefly_to_test
       - name: Prepare mypy_primer comparison
         shell: bash
         run: |
