@@ -4821,6 +4821,12 @@ Default severity: `ignore`
 
 This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
 
+## unused-type-ignore
+
+Default severity: `ignore`
+
+This error is raised when a `# type: ignore` comment is not used to suppress any error, and can be safely removed. This rule is distinct from `unused-ignore` so that projects using multiple type checkers can leave `# type: ignore` comments for other tools (e.g. mypy) without pyrefly flagging them. Enable this rule if your project uses pyrefly exclusively.
+
 ## variance-mismatch
 
 Default severity: `warn`
