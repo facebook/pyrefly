@@ -58,7 +58,9 @@ use crate::binding::narrow::NarrowSource;
 use crate::binding::narrow::NarrowingSubject;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
+use crate::types::callable::Callable;
 use crate::types::callable::FunctionKind;
+use crate::types::callable::Params;
 use crate::types::class::ClassType;
 use crate::types::lit_int::LitInt;
 use crate::types::literal::Lit;
@@ -676,7 +678,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 IntersectFallback::Right
             };
-            self.intersect_with_fallback(left, right, fallback)
+            let narrowed = self.intersect_with_fallback(left, right, fallback);
+            if !left.is_toplevel_callable() && right.is_toplevel_callable() && narrowed == *right {
+                let mut right = right.clone();
+                right.transform_toplevel_callable(&mut |callable: &mut Callable| {
+                    if matches!(callable.params, Params::Ellipsis) {
+                        callable.params = Params::Materialization;
+                    }
+                });
+                right
+            } else {
+                narrowed
+            }
         }
     }
 

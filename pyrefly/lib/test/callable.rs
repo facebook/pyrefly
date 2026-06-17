@@ -1330,7 +1330,7 @@ def f(x: object):
 testcase!(
     test_builtins_callable_narrow,
     r#"
-from typing import Any, Callable, assert_type
+from typing import Any, Callable, assert_type, reveal_type
 def f(
   x1: Callable[[int], int],
   x2: Callable[..., int],
@@ -1348,6 +1348,11 @@ def f(
         assert_type(x4, Callable[..., int | Any])
     if callable(x5):
         assert_type(x5, Callable[..., Any])
+
+def g(x: object):
+    if callable(x):
+        reveal_type(x)  # E: revealed type: (Materialization) -> object
+        x()  # E: Cannot call callable with unknown parameter types
     "#,
 );
 
