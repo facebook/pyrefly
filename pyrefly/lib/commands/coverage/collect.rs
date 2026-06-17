@@ -1606,6 +1606,21 @@ fn build_module_report(
         }
     }
 
+    // A `--module` override renames the module, so rewrite symbol prefixes to match.
+    if name != derived_name {
+        let rewrite = |s: &mut String| {
+            if let Some(rest) = s.strip_prefix(&module_prefix) {
+                *s = format!("{name}.{rest}");
+            }
+        };
+        for n in &mut names {
+            rewrite(n);
+        }
+        for sym in &mut symbol_reports {
+            rewrite(sym.name_mut());
+        }
+    }
+
     ModuleReport {
         name,
         path,
@@ -1810,8 +1825,8 @@ pub fn collect_module_reports(
             let derived_name = handle.module().to_string();
             let name = module_name_override.clone().unwrap_or(derived_name.clone());
             let path = handle.path().as_path().display().to_string();
-            let mut module_report = build_module_report(
-                name.clone(),
+            let module_report = build_module_report(
+                name,
                 path,
                 &derived_name,
                 symbols.line_count(),
@@ -1820,22 +1835,6 @@ pub fn collect_module_reports(
                 &symbols.classes,
                 symbols.suppressions,
             );
-            // When --module overrides the name, rewrite symbol prefixes to match.
-            if module_name_override.is_some() && name != derived_name {
-                let old_prefix = format!("{}.", derived_name);
-                let new_prefix = format!("{}.", name);
-                for n in &mut module_report.names {
-                    if let Some(rest) = n.strip_prefix(&old_prefix) {
-                        *n = format!("{new_prefix}{rest}");
-                    }
-                }
-                for sym in &mut module_report.symbol_reports {
-                    let sym_name = sym.name_mut();
-                    if let Some(rest) = sym_name.strip_prefix(&old_prefix) {
-                        *sym_name = format!("{new_prefix}{rest}");
-                    }
-                }
-            }
             Some((module_report, errors))
         } else {
             None
@@ -1948,26 +1947,19 @@ mod tests {
         build_module_report_for_test_with_env(py_file, TestEnv::new())
     }
 
-    /// Build a `ModuleReport` with a module name override, mirroring
-    /// the `collect_module_reports` --module flag logic.
+    /// Build a `ModuleReport` for the `--module` override case (file parses as `test`).
     fn build_module_report_with_override(py_file: &str, override_name: &str) -> ModuleReport {
-        let mut report = build_module_report_for_test(py_file);
-        let derived_name = "test";
-        let old_prefix = format!("{}.", derived_name);
-        let new_prefix = format!("{}.", override_name);
-        report.name = override_name.to_owned();
-        for n in &mut report.names {
-            if let Some(rest) = n.strip_prefix(&old_prefix) {
-                *n = format!("{new_prefix}{rest}");
-            }
-        }
-        for sym in &mut report.symbol_reports {
-            let sym_name = sym.name_mut();
-            if let Some(rest) = sym_name.strip_prefix(&old_prefix) {
-                *sym_name = format!("{new_prefix}{rest}");
-            }
-        }
-        report
+        let (p, module_path) = parse_test_module(py_file, TestEnv::new());
+        build_module_report(
+            override_name.to_owned(),
+            module_path,
+            "test",
+            p.line_count(),
+            &p.functions,
+            &p.variables,
+            &p.classes,
+            p.suppressions,
+        )
     }
 
     /// Merge a `.pyi` stub's symbols with its `.py` source, mirroring the production
