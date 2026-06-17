@@ -980,6 +980,16 @@ x = 2
 Bad: TypeAlias = x
 ```
 
+## invalid-type-checking-constant
+
+A module-level `TYPE_CHECKING` constant that is not typed as `bool`. Type checkers treat
+`TYPE_CHECKING` as `True`, while at runtime it is `False`, so a user-defined one must be a `bool`
+(conventionally `TYPE_CHECKING = False`).
+
+```python
+TYPE_CHECKING: str = ""  # error: not a bool
+```
+
 ## invalid-type-var
 
 An error caused by incorrect usage or definition of a TypeVar. A few examples:
