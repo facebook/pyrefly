@@ -54,6 +54,28 @@ reveal_type(decorated)  # E: revealed type: (x: int) -> str
 );
 
 testcase!(
+    test_inspect_unwrap_follows_wrapped_chain,
+    r#"
+from functools import wraps
+from inspect import unwrap
+from typing import reveal_type
+
+def inner(x: int) -> str:
+    return f"{x}"
+
+@wraps(inner)
+def middle(x: object) -> None:
+    pass
+
+@wraps(middle)
+def outer(x: object) -> None:
+    pass
+
+reveal_type(unwrap(outer))  # E: revealed type: (x: int) -> str
+    "#,
+);
+
+testcase!(
     test_signature_modifying_function_decorator,
     r#"
 from typing import assert_type, Callable, Any
