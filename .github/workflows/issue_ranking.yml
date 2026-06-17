@@ -168,13 +168,15 @@ jobs:
       # Install type checkers for snippet checking
       - name: Install type checkers
         if: ${{ inputs.check_snippets }}
-        run: |
-          echo "=== Installing type checkers ==="
-          pip install pyrefly pyright mypy
-          echo "pyrefly version: $(pyrefly --version 2>&1 || echo 'not found')"
-          echo "pyright version: $(pyright --version 2>&1 || echo 'not found')"
-          echo "mypy version: $(mypy --version 2>&1 || echo 'not found')"
-          echo "pyrefly path: $(which pyrefly 2>&1 || echo 'not found')"
+        uses: ./.github/actions/retry-command
+        with:
+          command: |
+            echo "=== Installing type checkers ==="
+            pip install pyrefly pyright mypy
+            echo "pyrefly version: $(pyrefly --version 2>&1 || echo 'not found')"
+            echo "pyright version: $(pyright --version 2>&1 || echo 'not found')"
+            echo "mypy version: $(mypy --version 2>&1 || echo 'not found')"
+            echo "pyrefly path: $(which pyrefly 2>&1 || echo 'not found')"
 
       # Download primer results if available
       - name: Download primer results
