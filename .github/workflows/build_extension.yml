@@ -126,6 +126,17 @@ jobs:
       - name: set jemalloc page size for ARM64 macOS
         if: ${{ matrix.arch == 'arm64' && matrix.platform == 'darwin' }}
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> ${{ matrix.github_env }}
+      - name: Fetch Cargo dependencies
+        uses: ./.github/actions/retry-command
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        with:
+          command: |
+            if [ -n "$RUST_TARGET" ]; then
+              cargo fetch --locked --manifest-path pyrefly/Cargo.toml --target "$RUST_TARGET"
+            else
+              cargo fetch --locked --manifest-path pyrefly/Cargo.toml
+            fi
       - name: build pyrefly binary (cross-compile)
         if: ${{ matrix.rust_target != '' }}
         uses: houseabsolute/actions-rust-cross@v1
