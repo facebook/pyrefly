@@ -36,16 +36,133 @@ testcase!(
     r#"
 from typing import overload
 
-@overload
-def foo(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
-    return x + 1  # will never be executed
+# should warn
 
 @overload
-def foo(x: str) -> str:  # E: `@overload` bodies should not contain executable logic
-    return "Oh no, got a string"  # will never be executed
+def returns_expr(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    return x + 1
 
-def foo(x: int | str) -> int | str:
-    raise Exception("unexpected type encountered")
+@overload
+def returns_expr(x: str) -> str:
+    ...
+
+@overload
+def raises_other(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    raise ValueError("bad")
+
+@overload
+def raises_other(x: str) -> str:
+    ...
+
+@overload
+def has_assignment(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    x = 1
+    return x
+
+@overload
+def has_assignment(x: str) -> str:
+    ...
+
+@overload
+def has_multiple_stmts(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    print("side effect")
+    return x
+
+@overload
+def has_multiple_stmts(x: str) -> str:
+    ...
+
+def returns_expr(x: int | str) -> int | str:
+    return x
+
+def raises_other(x: int | str) -> int | str:
+    return x
+
+def has_assignment(x: int | str) -> int | str:
+    return x
+
+def has_multiple_stmts(x: int | str) -> int | str:
+    return x
+
+# should not warn 
+
+@overload
+def body_pass(x: int) -> int:
+    pass
+
+@overload
+def body_pass(x: str) -> str:
+    ...
+
+def body_pass(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_ellipsis(x: int) -> int:
+    ...
+
+@overload
+def body_ellipsis(x: str) -> str:
+    ...
+
+def body_ellipsis(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_only(x: int) -> int:
+    """This is fine."""
+
+@overload
+def body_docstring_only(x: str) -> str:
+    ...
+
+def body_docstring_only(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl(x: int) -> int:
+    raise NotImplementedError
+
+@overload
+def body_raise_not_impl(x: str) -> str:
+    ...
+
+def body_raise_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_raise_not_impl_msg(x: int) -> int:
+    raise NotImplementedError("not done")
+
+@overload
+def body_raise_not_impl_msg(x: str) -> str:
+    ...
+
+def body_raise_not_impl_msg(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_return_not_impl(x: int) -> int:
+    return NotImplemented
+
+@overload
+def body_return_not_impl(x: str) -> str:
+    ...
+
+def body_return_not_impl(x: int | str) -> int | str:
+    return x
+
+@overload
+def body_docstring_then_pass(x: int) -> int:
+    """docstring stripped first, then pass is trivial."""
+    pass
+
+@overload
+def body_docstring_then_pass(x: str) -> str:
+    ...
+
+def body_docstring_then_pass(x: int | str) -> int | str:
+    return x
     "#,
 );
 
