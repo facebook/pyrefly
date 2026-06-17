@@ -38,7 +38,7 @@ jobs:
           path: |
             ~/.cargo/bin/wasm-pack
             ~/.cargo/bin/wasm-opt
-          key: ${{ runner.os }}-wasm-pack-0.15.0-wasm-opt-0.116.1
+          key: ${{ runner.os }}-${{ runner.arch }}-wasm-pack-0.15.0-wasm-opt-0.116.1
       - name: Set up Rust cache
         uses: Swatinem/rust-cache@v2
         with:
