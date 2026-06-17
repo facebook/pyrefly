@@ -1,0 +1,159 @@
+---
+title: Pytest Support
+description: Pyrefly support for pytest fixtures and test navigation.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Pytest Support
+
+Pyrefly includes built-in support for [pytest](https://docs.pytest.org/), the
+popular Python testing framework. This support focuses on fixtures and IDE
+workflows for navigating, annotating, and running tests.
+
+> **Note:** Pyrefly's pytest support is automatic when a file imports `pytest`.
+> Some IDE features also depend on selecting a Python interpreter where pytest is
+> installed.
+
+### Feedback
+
+We welcome your feedback and suggestions. Please share your thoughts and ideas
+by opening an issue on [GitHub](https://github.com/facebook/pyrefly/issues).
+
+---
+
+## What is pytest?
+
+pytest is a Python testing framework where tests are usually functions or
+methods named `test_*`. Its fixture system lets tests request reusable setup
+objects by naming fixture parameters.
+
+```python
+import pytest
+
+@pytest.fixture
+def username() -> str:
+    return "Ada"
+
+def test_user(username):
+    assert username == "Ada"
+```
+
+In this example, pytest injects the `username` fixture into the test function
+based on the parameter name.
+
+---
+
+## How Pyrefly Supports pytest
+
+Pyrefly recognizes pytest imports and fixture decorators without requiring a
+plugin or manual configuration. It:
+
+- Recognizes fixtures declared with `@pytest.fixture`, `@pytest.fixture(...)`,
+  and imported fixture aliases such as `from pytest import fixture`.
+- Resolves fixture parameters in tests and fixtures to their fixture
+  definitions.
+- Finds references from a fixture definition to the test and fixture parameters
+  that request it.
+- Shows optional inlay hints for pytest fixture parameter types.
+- Provides quick fixes that add inferred return annotations to fixtures.
+- Provides quick fixes that add inferred parameter annotations to tests that use
+  fixtures.
+- Adds runnable CodeLens actions for pytest tests in supported editors.
+
+---
+
+## Fixture Navigation
+
+Pyrefly understands pytest's fixture-by-name convention, so IDE navigation works
+across fixture definitions and fixture parameters in the same module.
+
+```python
+import pytest
+
+@pytest.fixture
+def database_url() -> str:
+    return "sqlite://"
+
+def test_connection(database_url):
+    reveal_type(database_url)  # revealed type: str
+```
+
+Go-to-definition on the `database_url` parameter in `test_connection` jumps to
+the fixture definition. Find-references on the fixture name includes parameters
+that request that fixture.
+
+Pyrefly also handles fixture aliases:
+
+```python
+from pytest import fixture as reusable
+
+@reusable
+def user_id() -> int:
+    return 42
+
+def test_lookup(user_id):
+    reveal_type(user_id)  # revealed type: int
+```
+
+---
+
+## Fixture Type Hints and Quick Fixes
+
+Pyrefly can infer fixture return types and offer quick fixes that make those
+types explicit.
+
+```python
+import pytest
+
+@pytest.fixture
+def enabled():
+    return True
+
+def test_feature(enabled):
+    assert enabled
+```
+
+In the editor, Pyrefly can offer:
+
+- `Add pytest fixture type annotation`, which updates the fixture to
+  `def enabled() -> bool:`.
+- `Add pytest fixture parameter type annotation`, which updates the test to
+  `def test_feature(enabled: bool):`.
+- Batch variants that annotate all eligible fixtures or fixture parameters in
+  the file.
+
+The parameter inlay hints are controlled by
+`python.analysis.inlayHints.pytestParameters`, which defaults to `false`.
+
+---
+
+## Running pytest Tests from the Editor
+
+In supported editors, Pyrefly shows runnable CodeLens actions above pytest tests.
+For example, a test method can be run using a pytest node id such as:
+
+```bash
+python -m pytest path/to/test_file.py::TestClass::test_method
+```
+
+This feature uses the Python interpreter selected for the workspace. If Pyrefly
+cannot import pytest from that interpreter, select the correct interpreter or
+install pytest in the active environment.
+
+---
+
+## How to Use
+
+You do not need to enable a Pyrefly plugin or add Pyrefly-specific configuration
+for pytest support.
+
+1. Install `pytest` in the Python environment used by your editor.
+1. Install `pyrefly`.
+1. Write pytest fixtures and tests as usual.
+1. Run Pyrefly or use the Pyrefly language server in your editor.
