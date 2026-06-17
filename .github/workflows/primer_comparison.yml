@@ -38,7 +38,9 @@ jobs:
           toolchain: stable
 
       - name: Install type checkers
-        run: pip install pyright mypy
+        uses: ./.github/actions/retry-command
+        with:
+          command: pip install pyright mypy
 
       - name: Build pyrefly
         run: |
