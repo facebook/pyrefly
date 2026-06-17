@@ -4206,6 +4206,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let result = self.expr_check(e, None, errors);
+        match special_export {
+            Some(SpecialExport::TypeVar) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidTypeVar,
+                    "TypeVar must be assigned to a variable".to_owned(),
+                );
+            }
+            Some(SpecialExport::ParamSpec) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidParamSpec,
+                    "ParamSpec must be assigned to a variable".to_owned(),
+                );
+            }
+            Some(SpecialExport::TypeVarTuple) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidTypeVarTuple,
+                    "TypeVarTuple must be assigned to a variable".to_owned(),
+                );
+            }
+            _ => {}
+        }
         if special_export != Some(SpecialExport::AssertType)
             && let Type::ClassType(cls) = &result
             && self.is_coroutine(&result)
