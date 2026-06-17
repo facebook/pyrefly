@@ -79,6 +79,16 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: lsp/package-lock.json
+      - name: Restore VS Code test binary cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.vscode-test
+            .vscode-test
+            lsp/.vscode-test
+          key: ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-${{ hashFiles('lsp/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.platform }}-${{ matrix.arch }}-vscode-test-
       - name: Install extension npm dependencies
         uses: ./.github/actions/retry-command
         with:
