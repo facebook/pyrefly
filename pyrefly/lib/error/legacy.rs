@@ -20,6 +20,7 @@ pub(crate) fn severity_to_str(severity: Severity) -> String {
         Severity::Ignore => "ignore".to_owned(),
         Severity::Info => "info".to_owned(),
         Severity::Warn => "warn".to_owned(),
+        Severity::Hint => "hint".to_owned(),
         Severity::Error => "error".to_owned(),
     }
 }

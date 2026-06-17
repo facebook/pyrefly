@@ -236,6 +236,7 @@ impl Error {
             Severity::Error => Level::Error,
             Severity::Warn => Level::Warning,
             Severity::Info => Level::Info,
+            Severity::Hint => Level::Info,
             Severity::Ignore => Level::None,
         };
 
@@ -330,6 +331,7 @@ impl Error {
                 Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
                 Severity::Warn => lsp_types::DiagnosticSeverity::WARNING,
                 Severity::Info => lsp_types::DiagnosticSeverity::INFORMATION,
+                Severity::Hint => lsp_types::DiagnosticSeverity::HINT,
                 // Ignored errors shouldn't be here
                 Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
             }),
