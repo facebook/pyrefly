@@ -1921,7 +1921,7 @@ testcase!(
     test_crash_on_decorator_assign,
     r#"
 from typing import TypeVar
-@T=TypeVar()  # E: Expected newline, found `=` # E: Missing argument `name`
+@T=TypeVar()  # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
 "#,
 );
 
