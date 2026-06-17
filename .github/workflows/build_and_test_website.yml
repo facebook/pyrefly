@@ -31,12 +31,21 @@ jobs:
           node-version: "20.x"
           cache: yarn
           cache-dependency-path: website/yarn.lock
+      - name: Restore wasm tool cache
+        id: wasm-tool-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/wasm-pack
+            ~/.cargo/bin/wasm-opt
+          key: ${{ runner.os }}-wasm-pack-0.15.0-wasm-opt-0.116.1
       - name: Install yarn deps
         uses: ./.github/actions/retry-command
         with:
           working-directory: website
           command: yarn install --frozen-lockfile
       - name: Install wasm-pack
+        if: steps.wasm-tool-cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/retry-command
         with:
           command: |
