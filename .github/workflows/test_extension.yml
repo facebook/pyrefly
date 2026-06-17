@@ -78,8 +78,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-        working-directory: lsp/
+      - name: Install extension npm dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          working-directory: lsp/
+          command: npm ci
       - run: npm run compile
         working-directory: lsp/
       - run: xvfb-run -a npm run test
