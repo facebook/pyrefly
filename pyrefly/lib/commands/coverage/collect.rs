@@ -152,18 +152,19 @@ fn has_function_ancestor(parent: &NestingContext) -> bool {
     }
 }
 
-/// Build a class's qualified name from its nesting context.
-/// Returns e.g. `"Outer.Inner"` for a nested class or `"MyClass"` for a top-level one.
-fn class_qualified_name(
+/// Build a class's fully-qualified name: module prefix, nesting context, then class name. Returns
+/// e.g. `"pkg.mod.Outer.Inner"` for a nested class or `"pkg.mod.MyClass"` for a top-level one.
+fn class_fqn(
     module: &Module,
     parent: &NestingContext,
     class_name: impl std::fmt::Display,
 ) -> String {
+    let prefix = module_prefix(module);
     let parent_path = module.display(parent).to_string();
     if parent_path.is_empty() {
-        class_name.to_string()
+        format!("{prefix}{class_name}")
     } else {
-        format!("{parent_path}.{class_name}")
+        format!("{prefix}{parent_path}.{class_name}")
     }
 }
 
@@ -611,7 +612,6 @@ fn parse_instance_attrs(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Variable> {
     let mut attrs = Vec::new();
-    let module_prefix = module_prefix(module);
 
     for field_idx in bindings.keys::<KeyClassField>() {
         let field = bindings.get(field_idx);
@@ -674,10 +674,10 @@ fn parse_instance_attrs(
             _ => continue,
         };
 
-        let class_name = class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
+        let class_name = class_fqn(module, &cls_binding.parent, &cls_binding.def.name);
         let range = field.range;
         attrs.push(Variable {
-            name: format!("{}{}.{}", module_prefix, class_name, field.name),
+            name: format!("{}.{}", class_name, field.name),
             annotation,
             slots,
             location: range_to_location(module, range),
@@ -747,8 +747,8 @@ fn parse_functions(
                         if !is_public_name(fun.def.name.as_str()) {
                             continue;
                         }
-                        let class_qname = class_qualified_name(module, &cls.parent, &cls.def.name);
-                        format!("{module_prefix}{class_qname}.{}", fun.def.name)
+                        let class_qname = class_fqn(module, &cls.parent, &cls.def.name);
+                        format!("{class_qname}.{}", fun.def.name)
                     }
                     BindingClass::FunctionalClassDef(..) => {
                         continue;
@@ -904,10 +904,7 @@ fn parse_functions(
             if has_function_ancestor(&cls.parent) {
                 continue;
             }
-            let class_prefix = format!(
-                "{module_prefix}{}",
-                class_qualified_name(module, &cls.parent, &cls.def.name)
-            );
+            let class_prefix = class_fqn(module, &cls.parent, &cls.def.name);
             let target_qualified = format!("{}.{}", class_prefix, target_name);
             if let Some(target_func) = functions.iter().find(|f| f.name == target_qualified) {
                 let alias_name = format!("{}.{}", class_prefix, field.name);
@@ -1141,7 +1138,6 @@ fn parse_classes(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
     let mut classes = Vec::new();
-    let prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
 
     // group method definitions by class
@@ -1188,7 +1184,7 @@ fn parse_classes(
             },
             None => continue,
         };
-        let class_name = format!("{prefix}{}", class_qualified_name(module, parent, name));
+        let class_name = class_fqn(module, parent, name);
         let mro = answers
             .get_idx(bindings.key_to_idx(&KeyClassMro(ClassDefIndex(class_type.index().0))))
             .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
@@ -1209,15 +1205,10 @@ fn parse_classes(
             if ancestor_class.module_name().as_str() == "builtins" {
                 continue;
             }
-            let ancestor_module = ancestor_class.module();
-            let ancestor_name = format!(
-                "{}{}",
-                module_prefix(ancestor_module),
-                class_qualified_name(
-                    ancestor_module,
-                    ancestor_class.qname().parent(),
-                    ancestor_class.name()
-                )
+            let ancestor_name = class_fqn(
+                ancestor_class.module(),
+                ancestor_class.qname().parent(),
+                ancestor_class.name(),
             );
             let Some(ancestor_class_fields) = transaction.get_class_fields(handle, ancestor_class)
             else {
@@ -1272,8 +1263,6 @@ fn collect_class_members(
     handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> SmallSet<String> {
-    let fqname_prefix = module_prefix(module);
-
     let mut members = SmallSet::new();
     for idx in bindings.keys::<KeyClass>() {
         if tco_classes.contains(&idx) {
@@ -1289,8 +1278,7 @@ fn collect_class_members(
             continue;
         };
 
-        let qname = class_qualified_name(module, &binding.parent, &binding.def.name);
-        let fqname = format!("{fqname_prefix}{qname}");
+        let fqname = class_fqn(module, &binding.parent, &binding.def.name);
 
         let mro = answers
             .get_idx(bindings.key_to_idx(&KeyClassMro(cls.index())))
