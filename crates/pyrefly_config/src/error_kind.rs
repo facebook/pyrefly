@@ -376,6 +376,8 @@ pub enum ErrorKind {
     UnusedIgnore,
     /// A `# type: ignore` comment is unused (no error to suppress on that line)
     UnusedTypeIgnore,
+    /// `@overload` bodies are never executed, so executable body logic is usually dead code.
+    UselessOverloadBody,
     /// The inferred variance of a type variable does not match its declared variance.
     /// For example, a type variable used only in covariant positions in a protocol should be declared covariant.
     VarianceMismatch,
@@ -503,6 +505,8 @@ impl ErrorKind {
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
+            // Overload bodies are runtime-dead, so this should warn rather than fail CI by default.
+            ErrorKind::UselessOverloadBody => Severity::Warn,
             _ => Severity::Error,
         }
     }

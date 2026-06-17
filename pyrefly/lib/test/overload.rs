@@ -31,6 +31,24 @@ def anywhere():
     "#,
 );
 
+testcase!(
+    test_useless_overload_body,
+    r#"
+from typing import overload
+
+@overload
+def foo(x: int) -> int:  # E: `@overload` bodies should not contain executable logic
+    return x + 1  # will never be executed
+
+@overload
+def foo(x: str) -> str:  # E: `@overload` bodies should not contain executable logic
+    return "Oh no, got a string"  # will never be executed
+
+def foo(x: int | str) -> int | str:
+    raise Exception("unexpected type encountered")
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2867
 testcase!(
     test_urlunparse_prefers_string_overload_for_parse_result,
@@ -721,7 +739,7 @@ def f(x: int) -> int: ...
 def f(x: str) -> str: ...
 
 @overload
-def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation
+def f(x: int | str) -> int | str: # E: @overload decorator should not be used on function implementation  # E: `@overload` bodies should not contain executable logic
     return x
     "#,
 );
@@ -765,7 +783,7 @@ from typing import overload, Any
 @overload
 def foo(a: int) -> int: ...
 @overload
-def foo(a: str) -> str:
+def foo(a: str) -> str:  # E: `@overload` bodies should not contain executable logic
     """Docstring"""
     return 123             # E: Returned type `Literal[123]` is not assignable to declared return type `str`
 def foo(*args, **kwargs) -> Any:

@@ -654,6 +654,13 @@ impl<'a> BindingsBuilder<'a> {
             }
             _ => None,
         };
+        if decorators.is_overload && !body_is_trivial && placeholder_body_kind.is_none() {
+            self.error(
+                func_name.range(),
+                ErrorKind::UselessOverloadBody,
+                "`@overload` bodies should not contain executable logic".to_owned(),
+            );
+        }
         // A `...` body is always interpreted as a stub function.
         // Functions with other trivial bodies are interpreted as stubs in some contexts.
         let stub_or_impl = if body_is_ellipse
