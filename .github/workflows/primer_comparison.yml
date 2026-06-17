@@ -37,6 +37,12 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-primer-comparison
+          cache-targets: false
+
       - name: Install type checkers
         uses: ./.github/actions/retry-command
         with:
