@@ -35,7 +35,11 @@ jobs:
           working-directory: website
           command: yarn install --frozen-lockfile
       - name: Install wasm-pack
-        run: cargo install wasm-pack wasm-opt
+        uses: ./.github/actions/retry-command
+        with:
+          command: |
+            cargo install wasm-pack --version 0.15.0 --locked
+            cargo install wasm-opt --version 0.116.1 --locked
       - name: Build
         working-directory: ./website
         run: cargo version && chmod +x scripts/build.sh && scripts/build.sh && yarn build-wasm-for-test
