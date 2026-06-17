@@ -520,6 +520,21 @@ impl SysInfo {
         x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
     }
 
+    /// Returns whether the expression is syntactically guarded by `TYPE_CHECKING`.
+    pub fn is_type_checking_guard(x: &Expr) -> bool {
+        match x {
+            Expr::Name(name) => Self::is_type_checking_constant_name(name.id()),
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+                value.is_name_expr() && Self::is_type_checking_constant_name(attr.as_str())
+            }
+            Expr::BoolOp(x) => match x.op {
+                BoolOp::And => x.values.iter().any(Self::is_type_checking_guard),
+                BoolOp::Or => x.values.iter().all(Self::is_type_checking_guard),
+            },
+            _ => false,
+        }
+    }
+
     fn evaluate(self, x: &Expr) -> Option<Value> {
         match x {
             Expr::Compare(x) if x.ops.len() == 1 && x.comparators.len() == 1 => Some(Value::Bool(

@@ -1033,14 +1033,46 @@ class Foo:
 testcase!(
     test_ellipsis_body,
     r#"
-from typing import Any, assert_type
+from typing import TYPE_CHECKING, Protocol, assert_type, overload
+from abc import abstractmethod
+
 def f(): ...
-# This is technically wrong (`g()` returns `None`), but `...` is often used to stub out the bodies
-# of things like overload signatures and abstractmethods. For simplicity, we just always allow this
-# stubbing behavior.
-def g() -> str: ...
+def g() -> None: ...
+def h() -> int | None: ...
+def i() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+async def j() -> None: ...
+async def k() -> str: ...  # E: Function body cannot consist only of `...` when the return type is not `None`
+
+if TYPE_CHECKING:
+    def tc() -> str: ...
+
+class P(Protocol):
+    def m(self) -> str: ...
+
+class A:
+    @abstractmethod
+    def m(self) -> str: ...
+
+@overload
+def ov(x: int) -> int: ...
+@overload
+def ov(x: str) -> str: ...
+def ov(x: int | str) -> int | str:
+    return x
+
 assert_type(f(), None)
-assert_type(g(), str)
+assert_type(g(), None)
+    "#,
+);
+
+testcase!(
+    test_ellipsis_body_in_pyi,
+    TestEnv::one_with_path("foo", "foo.pyi", "def f() -> int: ..."),
+    r#"
+from typing import assert_type
+from foo import f
+assert_type(f(), int)
     "#,
 );
 

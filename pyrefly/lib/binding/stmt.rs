@@ -10,6 +10,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -1257,6 +1258,8 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         NarrowOps::from_expr(self, test.as_ref())
                     };
+                    let is_type_checking_branch =
+                        test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
                     if let Some(test_expr) = test {
                         // Typecheck the test condition during solving.
                         self.insert_binding(
@@ -1270,7 +1273,13 @@ impl<'a> BindingsBuilder<'a> {
                         &Usage::Narrowing(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
-                    self.stmts(body, parent);
+                    if is_type_checking_branch {
+                        self.type_checking_depth += 1;
+                        self.stmts(body, parent);
+                        self.type_checking_depth -= 1;
+                    } else {
+                        self.stmts(body, parent);
+                    }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         exhaustive = true;

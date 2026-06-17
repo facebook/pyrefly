@@ -136,7 +136,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 13);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 20);
+assert_words!(BindingUndecoratedFunction, 21);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1859,6 +1859,7 @@ pub struct BindingUndecoratedFunction {
     pub def_index: FuncDefIndex,
     pub def: FunctionDefData,
     pub stub_or_impl: FunctionStubOrImpl,
+    pub has_ellipsis_body: bool,
     /// `Some` if the function body is a single placeholder statement
     /// (`raise NotImplementedError(...)` or `return NotImplemented`); `None` otherwise.
     pub placeholder_body_kind: Option<PlaceholderBodyKind>,

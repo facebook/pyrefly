@@ -5509,6 +5509,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             &x.def,
             x.def_index,
             x.stub_or_impl,
+            x.has_ellipsis_body,
             x.placeholder_body_kind,
             x.is_return_inferred,
             x.class_key.as_ref(),
