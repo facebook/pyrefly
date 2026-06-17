@@ -400,30 +400,15 @@ fn filter_module_report_to_public(report: &mut ModuleReport, public_fqns: &HashS
         .names
         .retain(|n| is_public_fqn(n, &module_prefix, public_fqns));
 
-    // recompute all aggregates in a single pass; type ignores attach to the
-    // module itself, not symbols, so their count is unaffected by filtering
-    report.slots = SlotCounts::default();
+    // type ignores attach to the module, not symbols, so filtering leaves them untouched
+    report.slots = report
+        .symbol_reports
+        .iter()
+        .fold(SlotCounts::default(), |acc, sym| acc.merge(*sym.slots()));
     report.symbols = SymbolCounts {
         n_type_ignores: report.symbols.n_type_ignores,
-        ..SymbolCounts::default()
+        ..count_symbols(&report.symbol_reports, &module_prefix)
     };
-
-    for sym in &report.symbol_reports {
-        report.slots = report.slots.merge(*sym.slots());
-        match sym {
-            SymbolReport::Function { name, n_params, .. } if is_method(name, &module_prefix) => {
-                report.symbols.n_methods += 1;
-                report.symbols.n_method_params += *n_params;
-            }
-            SymbolReport::Function { n_params, .. } => {
-                report.symbols.n_functions += 1;
-                report.symbols.n_function_params += *n_params;
-            }
-            SymbolReport::Class { .. } => report.symbols.n_classes += 1,
-            SymbolReport::Attr { .. } => report.symbols.n_attrs += 1,
-            SymbolReport::Property { .. } => report.symbols.n_properties += 1,
-        }
-    }
 
     report.coverage = report.slots.coverage();
     report.strict_coverage = report.slots.strict_coverage();
@@ -1130,6 +1115,27 @@ fn is_method(name: &str, module_prefix: &str) -> bool {
     without_prefix.contains('.')
 }
 
+/// Count symbols by kind. The caller sets `n_type_ignores` separately.
+fn count_symbols(symbol_reports: &[SymbolReport], module_prefix: &str) -> SymbolCounts {
+    let mut symbols = SymbolCounts::default();
+    for sym in symbol_reports {
+        match sym {
+            SymbolReport::Function { name, n_params, .. } if is_method(name, module_prefix) => {
+                symbols.n_methods += 1;
+                symbols.n_method_params += *n_params;
+            }
+            SymbolReport::Function { n_params, .. } => {
+                symbols.n_functions += 1;
+                symbols.n_function_params += *n_params;
+            }
+            SymbolReport::Class { .. } => symbols.n_classes += 1,
+            SymbolReport::Attr { .. } => symbols.n_attrs += 1,
+            SymbolReport::Property { .. } => symbols.n_properties += 1,
+        }
+    }
+    symbols
+}
+
 /// Calculate the aggregate summary by summing per-module symbol counts.
 pub fn calculate_summary(module_reports: &[ModuleReport]) -> ReportSummary {
     let mut slots = SlotCounts::default();
@@ -1578,33 +1584,13 @@ fn build_module_report(
     let mut seen = SmallSet::new();
     names.retain(|n| seen.insert(n.clone()));
 
-    // Compute per-module symbol counts. Use the derived (file-based)
-    // module name for prefix matching, since symbol names are built from
-    // the derived name and only rewritten to the override name later.
+    // Match prefixes against the derived (file-based) name: symbol names are
+    // built from it and only rewritten to the override name later.
     let module_prefix = format!("{}.", derived_name);
-    let mut symbols = SymbolCounts {
+    let symbols = SymbolCounts {
         n_type_ignores: suppressions.len(),
-        ..SymbolCounts::default()
+        ..count_symbols(&symbol_reports, &module_prefix)
     };
-    // Count functions/methods using the `Function` list directly so we
-    // can use `n_params` (accurate even for implicit-return dunders).
-    for func in functions.iter().filter(|f| f.property_role.is_none()) {
-        if is_method(&func.name, &module_prefix) {
-            symbols.n_methods += 1;
-            symbols.n_method_params += func.n_params;
-        } else {
-            symbols.n_functions += 1;
-            symbols.n_function_params += func.n_params;
-        }
-    }
-    for sym in &symbol_reports {
-        match sym {
-            SymbolReport::Property { .. } => symbols.n_properties += 1,
-            SymbolReport::Attr { .. } => symbols.n_attrs += 1,
-            SymbolReport::Class { .. } => symbols.n_classes += 1,
-            SymbolReport::Function { .. } => {}
-        }
-    }
 
     ModuleReport {
         name,
