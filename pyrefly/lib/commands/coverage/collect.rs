@@ -766,20 +766,9 @@ fn parse_functions(
                 format!("{}{}", module_prefix, fun.def.name)
             };
 
-            // Get return annotation text and check if return type is known
-            let return_key = Key::ReturnType(*id);
-            let return_idx = bindings.key_to_idx(&return_key);
-            let return_annotation = if let Binding::ReturnType(ret) = bindings.get(return_idx) {
-                match &ret.kind {
-                    ReturnTypeKind::ShouldValidateAnnotation { range, .. }
-                    | ReturnTypeKind::ShouldTrustAnnotation { range, .. } => {
-                        Some(module.code_at(*range).to_owned())
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            let return_idx = bindings.key_to_idx(&Key::ReturnType(*id));
+            let return_annotation = return_annotation_range(bindings, return_idx)
+                .map(|range| module.code_at(range).to_owned());
 
             let resolved_return_ty = return_annotation
                 .as_ref()
@@ -942,6 +931,17 @@ fn parse_functions(
     functions
 }
 
+fn return_annotation_range(bindings: &Bindings, return_idx: Idx<Key>) -> Option<TextRange> {
+    if let Binding::ReturnType(ret) = bindings.get(return_idx)
+        && let ReturnTypeKind::ShouldValidateAnnotation { range, .. }
+        | ReturnTypeKind::ShouldTrustAnnotation { range, .. } = &ret.kind
+    {
+        Some(*range)
+    } else {
+        None
+    }
+}
+
 /// Only the first parameter (`self`/`cls`) is allowed to be unannotated.
 fn is_function_completely_annotated(
     bindings: &Bindings,
@@ -949,19 +949,8 @@ fn is_function_completely_annotated(
     undecorated_idx: Idx<KeyUndecoratedFunction>,
 ) -> bool {
     let fun = bindings.get(undecorated_idx);
-    let return_key = Key::ReturnType(ShortIdentifier::new(&fun.def.name));
-    let return_idx = bindings.key_to_idx(&return_key);
-    let has_return_annotation = if let Binding::ReturnType(ret) = bindings.get(return_idx) {
-        matches!(
-            &ret.kind,
-            ReturnTypeKind::ShouldValidateAnnotation { .. }
-                | ReturnTypeKind::ShouldTrustAnnotation { .. }
-        )
-    } else {
-        false
-    };
-
-    if !has_return_annotation {
+    let return_idx = bindings.key_to_idx(&Key::ReturnType(ShortIdentifier::new(&fun.def.name)));
+    if return_annotation_range(bindings, return_idx).is_none() {
         return false;
     }
 
