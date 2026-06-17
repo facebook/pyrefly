@@ -30,7 +30,10 @@ jobs:
         with:
           node-version: "20.x"
       - name: Install yarn deps
-        run: cd website && yarn install
+        uses: ./.github/actions/retry-command
+        with:
+          working-directory: website
+          command: yarn install --frozen-lockfile
       - name: Install wasm-pack
         run: cargo install wasm-pack wasm-opt
       - name: Build
