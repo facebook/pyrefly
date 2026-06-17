@@ -15,6 +15,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::shaped_array::ShapedArrayType;
@@ -3481,6 +3482,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         is_in_function_scope: bool,
         attrs_field_specifier: Option<AttrsFieldSpecifierKind>,
+        is_module_scope: bool,
         errors: &ErrorCollector,
     ) -> Type {
         let (annot, ty) = self.name_assign_infer(
@@ -3491,6 +3493,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             attrs_field_specifier,
             errors,
         );
+        // A user-defined module-level `TYPE_CHECKING` (or pyrefly's `TYPE_CHECKING_WITH_PYREFLY`)
+        // constant is treated as `True` by type checkers and `False` at runtime, so it must be a
+        // `bool`. A class attribute that merely shares the name is not the sentinel, so restrict to
+        // module scope. Stub files have no runtime and conventionally initialize typing constants to
+        // placeholder values (e.g. `TYPE_CHECKING = 1`), so skip them.
+        // See https://github.com/facebook/pyrefly/issues/3756.
+        if is_module_scope
+            && SysInfo::is_type_checking_constant_name(name.as_str())
+            && !self.module().path().is_interface()
+            && !self.is_subset_eq(&ty, &self.heap.mk_class_type(self.stdlib.bool().clone()))
+        {
+            self.error(
+                errors,
+                expr.range(),
+                ErrorKind::InvalidTypeCheckingConstant,
+                format!(
+                    "`{name}` must have type `bool` (e.g. `{name} = False`), got `{}`",
+                    self.for_display(ty.clone())
+                ),
+            );
+        }
         if let Some(annot) = &annot
             && let Some((AnnotationStyle::Forwarded, _)) = annot_key
         {
@@ -5308,6 +5331,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &x.legacy_tparams,
                 x.is_in_function_scope,
                 x.attrs_field_specifier,
+                x.is_module_scope,
                 errors,
             ),
             Binding::TypeVar(x) => {

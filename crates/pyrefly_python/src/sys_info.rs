@@ -516,7 +516,7 @@ impl SysInfo {
         Some(self.evaluate(x)?.to_bool())
     }
 
-    fn is_type_checking_constant_name(x: &str) -> bool {
+    pub fn is_type_checking_constant_name(x: &str) -> bool {
         x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
     }
 
