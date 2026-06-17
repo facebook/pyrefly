@@ -157,8 +157,11 @@ jobs:
           cache: npm
       - name: save platform name
         run: echo "platform=${{ matrix.platform }}-${{ matrix.arch }}" >> ${{ matrix.github_env }}
-      - run: npm ci
-        working-directory: lsp/
+      - name: Install extension npm dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          working-directory: lsp/
+          command: npm ci
       - run: npx vsce package --target ${{ env.platform }} ${{ needs.get_version.outputs.prerelease_flag }} ${{needs.get_version.outputs.marketplace_version}}
         working-directory: lsp/
       - uses: actions/upload-artifact@v6
