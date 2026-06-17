@@ -1156,7 +1156,7 @@ fn parse_classes(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
     let mut classes = Vec::new();
-    let module_prefix = module_prefix(module);
+    let prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
 
     // group method definitions by class
@@ -1203,10 +1203,7 @@ fn parse_classes(
             },
             None => continue,
         };
-        let class_name = format!(
-            "{module_prefix}{}",
-            class_qualified_name(module, parent, name)
-        );
+        let class_name = format!("{prefix}{}", class_qualified_name(module, parent, name));
         let mro = answers
             .get_idx(bindings.key_to_idx(&KeyClassMro(ClassDefIndex(class_type.index().0))))
             .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
@@ -1223,31 +1220,20 @@ fn parse_classes(
         // Check inherited methods
         for ancestor_class_type in mro.ancestors_no_object() {
             let ancestor_class = ancestor_class_type.class_object();
-            let ancestor_name = {
-                let ancestor_module = ancestor_class.module();
-                let ancestor_module_prefix = if ancestor_module.name() != ModuleName::unknown() {
-                    format!("{}.", ancestor_module.name())
-                } else {
-                    String::new()
-                };
-                let ancestor_parent_path = ancestor_module
-                    .display(ancestor_class.qname().parent())
-                    .to_string();
-                if ancestor_parent_path.is_empty() {
-                    format!("{}{}", ancestor_module_prefix, ancestor_class.name())
-                } else {
-                    format!(
-                        "{}{}.{}",
-                        ancestor_module_prefix,
-                        ancestor_parent_path,
-                        ancestor_class.name()
-                    )
-                }
-            };
             // Skip methods inherited from builtins
             if ancestor_class.module_name().as_str() == "builtins" {
                 continue;
             }
+            let ancestor_module = ancestor_class.module();
+            let ancestor_name = format!(
+                "{}{}",
+                module_prefix(ancestor_module),
+                class_qualified_name(
+                    ancestor_module,
+                    ancestor_class.qname().parent(),
+                    ancestor_class.name()
+                )
+            );
             let Some(ancestor_class_fields) = transaction.get_class_fields(handle, ancestor_class)
             else {
                 continue;
