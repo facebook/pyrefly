@@ -1934,6 +1934,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                     )
                 }
+                Some(CalleeKind::Function(FunctionKind::InspectUnwrap))
+                    if let Some(ret) = self.call_inspect_unwrap(x, errors) =>
+                {
+                    ret
+                }
                 Some(CalleeKind::Function(FunctionKind::DataclassReplace)) => {
                     self.call_dataclasses_replace(
                         ty,
@@ -2022,6 +2027,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 other => other,
             }
+        }
+    }
+
+    fn call_inspect_unwrap(&self, x: &ExprCall, errors: &ErrorCollector) -> Option<Type> {
+        if x.arguments.args.len() != 1 {
+            return None;
+        }
+        if !x.arguments.keywords.iter().all(|kw| {
+            kw.arg.as_ref().is_some_and(|id| id.as_str() == "stop")
+                && matches!(kw.value, Expr::NoneLiteral(_))
+        }) {
+            return None;
+        }
+
+        let wrapped_attr = Name::new_static("__wrapped__");
+        let mut ty = self.expr_infer(&x.arguments.args[0], errors);
+        let mut seen = SmallSet::new();
+        loop {
+            if !self.has_attr(&ty, &wrapped_attr) {
+                return Some(ty);
+            }
+            if !seen.insert(ty.clone()) {
+                return Some(ty);
+            }
+            let attr_errors = self.error_swallower();
+            let next = self.type_of_attr_get(
+                &ty,
+                &wrapped_attr,
+                x.arguments.args[0].range(),
+                &attr_errors,
+                None,
+                "__wrapped__ lookup for inspect.unwrap",
+            );
+            if !attr_errors.is_empty() || next == ty {
+                return Some(ty);
+            }
+            ty = next;
         }
     }
 
