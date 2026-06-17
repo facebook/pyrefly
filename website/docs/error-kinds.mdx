@@ -1812,6 +1812,22 @@ Default severity: `ignore`
 
 This error is raised when a `# type: ignore` comment is not used to suppress any error, and can be safely removed. This rule is distinct from `unused-ignore` so that projects using multiple type checkers can leave `# type: ignore` comments for other tools (e.g. mypy) without pyrefly flagging them. Enable this rule if your project uses pyrefly exclusively.
 
+## useless-overload-body
+
+Default severity: `warn`
+
+This warning is raised when an `@overload` function contains executable body logic.
+Overload bodies are never executed at runtime, so only placeholder bodies like `pass`, `...`,
+a docstring-only body, `raise NotImplementedError(...)`, or `return NotImplemented` are useful.
+
+```python
+from typing import overload
+
+@overload
+def parse(x: int) -> int:
+    return x + 1  # warning: executable logic in an overload body
+```
+
 ## variance-mismatch
 
 Default severity: `warn`
