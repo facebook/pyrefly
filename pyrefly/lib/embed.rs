@@ -9,50 +9,56 @@
 //! interpreters, REPLs) that want "source in, diagnostics out" against a reused,
 //! warm checker — without driving the editor-oriented [`crate::playground`].
 //!
-//! [`Checker`] holds one warm [`State`]: the first [`Checker::check`] pays the
-//! one-time typeshed load, later checks reuse it. Each check overlays its files in
-//! a single transaction and solves only the target module ([`Require::Errors`]),
-//! leaving dependencies (stubs, typeshed) at [`Require::Exports`] — so a stub
-//! context is resolved, not fully re-checked, and only the target's diagnostics
-//! are collected.
+//! [`Checker`] holds one warm [`State`] over a fixed set of in-memory modules
+//! declared up front. The first [`Checker::check`] pays the one-time typeshed
+//! load; later checks reuse it, overlaying new module contents in a single
+//! transaction and solving only the target module ([`Require::Errors`]) — so
+//! context modules (stubs) and typeshed are resolved at export level, not
+//! re-checked, and only the target's diagnostics are collected.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::LiveSourceDatabase;
+use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::thread_pool::ThreadCount;
+use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
+pub use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 
-pub use crate::config::error_kind::Severity;
-
 /// A reusable type checker holding one warm [`State`].
 ///
-/// Cheap to keep alive and share (`&self` checks); construct once so the typeshed
-/// load is amortized across calls. Not tied to any on-disk project — all input is
-/// in-memory source supplied per [`check`](Checker::check).
+/// Construct once (amortizing the typeshed load) over the set of in-memory module
+/// names that will be checked, then call [`check`](Checker::check) per snippet.
+/// Cheap to keep alive and share (`&self` checks).
 pub struct Checker {
     state: State,
     sys_info: SysInfo,
 }
 
 impl Checker {
-    /// Build a checker for the given Python version (e.g. `"3.14"`), or the default
-    /// version when `None`. No interpreter is queried and the bundled typeshed is used.
-    pub fn new(python_version: Option<&str>) -> Result<Self, String> {
+    /// Build a checker for the given Python version (e.g. `"3.14"`, or the default
+    /// when `None`) over the in-memory modules named in `modules`. Only those module
+    /// names are importable between the supplied sources; everything else resolves to
+    /// the bundled typeshed. No interpreter is queried.
+    pub fn new(python_version: Option<&str>, modules: &[&str]) -> Result<Self, String> {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
@@ -67,6 +73,15 @@ impl Checker {
             None => SysInfo::default(),
         };
 
+        let module_paths = modules
+            .iter()
+            .map(|name| (ModuleName::from_str(name), memory_path(name)))
+            .collect();
+        config.source_db = Some(ArcId::new(Box::new(MemorySourceDb {
+            module_paths,
+            sys_info: sys_info.dupe(),
+        })));
+
         config.configure();
         let config_finder = ConfigFinder::new_constant(ArcId::new(config));
         Ok(Self {
@@ -75,36 +90,33 @@ impl Checker {
         })
     }
 
-    /// Type check `main_source` (as module `main_name`) against optional in-memory
-    /// `context` modules, returning diagnostics for the main module only.
+    /// Type check the `target` module, returning diagnostics for it only.
     ///
-    /// Context modules (each `(module_name, source)`) are importable by the main
-    /// module — e.g. monty's accumulated stubs — but their own diagnostics are not
-    /// reported. Only the main module is fully solved; context and typeshed are
-    /// resolved at export level.
-    pub fn check(
-        &self,
-        main_name: &str,
-        main_source: &str,
-        context: &[(&str, &str)],
-    ) -> Vec<Diagnostic> {
-        let main_handle = self.handle(main_name);
+    /// `files` supplies the current source for each in-memory module (each
+    /// `(module_name, source)`); every name must have been declared in
+    /// [`Checker::new`]. Modules other than `target` are importable but their own
+    /// diagnostics are not reported.
+    pub fn check(&self, target: &str, files: &[(&str, &str)]) -> Vec<Diagnostic> {
+        let target_handle = self.handle(target);
+        let memory = files
+            .iter()
+            .map(|(name, source)| {
+                (
+                    memory_path(name).as_path().to_path_buf(),
+                    Some(Arc::new(FileContents::from_source((*source).to_owned()))),
+                )
+            })
+            .collect();
 
-        let mut files = Vec::with_capacity(context.len() + 1);
-        for (name, source) in context {
-            files.push(memory_file(name, source));
-        }
-        files.push(memory_file(main_name, main_source));
-
-        // One transaction, one solve of just the main handle; committing keeps the
+        // One transaction, one solve of just the target handle; committing keeps the
         // typeshed/State warm for the next call.
         let mut transaction = self
             .state
             .new_committable_transaction(Require::Exports, None);
-        transaction.as_mut().set_memory(files);
+        transaction.as_mut().set_memory(memory);
         self.state.run_with_committing_transaction(
             transaction,
-            &[main_handle.dupe()],
+            &[target_handle.dupe()],
             Require::Errors,
             None,
             None,
@@ -112,7 +124,7 @@ impl Checker {
 
         self.state
             .transaction()
-            .get_errors([&main_handle])
+            .get_errors([&target_handle])
             .collect_errors()
             .ordinary
             .iter()
@@ -123,18 +135,49 @@ impl Checker {
     fn handle(&self, name: &str) -> Handle {
         Handle::new(
             ModuleName::from_str(name),
-            ModulePath::memory(PathBuf::from(format!("{name}.py"))),
+            memory_path(name),
             self.sys_info.dupe(),
         )
     }
 }
 
-/// Path-keyed in-memory file for `set_memory`, matching the module name used by [`Checker::handle`].
-fn memory_file(name: &str, source: &str) -> (PathBuf, Option<Arc<FileContents>>) {
-    (
-        PathBuf::from(format!("{name}.py")),
-        Some(Arc::new(FileContents::from_source(source.to_owned()))),
-    )
+/// In-memory module path for `name`, e.g. `name.py`. Shared by the source database
+/// and `set_memory` so import resolution and file contents agree.
+fn memory_path(name: &str) -> ModulePath {
+    ModulePath::memory(PathBuf::from(format!("{name}.py")))
+}
+
+/// Resolves the embedder's declared in-memory modules by name; everything else
+/// (typeshed, stdlib) falls through to normal resolution.
+#[derive(Debug)]
+struct MemorySourceDb {
+    module_paths: SmallMap<ModuleName, ModulePath>,
+    sys_info: SysInfo,
+}
+
+impl SourceDatabase for MemorySourceDb {
+    fn lookup(
+        &self,
+        module: ModuleName,
+        _origin: Option<&Path>,
+        _style_filter: Option<ModuleStyle>,
+    ) -> Option<ModulePath> {
+        self.module_paths.get(&module).cloned()
+    }
+
+    fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle> {
+        let (name, _) = self.module_paths.iter().find(|(_, p)| *p == module_path)?;
+        Some(Handle::new(
+            name.dupe(),
+            module_path.dupe(),
+            self.sys_info.dupe(),
+        ))
+    }
+
+    /// Never live: the module set is fixed at construction, so there is nothing to requery.
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
+        None
+    }
 }
 
 /// A single type-checking diagnostic, with owned data so it outlives the checker
