@@ -355,10 +355,6 @@ pub(crate) fn pytest_fixture_type_annotation_code_actions(
         });
     }
 
-    if candidates.is_empty() {
-        return None;
-    }
-
     let module = module_info.dupe();
     let selection_matches_fixtures = candidates
         .iter()

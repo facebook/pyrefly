@@ -81,7 +81,7 @@ def database_url() -> str:
     return "sqlite://"
 
 def test_connection(database_url):
-    reveal_type(database_url)  # revealed type: str
+    assert database_url.startswith("sqlite")
 ```
 
 Go-to-definition on the `database_url` parameter in `test_connection` jumps to
@@ -98,7 +98,7 @@ def user_id() -> int:
     return 42
 
 def test_lookup(user_id):
-    reveal_type(user_id)  # revealed type: int
+    assert user_id > 0
 ```
 
 ---
@@ -119,17 +119,17 @@ def test_feature(enabled):
     assert enabled
 ```
 
-In the editor, Pyrefly can offer:
+In the editor, these quick fixes appear as code actions:
 
-- `Add pytest fixture type annotation`, which updates the fixture to
+- Place the cursor inside an unannotated fixture to use
+  `Add pytest fixture type annotation`, which updates the fixture to
   `def enabled() -> bool:`.
-- `Add pytest fixture parameter type annotation`, which updates the test to
-  `def test_feature(enabled: bool):`.
-- Batch variants that annotate all eligible fixtures or fixture parameters in
-  the file.
-
-The parameter inlay hints are controlled by
-`python.analysis.inlayHints.pytestParameters`, which defaults to `false`.
+- Place the cursor on an unannotated test parameter that matches a known fixture
+  to use `Add pytest fixture parameter type annotation`, which updates the test
+  to `def test_feature(enabled: bool):`.
+- When more than one matching annotation is available, Pyrefly can also offer
+  batch code actions that annotate all eligible fixtures or fixture parameters
+  in the file.
 
 ---
 

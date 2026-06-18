@@ -4534,41 +4534,60 @@ impl Server {
         {
             return Ok((!actions.is_empty()).then_some(actions));
         }
-        if allow_refactor {
-            let mut push_refactor_actions = |refactors: Vec<LocalRefactorCodeAction>| {
-                for action in refactors {
-                    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-                    for (module, edit_range, new_text) in action.edits {
-                        let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
-                            module,
-                            range: edit_range,
-                        }) else {
-                            continue;
-                        };
-                        changes.entry(lsp_location.uri).or_default().push(TextEdit {
-                            range: lsp_location.range,
-                            new_text,
-                        });
-                    }
-                    if changes.is_empty() {
+        let mut push_local_actions = |local_actions: Vec<LocalRefactorCodeAction>| {
+            for action in local_actions {
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                for (module, edit_range, new_text) in action.edits {
+                    let Some(lsp_location) = self.to_lsp_location(&TextRangeWithModule {
+                        module,
+                        range: edit_range,
+                    }) else {
                         continue;
-                    }
-                    actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                        title: action.title,
-                        kind: Some(action.kind),
-                        edit: Some(WorkspaceEdit {
-                            changes: Some(changes),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }));
+                    };
+                    changes.entry(lsp_location.uri).or_default().push(TextEdit {
+                        range: lsp_location.range,
+                        new_text,
+                    });
                 }
-            };
+                if changes.is_empty() {
+                    continue;
+                }
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: action.title,
+                    kind: Some(action.kind),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }));
+            }
+        };
+        macro_rules! timed_local_action {
+            ($name:expr, $call:expr) => {{
+                let start = Instant::now();
+                if let Some(local_actions) = $call {
+                    push_local_actions(local_actions);
+                }
+                record_code_action_telemetry($name, start);
+            }};
+        }
+        if allow_quickfix {
+            timed_local_action!(
+                "pytest_fixture_type_annotation",
+                transaction.pytest_fixture_type_annotation_code_actions(
+                    &handle,
+                    range,
+                    import_format
+                )
+            );
+        }
+        if allow_refactor {
             macro_rules! timed_refactor_action {
                 ($name:expr, $call:expr) => {{
                     let start = Instant::now();
                     if let Some(refactors) = $call {
-                        push_refactor_actions(refactors);
+                        push_local_actions(refactors);
                     }
                     record_code_action_telemetry($name, start);
                 }};
@@ -4636,14 +4655,6 @@ impl Server {
             timed_refactor_action!(
                 "convert_dict",
                 transaction.convert_dict_code_actions(&handle, range)
-            );
-            timed_refactor_action!(
-                "pytest_fixture_type_annotation",
-                transaction.pytest_fixture_type_annotation_code_actions(
-                    &handle,
-                    range,
-                    import_format
-                )
             );
             let start = Instant::now();
             if let Some(action) =

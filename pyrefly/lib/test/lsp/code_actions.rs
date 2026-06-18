@@ -4816,6 +4816,40 @@ def test_one(answer: int, user: str):
     assert_eq!(expected.trim(), updated_all.trim());
 }
 
+#[test]
+fn pytest_fixture_parameter_annotation_from_annotated_fixture() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def enabled() -> bool:
+    return True
+
+def test_feature(enabled):
+    print(enabled)
+"#;
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let cursor = TextSize::try_from(code.find("enabled):").unwrap()).unwrap();
+    let selection = TextRange::new(cursor, cursor);
+
+    let actions = transaction
+        .pytest_fixture_type_annotation_code_actions(handle, selection, ImportFormat::Absolute)
+        .unwrap_or_default();
+    let action = actions
+        .iter()
+        .find(|action| action.title == "Add pytest fixture parameter type annotation")
+        .expect("missing fixture parameter annotation action");
+    let updated = apply_refactor_edits_for_module(&module_info, &action.edits);
+    assert!(
+        updated.contains("def test_feature(enabled: bool):"),
+        "expected fixture parameter annotation from annotated fixture return"
+    );
+}
+
 /// Returns the edits of the "Add `@override` decorator" quick fix for the method
 /// at the last `def foo` in `code`, or `None` if the fix is not offered.
 fn add_override_quickfix_edits(
