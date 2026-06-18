@@ -3781,3 +3781,57 @@ def a[T](x: T | MIS) -> T:
         raise ValueError("a")
     "#,
 );
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var_module_level,
+    r#"
+from typing import assert_type
+def go() -> object: ...
+def gv() -> int | str: ...
+cond: bool = True
+other = go()
+value = gv()
+if cond:
+    pass
+elif isinstance(other, int):  # isinstance first materialized while the module scope is mid-fork
+    raise Exception()
+else:
+    raise Exception()
+if isinstance(value, int):
+    assert_type(value, int)
+"#,
+);
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var,
+    r#"
+from typing import assert_type
+def f(cond: bool, other: object, value: int | str) -> None:
+    if cond:
+        pass
+    elif isinstance(other, int):
+        return
+    else:
+        return
+    assert_type(value, int | str)
+    if isinstance(value, int):
+        assert_type(value, int)
+    "#,
+);
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var_user_class,
+    r#"
+from typing import assert_type
+class C: pass
+def f(cond: bool, other: object, value: int | str) -> None:
+    if cond:
+        pass
+    elif isinstance(other, C):  # narrows `other` via a builtin (isinstance) first used here
+        return
+    else:
+        return
+    if isinstance(value, int):
+        assert_type(value, int)
+    "#,
+);

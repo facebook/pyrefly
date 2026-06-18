@@ -1073,23 +1073,19 @@ impl<'a> BindingsBuilder<'a> {
         best_suggestion(missing, candidates)
     }
 
-    fn should_cache_implicit_builtin_in_current_flow(&self, name: &Name) -> bool {
-        !(self.scopes.in_class_body() && self.scopes.current_static_contains(name))
-    }
-
+    /// Materialize a lazily-discovered implicit builtin as an entry in the module's static
+    /// scope, returning the idx of its (import) binding.
+    ///
+    /// We deliberately do NOT cache the builtin in any flow. The module static entry is enough
+    /// to resolve later reads (via `NameReadInfo::Anywhere`), and keeping builtins out of the
+    /// flow avoids them being lifted into a fork base and merged into a degenerate Phi (which
+    /// would silently break later uses, e.g. an `isinstance` call that stops narrowing).
     fn materialize_implicit_builtin_name(&mut self, name: &Name, module: ModuleName) -> Idx<Key> {
         let key = self
             .scopes
             .add_implicit_builtin_to_module_static(Hashed::new(name), module);
         let idx = self.idx_for_promise(key);
         self.insert_implicit_builtin_binding(idx, module, name);
-        if self.should_cache_implicit_builtin_in_current_flow(name) {
-            self.scopes.define_in_current_flow(
-                Hashed::new(name),
-                idx,
-                FlowStyle::Import(module, name.clone()),
-            );
-        }
         idx
     }
 
@@ -1534,13 +1530,6 @@ impl<'a> BindingsBuilder<'a> {
                 let idx = self.idx_for_promise(key);
                 if let Some(module) = implicit_builtin_module {
                     self.insert_implicit_builtin_binding(idx, module, name.key());
-                    if self.should_cache_implicit_builtin_in_current_flow(name.key()) {
-                        self.scopes.define_in_current_flow(
-                            name,
-                            idx,
-                            FlowStyle::Import(module, (*name.key()).clone()),
-                        );
-                    }
                 }
                 // NameReadInfo::Anywhere can only be InitializedInFlow::Yes or InitializedInFlow::No
                 if may_prove_initialized && matches!(initialized, InitializedInFlow::No) {
@@ -2293,6 +2282,17 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } => {
                 self.mark_does_not_pin_if_first_use(original_idx);
+                // An implicit builtin is never a legacy type variable (the `builtins` module
+                // defines no `TypeVar`s), so don't intercept it as a possible tparam. Doing so
+                // would add a `PossibleLegacyTParam` entry to this scope's static that shadows
+                // the module's `ImplicitBuiltinImport`, hiding the name's builtin-ness from
+                // special-export lookups (e.g. a `bool`/`isinstance` argument).
+                if self.scopes.is_implicit_builtin_name(&name.id) {
+                    return TParamLookupResult::NotTParam {
+                        idx: original_idx,
+                        initialized,
+                    };
+                }
                 match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
                     Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
                     None => TParamLookupResult::NotTParam {
