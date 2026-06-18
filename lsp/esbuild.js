@@ -74,6 +74,7 @@ async function main() {
   });
 
   if (watch) {
+    copyWasmArtifact();
     await Promise.all([nodeCtx.watch(), webCtx.watch(), webWorkerCtx.watch()]);
   } else {
     await Promise.all([nodeCtx.rebuild(), webCtx.rebuild(), webWorkerCtx.rebuild()]);
@@ -106,6 +107,7 @@ const esbuildProblemMatcherPlugin = {
 function copyWasmArtifact() {
   const wasmDir = path.join(__dirname, '..', 'pyrefly_wasm', 'target');
   const wasmOutputPath = path.join(__dirname, 'dist', 'pyrefly_wasm_bg.wasm');
+  fs.mkdirSync(path.dirname(wasmOutputPath), { recursive: true });
   const wasmCandidates = [
     path.join(wasmDir, 'pyrefly_wasm_bg.wasm.opt'),
     path.join(wasmDir, 'pyrefly_wasm_bg.wasm'),

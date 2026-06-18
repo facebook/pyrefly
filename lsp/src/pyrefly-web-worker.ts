@@ -54,7 +54,14 @@ import {
 import * as pyreflyWasm from '../wasm/pyrefly_wasm';
 
 type PyreflyWasmModule = {
-  default: (input?: RequestInfo | URL | Response | BufferSource) => Promise<void>;
+  default: (
+    input?:
+      | RequestInfo
+      | URL
+      | Response
+      | BufferSource
+      | {module_or_path?: RequestInfo | URL | Response | BufferSource},
+  ) => Promise<void>;
   State: new (version: string) => PyreflyState;
 };
 
@@ -178,12 +185,12 @@ async function ensureWasmState(): Promise<PyreflyState | null> {
   }
   try {
     if (wasmResourceBytes) {
-      await wasmModule.default(wasmResourceBytes);
+      await wasmModule.default({module_or_path: wasmResourceBytes});
     } else {
       const wasmUrl = wasmResourceUri
         ? new URL(wasmResourceUri)
         : new URL('pyrefly_wasm_bg.wasm', self.location.href);
-      await wasmModule.default(wasmUrl);
+      await wasmModule.default({module_or_path: wasmUrl});
     }
     wasmState = new wasmModule.State('3.12');
     return wasmState;
@@ -517,10 +524,11 @@ connection.onRequest('textDocument/definition', async (params: DefinitionParams)
   }
   const filename = uriToFilename(params.textDocument.uri);
   state.setActiveFile(filename);
-  const results = state.gotoDefinitionLocations(
-    params.position.line + 1,
-    params.position.character + 1,
-  );
+  const results =
+    state.gotoDefinitionLocations(
+      params.position.line + 1,
+      params.position.character + 1,
+    ) ?? [];
 
   const locations = results
     .filter(result => files.has(result.filename))

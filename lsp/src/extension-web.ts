@@ -37,14 +37,24 @@ export async function activate(
     );
   }
 
-  const worker = createWorker(context);
   const wasmFileUri = vscode.Uri.joinPath(
     context.extensionUri,
     'dist',
     'pyrefly_wasm_bg.wasm',
   );
   const wasmUri = await vscode.env.asExternalUri(wasmFileUri);
-  const wasmBytes = await vscode.workspace.fs.readFile(wasmFileUri);
+  let wasmBytes: Uint8Array;
+  try {
+    wasmBytes = await vscode.workspace.fs.readFile(wasmFileUri);
+  } catch (error) {
+    const message =
+      'Pyrefly web failed to load the WASM bundle. Run pyrefly_wasm/build.sh and rebuild the extension.';
+    outputChannel.appendLine(`${message} ${String(error)}`);
+    void vscode.window.showErrorMessage(message);
+    return;
+  }
+
+  const worker = createWorker(context);
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{language: 'python'}],

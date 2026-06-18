@@ -92,11 +92,7 @@ impl State {
         let results = self
             .0
             .goto_definition_locations(Position::new(line, column));
-        if results.is_empty() {
-            JsValue::NULL
-        } else {
-            serde_wasm_bindgen::to_value(&results).unwrap_or(JsValue::NULL)
-        }
+        serde_wasm_bindgen::to_value(&results).unwrap()
     }
 
     #[wasm_bindgen(js_name=autoComplete)]
