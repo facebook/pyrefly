@@ -1745,9 +1745,6 @@ Enables additional error codes on top of the default for stricter checking.
 - Enables (as errors): [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
 
 #### Preset: `all`
-:::info
-This is a new preset in *upcoming* Pyrefly version 1.1.0. It is not yet available in the current stable version.
-:::
 
 :::info
 For most users, we recommend using the `strict` preset and enabling individual additional errors as desired,
@@ -4713,10 +4710,6 @@ def valid_generator():
 
 Default severity: `warn`
 
-:::info
-This is a new error kind in *upcoming* Pyrefly version 1.1.0. It is not yet available in the current stable version.
-:::
-
 This warning is raised when a `case` pattern in a `match` statement can never match
 the subject because the subject's type is disjoint from the pattern's type.
 
@@ -6771,7 +6764,7 @@ Source annotations are always preferred over inferred types when both are availa
 
 ---
 title: Agent Skill for Tensor Shape Porting
-description: How to use the port-model agent skill to automatically add tensor shape annotations to PyTorch models.
+description: How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
 ---
 
 {/*
@@ -6789,19 +6782,20 @@ skill runs a structured, multi-step workflow — auditing ops, inventorying
 parameters, probing shapes with `reveal_type`, restructuring for tracking, and
 verifying the result — that produces a fully annotated port file.
 
-## Invoking the skill
+## Where the skill lives
 
-In Claude Code, from a project with pyrefly's tensor shape fixtures, ask:
-
-```
-Port this model to use tensor shape types: path/to/model.py
-```
-
-Or use the slash command directly:
+The skill is a directory in the Pyrefly source tree:
 
 ```
-/port-model path/to/model.py
+tensor-shapes/skills/add-shape-types-to-torch-model/
 ```
+
+You can either copy the skill into your configuration and use a
+slash command like `/add-shape-types-to-torch-model` to invoke it, or you
+can just point your agent at the skill file and ask it to follow the steps.
+
+
+## What should the agent do?
 
 The skill will:
 
@@ -6830,8 +6824,8 @@ The workflow:
    against what the skill prescribes. A prompt like:
 
    ```
-   Re-read the port-model skill and reflect on the port you just produced.
-   What did you miss? What could be improved?
+   Re-read the add-shape-types-to-torch-model skill and reflect on the port you
+   just produced. What did you miss? What could be improved?
    ```
 
    This typically surfaces missed restructuring opportunities — cases where the
@@ -8141,11 +8135,6 @@ description: An overview of Pyrefly's tensor shape type system for static type c
  */}
 
 # Tensor Shapes
-
-
-:::info
-The support described here will be in the *upcoming* Pyrefly version 1.1.0. Experimental tensor shape support in 1.0.0 was more limited and is not recommended.
-:::
 
 :::warning Experimental
 This feature is experimental. The API and behavior may change in future releases without notice.

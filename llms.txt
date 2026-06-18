@@ -23,7 +23,7 @@
 - [Coverage](report): Measure and enforce type coverage in your Python codebase with Pyrefly.
 - [Stub Generation](stubgen): Generate .pyi stub files from Python source files with Pyrefly stubgen.
 - [Tensor Shapes](tensor-shapes): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
-- [Agent Skill for Tensor Shape Porting](tensor-shapes-ai-porting): How to use the port-model agent skill to automatically add tensor shape annotations to PyTorch models.
+- [Agent Skill for Tensor Shape Porting](tensor-shapes-ai-porting): How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
 - [Contributing](tensor-shapes-contributing): How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
 - [API Reference](tensor-shapes-reference): Complete reference for Dim, Tensor, and tensor shape type system APIs.
 - [Getting Started](tensor-shapes-setup): How to configure Pyrefly for tensor shape checking and set up your project.
