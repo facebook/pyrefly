@@ -2006,6 +2006,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         narrowing_subject: &NarrowingSubject,
         narrow_ops_for_fall_through: &(Box<NarrowOp>, TextRange),
         subject_range: &TextRange,
+        display_subject_range: &Option<TextRange>,
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
@@ -2047,14 +2048,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let subject_display = self.for_display(subject_info.into_ty());
         let remaining_display = self.for_display(remaining_ty.clone());
         let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
-        let mut builder = errors.error_builder(
-            *subject_range,
-            ErrorKind::NonExhaustiveMatch,
+        let message = if let Some(display_subject_range) = display_subject_range {
+            format!(
+                "Match on `{}` of type `{}` is not exhaustive",
+                self.module().code_at(*display_subject_range),
+                ctx.display(&subject_display)
+            )
+        } else {
             format!(
                 "Match on `{}` is not exhaustive",
                 ctx.display(&subject_display)
-            ),
-        );
+            )
+        };
+        let mut builder =
+            errors.error_builder(*subject_range, ErrorKind::NonExhaustiveMatch, message);
         if let Some(missing_cases) = self.format_missing_cases(&remaining_ty) {
             builder = builder.with_detail(format!("Missing cases: {}", missing_cases));
         }

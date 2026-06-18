@@ -18,7 +18,9 @@ use ruff_python_ast::Number;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::PatternKeyword;
 use ruff_python_ast::StmtMatch;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
@@ -48,16 +50,37 @@ enum MatchSubject {
     None,
     /// A single match subject (e.g., `match x:`).
     Single(NarrowingSubject),
+    /// A local-only subject for matching non-name expressions (e.g., `match await f():`).
+    /// Python evaluates the subject once before matching, so we need a stable internal
+    /// subject for branch narrowing while diagnostics still point at the source expression.
+    Synthetic {
+        subject: NarrowingSubject,
+        display_subject_range: TextRange,
+    },
     /// Per-element subjects from a tuple match (e.g., `match x, y:`).
     Tuple(Vec<Option<NarrowingSubject>>),
 }
 
 impl MatchSubject {
-    /// Extract a single narrowing subject, if this is `Single`.
+    /// Extract a single narrowing subject, if available.
     fn as_single(&self) -> Option<&NarrowingSubject> {
         match self {
-            MatchSubject::Single(s) => Some(s),
+            MatchSubject::Single(s) | MatchSubject::Synthetic { subject: s, .. } => Some(s),
             _ => Option::None,
+        }
+    }
+
+    fn is_synthetic(&self) -> bool {
+        matches!(self, MatchSubject::Synthetic { .. })
+    }
+
+    fn display_subject_range(&self, fallback: TextRange) -> TextRange {
+        match self {
+            MatchSubject::Synthetic {
+                display_subject_range,
+                ..
+            } => *display_subject_range,
+            _ => fallback,
         }
     }
 }
@@ -554,7 +577,10 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             match expr_to_subjects(&x.subject).first() {
                 Some(s) => MatchSubject::Single(s.clone()),
-                None => MatchSubject::None,
+                None => MatchSubject::Synthetic {
+                    subject: NarrowingSubject::Name(Name::new_static("$match_subject")),
+                    display_subject_range: x.subject.range(),
+                },
             }
         };
         let mut exhaustive = false;
@@ -667,7 +693,15 @@ impl<'a> BindingsBuilder<'a> {
         if exhaustive {
             self.finish_exhaustive_fork();
         } else {
-            let narrow_entries = self.build_narrow_entries(&negated_prev_ops);
+            let narrow_entries = if match_subject.is_synthetic() {
+                negated_prev_ops
+                    .0
+                    .values()
+                    .map(|(op, range)| (subject_idx, Box::new(op.clone()), *range))
+                    .collect()
+            } else {
+                self.build_narrow_entries(&negated_prev_ops)
+            };
             // Create BindingExpect only if we have a narrowing subject (for exhaustiveness warnings)
             if let Some(narrowing_subject) = match_subject.as_single()
                 && let Some((op, range)) = negated_prev_ops.0.get(narrowing_subject.name())
@@ -678,7 +712,14 @@ impl<'a> BindingsBuilder<'a> {
                         subject_idx,
                         narrowing_subject: narrowing_subject.clone(),
                         narrow_ops_for_fall_through: (Box::new(op.clone()), *range),
-                        subject_range: x.subject.range(),
+                        subject_range: match_subject.display_subject_range(x.subject.range()),
+                        display_subject_range: match match_subject {
+                            MatchSubject::Synthetic {
+                                display_subject_range,
+                                ..
+                            } => Some(display_subject_range),
+                            _ => None,
+                        },
                     },
                 );
             }

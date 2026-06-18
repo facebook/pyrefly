@@ -1152,6 +1152,7 @@ pub enum BindingExpect {
         narrowing_subject: NarrowingSubject,
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
+        display_subject_range: Option<TextRange>,
     },
     /// A match case whose pattern may not overlap with the current subject type.
     MatchCaseReachability {
