@@ -460,7 +460,12 @@ connection.onRequest(
   async (params: InitializeParams): Promise<InitializeResult> => {
     setWorkspaceRoots(params);
     const initOptions = params.initializationOptions as
-      | {wasmUri?: string; wasmBytes?: Uint8Array; pythonVersion?: string}
+      | {
+          wasmUri?: string;
+          wasmBytes?: Uint8Array;
+          pythonVersion?: string;
+          initialFiles?: Record<string, string>;
+        }
       | undefined;
     if (initOptions?.wasmUri) {
       wasmResourceUri = initOptions.wasmUri;
@@ -470,6 +475,11 @@ connection.onRequest(
     }
     if (initOptions?.pythonVersion) {
       pythonVersion = initOptions.pythonVersion;
+    }
+    if (initOptions?.initialFiles) {
+      for (const [filename, content] of Object.entries(initOptions.initialFiles)) {
+        files.set(filename, content);
+      }
     }
     const state = await ensureWasmState();
     const legend = state

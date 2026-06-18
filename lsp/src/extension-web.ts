@@ -10,8 +10,8 @@
 import * as vscode from 'vscode';
 import {LanguageClient, LanguageClientOptions} from 'vscode-languageclient/browser';
 
-const DEFAULT_PYTHON_VERSION = '3.12';
 const READ_WORKSPACE_FILE_REQUEST = 'pyrefly/readWorkspaceFile';
+const INITIAL_CONFIG_FILES = ['pyrefly.toml', 'pyproject.toml'];
 
 let client: LanguageClient | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
@@ -26,56 +26,34 @@ function createWorker(context: vscode.ExtensionContext): Worker {
   return new Worker(workerUri.toString(true));
 }
 
-function extractPythonVersion(text: string, sectionName?: string): string | undefined {
-  let section = text;
-  if (sectionName) {
-    const start = text.search(new RegExp(`^\\s*\\[${sectionName}\\]\\s*$`, 'm'));
-    if (start < 0) {
-      return undefined;
-    }
-    const rest = text.slice(start).split('\n').slice(1).join('\n');
-    const nextSection = rest.search(/^\s*\[/m);
-    section = nextSection < 0 ? rest : rest.slice(0, nextSection);
-  }
-  return section
-    ?.match(/^\s*python[-_]?version\s*=\s*["']([^"']+)["']/m)?.[1]
-    ?.trim();
-}
-
-async function detectPythonVersion(): Promise<string> {
+function configuredPythonVersion(): string | undefined {
   const configured = vscode.workspace
     .getConfiguration('python.pyrefly')
     .get<string>('pythonVersion', '')
     .trim();
-  if (configured !== '') {
-    return configured;
-  }
+  return configured === '' ? undefined : configured;
+}
 
+async function readInitialConfigFiles(): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
   const decoder = new TextDecoder('utf-8');
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    const pyreflyConfig = vscode.Uri.joinPath(folder.uri, 'pyrefly.toml');
-    try {
-      const version = extractPythonVersion(
-        decoder.decode(await vscode.workspace.fs.readFile(pyreflyConfig)),
-      );
-      if (version) {
-        return version;
+    for (const filename of INITIAL_CONFIG_FILES) {
+      if (files[filename] != null) {
+        continue;
       }
-    } catch {}
-
-    const pyproject = vscode.Uri.joinPath(folder.uri, 'pyproject.toml');
-    try {
-      const version = extractPythonVersion(
-        decoder.decode(await vscode.workspace.fs.readFile(pyproject)),
-        'tool\\.pyrefly',
-      );
-      if (version) {
-        return version;
+      try {
+        files[filename] = decoder.decode(
+          await vscode.workspace.fs.readFile(
+            vscode.Uri.joinPath(folder.uri, filename),
+          ),
+        );
+      } catch {
+        // Missing config files are normal. Rust/WASM owns parsing once found.
       }
-    } catch {}
+    }
   }
-
-  return DEFAULT_PYTHON_VERSION;
+  return files;
 }
 
 async function readWorkspaceFile(
@@ -144,7 +122,8 @@ export async function activate(
       wasmBytes,
       // Keep URI as a fallback / for debugging.
       wasmUri: wasmUri.toString(true),
-      pythonVersion: await detectPythonVersion(),
+      pythonVersion: configuredPythonVersion(),
+      initialFiles: await readInitialConfigFiles(),
     },
   };
 

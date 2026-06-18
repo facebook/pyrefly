@@ -299,31 +299,41 @@ impl Playground {
         force_update: bool,
     ) -> Option<String> {
         self.config_diagnostics.clear();
-        // Parse configuration if present in the in-memory files
-        let mut parsed_config: Option<ConfigFile> = None;
-        if let Some(cfg_str) = files.get("pyrefly.toml") {
-            match toml::from_str::<ConfigFile>(cfg_str) {
-                Ok(cfg) => parsed_config = Some(cfg),
-                Err(err) => {
-                    // Attach a diagnostic to pyrefly.toml on parse/validation failure
-                    self.config_diagnostics.push(Diagnostic {
-                        start_line: 1,
-                        start_col: 1,
-                        end_line: 1,
-                        end_col: 1,
-                        message_header: "TOML parse error".to_owned(),
-                        message_details: err.to_string(),
-                        kind: "parse-error".to_owned(),
-                        // MarkerSeverity.Error (8)
-                        severity: 8,
-                        filename: "pyrefly.toml".to_owned(),
-                    });
-                    if !force_update {
-                        return None;
-                    }
+        // Parse configuration if present in the in-memory files. Match the normal
+        // config precedence: pyrefly.toml beats pyproject.toml's [tool.pyrefly].
+        let config_result = files
+            .get("pyrefly.toml")
+            .map(|cfg| ("pyrefly.toml", ConfigFile::parse_config(cfg).map(Some)))
+            .or_else(|| {
+                files.get("pyproject.toml").map(|cfg| {
+                    (
+                        "pyproject.toml",
+                        ConfigFile::parse_pyproject_toml(cfg).map(|(config, _)| config),
+                    )
+                })
+            });
+        let parsed_config = match config_result {
+            Some((_, Ok(config))) => config,
+            Some((filename, Err(err))) => {
+                self.config_diagnostics.push(Diagnostic {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 1,
+                    end_col: 1,
+                    message_header: "TOML parse error".to_owned(),
+                    message_details: err.to_string(),
+                    kind: "parse-error".to_owned(),
+                    // MarkerSeverity.Error (8)
+                    severity: 8,
+                    filename: filename.to_owned(),
+                });
+                if !force_update {
+                    return None;
                 }
+                None
             }
-        }
+            None => None,
+        };
 
         self.handles.clear();
         // Base configuration: use parsed config if available, otherwise defaults
@@ -1059,6 +1069,21 @@ mod tests {
             !state.handles.contains_key("pyrefly.toml"),
             "Config file should not be a module"
         );
+    }
+
+    #[test]
+    fn test_pyproject_config_sets_python_version() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("module.py".to_owned(), "x: int = 1".to_owned());
+        files.insert(
+            "pyproject.toml".to_owned(),
+            "[tool.pyrefly]\npython-version = \"3.11\"".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+
+        assert_eq!(state.sys_info.version(), PythonVersion::new(3, 11, 0));
     }
 
     #[test]
