@@ -867,6 +867,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
             }
+            Type::Quantified(q) if q.is_type_var() => {
+                // A TypeVar iterates like its upper bound: `Z: tuple[str, int]` must
+                // unpack positionally rather than collapse to the element join via the
+                // iterable protocol. Mirrors attribute access on a bounded TypeVar.
+                self.iterate(
+                    &q.upper_bound(self.stdlib, self.heap),
+                    range,
+                    errors,
+                    orig_context,
+                )
+            }
             Type::Union(f) => f
                 .members
                 .iter()
