@@ -16,11 +16,12 @@
  *   `vscode-languageserver-protocol/browser`.
  * - Typechecking is powered by the Pyrefly WASM (`pyrefly_wasm`), which exposes a small,
  *   editor-oriented API (diagnostics, hover, completion, etc).
- * - We keep an in-memory map of opened file contents (`files`). On open/change/close we update
- *   the WASM state, then publish diagnostics back to the client.
+ * - We keep an in-memory map of opened or lazily loaded file contents (`files`). On
+ *   open/change/close we update the WASM state, then publish diagnostics back to the client.
  *
  * Limitations:
- * - Only opened files can participate in cross-file features.
+ * - Cross-file features are limited to opened files and imports that can be resolved by asking
+ *   `lsp/src/extension-web.ts` to read specific candidate paths from the workspace.
  * - No subprocesses / interpreter probing in the browser sandbox.
  */
 
@@ -123,6 +124,14 @@ type PyreflyInlayHint = {
   position: PyreflyPosition;
 };
 
+type WorkspaceFileResponse = {
+  filename: string;
+  content: string;
+};
+
+const READ_WORKSPACE_FILE_REQUEST = 'pyrefly/readWorkspaceFile';
+const MAX_MISSING_IMPORT_RESOLUTION_PASSES = 3;
+
 const workerScope = self as unknown as DedicatedWorkerGlobalScope;
 const connection = createProtocolConnection(
   new BrowserMessageReader(workerScope),
@@ -136,6 +145,7 @@ let wasmState: PyreflyState | null = null;
 let wasmLoadNotified = false;
 let wasmResourceUri: string | undefined;
 let wasmResourceBytes: Uint8Array | undefined;
+let pythonVersion = '3.12';
 
 const DEFAULT_SEMANTIC_TOKENS_LEGEND: SemanticTokensLegend = {
   // Keep in sync with `pyrefly/lib/state/semantic_tokens.rs` legends.
@@ -192,7 +202,7 @@ async function ensureWasmState(): Promise<PyreflyState | null> {
         : new URL('pyrefly_wasm_bg.wasm', self.location.href);
       await wasmModule.default({module_or_path: wasmUrl});
     }
-    wasmState = new wasmModule.State('3.12');
+    wasmState = new wasmModule.State(pythonVersion);
     return wasmState;
   } catch (error) {
     if (!wasmLoadNotified) {
@@ -339,8 +349,7 @@ function toDiagnosticSeverity(severity: number): DiagnosticSeverity {
   }
 }
 
-async function publishDiagnostics(state: PyreflyState): Promise<void> {
-  const allDiagnostics = state.getErrors();
+function publishDiagnosticsForFiles(allDiagnostics: PyreflyDiagnostic[]): void {
   const byFile = new Map<string, Diagnostic[]>();
 
   for (const diag of allDiagnostics) {
@@ -370,6 +379,73 @@ async function publishDiagnostics(state: PyreflyState): Promise<void> {
   }
 }
 
+function missingImportCandidates(moduleName: string, importerFilename: string): string[] {
+  const path = moduleName.replace(/\./g, '/');
+  const importerDir = importerFilename.split('/').slice(0, -1).join('/');
+  const candidates = [
+    ...(importerDir
+      ? [
+          `${importerDir}/${path}.pyi`,
+          `${importerDir}/${path}.py`,
+          `${importerDir}/${path}/__init__.pyi`,
+          `${importerDir}/${path}/__init__.py`,
+        ]
+      : []),
+    `${path}.pyi`,
+    `${path}.py`,
+    `${path}/__init__.pyi`,
+    `${path}/__init__.py`,
+  ];
+  return [...new Set(candidates)];
+}
+
+async function loadMissingImportFiles(
+  diagnostics: PyreflyDiagnostic[],
+): Promise<boolean> {
+  const modules = new Set<string>();
+  for (const diagnostic of diagnostics) {
+    const moduleName = diagnostic.message_header.match(
+      /^Cannot find module `([^`]+)`/,
+    )?.[1];
+    if (moduleName) {
+      modules.add(`${diagnostic.filename}\0${moduleName}`);
+    }
+  }
+
+  let loadedAny = false;
+  for (const key of modules) {
+    const [importerFilename, moduleName] = key.split('\0', 2);
+    const filenames = missingImportCandidates(moduleName, importerFilename).filter(
+      filename => !files.has(filename),
+    );
+    if (filenames.length === 0) {
+      continue;
+    }
+    const response = (await connection.sendRequest(
+      READ_WORKSPACE_FILE_REQUEST,
+      {filenames},
+    )) as WorkspaceFileResponse | null;
+    if (!response || files.has(response.filename)) {
+      continue;
+    }
+    files.set(response.filename, response.content);
+    loadedAny = true;
+  }
+  return loadedAny;
+}
+
+async function publishDiagnostics(state: PyreflyState): Promise<void> {
+  for (let i = 0; i < MAX_MISSING_IMPORT_RESOLUTION_PASSES; i++) {
+    const diagnostics = state.getErrors();
+    publishDiagnosticsForFiles(diagnostics);
+    if (!(await loadMissingImportFiles(diagnostics))) {
+      return;
+    }
+    state.updateSandboxFiles(Object.fromEntries(files), true);
+  }
+  publishDiagnosticsForFiles(state.getErrors());
+}
+
 async function rebuildAll(): Promise<void> {
   const state = await ensureWasmState();
   if (!state) {
@@ -384,13 +460,16 @@ connection.onRequest(
   async (params: InitializeParams): Promise<InitializeResult> => {
     setWorkspaceRoots(params);
     const initOptions = params.initializationOptions as
-      | {wasmUri?: string; wasmBytes?: Uint8Array}
+      | {wasmUri?: string; wasmBytes?: Uint8Array; pythonVersion?: string}
       | undefined;
     if (initOptions?.wasmUri) {
       wasmResourceUri = initOptions.wasmUri;
     }
     if (initOptions?.wasmBytes) {
       wasmResourceBytes = initOptions.wasmBytes;
+    }
+    if (initOptions?.pythonVersion) {
+      pythonVersion = initOptions.pythonVersion;
     }
     const state = await ensureWasmState();
     const legend = state

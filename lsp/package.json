@@ -255,23 +255,23 @@
                     "description": "Controls whether hover tooltips include 'Go to definition' and 'Go to type definition' navigation links.",
                     "scope": "resource"
                 },
-                "python.analysis.completeFunctionParens": {
+                "python.pyrefly.completeFunctionParens": {
                     "type": "boolean",
                     "default": false,
                     "description": "Automatically insert parentheses when completing a function or method.",
                     "scope": "resource"
                 },
-                "python.analysis.diagnosticMode": {
+                "python.pyrefly.diagnosticMode": {
                     "type": "string",
                     "default": "openFilesOnly",
                     "enum": [
                         "openFilesOnly",
                         "workspace"
                     ],
-                    "description": "Controls the scope of diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace. If `python.pyrefly.diagnosticMode` is set, it takes precedence.",
+                    "description": "Controls the scope of Pyrefly's diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace.",
                     "scope": "resource"
                 },
-                "python.analysis.importFormat": {
+                "python.pyrefly.importFormat": {
                     "type": "string",
                     "default": "absolute",
                     "enum": [
@@ -331,14 +331,10 @@
                     "description": "If true (default), Pyrefly will stream diagnostics as they become available during recheck, providing incremental feedback. Set to false to only publish diagnostics after the full recheck completes.",
                     "scope": "resource"
                 },
-                "python.pyrefly.diagnosticMode": {
+                "python.pyrefly.pythonVersion": {
                     "type": "string",
-                    "default": "openFilesOnly",
-                    "description": "Controls the scope of Pyrefly's diagnostic analysis. When set to 'openFilesOnly', diagnostics are only provided for files that are currently open in the editor. When set to 'workspace', diagnostics are computed and published for all files in the workspace.",
-                    "enum": [
-                        "openFilesOnly",
-                        "workspace"
-                    ],
+                    "default": "",
+                    "description": "Python version used by Pyrefly's VS Code Web extension. Leave empty to detect from pyrefly.toml or pyproject.toml when possible, otherwise Pyrefly defaults to Python 3.12.",
                     "scope": "resource"
                 },
                 "pyrefly.commentFoldingRanges": {

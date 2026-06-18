@@ -246,6 +246,8 @@ struct PyreflyClientConfig {
     extra_paths: Option<Vec<PathBuf>>,
     runnable_code_lens: Option<bool>,
     diagnostic_mode: Option<DiagnosticMode>,
+    complete_function_parens: Option<bool>,
+    import_format: Option<ImportFormat>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
     analysis: Option<LspAnalysisConfig>,
     #[serde(default)]
@@ -517,6 +519,10 @@ impl Workspaces {
             self.update_pythonpath(modified, scope_uri, &python_path);
         }
 
+        if let Some(analysis) = config.analysis {
+            self.update_ide_settings(modified, scope_uri, analysis);
+        }
+
         if let Some(pyrefly) = config.pyrefly {
             if let Some(extra_paths) = pyrefly.extra_paths {
                 self.update_search_paths(modified, scope_uri, extra_paths);
@@ -535,6 +541,18 @@ impl Workspaces {
             }
             if let Some(diagnostic_mode) = pyrefly.diagnostic_mode {
                 self.update_diagnostic_mode(scope_uri, diagnostic_mode);
+            }
+            if pyrefly.complete_function_parens.is_some() || pyrefly.import_format.is_some() {
+                let mut analysis = pyrefly.analysis.or(config.analysis).unwrap_or_default();
+                if let Some(complete_function_parens) = pyrefly.complete_function_parens {
+                    analysis.complete_function_parens = Some(complete_function_parens);
+                }
+                if let Some(import_format) = pyrefly.import_format {
+                    analysis.import_format = Some(import_format);
+                }
+                self.update_ide_settings(modified, scope_uri, analysis);
+            } else if let Some(analysis) = pyrefly.analysis {
+                self.update_ide_settings(modified, scope_uri, analysis);
             }
             // Always write a definitive value for each of these three
             // settings — including `None` when absent — so that removing a
@@ -557,17 +575,9 @@ impl Workspaces {
                     pyrefly.display_type_errors,
                 ),
             );
-            // Handle analysis config nested under pyrefly (e.g., pyrefly.analysis)
-            if let Some(analysis) = pyrefly.analysis {
-                self.update_ide_settings(modified, scope_uri, analysis);
-            }
             if let Some(config_path) = pyrefly.config_path {
                 self.update_workspace_config(modified, scope_uri, config_path);
             }
-        }
-        // Always handle analysis at top level (no longer conditional on analysis_handled)
-        if let Some(analysis) = config.analysis {
-            self.update_ide_settings(modified, scope_uri, analysis);
         }
     }
 
@@ -1091,6 +1101,36 @@ mod tests {
         ));
         assert_eq!(config.python_path, Some("/usr/bin/python3".to_owned()));
         assert!(config.pyrefly.is_some());
+    }
+
+    #[test]
+    fn test_pyrefly_direct_ide_settings_merge_with_legacy_analysis() {
+        let workspaces = Workspaces::new(Workspace::new(), &[]);
+        let mut modified = false;
+
+        workspaces.apply_client_configuration(
+            &mut modified,
+            &None,
+            json!({
+                "analysis": {
+                    "diagnosticMode": "workspace"
+                },
+                "pyrefly": {
+                    "completeFunctionParens": true,
+                    "importFormat": "relative"
+                }
+            }),
+        );
+
+        let analysis = workspaces
+            .default
+            .read()
+            .lsp_analysis_config
+            .expect("analysis config should be set");
+        assert!(modified);
+        assert_eq!(analysis.diagnostic_mode, Some(DiagnosticMode::Workspace));
+        assert_eq!(analysis.complete_function_parens, Some(true));
+        assert_eq!(analysis.import_format, Some(ImportFormat::Relative));
     }
 
     /// Legacy `displayTypeErrors` maps onto the two new axes:
