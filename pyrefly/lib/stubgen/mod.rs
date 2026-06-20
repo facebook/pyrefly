@@ -227,6 +227,11 @@ class BaseModel:
     }
 
     #[test]
+    fn test_stubgen_callable_values() {
+        assert_stubgen_snapshot("callable_values");
+    }
+
+    #[test]
     fn test_stubgen_typevar() {
         assert_stubgen_snapshot("typevar");
     }

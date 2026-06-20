@@ -18,10 +18,15 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
 use pyrefly_types::display::TypeDisplayContext;
+use pyrefly_types::types::BoundMethodType;
+use pyrefly_types::types::Forallable;
+use pyrefly_types::types::Overload;
+use pyrefly_types::types::OverloadType;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Operator;
@@ -53,6 +58,9 @@ pub struct ModuleStub {
     /// emit `from _typeshed import Incomplete`).
     pub uses_incomplete: bool,
     pub uses_self: bool,
+    /// Whether any item renders a `Callable[...]` annotation (so we know
+    /// whether to emit `from typing import Callable`).
+    pub uses_callable: bool,
 }
 
 pub enum StubItem {
@@ -138,6 +146,7 @@ pub fn extract_module_stub(
         config,
         uses_incomplete: false,
         uses_self: false,
+        uses_callable: false,
         function_map: &function_map,
         dunder_all: &dunder_all,
     };
@@ -148,6 +157,7 @@ pub fn extract_module_stub(
         items,
         uses_incomplete: ctx.uses_incomplete,
         uses_self: ctx.uses_self,
+        uses_callable: ctx.uses_callable,
     })
 }
 
@@ -158,6 +168,7 @@ struct ExtractionContext<'a> {
     config: &'a ExtractConfig,
     uses_incomplete: bool,
     uses_self: bool,
+    uses_callable: bool,
     function_map: &'a HashMap<TextRange, DecoratedFunction>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
@@ -421,6 +432,12 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
         ctx.uses_incomplete = true;
         return Some("Incomplete".to_owned());
     }
+    // pyrefly's internal type display renders function and overload types using
+    // a non-Python `(args) -> ret` / `Overload[...]` syntax and never imports the
+    // referenced names. Translate them to valid `typing.Callable[...]` instead.
+    if let Some(s) = format_callable_type(ty, ctx) {
+        return Some(s);
+    }
     if ty.any(|sub_type| matches!(sub_type, Type::SelfType(_))) {
         ctx.uses_self = true;
     }
@@ -432,6 +449,90 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
         return Some("Incomplete".to_owned());
     }
     Some(s)
+}
+
+/// Render a callable-typed value as a valid `typing.Callable[...]` annotation,
+/// or `None` if `ty` is not a callable type.
+fn format_callable_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
+    match ty {
+        Type::Function(func) => Some(callable_from_signature(&func.signature, ctx)),
+        Type::Callable(callable) => Some(callable_from_signature(callable, ctx)),
+        Type::BoundMethod(method) => match &method.func {
+            // Drop the bound `self`/`cls` parameter before rendering.
+            BoundMethodType::Function(func) => {
+                let sig = func
+                    .signature
+                    .strip_first_param()
+                    .unwrap_or_else(|| func.signature.clone());
+                Some(callable_from_signature(&sig, ctx))
+            }
+            // Generic methods: parameters can't be faithfully expressed.
+            BoundMethodType::Forall(forall) => {
+                Some(callable_ellipsis(&forall.body.signature.ret, ctx))
+            }
+            BoundMethodType::Overload(overload) => Some(format_overload(overload, ctx)),
+        },
+        Type::Overload(overload) => Some(format_overload(overload, ctx)),
+        // A generic (`Forall`) function/callable: parameters carry type
+        // variables we can't faithfully express, so elide them.
+        Type::Forall(forall) => match &forall.body {
+            Forallable::Function(func) => Some(callable_ellipsis(&func.signature.ret, ctx)),
+            Forallable::Callable(callable) => Some(callable_ellipsis(&callable.ret, ctx)),
+            Forallable::TypeAlias(_) => None,
+        },
+        _ => None,
+    }
+}
+
+/// Render `Callable[[arg, ...], Ret]` when the parameter list is a plain
+/// sequence of positional parameters, otherwise `Callable[..., Ret]` (e.g. when
+/// it contains `*args`, `**kwargs`, or keyword-only parameters that the
+/// `Callable` form can't represent).
+fn callable_from_signature(sig: &Callable, ctx: &mut ExtractionContext) -> String {
+    ctx.uses_callable = true;
+    let ret = format_type(&sig.ret, ctx).unwrap_or_else(|| "Incomplete".to_owned());
+    match &sig.params {
+        Params::List(params)
+            if params
+                .items()
+                .iter()
+                .all(|p| matches!(p, Param::PosOnly(..) | Param::Pos(..))) =>
+        {
+            let rendered: Vec<String> = params
+                .items()
+                .iter()
+                .map(|p| format_type(p.as_type(), ctx).unwrap_or_else(|| "Incomplete".to_owned()))
+                .collect();
+            format!("Callable[[{}], {}]", rendered.join(", "), ret)
+        }
+        _ => format!("Callable[..., {ret}]"),
+    }
+}
+
+/// `Callable[..., Ret]` for cases where the parameters can't be expressed.
+fn callable_ellipsis(ret: &Type, ctx: &mut ExtractionContext) -> String {
+    ctx.uses_callable = true;
+    let ret = format_type(ret, ctx).unwrap_or_else(|| "Incomplete".to_owned());
+    format!("Callable[..., {ret}]")
+}
+
+/// Render an overload set. If every signature shares the same return type we
+/// can render `Callable[..., Ret]`; otherwise there is no single faithful
+/// return type, so fall back to `Incomplete`.
+fn format_overload(overload: &Overload, ctx: &mut ExtractionContext) -> String {
+    let ret = |sig: &OverloadType| -> Type {
+        match sig {
+            OverloadType::Function(f) => f.signature.ret.clone(),
+            OverloadType::Forall(forall) => forall.body.signature.ret.clone(),
+        }
+    };
+    let first = ret(overload.signatures.first());
+    if overload.signatures.iter().all(|s| ret(s) == first) {
+        callable_ellipsis(&first, ctx)
+    } else {
+        ctx.uses_incomplete = true;
+        "Incomplete".to_owned()
+    }
 }
 
 /// Uses source text for simple literals, `...` for everything else.
