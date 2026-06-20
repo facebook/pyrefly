@@ -28,7 +28,7 @@ jobs:
       if: ${{ matrix.os == 'windows-latest' }}
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
     - name: install Scrut
-      run: cargo install scrut
+      run: cargo install scrut --locked
       # Scrut doesn't support Windows yet
       if: ${{ matrix.os != 'windows-latest' }}
     - name: set up rust cache

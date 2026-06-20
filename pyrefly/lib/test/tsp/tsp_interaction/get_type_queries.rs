@@ -71,6 +71,35 @@ fn get_computed_type_ok(
     result
 }
 
+/// Helper to send a range-based getComputedType request and return a successful result.
+fn get_computed_type_range_ok(
+    tsp: &mut TspInteraction,
+    file_uri: &str,
+    start_line: u32,
+    start_character: u32,
+    end_line: u32,
+    end_character: u32,
+    snapshot: i32,
+) -> serde_json::Value {
+    tsp.server.get_computed_type_range(
+        file_uri,
+        start_line,
+        start_character,
+        end_line,
+        end_character,
+        snapshot,
+    );
+    let resp = tsp.client.receive_response_skip_notifications();
+    assert!(
+        resp.error.is_none(),
+        "Expected success, got error: {:?}",
+        resp.error
+    );
+    let result = resp.result.expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null type result");
+    result
+}
+
 /// Helper to send a getExpectedType request and return a successful (non-null) result.
 fn get_expected_type_ok(
     tsp: &mut TspInteraction,
@@ -1092,6 +1121,103 @@ greet(\"world\")
         Some(file_uri.as_str()),
         "Expected declaration URI to match the source file"
     );
+
+    tsp.shutdown();
+}
+
+// =======================================================================
+// Regression: a whole call-expression range returns the call's result
+//
+// `typeServer/getComputedType` is range-aware. When the requested range
+// exactly covers a call expression (`Foo()`), it returns the call's
+// *result* type (the constructed instance / return value) rather than the
+// callee declaration sitting at the range start. This complements the
+// call-position behavior above: an empty range (or a range that only spans
+// the callee identifier) still preserves the callee declaration, but the
+// full call range resolves to the value the call produces.
+//
+// Pylance bug: https://github.com/microsoft/pylance-release/issues/8016
+// ("[TSP] Goto def doesn't work on special methods"). Operator go-to-def
+// needs the left operand of `ClassWithMagicMethod() < 1` to resolve to a
+// class *instance* so the `__lt__` magic method can be found.
+// =======================================================================
+
+/// Assert the result is a class type carrying the INSTANCE flag (2).
+fn assert_class_instance(result: &serde_json::Value) {
+    assert_kind(result, TypeKind::Class);
+    let flags = result.get("flags").and_then(|v| v.as_i64());
+    assert!(
+        flags.is_some_and(|f| f & 2 != 0),
+        "Expected INSTANCE flag (2), got flags={flags:?} in: {result}"
+    );
+}
+
+#[test]
+fn test_get_computed_type_call_expr_range_returns_instance() {
+    // Repro for pylance-release#8016. `ClassWithMagicMethod()` is a call
+    // expression on line 4. Querying the *whole* call range must return the
+    // constructed instance (Class + INSTANCE flag), not the constructor.
+    let code = "\
+class ClassWithMagicMethod:
+    def __lt__(self, v: int) -> bool:
+        return True
+
+a = ClassWithMagicMethod()
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 4: `a = ClassWithMagicMethod()` — the call spans chars 4..26.
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 4, 4, 4, 26, snapshot);
+    assert_class_instance(&result);
+
+    let decl = result.get("declaration").expect("Expected declaration");
+    let name = decl.get("name").and_then(|v| v.as_str());
+    assert_eq!(name, Some("ClassWithMagicMethod"), "Expected class name");
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_call_expr_range_vs_callee_position() {
+    // The range-aware behavior must distinguish the whole call expression
+    // from the callee identifier:
+    //   - whole call range  -> the constructed instance (INSTANCE flag set)
+    //   - callee position    -> the class itself (instantiable, no INSTANCE)
+    let code = "\
+class Foo:
+    pass
+
+a = Foo()
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 3: `a = Foo()` — the call `Foo()` spans chars 4..9.
+    let whole_call = get_computed_type_range_ok(&mut tsp, &file_uri, 3, 4, 3, 9, snapshot);
+    assert_class_instance(&whole_call);
+
+    // Callee identifier position (empty range at the start of `Foo`) keeps
+    // the declaration-preserving behavior: the class object, not an instance.
+    let callee = get_computed_type_ok(&mut tsp, &file_uri, 3, 4, snapshot);
+    assert_kind(&callee, TypeKind::Class);
+    let callee_flags = callee.get("flags").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        callee_flags & 2 == 0,
+        "Expected callee `Foo` to be the class itself (no INSTANCE flag), got flags={callee_flags}"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_builtin_call_expr_range_returns_instance() {
+    // A builtin call expression range (`str()`) likewise resolves to the
+    // produced instance rather than the `str` class/constructor.
+    let code = "x = str()\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 0: `x = str()` — the call `str()` spans chars 4..9.
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 0, 4, 0, 9, snapshot);
+    assert_class_instance(&result);
 
     tsp.shutdown();
 }

@@ -20,6 +20,7 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::watch_pattern::WatchPattern;
+use regex::Regex;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -155,6 +156,10 @@ pub struct BuckCheckSourceDatabase {
     implicit_init: SmallMap<ModuleName, ModulePath>,
     sys_info: SysInfo,
     check_dependencies: bool,
+    /// Regexes matched against dependency module names. When `check_dependencies`
+    /// is true, any dependency module whose name matches one of these is skipped
+    /// (not type-checked). Sources (the main target) are always preserved.
+    skip_dependency_modules: Vec<Regex>,
 }
 
 impl SourceDatabase for BuckCheckSourceDatabase {
@@ -165,13 +170,21 @@ impl SourceDatabase for BuckCheckSourceDatabase {
                 .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
         });
         if self.check_dependencies {
-            sources
-                .chain(self.dependencies.iter().flat_map(|(name, paths)| {
+            let deps = self
+                .dependencies
+                .iter()
+                .filter(|(name, _)| {
+                    !self
+                        .skip_dependency_modules
+                        .iter()
+                        .any(|re| re.is_match(name.as_str()))
+                })
+                .flat_map(|(name, paths)| {
                     paths
                         .iter()
                         .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
-                }))
-                .collect()
+                });
+            sources.chain(deps).collect()
         } else {
             sources.collect()
         }
@@ -238,6 +251,7 @@ impl BuckCheckSourceDatabase {
         typeshed_manifests: &[PathBuf],
         sys_info: SysInfo,
         check_dependencies: bool,
+        skip_dependency_modules: Vec<Regex>,
     ) -> anyhow::Result<Self> {
         let sources = read_manifest_files(source_manifests)?;
         let dependencies = read_manifest_files(dependency_manifests)?;
@@ -248,6 +262,7 @@ impl BuckCheckSourceDatabase {
             typeshed,
             sys_info,
             check_dependencies,
+            skip_dependency_modules,
         ))
     }
 
@@ -257,6 +272,7 @@ impl BuckCheckSourceDatabase {
         typeshed_items: Vec<ManifestItem>,
         sys_info: SysInfo,
         check_dependencies: bool,
+        skip_dependency_modules: Vec<Regex>,
     ) -> Self {
         let mut implicit_init = SmallMap::new();
         for x in source_items
@@ -281,6 +297,7 @@ impl BuckCheckSourceDatabase {
             implicit_init,
             sys_info,
             check_dependencies,
+            skip_dependency_modules,
         }
     }
 }
@@ -368,6 +385,7 @@ mod tests {
             }],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -412,6 +430,7 @@ mod tests {
             vec![],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -451,6 +470,7 @@ mod tests {
             vec![],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -493,6 +513,7 @@ mod tests {
             vec![],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
@@ -556,6 +577,7 @@ mod tests {
             ],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("a")),
@@ -596,6 +618,7 @@ mod tests {
             vec![],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         let res = source_db.lookup(ModuleName::from_str("foo"), None, None);
         assert_eq!(res.unwrap().as_path().to_str().unwrap(), "/root/foo");

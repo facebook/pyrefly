@@ -1313,6 +1313,18 @@ class C:
     "#,
 );
 
+// `default` and `default_factory` are mutually exclusive at runtime; typeshed's
+// `dataclasses.field` overloads already reject passing both, so no extra check is needed.
+testcase!(
+    test_dataclass_field_default_and_default_factory_conflict,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = field(default=1, default_factory=int)  # E: not assignable to parameter `default_factory`
+    "#,
+);
+
 testcase!(
     test_default,
     r#"
@@ -2459,6 +2471,19 @@ class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all ot
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3751
+testcase!(
+    test_dataclass_decorator_on_named_tuple,
+    r#"
+from dataclasses import dataclass
+from typing import NamedTuple
+
+@dataclass
+class Foo(NamedTuple):  # E: Cannot apply `@dataclass` to NamedTuple
+    x: int
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/2920
 testcase!(
     test_frozen_dataclass_override_setattr_delattr,
@@ -2559,5 +2584,21 @@ def user_defined_field() -> None:
     @dataclass
     class C:
         x = field(default=1)  # !E: type annotation
+"#,
+);
+
+// Unlike attrs, a stdlib dataclass does NOT strip leading underscores from a private
+// field's `__init__` parameter.
+testcase!(
+    test_dataclass_private_field_keeps_underscore,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass
+class C:
+    _x: int
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, _x: int) -> None
 "#,
 );

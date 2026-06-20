@@ -376,6 +376,8 @@ pub enum ErrorKind {
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
     UnusedIgnore,
+    /// A `# type: ignore` comment is unused (no error to suppress on that line)
+    UnusedTypeIgnore,
     /// The inferred variance of a type variable does not match its declared variance.
     /// For example, a type variable used only in covariant positions in a protocol should be declared covariant.
     VarianceMismatch,
@@ -503,6 +505,7 @@ impl ErrorKind {
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
             ErrorKind::UntypedImport => Severity::Warn,
             ErrorKind::UnusedIgnore => Severity::Ignore,
+            ErrorKind::UnusedTypeIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
             _ => Severity::Error,
         }

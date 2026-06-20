@@ -141,11 +141,14 @@ impl<'a> BindingsBuilder<'a> {
     /// as defined downstream.
     fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
         let name = Hashed::new(&identifier.id);
-        let name_is_defined = !matches!(
-            self.scopes
-                .look_up_name_for_read(name, &Usage::Narrowing(None)),
-            NameReadInfo::NotFound,
-        );
+        let name_is_defined = match self.look_up_name_for_read(name, &Usage::Narrowing(None)) {
+            NameReadInfo::Flow { .. } | NameReadInfo::Anywhere { .. } => true,
+            // This helper only runs after attribute/subscript assignment targets. If the base is an
+            // implicit builtin, binding the assigned expression has already materialized it. A still
+            // unmaterialized builtin here is indistinguishable from any other name that is absent
+            // from local flow, so leave it un-narrowed.
+            NameReadInfo::ImplicitBuiltin { .. } | NameReadInfo::NotFound => false,
+        };
         if name_is_defined {
             self.scopes.narrow_in_current_flow(name, narrowed_idx);
         }

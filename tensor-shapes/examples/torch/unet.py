@@ -22,7 +22,6 @@ from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 if TYPE_CHECKING:
     from shape_extensions import Dim

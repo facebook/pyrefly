@@ -77,6 +77,7 @@ use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::lsp::wasm::signature_help::CallInfo;
+use crate::state::ide::ImportEdit;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
@@ -119,6 +120,31 @@ fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
 
 fn default_true() -> bool {
     true
+}
+
+/// Search file content for a symbol name and return the `TextRange` of its
+/// first occurrence as a whole word. Used by go-to-definition to locate
+/// symbols in non-Python source files (e.g. thrift struct/enum names).
+fn find_symbol_range_in_text(content: &str, symbol: &str) -> Option<TextRange> {
+    fn is_word_char(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let bytes = content.as_bytes();
+    let mut start = 0;
+    while let Some(pos) = content[start..].find(symbol) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0 || !is_word_char(bytes[abs_pos - 1]);
+        let after_pos = abs_pos + symbol.len();
+        let after_ok = after_pos >= bytes.len() || !is_word_char(bytes[after_pos]);
+        if before_ok && after_ok {
+            return Some(TextRange::new(
+                TextSize::new(abs_pos as u32),
+                TextSize::new(after_pos as u32),
+            ));
+        }
+        start = abs_pos + 1;
+    }
+    None
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -755,12 +781,12 @@ impl<'a> Transaction<'a> {
         ast: &ModModule,
         module_name: ModuleName,
         import_format: ImportFormat,
-    ) -> Option<(String, TextSize, String, String)> {
+    ) -> Option<(String, ImportEdit)> {
         let (parent_module_str, submodule_name) = module_name.as_str().rsplit_once('.')?;
         let parent_handle = self
             .import_handle(handle, ModuleName::from_str(parent_module_str), None)
             .finding()?;
-        let (position, insert_text, imported_module) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             self.config_finder(),
             handle.dupe(),
@@ -768,12 +794,10 @@ impl<'a> Transaction<'a> {
             submodule_name,
             import_format,
         );
-        Some((
-            submodule_name.to_owned(),
-            position,
-            insert_text,
-            imported_module,
-        ))
+        // Return the whole edit so callers can use `display_text` for human-facing
+        // strings (which stays "from parent import submodule" even when the actual
+        // edit merges into an existing line and `new_text` is just ", submodule").
+        Some((submodule_name.to_owned(), import_edit))
     }
 
     fn type_from_expression_at_impl(
@@ -1250,6 +1274,42 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<Type> {
         self.get_type_at_impl_with_options(handle, position, false, false)
+    }
+
+    /// Computed type for the TSP `getComputedType` endpoint, resolved from the
+    /// full requested node range rather than a single position.
+    ///
+    /// TSP clients send the source range of the node they care about, but the
+    /// position-based lookup ([`get_type_at_preserving_declaration`]) resolves
+    /// the identifier sitting at the range's start. For a call expression
+    /// (`Foo()`), that start offset lands on the callee, so the
+    /// declaration-preserving lookup returns the callee (e.g. the constructor)
+    /// instead of the call's result. When the requested range exactly covers a
+    /// call expression, return the recorded result type of that expression so
+    /// the client sees the call's value type (e.g. the constructed instance).
+    ///
+    /// All other ranges keep the declaration-preserving behavior, which clients
+    /// rely on to re-resolve signatures/overloads from a callee's declaration.
+    pub fn get_computed_type_at_range(&self, handle: &Handle, range: TextRange) -> Option<Type> {
+        if self.range_is_call_expr(handle, range)
+            && let Some(ty) = self.get_type_trace(handle, range)
+        {
+            return Some(ty);
+        }
+        self.get_type_at_preserving_declaration(handle, range.start())
+    }
+
+    /// Whether `range` exactly covers a call expression node (`Foo()`).
+    fn range_is_call_expr(&self, handle: &Handle, range: TextRange) -> bool {
+        if range.is_empty() {
+            return false;
+        }
+        let Some(module) = self.get_ast(handle) else {
+            return false;
+        };
+        Ast::locate_node(&module, range.start())
+            .into_iter()
+            .any(|node| node.range() == range && matches!(node, AnyNodeRef::ExprCall(_)))
     }
 
     fn get_result_type_at_impl(
@@ -2125,13 +2185,49 @@ impl<'a> Transaction<'a> {
         // parsed as Python): navigate to the module file itself. Only applies
         // when extra file extensions are configured.
         let config_has_extra_extensions = self.config_has_extra_extensions(handle);
-        if config_has_extra_extensions && let Type::Module(ref module) = base_type {
-            let module_name = ModuleName::from_parts(module.parts());
-            if let Ok(Some(item)) =
-                self.find_definition_for_imported_module(handle, module_name, preference)
-                && !item.is_python_module()
+        if config_has_extra_extensions {
+            if let Type::Module(ref module) = base_type {
+                let module_name = ModuleName::from_parts(module.parts());
+                if let Ok(Some(item)) = self.find_symbol_in_non_python_module(
+                    handle,
+                    module_name,
+                    name.as_str(),
+                    preference,
+                ) && !item.is_python_module()
+                {
+                    return Ok(vec1![item]);
+                }
+            }
+            // Nested attribute fallback: handles `module.Container.member`
+            // where `module` is a non-Python file (e.g. .thrift). The base
+            // expression `module.Container` resolves to Any/Unknown because
+            // the type system can't resolve attributes on non-Python modules.
+            // We look at the AST to find the base's own base expression,
+            // check if it's a Module type, and if so search for the member
+            // as a whole-word match in the module source file.
+            if base_type.is_any()
+                && let Some(mod_module) = self.get_ast(handle)
             {
-                return Ok(vec1![item]);
+                let covering_nodes = Ast::locate_node(&mod_module, base_range.start());
+                for node in &covering_nodes {
+                    if let AnyNodeRef::ExprAttribute(attr) = node
+                        && attr.range() == base_range
+                        && let Some(Type::Module(ref module)) =
+                            answers.get_type_trace(attr.value.range())
+                    {
+                        let module_name = ModuleName::from_parts(module.parts());
+                        if let Ok(Some(item)) = self.find_symbol_in_non_python_module(
+                            handle,
+                            module_name,
+                            name.as_str(),
+                            preference,
+                        ) && !item.is_python_module()
+                        {
+                            return Ok(vec1![item]);
+                        }
+                        break;
+                    }
+                }
             }
         }
         Err(EmptyResponseReason::DefinitionNotFound {
@@ -2165,6 +2261,42 @@ impl<'a> Transaction<'a> {
             module: module_info,
             docstring_range: self.get_module_docstring_range(&handle),
             display_name: Some(module_name.to_string()),
+        }))
+    }
+
+    /// Search a non-Python source file for a symbol definition and return a
+    /// `FindDefinitionItemWithDocstring` pointing at the symbol's location.
+    /// Falls back to the module start if the symbol is not found.
+    ///
+    /// This handles go-to-definition for imports from non-Python files (e.g.
+    /// `.thrift`) by locating the symbol name in the source text, so the user
+    /// lands on the actual definition rather than just the top of the file.
+    fn find_symbol_in_non_python_module(
+        &self,
+        handle: &Handle,
+        module_name: ModuleName,
+        symbol_name: &str,
+        preference: FindPreference,
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let Some(module_handle) =
+            self.import_handle_with_preference(handle, module_name, preference)
+        else {
+            return Err(EmptyResponseReason::ModuleNotFound);
+        };
+        let _ = self.get_exports(&module_handle);
+        let module_info = self
+            .get_module_info(&module_handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+
+        let definition_range =
+            find_symbol_range_in_text(module_info.contents(), symbol_name).unwrap_or_default();
+
+        Ok(Some(FindDefinitionItemWithDocstring {
+            metadata: DefinitionMetadata::Module,
+            definition_range,
+            module: module_info,
+            docstring_range: None,
+            display_name: Some(symbol_name.to_owned()),
         }))
     }
 
@@ -2446,9 +2578,10 @@ impl<'a> Transaction<'a> {
                         }
                         let resolved_module_name =
                             resolve_relative_module_name(handle, module_name, dots);
-                        if let Ok(Some(module_item)) = self.find_definition_for_imported_module(
+                        if let Ok(Some(module_item)) = self.find_symbol_in_non_python_module(
                             handle,
                             resolved_module_name,
+                            name_after_import.id.as_str(),
                             preference,
                         ) {
                             if module_item.is_python_module() {
@@ -2886,11 +3019,13 @@ impl<'a> Transaction<'a> {
                         if aliased_module.is_some_and(|m| m == module_name) {
                             continue;
                         }
-                        if let Some((_submodule_name, position, insert_text, _)) =
+                        if let Some((_submodule_name, import_edit)) =
                             self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
                         {
-                            let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
+                            // Use `display_text` for the human-facing title so a merge
+                            // edit shows "from parent import submodule" rather than the
+                            // raw ", submodule" insertion text.
+                            let title = format!("Insert import: `{}`", import_edit.display_text);
                             let is_private_import = module_name
                                 .components()
                                 .last()
@@ -2898,8 +3033,8 @@ impl<'a> Transaction<'a> {
                             import_actions.push(QuickfixAction {
                                 title,
                                 module_info: module_info.dupe(),
-                                range,
-                                insert_text,
+                                range: import_edit.range,
+                                insert_text: import_edit.insert_text,
                                 is_deprecated: false,
                                 is_private_import,
                             });
@@ -3033,7 +3168,7 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(|(handle_to_import_from, _)| handle_to_import_from)
             .min_by_key(|candidate| usize::from(candidate.module().as_str() != "typing"))?;
-        let (position, insert_text, _) = insert_import_edit(
+        let edit = insert_import_edit(
             ast,
             self.config_finder(),
             handle.dupe(),
@@ -3041,11 +3176,7 @@ impl<'a> Transaction<'a> {
             "override",
             import_format,
         );
-        Some((
-            module_info.dupe(),
-            TextRange::at(position, TextSize::new(0)),
-            insert_text,
-        ))
+        Some((module_info.dupe(), edit.range, edit.insert_text))
     }
 
     fn create_quickfix_action_for_common_alias_import(
@@ -3119,7 +3250,7 @@ impl<'a> Transaction<'a> {
         handle_to_import_from: Handle,
         export: Export,
     ) {
-        let (position, insert_text, _) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             self.config_finder(),
             handle.dupe(),
@@ -3127,11 +3258,11 @@ impl<'a> Transaction<'a> {
             unknown_name,
             import_format,
         );
-        let range = TextRange::at(position, TextSize::new(0));
+        let range = import_edit.range;
         let is_deprecated = export.deprecation.is_some();
         let title = format!(
             "Insert import: `{}`{}",
-            insert_text.trim(),
+            import_edit.display_text,
             if is_deprecated { " (deprecated)" } else { "" }
         );
 
@@ -3145,7 +3276,7 @@ impl<'a> Transaction<'a> {
             title,
             module_info: module_info.dupe(),
             range,
-            insert_text,
+            insert_text: import_edit.insert_text,
             is_deprecated,
             is_private_import,
         });

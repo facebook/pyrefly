@@ -31,6 +31,7 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
+use starlark_map::small_set::SmallSet;
 
 use crate::class::Class;
 use crate::class::ClassType;
@@ -216,6 +217,15 @@ pub struct ArgCounts {
     pub overall: ArgCount,
 }
 
+/// Controls which parameters are displayed by `ParamList::fmt_with_type`
+#[derive(Debug, Clone)]
+pub enum ParamOverlay {
+    /// Display all parameters
+    All,
+    /// Display only this set of named parameters, plus all anonymous parameters
+    Subset(SmallSet<Name>),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct ParamList(Vec<Param>);
@@ -250,24 +260,41 @@ impl ParamList {
         &self,
         output: &mut O,
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
+        overlay: &ParamOverlay,
     ) -> fmt::Result {
         let mut named_posonly = false;
         let mut kwonly = false;
+        let mut skipped_prev = false;
         for (i, param) in self.0.iter().enumerate() {
-            if i > 0 {
-                output.write_str(", ")?;
-            }
+            // `/` or `*` markers that should be printed before the param
+            let mut marker_prefixes = Vec::new();
             if matches!(param, Param::PosOnly(Some(_), _, _)) {
                 named_posonly = true;
             } else if named_posonly {
                 named_posonly = false;
-                output.write_str("/, ")?;
+                marker_prefixes.push("/");
             }
             if !kwonly && matches!(param, Param::KwOnly(..)) {
                 kwonly = true;
-                output.write_str("*, ")?;
+                marker_prefixes.push("*");
             }
-            param.fmt_with_type(output, write_type)?;
+            // Should we elide the param?
+            let skip = matches!(overlay, ParamOverlay::Subset(names) if param.name().is_some_and(|name| !names.contains(name)));
+            if i > 0 && (!skipped_prev || !marker_prefixes.is_empty() || !skip) {
+                output.write_str(", ")?;
+            }
+            for marker_prefix in marker_prefixes.iter() {
+                output.write_str(marker_prefix)?;
+                output.write_str(", ")?;
+            }
+            if skip {
+                if !skipped_prev || !marker_prefixes.is_empty() {
+                    output.write_str("...")?;
+                }
+            } else {
+                param.fmt_with_type(output, write_type)?;
+            }
+            skipped_prev = skip;
         }
         if named_posonly {
             output.write_str(", /")?;
@@ -877,7 +904,7 @@ impl Callable {
         match &self.params {
             Params::List(params) => {
                 output.write_str("(")?;
-                params.fmt_with_type(output, write_type)?;
+                params.fmt_with_type(output, write_type, &ParamOverlay::All)?;
                 output.write_str(") -> ")?;
                 write_type(&self.ret, output)
             }
@@ -902,7 +929,7 @@ impl Callable {
                         if !args.is_empty() && !params.is_empty() {
                             output.write_str(", ")?;
                         }
-                        params.fmt_with_type(output, write_type)?;
+                        params.fmt_with_type(output, write_type, &ParamOverlay::All)?;
                     }
                     Type::Ellipsis => {
                         if !args.is_empty() {

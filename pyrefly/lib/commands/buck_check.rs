@@ -25,6 +25,7 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::thread_pool::ThreadCount;
+use regex::Regex;
 use ruff_text_size::Ranged;
 use serde::Deserialize;
 use tracing::info;
@@ -77,6 +78,12 @@ pub struct BuckCheckArgs {
     /// Also check dependency files, which are normally only used for import resolution.
     #[arg(long)]
     check_dependencies: bool,
+
+    /// When checking dependencies (`--check-dependencies`), skip type-checking
+    /// dependency modules whose module name matches any of these regexes.
+    /// May be passed multiple times. Has no effect without `--check-dependencies`.
+    #[arg(long = "skip-dependency-modules", value_name = "REGEX")]
+    skip_dependency_modules: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -227,12 +234,21 @@ impl BuckCheckArgs {
         let python_version = PythonVersion::from_str(&input_file.py_version)?;
         let python_platform = PythonPlatform::new(&input_file.system_platform);
         let sys_info = SysInfo::new(python_version, python_platform);
+        let skip_dependency_regexes = self
+            .skip_dependency_modules
+            .iter()
+            .map(|pattern| {
+                Regex::new(pattern)
+                    .with_context(|| format!("invalid --skip-dependency-modules `{pattern}`"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let sourcedb = BuckCheckSourceDatabase::from_manifest_files(
             input_file.sources.as_slice(),
             input_file.dependencies.as_slice(),
             input_file.typeshed.as_slice(),
             sys_info.dupe(),
             self.check_dependencies,
+            skip_dependency_regexes,
         )?;
         let type_errors = compute_errors(
             sys_info,

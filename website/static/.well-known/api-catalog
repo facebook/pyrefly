@@ -1,0 +1,43 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://pyrefly.org/",
+      "service-doc": [
+        {
+          "href": "https://pyrefly.org/llms.txt",
+          "type": "text/plain",
+          "title": "LLM-friendly documentation index"
+        },
+        {
+          "href": "https://pyrefly.org/llms-full.txt",
+          "type": "text/plain",
+          "title": "Complete documentation content"
+        }
+      ],
+      "service-desc": [
+        {
+          "href": "https://github.com/facebook/pyrefly",
+          "type": "text/html",
+          "title": "Pyrefly GitHub Repository"
+        }
+      ]
+    },
+    {
+      "anchor": "https://pyrefly.org/sandbox/",
+      "service-doc": [
+        {
+          "href": "https://pyrefly.org/en/docs/",
+          "type": "text/html",
+          "title": "Pyrefly Documentation"
+        }
+      ],
+      "item": [
+        {
+          "href": "https://pyrefly.org/sandbox/",
+          "type": "text/html",
+          "title": "Interactive Sandbox"
+        }
+      ]
+    }
+  ]
+}

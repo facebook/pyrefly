@@ -6,6 +6,7 @@
  */
 
 use std::mem;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe as _;
@@ -42,17 +43,17 @@ use crate::binding::binding::BindingAbstractClassCheck;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassBaseType;
+use crate::binding::binding::BindingClassChecks;
+use crate::binding::binding::BindingClassDisjointBase;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
-use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingShapedArrayMetadata;
 use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingVariance;
-use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::ClassBinding;
 use crate::binding::binding::ClassDefData;
 use crate::binding::binding::ClassFieldDefinition;
@@ -62,16 +63,16 @@ use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassChecks;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
 use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
-use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -82,6 +83,8 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
+use crate::types::class::AttrsFieldSpecifier;
+use crate::types::class::AttrsFieldSpecifierKind;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::class::ClassFields;
@@ -133,11 +136,10 @@ impl<'a> BindingsBuilder<'a> {
             base_type_idx: self.idx_for_promise(KeyClassBaseType(def_index)),
             metadata_idx: self.idx_for_promise(KeyClassMetadata(def_index)),
             mro_idx: self.idx_for_promise(KeyClassMro(def_index)),
+            disjoint_base_idx: self.idx_for_promise(KeyClassDisjointBase(def_index)),
             synthesized_fields_idx: self.idx_for_promise(KeyClassSynthesizedFields(def_index)),
             variance_idx: self.idx_for_promise(KeyVariance(def_index)),
-            variance_check_idx: self.idx_for_promise(KeyVarianceCheck(def_index)),
-            consistent_override_check_idx: self
-                .idx_for_promise(KeyConsistentOverrideCheck(def_index)),
+            class_checks_idx: self.idx_for_promise(KeyClassChecks(def_index)),
             abstract_class_check_idx: self.idx_for_promise(KeyAbstractClassCheck(def_index)),
             subscript_symmetry_idx: self.idx_for_promise(KeyClassSubscriptSymmetry(def_index)),
         };
@@ -394,18 +396,25 @@ impl<'a> BindingsBuilder<'a> {
                 }
             });
         }
+        let bases: Arc<[BaseClass]> = Arc::from(bases.into_boxed_slice());
 
         self.insert_binding_idx(
             class_indices.base_type_idx,
             BindingClassBaseType {
                 class_idx: class_indices.class_idx,
                 is_new_type: false,
-                bases: bases.clone().into_boxed_slice(),
+                bases: bases.dupe(),
             },
         );
         self.insert_binding_idx(
             class_indices.mro_idx,
             BindingClassMro {
+                class_idx: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.disjoint_base_idx,
+            BindingClassDisjointBase {
                 class_idx: class_indices.class_idx,
             },
         );
@@ -461,12 +470,47 @@ impl<'a> BindingsBuilder<'a> {
 
             let docstring_range = field_docstrings.get(&range).copied();
 
+            // Detect at binding (AST available) so solving reads by symbol identity, not type.
+            let attrs_field_specifier =
+                if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
+                    && let ExprOrBinding::Expr(Expr::Call(call)) = value.as_ref()
+                    && let Some(kind) = match self.as_special_export(&call.func) {
+                        Some(SpecialExport::AttrsLegacyAttrib) => {
+                            Some(AttrsFieldSpecifierKind::Attrib)
+                        }
+                        Some(SpecialExport::AttrsNextGenField) => {
+                            Some(AttrsFieldSpecifierKind::Field)
+                        }
+                        _ => None,
+                    }
+                {
+                    // Only `attr.ib` accepts a positional default; `field`'s is keyword-only.
+                    let positional_default = (kind == AttrsFieldSpecifierKind::Attrib)
+                        .then(|| call.arguments.args.first())
+                        .flatten();
+                    let default_is_nothing = call
+                        .arguments
+                        .find_keyword("default")
+                        .map(|kw| &kw.value)
+                        .or(positional_default)
+                        .is_some_and(|e| {
+                            self.as_special_export(e) == Some(SpecialExport::AttrsNothing)
+                        });
+                    Some(AttrsFieldSpecifier {
+                        kind,
+                        default_is_nothing,
+                    })
+                } else {
+                    None
+                };
+
             fields.insert_hashed(
                 name.clone(),
                 ClassFieldProperties::new(
                     is_annotated,
                     is_initialized_on_class,
                     is_defined_in_class_body,
+                    attrs_field_specifier,
                     range,
                     docstring_range,
                 ),
@@ -538,22 +582,16 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
         self.insert_binding_idx(
-            class_indices.variance_check_idx,
-            BindingVarianceCheck {
+            class_indices.class_checks_idx,
+            BindingClassChecks {
                 class_idx: class_indices.class_idx,
-            },
-        );
-        self.insert_binding_idx(
-            class_indices.consistent_override_check_idx,
-            BindingConsistentOverrideCheck {
-                class_key: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(
             class_indices.metadata_idx,
             BindingClassMetadata {
                 class_idx: class_indices.class_idx,
-                bases: bases.clone().into_boxed_slice(),
+                bases,
                 keywords: keywords.into_boxed_slice(),
                 decorators: decorators.into_boxed_slice(),
                 is_new_type: false,
@@ -1078,6 +1116,7 @@ impl<'a> BindingsBuilder<'a> {
                     member_annotation.is_some() || class_kind == SynthesizedClassKind::NamedTuple,
                     member_value.is_some(),
                     true, // Synthesized fields are class body fields
+                    None, // Synthesized fields are never attrs field specifiers
                     range,
                     None, // Synthesized fields don't have docstrings
                 ),
@@ -1147,20 +1186,21 @@ impl<'a> BindingsBuilder<'a> {
             .map(|base| self.base_class_of(base))
             .chain(special_base)
             .collect::<Vec<_>>();
+        let base_classes: Arc<[BaseClass]> = Arc::from(base_classes.into_boxed_slice());
         let is_new_type = class_kind == SynthesizedClassKind::NewType;
         self.insert_binding_idx(
             class_indices.base_type_idx,
             BindingClassBaseType {
                 class_idx: class_indices.class_idx,
                 is_new_type,
-                bases: base_classes.clone().into_boxed_slice(),
+                bases: base_classes.dupe(),
             },
         );
         self.insert_binding_idx(
             class_indices.metadata_idx,
             BindingClassMetadata {
                 class_idx: class_indices.class_idx,
-                bases: base_classes.into_boxed_slice(),
+                bases: base_classes,
                 keywords,
                 decorators: Box::new([]),
                 is_new_type,
@@ -1174,6 +1214,12 @@ impl<'a> BindingsBuilder<'a> {
         self.insert_binding_idx(
             class_indices.mro_idx,
             BindingClassMro {
+                class_idx: class_indices.class_idx,
+            },
+        );
+        self.insert_binding_idx(
+            class_indices.disjoint_base_idx,
+            BindingClassDisjointBase {
                 class_idx: class_indices.class_idx,
             },
         );
@@ -1220,15 +1266,9 @@ impl<'a> BindingsBuilder<'a> {
             },
         );
         self.insert_binding_idx(
-            class_indices.variance_check_idx,
-            BindingVarianceCheck {
+            class_indices.class_checks_idx,
+            BindingClassChecks {
                 class_idx: class_indices.class_idx,
-            },
-        );
-        self.insert_binding_idx(
-            class_indices.consistent_override_check_idx,
-            BindingConsistentOverrideCheck {
-                class_key: class_indices.class_idx,
             },
         );
         self.insert_binding_idx(

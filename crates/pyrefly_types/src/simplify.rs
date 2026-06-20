@@ -20,6 +20,12 @@ use crate::typed_dict::TypedDict;
 use crate::types::Type;
 
 /// Turn unions of unions into a flattened list for one union, and return the deduped list.
+///
+/// Invariant: this function relies on `simplify_intersections` only ever introducing `Never`
+/// types (never new `Union`s or other composites). That coupling lets us drop the resulting
+/// `Never`s with a simple `retain` rather than performing a second flatten pass. If
+/// `simplify_intersections` is ever changed to introduce other kinds of types, this function
+/// must be updated to re-flatten accordingly.
 fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     fn flatten(xs: Vec<Type>, res: &mut Vec<Type>) {
         for x in xs {
@@ -33,12 +39,13 @@ fn flatten_and_dedup(xs: Vec<Type>, heap: &TypeHeap) -> Vec<Type> {
     let mut flattened = Vec::with_capacity(xs.len());
     flatten(xs, &mut flattened);
     simplify_intersections(&mut flattened, heap);
-    let mut res = Vec::with_capacity(flattened.len());
-    flatten(flattened, &mut res);
-
-    res.sort();
-    res.dedup();
-    res
+    // Per the invariant documented on `simplify_intersections`, that call only ever introduces
+    // `Never`s (by replacing absorbed intersection types), so dropping them in place here
+    // suffices and we don't need a second flatten pass.
+    flattened.retain(|x| !x.is_never());
+    flattened.sort();
+    flattened.dedup();
+    flattened
 }
 
 /// Given a list of types to union together,
@@ -55,6 +62,15 @@ fn try_collapse(mut xs: Vec<Type>, heap: &TypeHeap) -> Result<Type, Vec<Type>> {
     }
 }
 
+/// Simplify intersections within a union in place: if `A | (A & B)` appears, the intersection
+/// is absorbed by `A` and we replace the `A & B` member with `Never`.
+///
+/// Invariant: this function must only ever introduce `Never` types into `xs` (by overwriting
+/// absorbed intersection members). `flatten_and_dedup` is coupled to this invariant: it relies
+/// on the fact that no new `Union`s (or other composite types needing flattening) are produced
+/// here so that it can clean up with a single `retain` pass over `Never`s rather than
+/// re-running the flatten step. If you extend this function to introduce other kinds of
+/// types, update `flatten_and_dedup` accordingly.
 fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
     // Simplify `A | (A & B)` to `A`
     let (mut intersects, non_intersects): (Vec<_>, Vec<_>) =
@@ -67,6 +83,10 @@ fn simplify_intersections(xs: &mut [Type], heap: &TypeHeap) {
         }
     }
 }
+
+/// After literal/enum squashing, a union with more than this many members is widened to
+/// `Any` to bound type complexity.
+static MAX_UNION_MEMBERS: usize = 4096;
 
 fn unions_internal(
     xs: Vec<Type>,
@@ -82,7 +102,13 @@ fn unions_internal(
         }
         collapse_tuple_unions_with_empty(&mut res, heap);
         collapse_builtins_type(&mut res, heap);
+        collapse_wide_tuple_unions(&mut res, heap);
         collapse_quantifieds(&mut res, heap);
+        // Second pass: squashing can still leave a pathologically large union (e.g. thousands
+        // of distinct class types). Widen anything still over the cap to `Any`.
+        if res.len() > MAX_UNION_MEMBERS {
+            return heap.mk_any_implicit();
+        }
         // `res` is collapsible again if `flatten_and_dedup` drops `xs` to 0 or 1 elements
         try_collapse(res, heap).unwrap_or_else(|members| heap.mk_union(members))
     })
@@ -508,6 +534,81 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
     }
 }
 
+const TUPLE_UNION_WIDENING_THRESHOLD: usize = 256;
+
+/// Collapses unions containing more than `TUPLE_UNION_WIDENING_THRESHOLD` tuple variants
+/// into a single tuple type, preventing combinatorial explosion of concrete tuple types at
+/// control-flow joins (keeping type complexity linear O(N) rather than exponential O(2^N)).
+fn collapse_wide_tuple_unions(res: &mut Vec<Type>, heap: &TypeHeap) {
+    let tuples: Vec<&Tuple> = res
+        .iter()
+        .filter_map(|t| match t {
+            Type::Tuple(tuple) => Some(tuple),
+            _ => None,
+        })
+        .collect();
+    if tuples.len() <= TUPLE_UNION_WIDENING_THRESHOLD {
+        return;
+    }
+    let mut element_types = Vec::new();
+    for tuple in &tuples {
+        collect_tuple_elements(tuple, heap, &mut element_types);
+    }
+    let merged = heap.mk_unbounded_tuple(unions(element_types, heap));
+    res.retain(|t| !matches!(t, Type::Tuple(_)));
+    res.push(merged);
+    res.sort();
+    res.dedup();
+}
+
+fn collect_tuple_elements(tuple: &Tuple, heap: &TypeHeap, out: &mut Vec<Type>) {
+    match tuple {
+        Tuple::Concrete(elts) => {
+            for elt in elts {
+                collect_tuple_member(elt, heap, out);
+            }
+        }
+        Tuple::Unbounded(elem) => {
+            out.push((**elem).clone());
+        }
+        Tuple::Unpacked(unpacked) => {
+            let (prefix, middle, suffix) = unpacked.as_ref();
+            for elt in prefix {
+                collect_tuple_member(elt, heap, out);
+            }
+            collect_unpacked_member(middle, heap, out);
+            for elt in suffix {
+                collect_tuple_member(elt, heap, out);
+            }
+        }
+    }
+}
+
+fn collect_tuple_member(ty: &Type, heap: &TypeHeap, out: &mut Vec<Type>) {
+    match ty {
+        Type::Unpack(inner) => {
+            collect_unpacked_member(inner, heap, out);
+        }
+        other => {
+            out.push(other.clone());
+        }
+    }
+}
+
+fn collect_unpacked_member(ty: &Type, heap: &TypeHeap, out: &mut Vec<Type>) {
+    match ty {
+        Type::Tuple(tuple) => {
+            collect_tuple_elements(tuple, heap, out);
+        }
+        Type::Quantified(q) if q.is_type_var_tuple() => {
+            out.push(heap.mk_element_of_type_var_tuple((**q).clone()));
+        }
+        other => {
+            out.push(other.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pyrefly_python::module_name::ModuleName;
@@ -515,6 +616,7 @@ mod tests {
     use ruff_text_size::TextRange;
 
     use crate::heap::TypeHeap;
+    use crate::lit_int::LitInt;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedIdentity;
@@ -537,6 +639,21 @@ mod tests {
         ];
         let res = unions(xs, &heap);
         assert_eq!(res, Type::never());
+    }
+
+    #[test]
+    fn test_oversized_union_widens_to_any() {
+        let heap = TypeHeap::new();
+        // More than `MAX_UNION_MEMBERS` distinct members survive squashing, so the union is
+        // widened to `Any`.
+        let xs: Vec<Type> = (0..=(super::MAX_UNION_MEMBERS as i64))
+            .map(|i| LitInt::new(i).to_implicit_type())
+            .collect();
+        assert!(matches!(unions(xs, &heap), Type::Any(_)));
+
+        // A union under the cap is left untouched.
+        let xs: Vec<Type> = (0..8).map(|i| LitInt::new(i).to_implicit_type()).collect();
+        assert!(matches!(unions(xs, &heap), Type::Union(_)));
     }
 
     #[test]
@@ -652,5 +769,105 @@ mod tests {
             )),
         ];
         assert_eq!(unions(xs, &heap), Type::unbounded_tuple(Type::None));
+    }
+
+    #[test]
+    fn test_collapse_wide_tuple_unions() {
+        let heap = TypeHeap::new();
+        // Build more than the threshold of distinct-length tuples so the widening fires. Mixed
+        // arities can't merge per-position, so they collapse to an unbounded `tuple[None, ...]`.
+        let xs = (1..=(super::TUPLE_UNION_WIDENING_THRESHOLD + 1))
+            .map(|i| Type::concrete_tuple(vec![Type::None; i]))
+            .collect();
+        let res = unions(xs, &heap);
+        assert_eq!(res, Type::unbounded_tuple(Type::None));
+    }
+
+    #[test]
+    fn test_collapse_wide_tuple_unions_corner_cases() {
+        let heap = TypeHeap::new();
+
+        use pyrefly_python::module_name::ModuleName;
+        use ruff_python_ast::name::Name;
+        use ruff_text_size::TextRange;
+        use ruff_text_size::TextSize;
+
+        use crate::quantified::AnchorIndex;
+        use crate::quantified::Quantified;
+        use crate::quantified::QuantifiedIdentity;
+        use crate::quantified::QuantifiedKind;
+        use crate::quantified::QuantifiedOrigin;
+        use crate::type_var::PreInferenceVariance;
+        use crate::type_var::Restriction;
+
+        let q_id = QuantifiedIdentity::new(
+            ModuleName::from_str("test"),
+            AnchorIndex::new(TextRange::new(TextSize::new(0), TextSize::new(10)), 0),
+            QuantifiedOrigin::ScopedLegacy,
+        );
+        let tvt = Quantified::new(
+            q_id,
+            Name::new_static("Ts"),
+            QuantifiedKind::TypeVarTuple,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        )
+        .to_type(&heap);
+
+        let mut xs = vec![
+            // A tuple with unpacked concrete tuple: tuple[any_explicit, *tuple[any_implicit, any_error]]
+            Type::concrete_tuple(vec![
+                Type::any_explicit(),
+                Type::Unpack(Box::new(Type::concrete_tuple(vec![
+                    Type::any_implicit(),
+                    Type::any_error(),
+                ]))),
+            ]),
+            // A tuple with regular nested tuple: tuple[any_explicit, tuple[any_implicit, any_error]]
+            Type::concrete_tuple(vec![
+                Type::any_explicit(),
+                Type::concrete_tuple(vec![Type::any_implicit(), Type::any_error()]),
+            ]),
+            // A tuple with unpacked TypeVarTuple: tuple[any_explicit, *Ts]
+            Type::concrete_tuple(vec![
+                Type::any_explicit(),
+                Type::Unpack(Box::new(tvt.clone())),
+            ]),
+            // A tuple with invalid unpacked type: tuple[any_explicit, *None]
+            Type::concrete_tuple(vec![
+                Type::any_explicit(),
+                Type::Unpack(Box::new(Type::None)),
+            ]),
+            Type::concrete_tuple(vec![Type::any_explicit()]),
+            Type::concrete_tuple(vec![Type::any_implicit()]),
+            Type::concrete_tuple(vec![Type::any_error()]),
+            Type::concrete_tuple(vec![Type::None]),
+            Type::concrete_tuple(vec![Type::any_tuple()]),
+        ];
+
+        // Pad with distinct-length all-`None` tuples so the union exceeds the widening threshold
+        // and the collapse fires. Their only element, `None`, is already part of the expected
+        // union, and the varying arities keep the result on the unbounded-widening path.
+        xs.extend(
+            (3..=(super::TUPLE_UNION_WIDENING_THRESHOLD + 3))
+                .map(|i| Type::concrete_tuple(vec![Type::None; i])),
+        );
+
+        let res = unions(xs, &heap);
+        let expected_element_type = unions(
+            vec![
+                Type::any_explicit(),
+                Type::any_implicit(),
+                Type::any_error(),
+                Type::concrete_tuple(vec![Type::any_implicit(), Type::any_error()]),
+                heap.mk_element_of_type_var_tuple(tvt.as_quantified().unwrap().0.clone()),
+                Type::None,
+                Type::any_tuple(),
+            ],
+            &heap,
+        );
+
+        assert_eq!(res, Type::unbounded_tuple(expected_element_type));
     }
 }

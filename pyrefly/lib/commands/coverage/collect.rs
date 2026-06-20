@@ -29,6 +29,7 @@ use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::thread_pool::ThreadCount;
+use rayon::prelude::*;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::name::Name;
@@ -43,7 +44,6 @@ use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
-use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::ClassBinding;
@@ -167,6 +167,15 @@ fn class_qualified_name(
     }
 }
 
+/// The module name with a trailing `.`, or empty for the unknown module; prefixed to symbol FQNs.
+fn module_prefix(module: &Module) -> String {
+    if module.name() != ModuleName::unknown() {
+        format!("{}.", module.name())
+    } else {
+        String::new()
+    }
+}
+
 /// Merge overloads with the same qualified name into one entry,
 /// keeping the best annotation quality per deduplicated slot.
 fn merge_overloads(functions: &mut Vec<Function>) {
@@ -235,6 +244,28 @@ fn classify_annotation_rank(has_annotation: bool, resolved_is_known: Option<bool
         None if has_annotation => SlotRank::Typed,
         None => SlotRank::Untyped,
     }
+}
+
+/// Annotation source text and slot classification for an optional annotation binding.
+fn classify_annotation(
+    module: &Module,
+    bindings: &Bindings,
+    answers: &Answers,
+    annotation_idx: Option<Idx<KeyAnnotation>>,
+) -> (Option<String>, SlotCounts) {
+    let annotation_text = annotation_idx.and_then(|idx| match bindings.get(idx) {
+        BindingAnnotation::AnnotateExpr(_, expr, _) => {
+            Some(module.code_at(expr.range()).to_owned())
+        }
+        _ => None,
+    });
+    let resolved_ty = annotation_idx.and_then(|idx| {
+        answers
+            .get_idx(idx)
+            .and_then(|awt| awt.annotation.ty.as_ref().map(is_type_known))
+    });
+    let slots = classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
+    (annotation_text, slots)
 }
 
 /// Returns true if the name is public: does not start with `_`, or is a dunder (`__x__`).
@@ -369,33 +400,28 @@ fn filter_module_report_to_public(report: &mut ModuleReport, public_fqns: &HashS
         .names
         .retain(|n| is_public_fqn(n, &module_prefix, public_fqns));
 
-    // recompute all aggregates in a single pass
+    // recompute all aggregates in a single pass; type ignores attach to the
+    // module itself, not symbols, so their count is unaffected by filtering
     report.slots = SlotCounts::default();
-    report.n_methods = 0;
-    report.n_functions = 0;
-    report.n_method_params = 0;
-    report.n_function_params = 0;
-    report.n_classes = 0;
-    report.n_attrs = 0;
-    report.n_properties = 0;
-    // `n_type_ignores` is not affected by public filtering since type ignores are always
-    // attached to the module itself, not individual symbols, so we don't need to recalculate
-    // it here.
+    report.symbols = SymbolCounts {
+        n_type_ignores: report.symbols.n_type_ignores,
+        ..SymbolCounts::default()
+    };
 
     for sym in &report.symbol_reports {
         report.slots = report.slots.merge(*sym.slots());
         match sym {
             SymbolReport::Function { name, n_params, .. } if is_method(name, &module_prefix) => {
-                report.n_methods += 1;
-                report.n_method_params += *n_params;
+                report.symbols.n_methods += 1;
+                report.symbols.n_method_params += *n_params;
             }
             SymbolReport::Function { n_params, .. } => {
-                report.n_functions += 1;
-                report.n_function_params += *n_params;
+                report.symbols.n_functions += 1;
+                report.symbols.n_function_params += *n_params;
             }
-            SymbolReport::Class { .. } => report.n_classes += 1,
-            SymbolReport::Attr { .. } => report.n_attrs += 1,
-            SymbolReport::Property { .. } => report.n_properties += 1,
+            SymbolReport::Class { .. } => report.symbols.n_classes += 1,
+            SymbolReport::Attr { .. } => report.symbols.n_attrs += 1,
+            SymbolReport::Property { .. } => report.symbols.n_properties += 1,
         }
     }
 
@@ -418,35 +444,25 @@ fn has_implicit_receiver(
     }
 }
 
-/// Returns the ClassBinding if the class owning this field is a schema class (dataclass, enum,
+/// Whether the class is a schema class (dataclass, enum,
 /// TypedDict, NamedTuple, pydantic model, or attrs class). Fields of schema classes are
 /// IMPLICIT — they have 0 typable slots because the class definition itself governs their types.
 ///
 /// Only frameworks where annotations are structurally required are included.
 /// Django, marshmallow, and factory_boy use descriptors with optional annotations,
 /// so their fields count toward coverage.
-fn get_cls_binding_if_schema_class_field<'a>(
-    bindings: &'a Bindings,
-    answers: &Answers,
-    field: &BindingClassField,
-) -> Option<&'a ClassBinding> {
-    let cls_binding = match bindings.get(field.class_idx) {
-        BindingClass::ClassDef(cls) => cls,
-        BindingClass::FunctionalClassDef(..) => return None,
-    };
+fn is_schema_class(bindings: &Bindings, answers: &Answers, cls_binding: &ClassBinding) -> bool {
     let metadata_key = KeyClassMetadata(cls_binding.def_index);
-    let metadata = answers.get_idx(bindings.key_to_idx(&metadata_key))?;
-    if metadata.dataclass_metadata().is_some()
-        || metadata.is_enum()
-        || metadata.is_typed_dict()
-        || metadata.named_tuple_metadata().is_some()
-        || metadata.is_pydantic_model()
-        || metadata.is_attrs_class()
-    {
-        Some(cls_binding)
-    } else {
-        None
-    }
+    answers
+        .get_idx(bindings.key_to_idx(&metadata_key))
+        .is_some_and(|metadata| {
+            metadata.dataclass_metadata().is_some()
+                || metadata.is_enum()
+                || metadata.is_typed_dict()
+                || metadata.named_tuple_metadata().is_some()
+                || metadata.is_pydantic_model()
+                || metadata.is_attrs_class()
+        })
 }
 
 fn parse_variables(
@@ -466,11 +482,29 @@ fn parse_variables(
         }
     }
 
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    /// True if the binding resolves to an import in at least one flow branch.
+    fn involves_import(bindings: &Bindings, idx: Idx<Key>, seen: &mut SmallSet<Idx<Key>>) -> bool {
+        if !seen.insert(idx) {
+            return false; // LoopPhi can be cyclic
+        }
+        match bindings.get(idx) {
+            Binding::Module(..) | Binding::Import(..) => true,
+            Binding::Forward(i)
+            | Binding::PromoteForward(i)
+            | Binding::ForwardToFirstUse(i)
+            | Binding::Narrow(i, _, _) => involves_import(bindings, *i, seen),
+            Binding::Phi(_, branches) => branches
+                .iter()
+                .any(|b| involves_import(bindings, b.value_key, seen)),
+            Binding::LoopPhi(prior, members) => {
+                involves_import(bindings, *prior, seen)
+                    || members.iter().any(|i| involves_import(bindings, *i, seen))
+            }
+            _ => false,
+        }
+    }
+
+    let module_prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
     // Collect names already reported as functions or classes so we can skip them.
     let reported_names: SmallSet<&str> = functions
@@ -499,102 +533,60 @@ fn parse_variables(
             Some(ExportLocation::ThisModule(export)) => export.location,
             _ => continue,
         };
-        let location = range_to_location(module, range);
-        match binding {
+        let (annotation, slots) = match binding {
             BindingExport::AnnotatedForward(annot_idx, key_idx) => {
                 // IMPLICIT: type aliases are type-level constructs with 0 slots.
                 if matches!(
                     bindings.get(*key_idx),
                     Binding::TypeAlias(_) | Binding::TypeAliasRef(_)
                 ) {
-                    variables.push(Variable {
-                        name: qualified_name,
-                        annotation: None,
-                        slots: SlotCounts::default(),
-                        location,
-                        range,
-                    });
-                    continue;
+                    (None, SlotCounts::default())
+                } else {
+                    classify_annotation(module, bindings, answers, Some(*annot_idx))
                 }
-                let annotation_text = match bindings.get(*annot_idx) {
-                    BindingAnnotation::AnnotateExpr(_, expr, _) => {
-                        Some(module.code_at(expr.range()).to_owned())
-                    }
-                    _ => None,
-                };
-                let resolved_ty = answers
-                    .get_idx(*annot_idx)
-                    .and_then(|awt| awt.annotation.ty.as_ref().map(is_type_known));
-                let slots = classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
-                variables.push(Variable {
-                    name: qualified_name,
-                    annotation: annotation_text,
-                    slots,
-                    location,
-                    range,
-                });
             }
             BindingExport::Forward(idx) | BindingExport::PromoteForward(idx) => {
                 match bindings.get(*idx) {
                     // Skip injected implicit globals
-                    Binding::Global(_) => {}
+                    Binding::Global(_) => continue,
                     // IMPLICIT: special type forms and type aliases have 0 slots
                     Binding::TypeVar(_)
                     | Binding::ParamSpec(_)
                     | Binding::TypeVarTuple(_)
                     | Binding::TypeAlias(_)
-                    | Binding::TypeAliasRef(_) => {
-                        variables.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: SlotCounts::default(),
-                            location,
-                            range,
-                        });
-                    }
+                    | Binding::TypeAliasRef(_) => (None, SlotCounts::default()),
                     // Functions and classes are handled by parse_functions/parse_classes;
                     // skip them here even when excluded (e.g. @type_check_only).
-                    Binding::Function(..) | Binding::ClassDef(..) => {}
+                    Binding::Function(..) | Binding::ClassDef(..) => continue,
                     // IMPLICIT: non-call assignments have 0 slots;
                     // call assignments are untyped (1 slot)
-                    Binding::NameAssign(na) => {
-                        variables.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: untyped_if_call(na.expr.as_ref()),
-                            location,
-                            range,
-                        });
-                    }
+                    Binding::NameAssign(na) => (None, untyped_if_call(na.expr.as_ref())),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
-                        Binding::Function(..) | Binding::ClassDef(..) => {}
-                        Binding::Expr(_, expr) => {
-                            variables.push(Variable {
-                                name: qualified_name,
-                                annotation: None,
-                                slots: untyped_if_call(expr.as_ref()),
-                                location,
-                                range,
-                            });
-                        }
+                        Binding::Function(..) | Binding::ClassDef(..) => continue,
+                        Binding::Expr(_, expr) => (None, untyped_if_call(expr.as_ref())),
                         _ => {
                             unreachable!(
                                 "MultiTargetAssign RHS should be Expr, Function, or ClassDef"
                             );
                         }
                     },
-                    _ => {
-                        variables.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: SlotCounts::untyped(),
-                            location,
-                            range,
-                        });
+                    // Skip optional imports (`try: import x; except _: x = None`) like plain imports.
+                    Binding::Phi(..) | Binding::LoopPhi(..)
+                        if involves_import(bindings, *idx, &mut SmallSet::new()) =>
+                    {
+                        continue;
                     }
+                    _ => (None, SlotCounts::untyped()),
                 }
             }
-        }
+        };
+        variables.push(Variable {
+            name: qualified_name,
+            annotation,
+            slots,
+            location: range_to_location(module, range),
+            range,
+        });
     }
     variables.sort_by_key(|a| a.location);
     variables
@@ -619,11 +611,7 @@ fn parse_instance_attrs(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Variable> {
     let mut attrs = Vec::new();
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let module_prefix = module_prefix(module);
 
     for field_idx in bindings.keys::<KeyClassField>() {
         let field = bindings.get(field_idx);
@@ -643,81 +631,6 @@ fn parse_instance_attrs(
             continue;
         }
 
-        // Only count instance attrs from recognized methods (__init__, etc.)
-        // or a schema class body field. We handle recognized-method fields with full
-        // slot classification, and schema body fields as IMPLICIT (0 typable).
-        let annotation_idx = match &field.definition {
-            ClassFieldDefinition::DefinedInMethod {
-                annotation, method, ..
-            } => {
-                if !method.recognized_attribute_defining_method {
-                    continue;
-                }
-                *annotation
-            }
-            ClassFieldDefinition::DeclaredByAnnotation {
-                annotation,
-                initialized_in_recognized_method,
-            } => {
-                // Schema class fields are always IMPLICIT regardless of whether they're
-                // also initialized in a recognized method — the class definition governs
-                // their types.
-                if let Some(cls_binding) =
-                    get_cls_binding_if_schema_class_field(bindings, answers, field)
-                {
-                    if !has_function_ancestor(&cls_binding.parent) {
-                        let class_name = class_qualified_name(
-                            module,
-                            &cls_binding.parent,
-                            &cls_binding.def.name,
-                        );
-                        let qualified_name =
-                            format!("{}{}.{}", module_prefix, class_name, field.name);
-                        let range = field.range;
-                        let location = range_to_location(module, range);
-                        attrs.push(Variable {
-                            name: qualified_name,
-                            annotation: None,
-                            slots: SlotCounts::default(),
-                            location,
-                            range,
-                        });
-                    }
-                    continue;
-                }
-                // Non-schema fields only count when initialized in a recognized method,
-                // or declared in a stub.
-                if !initialized_in_recognized_method && !module.path().is_interface() {
-                    continue;
-                }
-                Some(*annotation)
-            }
-            ClassFieldDefinition::AssignedInBody { .. } => {
-                // Check if this is an enum member or other schema class body assignment
-                if let Some(cls_binding) =
-                    get_cls_binding_if_schema_class_field(bindings, answers, field)
-                {
-                    if has_function_ancestor(&cls_binding.parent) {
-                        continue;
-                    }
-                    let class_name =
-                        class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
-                    let qualified_name = format!("{}{}.{}", module_prefix, class_name, field.name);
-                    let range = field.range;
-                    let location = range_to_location(module, range);
-                    attrs.push(Variable {
-                        name: qualified_name,
-                        annotation: None,
-                        slots: SlotCounts::default(),
-                        location,
-                        range,
-                    });
-                }
-                continue;
-            }
-            _ => continue,
-        };
-
         let cls_binding = match bindings.get(field.class_idx) {
             BindingClass::ClassDef(cls) => cls,
             BindingClass::FunctionalClassDef(..) => continue,
@@ -725,29 +638,49 @@ fn parse_instance_attrs(
         if has_function_ancestor(&cls_binding.parent) {
             continue;
         }
-        let class_name = class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
-        let qualified_name = format!("{}{}.{}", module_prefix, class_name, field.name);
-        let range = field.range;
-        let location = range_to_location(module, range);
 
-        let annotation_text = annotation_idx.and_then(|idx| match bindings.get(idx) {
-            BindingAnnotation::AnnotateExpr(_, expr, _) => {
-                Some(module.code_at(expr.range()).to_owned())
+        // Only count instance attrs from recognized methods (__init__, etc.)
+        // or a schema class body field. We handle recognized-method fields with full
+        // slot classification, and schema body fields as IMPLICIT (0 typable).
+        let (annotation, slots) = match &field.definition {
+            ClassFieldDefinition::DefinedInMethod {
+                annotation, method, ..
+            } => {
+                if !method.recognized_attribute_defining_method {
+                    continue;
+                }
+                classify_annotation(module, bindings, answers, *annotation)
             }
-            _ => None,
-        });
-        let resolved_ty = annotation_idx.and_then(|idx| {
-            answers
-                .get_idx(idx)
-                .and_then(|awt| awt.annotation.ty.as_ref().map(is_type_known))
-        });
-        let slots = classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
+            // Schema class fields are always IMPLICIT regardless of whether they're
+            // also initialized in a recognized method — the class definition governs
+            // their types.
+            ClassFieldDefinition::DeclaredByAnnotation { .. }
+            | ClassFieldDefinition::AssignedInBody { .. }
+                if is_schema_class(bindings, answers, cls_binding) =>
+            {
+                (None, SlotCounts::default())
+            }
+            // Non-schema fields only count when initialized in a recognized method,
+            // or declared in a stub.
+            ClassFieldDefinition::DeclaredByAnnotation {
+                annotation,
+                initialized_in_recognized_method,
+            } => {
+                if !initialized_in_recognized_method && !module.path().is_interface() {
+                    continue;
+                }
+                classify_annotation(module, bindings, answers, Some(*annotation))
+            }
+            _ => continue,
+        };
 
+        let class_name = class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
+        let range = field.range;
         attrs.push(Variable {
-            name: qualified_name,
-            annotation: annotation_text,
+            name: format!("{}{}.{}", module_prefix, class_name, field.name),
+            annotation,
             slots,
-            location,
+            location: range_to_location(module, range),
             range,
         });
     }
@@ -764,11 +697,7 @@ fn parse_functions(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Function> {
     let mut functions = Vec::new();
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let module_prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
 
     for idx in bindings.keys::<Key>() {
@@ -1201,44 +1130,20 @@ fn is_method(name: &str, module_prefix: &str) -> bool {
     without_prefix.contains('.')
 }
 
-/// Calculate the aggregate summary by summing per-module entity counts.
+/// Calculate the aggregate summary by summing per-module symbol counts.
 pub fn calculate_summary(module_reports: &[ModuleReport]) -> ReportSummary {
-    let n_modules = module_reports.len();
-    let mut total_slots = SlotCounts::default();
-    let mut n_functions = 0usize;
-    let mut n_methods = 0usize;
-    let mut n_function_params = 0usize;
-    let mut n_method_params = 0usize;
-    let mut n_classes = 0usize;
-    let mut n_attrs = 0usize;
-    let mut n_properties = 0usize;
-    let mut n_type_ignores = 0usize;
-
+    let mut slots = SlotCounts::default();
+    let mut symbols = SymbolCounts::default();
     for module in module_reports {
-        total_slots = total_slots.merge(module.slots);
-        n_functions += module.n_functions;
-        n_methods += module.n_methods;
-        n_function_params += module.n_function_params;
-        n_method_params += module.n_method_params;
-        n_classes += module.n_classes;
-        n_attrs += module.n_attrs;
-        n_properties += module.n_properties;
-        n_type_ignores += module.n_type_ignores;
+        slots = slots.merge(module.slots);
+        symbols = symbols.merge(module.symbols);
     }
-
     ReportSummary {
-        n_modules,
-        slots: total_slots,
-        coverage: total_slots.coverage(),
-        strict_coverage: total_slots.strict_coverage(),
-        n_functions,
-        n_methods,
-        n_function_params,
-        n_method_params,
-        n_classes,
-        n_attrs,
-        n_properties,
-        n_type_ignores,
+        n_modules: module_reports.len(),
+        slots,
+        coverage: slots.coverage(),
+        strict_coverage: slots.strict_coverage(),
+        symbols,
     }
 }
 
@@ -1251,12 +1156,26 @@ fn parse_classes(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
     let mut classes = Vec::new();
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let module_prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
+
+    // group method definitions by class
+    let mut methods_by_class: HashMap<Idx<KeyClass>, Vec<Idx<KeyUndecoratedFunction>>> =
+        HashMap::new();
+    for idx in bindings.keys::<Key>() {
+        if let Key::Definition(_) = bindings.idx_to_key(idx)
+            && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
+        {
+            let undecorated_idx = bindings.get(*x).undecorated_idx;
+            if let Some(class_key) = bindings.get(undecorated_idx).class_key {
+                methods_by_class
+                    .entry(class_key)
+                    .or_default()
+                    .push(undecorated_idx);
+            }
+        }
+    }
+
     for class_idx in bindings.keys::<KeyClass>() {
         // Skip @type_check_only classes.
         if tco_classes.contains(&class_idx) {
@@ -1293,25 +1212,12 @@ fn parse_classes(
             .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
         // Check methods defined directly on this class
         let mut incomplete_attributes = Vec::new();
-        for idx in bindings.keys::<Key>() {
-            if let Key::Definition(_id) = bindings.idx_to_key(idx)
-                && let Binding::Function(x, _pred, _class_meta) = bindings.get(idx)
-            {
-                let decorated = bindings.get(*x);
-                let undecorated_idx = decorated.undecorated_idx;
-                let fun = bindings.get(undecorated_idx);
-                if let Some(func_class_key) = fun.class_key {
-                    if func_class_key != class_idx {
-                        continue;
-                    }
-                    let method_name = fun.def.name.to_string();
-                    if !is_function_completely_annotated(bindings, answers, undecorated_idx) {
-                        incomplete_attributes.push(IncompleteAttribute {
-                            name: method_name.clone(),
-                            declared_in: class_name.clone(),
-                        });
-                    }
-                }
+        for &undecorated_idx in methods_by_class.get(&class_idx).into_iter().flatten() {
+            if !is_function_completely_annotated(bindings, answers, undecorated_idx) {
+                incomplete_attributes.push(IncompleteAttribute {
+                    name: bindings.get(undecorated_idx).def.name.to_string(),
+                    declared_in: class_name.clone(),
+                });
             }
         }
         // Check inherited methods
@@ -1395,11 +1301,7 @@ fn collect_class_members(
     handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> SmallSet<String> {
-    let fqname_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let fqname_prefix = module_prefix(module);
 
     let mut members = SmallSet::new();
     for idx in bindings.keys::<KeyClass>() {
@@ -1448,11 +1350,7 @@ fn collect_reexport_fqns(
     exports_data: &Exports,
     dunder_all: &SmallSet<Name>,
 ) -> SmallSet<String> {
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let module_prefix = module_prefix(module);
     exports
         .iter()
         .filter(|&(name, loc)| {
@@ -1537,7 +1435,8 @@ impl ModuleSymbols {
 
     /// When this `.pyi` stub only covers a subset of its `.py` counterpart's public
     /// symbols, add the uncovered `py` symbols so that completeness metrics reflect
-    /// the full module interface. `transaction`/`handle` must be the stub's.
+    /// the full module interface. Merged symbols count as fully untyped, since type
+    /// checkers ignore the `.py` when a stub exists. `transaction`/`handle` must be the stub's.
     fn merge_uncovered_py_symbols(
         &mut self,
         transaction: &Transaction,
@@ -1586,19 +1485,21 @@ impl ModuleSymbols {
                         .is_some_and(|rest| rest.starts_with('.'))
             })
         };
-        for py_func in py.functions {
+        for mut py_func in py.functions {
             if keep(&py_func.name)
                 && !stub_class_members.contains(&py_func.name)
                 && !is_reexported(&py_func.name)
             {
+                py_func.slots = py_func.slots.as_untyped();
                 self.functions.push(py_func);
             }
         }
-        for py_var in py.variables {
+        for mut py_var in py.variables {
             if keep(&py_var.name)
                 && !stub_class_members.contains(&py_var.name)
                 && !is_reexported(&py_var.name)
             {
+                py_var.slots = py_var.slots.as_untyped();
                 self.variables.push(py_var);
             }
         }
@@ -1677,37 +1578,33 @@ fn build_module_report(
     let mut seen = SmallSet::new();
     names.retain(|n| seen.insert(n.clone()));
 
-    // Compute per-module entity counts. Use the derived (file-based)
+    // Compute per-module symbol counts. Use the derived (file-based)
     // module name for prefix matching, since symbol names are built from
     // the derived name and only rewritten to the override name later.
     let module_prefix = format!("{}.", derived_name);
-    let mut n_functions = 0usize;
-    let mut n_methods = 0usize;
-    let mut n_function_params = 0usize;
-    let mut n_method_params = 0usize;
-    let mut n_classes = 0usize;
-    let mut n_attrs = 0usize;
-    let mut n_properties = 0usize;
+    let mut symbols = SymbolCounts {
+        n_type_ignores: suppressions.len(),
+        ..SymbolCounts::default()
+    };
     // Count functions/methods using the `Function` list directly so we
     // can use `n_params` (accurate even for implicit-return dunders).
     for func in functions.iter().filter(|f| f.property_role.is_none()) {
         if is_method(&func.name, &module_prefix) {
-            n_methods += 1;
-            n_method_params += func.n_params;
+            symbols.n_methods += 1;
+            symbols.n_method_params += func.n_params;
         } else {
-            n_functions += 1;
-            n_function_params += func.n_params;
+            symbols.n_functions += 1;
+            symbols.n_function_params += func.n_params;
         }
     }
     for sym in &symbol_reports {
         match sym {
-            SymbolReport::Property { .. } => n_properties += 1,
-            SymbolReport::Attr { .. } => n_attrs += 1,
-            SymbolReport::Class { .. } => n_classes += 1,
+            SymbolReport::Property { .. } => symbols.n_properties += 1,
+            SymbolReport::Attr { .. } => symbols.n_attrs += 1,
+            SymbolReport::Class { .. } => symbols.n_classes += 1,
             SymbolReport::Function { .. } => {}
         }
     }
-    let n_type_ignores = suppressions.len();
 
     ModuleReport {
         name,
@@ -1719,14 +1616,7 @@ fn build_module_report(
         coverage: total_slots.coverage(),
         strict_coverage: total_slots.strict_coverage(),
         slots: total_slots,
-        n_functions,
-        n_methods,
-        n_function_params,
-        n_method_params,
-        n_classes,
-        n_attrs,
-        n_properties,
-        n_type_ignores,
+        symbols,
     }
 }
 
@@ -1786,7 +1676,7 @@ pub fn collect_module_reports(
     untyped_strict: Option<bool>,
     thread_count: ThreadCount,
 ) -> anyhow::Result<(Vec<ModuleReport>, Vec<Error>)> {
-    let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+    let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
     let state = State::new(config_finder, thread_count);
     let holder = Forgetter::new(state, false);
     let handles = Handles::new(expanded_file_list);
@@ -1869,24 +1759,22 @@ pub fn collect_module_reports(
     };
     let config_finder = holder.as_ref().config_finder();
     let dir_cache = DirEntryCache::new(true);
-    for handle in &handles {
+    // Safe to parallelize: per-module collection is read-only and independent.
+    let transaction: &Transaction = transaction;
+    let collect_one = |handle: &Handle| -> Option<(ModuleReport, Vec<Error>)> {
         if shadowed.contains(handle.path().as_path()) {
-            continue;
+            return None;
         }
 
         // gh-3632: skip files whose module name isn't importable (shadowed parent).
         let module = handle.module();
         if module != ModuleName::unknown() {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
-            if find_import_filtered(&config, module, None, None, &dir_cache, None)
-                .finding()
-                .is_none()
-            {
-                continue;
-            }
+            find_import_filtered(&config, module, None, None, &dir_cache, None).finding()?;
         }
 
         if let Some(mut symbols) = ModuleSymbols::collect(transaction, handle) {
+            let mut errors = Vec::new();
             // Per source module, so stub-merged `.py` symbols render against their own file.
             if let Some(strict) = untyped_strict {
                 collect_untyped_errors(
@@ -1948,8 +1836,17 @@ pub fn collect_module_reports(
                     }
                 }
             }
-            module_reports.push(module_report);
+            Some((module_report, errors))
+        } else {
+            None
         }
+    };
+    let collected: Vec<(ModuleReport, Vec<Error>)> = holder
+        .as_ref()
+        .install(|| handles.par_iter().filter_map(collect_one).collect());
+    for (report, module_errors) in collected {
+        module_reports.push(report);
+        errors.extend(module_errors);
     }
 
     if let Some(public_fqns) = &public_fqns {
@@ -2073,10 +1970,10 @@ mod tests {
         report
     }
 
-    /// Build a `ModuleReport` that merges a `.pyi` stub with its `.py` source,
-    /// mirroring the production pipeline in `collect_module_reports` when `prefer_stubs` is
-    /// true and both files exist for the same module.
-    fn build_stub_module_report(pyi_file: &str, py_file: &str) -> ModuleReport {
+    /// Merge a `.pyi` stub's symbols with its `.py` source, mirroring the production
+    /// pipeline in `collect_module_reports` when `prefer_stubs` is true and both
+    /// files exist for the same module.
+    fn merged_stub_symbols(pyi_file: &str, py_file: &str) -> ModuleSymbols {
         // Keep the state alive: the merge needs the stub's transaction.
         let pyi_code = load_test_file(pyi_file);
         let (pyi_state, pyi_handle_fn) = TestEnv::one_with_path("test", "test.pyi", &pyi_code)
@@ -2088,7 +1985,11 @@ mod tests {
 
         let (py, _) = parse_test_module(py_file, TestEnv::new());
         stub.merge_uncovered_py_symbols(&pyi_txn, &pyi_handle, py);
+        stub
+    }
 
+    fn build_stub_module_report(pyi_file: &str, py_file: &str) -> ModuleReport {
+        let stub = merged_stub_symbols(pyi_file, py_file);
         build_module_report(
             "test".to_owned(),
             "test.pyi".to_owned(),
@@ -2111,6 +2012,13 @@ mod tests {
     fn test_report_variables() {
         let report = build_module_report_for_test("variables.py");
         compare_snapshot("variables.expected.json", &report);
+    }
+
+    /// gh-3773: optional imports must not be reported as untyped variables.
+    #[test]
+    fn test_report_optional_imports() {
+        let report = build_module_report_for_test("optional_imports.py");
+        compare_snapshot("optional_imports.expected.json", &report);
     }
 
     #[test]
@@ -2193,6 +2101,16 @@ mod tests {
     fn test_report_stub_reexport_class() {
         let report = build_stub_module_report("stub_reexport_class.pyi", "stub_reexport_class.py");
         compare_snapshot("stub_reexport_class.expected.json", &report);
+    }
+
+    /// gh-3778: `.py`-only symbols count as fully untyped, even when annotated in the `.py`.
+    #[test]
+    fn test_report_stub_ignores_py_annotations() {
+        let report = build_stub_module_report(
+            "stub_ignores_py_annotations.pyi",
+            "stub_ignores_py_annotations.py",
+        );
+        compare_snapshot("stub_ignores_py_annotations.expected.json", &report);
     }
 
     /// gh-3519: don't double-count methods whose stub coverage is inherited.
@@ -2328,14 +2246,25 @@ mod tests {
             "inherited_attrs.py",
             "instance_attrs.py",
             "method_aliases.py",
+            "optional_imports.py",
             "overloads.py",
             "overloads_partial.py",
             "partial_any.py",
             "property_basic.py",
             "schema_classes_methods.py",
+            "stub_ignores_py_annotations.pyi",
             "variables.py",
         ] {
-            let (p, module_path) = parse_test_module(file, TestEnv::new());
+            // `.pyi` entries are stub-merged with their `.py` source.
+            let (p, module_path) = if let Some(stem) = file.strip_suffix(".pyi") {
+                (
+                    merged_stub_symbols(file, &format!("{stem}.py")),
+                    "test.pyi".to_owned(),
+                )
+            } else {
+                parse_test_module(file, TestEnv::new())
+            };
+
             let report = build_module_report(
                 "test".to_owned(),
                 module_path,
@@ -2703,7 +2632,7 @@ mod tests {
         compare_snapshot("del_module_level.expected.json", &report);
     }
 
-    /// --module name override: entity counts (n_functions vs n_methods) must
+    /// --module name override: symbol counts (n_functions vs n_methods) must
     /// be correct even when the output module name differs from the derived name.
     #[test]
     fn test_report_module_name_override() {
@@ -2876,14 +2805,16 @@ def g(x: int) -> int:
             slots: SlotCounts::default(),
             coverage: 100.0,
             strict_coverage: 100.0,
-            n_functions: 2,
-            n_methods: 0,
-            n_function_params: 123,
-            n_method_params: 456,
-            n_classes: 1,
-            n_attrs: 1,
-            n_properties: 0,
-            n_type_ignores: 0,
+            symbols: SymbolCounts {
+                n_functions: 2,
+                n_methods: 0,
+                n_function_params: 123,
+                n_method_params: 456,
+                n_classes: 1,
+                n_attrs: 1,
+                n_properties: 0,
+                n_type_ignores: 0,
+            },
         };
 
         let public_fqns: HashSet<String> = ["pkg.Foo", "pkg.bar"]
@@ -2894,12 +2825,12 @@ def g(x: int) -> int:
 
         assert_eq!(report.names, vec!["pkg.Foo", "pkg.bar"]);
         assert_eq!(report.symbol_reports.len(), 3); // Foo, Foo.method, bar
-        assert_eq!(report.n_functions, 1);
-        assert_eq!(report.n_methods, 1);
-        assert_eq!(report.n_function_params, 1);
-        assert_eq!(report.n_method_params, 2);
-        assert_eq!(report.n_classes, 1);
-        assert_eq!(report.n_attrs, 0);
+        assert_eq!(report.symbols.n_functions, 1);
+        assert_eq!(report.symbols.n_methods, 1);
+        assert_eq!(report.symbols.n_function_params, 1);
+        assert_eq!(report.symbols.n_method_params, 2);
+        assert_eq!(report.symbols.n_classes, 1);
+        assert_eq!(report.symbols.n_attrs, 0);
     }
 
     #[test]

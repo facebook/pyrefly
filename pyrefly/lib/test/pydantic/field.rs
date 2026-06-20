@@ -439,3 +439,21 @@ class Model(BaseModel):
     x = Field(default=1)  # E: `x` is a dataclass field but has no type annotation
 "#,
 );
+
+// Pydantic `_`-prefixed private fields are not storage; the inherited
+// `BaseModel` representative wins — a regression to `Left` would name it
+// in the diagnostic.
+pydantic_testcase!(
+    test_pydantic_dataclass_slots_private_fields_do_not_promote,
+    r#"
+from pydantic import BaseModel
+
+class Left(BaseModel, slots=True):
+    _x: int
+
+class Right:
+    __slots__ = ("y",)
+
+class Conflict(Left, Right): ...  # E: inherits from incompatible disjoint bases `BaseModel`, `Right`
+"#,
+);

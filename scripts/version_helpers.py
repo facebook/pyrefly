@@ -60,6 +60,40 @@ def parse_semver(version: str) -> tuple[int, int, int, int | None]:
     )
 
 
+def format_semver(version: tuple[int, int, int, int | None]) -> str:
+    """Render a parsed version tuple as canonical semver (inverse of parse_semver)."""
+    major, minor, patch, dev_n = version
+    s = f"{major}.{minor}.{patch}"
+    if dev_n is not None:
+        s += f"-dev.{dev_n}"
+    return s
+
+
+def previous_minor(version: str) -> str:
+    """Bare release tag the changelog for a stable minor/major cut diffs *from*.
+
+    A minor release's notes should span the whole minor -- everything since
+    the previous stable minor -- not just the last dev snapshot, so they diff
+    from `M.(m-1).0`. Tags are bare semver with no `v` prefix (see
+    publish_to_pypi.yml).
+
+    Raises ValueError unless `version` is a stable `M.m.0` with m > 0. A major
+    bump `M.0.0` has no previous minor in its own major line, so the caller
+    must supply an explicit from-ref.
+    """
+    major, minor, patch, dev_n = parse_semver(version)
+    if dev_n is not None or patch != 0:
+        raise ValueError(
+            f"previous_minor expects a stable M.m.0 version, got {version!r}"
+        )
+    if minor == 0:
+        raise ValueError(
+            f"{version!r} is a major release with no previous minor in its "
+            "major line; supply an explicit from-ref"
+        )
+    return f"{major}.{minor - 1}.0"
+
+
 def is_prerelease(version: str) -> bool:
     """Return True if the version is a pre-release (contains -dev.N)."""
     _, _, _, dev_n = parse_semver(version)

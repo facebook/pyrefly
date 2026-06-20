@@ -682,6 +682,18 @@ issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overl
 );
 
 testcase!(
+    test_runtime_checkable_protocol_never_no_unsafe_overlap,
+    r#"
+from collections.abc import Iterable
+from typing import Never
+
+def f(x: Never) -> None:
+    if isinstance(x, Iterable):
+        pass
+"#,
+);
+
+testcase!(
     test_runtime_checkable_missing_members_do_not_overlap,
     r#"
 from typing import Any, Generator, Iterable, Protocol, runtime_checkable
@@ -1004,5 +1016,34 @@ class Ambiguous(Protocol):
 class Ok(Protocol):
     x: int
     y: str = "default"
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_method_filtered_by_self,
+    r#"
+from __future__ import annotations
+from datetime import timedelta
+from typing import Generic, TypeVar, Protocol, overload, assert_type
+
+T_contra = TypeVar("T_contra", contravariant=True)
+S1_co = TypeVar("S1_co", bound=timedelta | int | float, covariant=True)
+S2_co = TypeVar("S2_co", bound=timedelta | int | float, covariant=True)
+
+class SupportsProtoTrueDiv(Protocol[T_contra, S2_co]):
+    def _proto_truediv(self, other: T_contra, /) -> ElementOpsMixin[S2_co]: ...
+
+class ElementOpsMixin(Protocol, Generic[S2_co]):
+    @overload
+    def _proto_truediv(self: ElementOpsMixin[int], other: int, /) -> ElementOpsMixin[float]: ...
+    @overload
+    def _proto_truediv(self: ElementOpsMixin[timedelta], other: timedelta, /) -> ElementOpsMixin[float]: ...
+
+class Series(ElementOpsMixin[S2_co], Protocol):
+    def __truediv__(self: SupportsProtoTrueDiv[T_contra, S1_co], other: T_contra) -> Series[S1_co]: ...
+
+def main2(s: Series[timedelta]) -> None:
+    td = timedelta(1)
+    assert_type(s / td, Series[float])
 "#,
 );

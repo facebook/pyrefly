@@ -1588,7 +1588,10 @@ pub struct ThreadState {
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
     /// Solve-time mapping from per-module lambda parameter IDs to the
     /// thread-local Var that represents that parameter in the current solve.
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, LambdaParamId), Var>>,
+    ///
+    /// The `ModulePath` is needed to distinguish the in-memory and on-disk
+    /// versions of the same module, which can coexist in the IDE (issue #3789).
+    lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1870,14 +1873,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.thread_state
             .lambda_param_vars
             .borrow_mut()
-            .insert((self.module().name(), id), var);
+            .insert((self.module().name(), self.module().path().dupe(), id), var);
     }
 
     fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
-            .get(&(self.module().name(), id))
+            .get(&(self.module().name(), self.module().path().dupe(), id))
             .copied()
     }
 
@@ -1918,8 +1921,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Record an expected type trace.
     pub(crate) fn record_expected_type_trace(&self, loc: TextRange, ty: &Type) {
-        self.trace_state()
-            .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        // Guard on the trace sink before cloning: in a normal (non-tracing) check
+        // there is no sink installed, so the clone would be pure waste.
+        if self.current().tracing_enabled() {
+            self.trace_state()
+                .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        }
     }
 
     /// Store a partial answer for inline first-use pinning.
@@ -3176,12 +3183,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if Self::type_contains_none(got) && !Self::type_contains_none(want) {
             let hint = match tcc().kind {
-                TypeCheckKind::ExplicitFunctionReturn => {
-                    format!(
-                        "The return type does not allow `None`. \
-                         Either handle the `None` case or change the return type to `{} | None`.",
+                TypeCheckKind::ExplicitFunctionReturn
+                | TypeCheckKind::AnnAssign
+                | TypeCheckKind::AnnotatedName(_)
+                    if !got.is_none() =>
+                {
+                    Some(format!(
+                        "Consider narrowing the value with an `is not None` check or changing the declared type to `{} | None`",
                         self.for_display(want.clone()),
-                    )
+                    ))
                 }
                 TypeCheckKind::ImplicitFunctionReturn(_) => {
                     // For implicit returns (missing return statement), the error message
@@ -3189,23 +3199,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // an explicit return" is already clear. Adding a None hint here is
                     // confusing because the user didn't explicitly return None.
                     // Skip the hint for implicit returns.
-                    builder.emit();
-                    return;
+                    None
                 }
-                TypeCheckKind::AnnAssign
-                | TypeCheckKind::AnnotatedName(_)
-                | TypeCheckKind::Attribute(_) => {
-                    format!(
-                        "The declared type does not allow `None`. \
-                         Either narrow with an `is not None` check or change the type to `{} | None`.",
-                        self.for_display(want.clone()),
-                    )
+                TypeCheckKind::Attribute(_)
+                | TypeCheckKind::CallArgument(..)
+                | TypeCheckKind::CallKwArgs(..)
+                | TypeCheckKind::CallUnpackKwArg(..)
+                | TypeCheckKind::CallVarArgs(..) => {
+                    if got.is_none() {
+                        // Skip the hint. Narrowing the value doesn't make sense if there's no
+                        // non-None part to narrow to, and changing the attribute or parameter type
+                        // is often unactionable, since the definition may be in third-party code.
+                        None
+                    } else {
+                        // We only suggest narrowing. Changing the attribute or parameter type is
+                        // often unactionable, since the definition may be in third-party code.
+                        Some("Consider narrowing the value with an `is not None` check".to_owned())
+                    }
                 }
-                _ => "The type includes `None` which is not accepted here. \
-                     Narrow the type with an `is not None` check."
-                    .to_owned(),
+                _ => Some(format!(
+                    "Consider changing the declared type to `{} | None`",
+                    self.for_display(want.clone())
+                )),
             };
-            builder = builder.with_detail(hint);
+            if let Some(hint) = hint {
+                builder = builder
+                    .with_detail(format!("The declared type does not allow `None`. {hint}."));
+            }
         }
         builder.emit();
     }

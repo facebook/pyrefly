@@ -28,11 +28,11 @@ export default function LandingPage(): React.ReactElement {
             description={siteConfig.description}
         >
             <Banner
-                text="🎉 Pyrefly v1.0 is now available!"
+                text="🎉 Pyrefly v1.1 is now available!"
                 dismissible={true}
                 cta={{
                     text: 'Read the blog',
-                    href: '/blog/v1.0',
+                    href: '/blog/v1.1',
                 }}
             />
             <LandingPageSection

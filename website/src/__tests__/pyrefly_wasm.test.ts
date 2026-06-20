@@ -164,7 +164,7 @@ tes
             const testCompletion = completions.find((c) => c.label === 'test');
             expect(testCompletion).toBeDefined();
             expect(testCompletion.detail).toContain('(x: int) -> int');
-            expect(testCompletion.kind).toBe(3); // Function kind
+            expect(testCompletion.kind).toBe(1); // Monaco Function kind (LSP's is 3)
         });
     });
 

@@ -207,6 +207,9 @@ pub struct DataclassKeywords {
     /// coercion (e.g., allowing `'0'` for an int field and coercing it to `0`) is allowed. `strict` is always true
     /// for non-Pydantic dataclasses.
     pub strict: bool,
+    /// attrs-only `auto_attribs`. `None` = not explicitly set (different attrs decorators have different defaults).
+    /// `Some(false)` = only `attr.ib()`/`field()` names are fields.
+    pub auto_attribs: Option<bool>,
 }
 
 impl DataclassKeywords {
@@ -219,6 +222,7 @@ impl DataclassKeywords {
     const UNSAFE_HASH: Name = Name::new_static("unsafe_hash");
     const SLOTS: Name = Name::new_static("slots");
     const STRICT: Name = Name::new_static("strict");
+    const AUTO_ATTRIBS: Name = Name::new_static("auto_attribs");
 
     /// Creates dataclass keywords from a type map (decorator arguments) and defaults.
     ///
@@ -245,6 +249,9 @@ impl DataclassKeywords {
             slots: map.get_bool(&Self::SLOTS).unwrap_or(false),
             extra: false,
             strict: map.get_bool(&Self::STRICT).unwrap_or(strict_default),
+            // Explicit value only; the per-decorator default is resolved in
+            // `dataclass_from_dataclass_transform` where `order_default` is known.
+            auto_attribs: map.get_bool(&Self::AUTO_ATTRIBS),
         }
     }
 

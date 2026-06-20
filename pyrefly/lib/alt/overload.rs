@@ -6,16 +6,20 @@
  */
 
 use std::cmp::max;
-use std::collections::HashMap;
 
 use itertools::Either;
 use itertools::Itertools;
 use pyrefly_types::callable::ArgCount;
 use pyrefly_types::callable::ArgCounts;
 use pyrefly_types::callable::Param;
+use pyrefly_types::callable::ParamOverlay;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_output::DisplayOutput;
+use pyrefly_types::type_output::TypeOutput;
 use pyrefly_types::types::TArgs;
+use pyrefly_util::display::Fmt;
 use pyrefly_util::display::count;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::owner::Owner;
@@ -23,12 +27,14 @@ use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::OverloadTrace;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::call::TargetWithTParams;
+use crate::alt::callable::ArgMap;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
@@ -52,8 +58,8 @@ struct CalledOverload<'f> {
     ctor_targs: Option<TArgs>,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
-    /// Maps each argument's source range to the parameter type it was matched against.
-    expected_types: HashMap<TextRange, Type>,
+    /// Maps each argument's source range to the parameter it was matched against.
+    argmap: ArgMap,
 }
 
 impl CalledOverload<'_> {
@@ -287,7 +293,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ctor_targs: None,
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
-                    expected_types: HashMap::new(),
+                    argmap: ArgMap::new(),
                 },
                 false,
             ),
@@ -339,12 +345,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(first_overload) = matched_overloads.first() {
                         let func = first_overload.func;
                         let ctor_targs = first_overload.ctor_targs.clone();
-                        let expected_types = first_overload.expected_types.clone();
+                        let argmap = first_overload.argmap.clone();
                         let specialization_errors = first_overload.specialization_errors.clone();
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
-                            expected_types,
+                            argmap,
                             res: self.unions(matched_overloads.into_map(|o| o.res)),
                             call_errors: self.error_collector(),
                             specialization_errors,
@@ -367,23 +373,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *targs = chosen_targs;
         }
-        // Record the closest overload to power IDE services.
-        let mut overload_trace = |target: &TargetWithTParams<Function>| {
-            let tparams = target
-                .0
-                .as_ref()
-                .filter(|tparams| !tparams.is_empty())
-                .cloned();
-            OverloadTrace::new(target.1.signature.clone(), tparams)
-        };
-        let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
-        let closest_overload_trace = overload_trace(closest_overload.func);
-        self.record_overload_trace(
-            arguments_range,
-            all_overload_traces,
-            closest_overload_trace,
-            matched,
-        );
+        // Record the closest overload to power IDE services. Guard on the trace
+        // sink before building the (per-signature cloned) traces, which would
+        // otherwise be wasted work in a normal non-tracing check.
+        if self.current().tracing_enabled() {
+            let mut overload_trace = |target: &TargetWithTParams<Function>| {
+                let tparams = target
+                    .0
+                    .as_ref()
+                    .filter(|tparams| !tparams.is_empty())
+                    .cloned();
+                OverloadTrace::new(target.1.signature.clone(), tparams)
+            };
+            let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
+            let closest_overload_trace = overload_trace(closest_overload.func);
+            self.record_overload_trace(
+                arguments_range,
+                all_overload_traces,
+                closest_overload_trace,
+                matched,
+            );
+        }
         if matched {
             // If the selected overload is deprecated, we log a deprecation error.
             if let Some(deprecation) = &closest_overload.func.1.metadata.flags.deprecation {
@@ -441,6 +451,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 context,
                 &closest_overload.func.1.signature,
                 closest_overload.call_errors,
+                closest_overload.argmap,
             );
             (
                 self.heap.mk_any_error(),
@@ -502,6 +513,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         closest_overload_signature: &Callable,
         closest_overload_call_errors: ErrorCollector,
+        mut closest_overload_argmap: ArgMap,
     ) {
         // Build a string showing the argument types for error messages
         let mut arg_type_strs = Vec::new();
@@ -530,6 +542,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             args_display
         );
         let mut details = vec!["Possible overloads:".to_owned()];
+        // Build an overlay of relevant parameters. We'll show only these parameters when printing overloads.
+        if self_obj.is_some() {
+            // We strip `self` from the displayed signatures, so drop it from the overlay as well.
+            // `callable_infer_inner` uses the entire arguments_range as the range for `self` when
+            // constructing a CallArg for it.
+            closest_overload_argmap
+                .range_to_param
+                .remove(&arguments_range);
+        }
+        let signature_overlay = {
+            // If call errors is empty, the call failed due to an arity mismatch. Show all
+            // parameters so the user can see the number of parameters in each signature.
+            if closest_overload_call_errors.is_empty()
+                // If any args are unpacked, we don't know for sure which parameters are matched,
+                // so show all of them.
+                || args.iter().any(|arg| matches!(arg, CallArg::Star(..)))
+                || keywords.iter().any(|kw| kw.arg.is_none())
+                // If an unexpected argument was passed in, show all the parameters to help the user
+                // figure out which one they actually meant to match.
+                || args.iter().map(|arg| arg.range()).chain(keywords.iter().map(|kw| kw.range)).any(|r| !closest_overload_argmap.range_to_param.contains_key(&r))
+            {
+                ParamOverlay::All
+            } else {
+                // Show only parameters that were matched by passed arguments and required
+                // parameters that were not matched.
+                let names = closest_overload_argmap
+                    .range_to_param
+                    .into_values()
+                    .map(|p| p.name)
+                    .chain(closest_overload_argmap.unmatched_params)
+                    .collect::<Option<SmallSet<_>>>();
+                match names {
+                    Some(names) => ParamOverlay::Subset(names),
+                    None => ParamOverlay::All,
+                }
+            }
+        };
         for overload in overloads {
             let suffix = if overload.1.signature == *closest_overload_signature {
                 " [closest match]"
@@ -544,10 +593,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .unwrap_or_else(|| overload.1.signature.clone()),
                 None => overload.1.signature.clone(),
             };
-            let signature = self
+            let type_for_display = self
                 .solver()
                 .for_display(self.heap.mk_callable_from(signature));
-            details.push(format!("  {signature}{suffix}"));
+            let display_context = TypeDisplayContext::new(&[&type_for_display]);
+            let signature_for_display = match &type_for_display {
+                Type::Callable(callable) => callable,
+                _ => unreachable!("Expected a callable"),
+            };
+            let signature_for_display = match &signature_for_display.params {
+                Params::List(params) => {
+                    if let ParamOverlay::Subset(names) = &signature_overlay
+                        && let cur_names = params
+                            .items()
+                            .iter()
+                            .filter_map(|p| p.name())
+                            .collect::<SmallSet<_>>()
+                        && names.iter().any(|name| !cur_names.contains(name))
+                    {
+                        // If any of the parameters we want to show don't exist in the current
+                        // signature, be conservative and show everything.
+                        format!("{type_for_display}")
+                    } else {
+                        format!(
+                            "{}",
+                            Fmt(|f| {
+                                let mut output = DisplayOutput::new(&display_context, f);
+                                let write_type = |t: &Type, o: &mut DisplayOutput| {
+                                    display_context.fmt_helper_generic(t, false, o)
+                                };
+                                output.write_str("(")?;
+                                params.fmt_with_type(
+                                    &mut output,
+                                    &write_type,
+                                    &signature_overlay,
+                                )?;
+                                output.write_str(") -> ")?;
+                                write_type(&signature_for_display.ret, &mut output)
+                            })
+                        )
+                    }
+                }
+                _ => format!("{type_for_display}"),
+            };
+            details.push(format!("  {signature_for_display}{suffix}"));
         }
         let mut builder = errors
             .error_builder(arguments_range, ErrorKind::NoMatchingOverload, header)
@@ -706,7 +795,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     let mut param_types = matched_overloads
                         .iter()
-                        .filter_map(|o| o.expected_types.get(&arg_range));
+                        .filter_map(|o| o.argmap.range_to_param.get(&arg_range).map(|p| &p.ty));
                     let Some(first) = param_types.next() else {
                         // If we can't find the expected type, be conservative and assume there may be multiple.
                         return true;
@@ -922,7 +1011,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams = callable.0.as_deref();
 
         let call_errors = self.error_collector();
-        let (res, specialization_errors, expected_types) = self.callable_infer(
+        let (res, specialization_errors, argmap) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
             shape_transform,
@@ -947,7 +1036,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ctor_targs: overload_ctor_targs,
             call_errors,
             specialization_errors,
-            expected_types,
+            argmap,
         }
     }
 }

@@ -6,7 +6,6 @@
 from typing import assert_type, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
     from torch import Tensor
 
 

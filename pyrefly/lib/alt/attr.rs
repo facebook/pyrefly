@@ -1146,7 +1146,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return Some((names, has_dict));
         }
         let slots = metadata.slots_info()?;
-        Some((slots.names.clone(), slots.has_dict))
+        Some((slots.names.clone(), slots.has_dict()))
     }
 
     /// Compute the effective slots policy for a class instance write.
@@ -1301,6 +1301,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// During a protocol structural-subtyping check, the got-side member is looked
+    /// up and bound normally, so an overloaded method keeps every overload. Drop the
+    /// overloads whose explicit `self:` annotation is incompatible with the
+    /// (fully-known) receiver, so the subset solver doesn't bind type variables from
+    /// an inapplicable overload.
+    ///
+    /// Returns a filtered copy of the attribute, or `None` if nothing
+    /// changed.
+    ///
+    /// Filtering is skipped when the receiver still contains free type variables or
+    /// unsolved inference vars, since dropping overloads then could be premature.
+    fn filter_got_overloads_for_protocol(&self, attr: &Attribute) -> Option<Attribute> {
+        let Attribute::ClassAttribute(class_attr) = attr else {
+            return None;
+        };
+        let ty = match class_attr {
+            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => ty,
+            _ => return None,
+        };
+        let Type::BoundMethod(bound_method) = ty else {
+            return None;
+        };
+        let BoundMethodType::Overload(overload) = &bound_method.func else {
+            return None;
+        };
+        let self_type = &bound_method.obj;
+        let mut quantifieds = SmallSet::new();
+        self_type.collect_quantifieds(&mut quantifieds);
+        if !quantifieds.is_empty() || !self_type.collect_maybe_placeholder_vars().is_empty() {
+            return None;
+        }
+        let filtered_overload = self.filter_overloads_by_self_type(overload, self_type)?;
+        if &filtered_overload == overload {
+            return None;
+        }
+        let mut new_bound_method = (**bound_method).clone();
+        new_bound_method.func = BoundMethodType::Overload(filtered_overload);
+        let new_method = self.heap.mk_bound_method(new_bound_method);
+        Some(Attribute::ClassAttribute(match class_attr {
+            ClassAttribute::ReadWrite(_) => ClassAttribute::ReadWrite(new_method),
+            ClassAttribute::ReadOnly(_, reason) => {
+                ClassAttribute::ReadOnly(new_method, reason.clone())
+            }
+            _ => unreachable!("matched ReadWrite/ReadOnly above"),
+        }))
+    }
+
     /// Predicate for whether a specific attribute name matches a protocol during structural
     /// subtyping checks.
     ///
@@ -1339,6 +1386,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && let Some(want) = self.get_protocol_attribute(protocol, got.clone(), attr_name)
             {
                 for (got_attr, _) in got_attrs.iter() {
+                    // Filter overloaded got-side methods by self-type so the subset
+                    // solver doesn't match an overload whose `self:` is incompatible
+                    // with the receiver.
+                    let filtered = self.filter_got_overloads_for_protocol(got_attr);
+                    let got_attr = filtered.as_ref().unwrap_or(got_attr);
                     self.is_attribute_subset(got_attr, &want, &mut |got, want| {
                         is_subset(got, want)
                     })

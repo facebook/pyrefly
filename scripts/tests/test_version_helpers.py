@@ -11,9 +11,11 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from parameterized import parameterized
 from pyrefly.scripts.version_helpers import (
+    format_semver,
     is_prerelease,
     main,
     parse_semver,
+    previous_minor,
     to_marketplace,
 )
 
@@ -59,6 +61,50 @@ class ParseSemverTest(unittest.TestCase):
     def test_invalid(self, _name: str, s: str) -> None:
         with self.assertRaises(ValueError):
             parse_semver(s)
+
+
+class FormatSemverTest(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("bare_minor", "1.2.0"),
+            ("bare_patch", "1.2.3"),
+            ("bare_zero", "0.0.0"),
+            ("dev_first", "1.2.0-dev.1"),
+            ("dev_zero", "1.2.0-dev.0"),
+            ("dev_high", "1.2.0-dev.999"),
+        ]
+    )
+    def test_round_trips_with_parse_semver(self, _name: str, s: str) -> None:
+        self.assertEqual(format_semver(parse_semver(s)), s)
+
+
+class PreviousMinorTest(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("minor_one", "1.1.0", "1.0.0"),
+            ("minor_two", "1.2.0", "1.1.0"),
+            ("higher_major", "2.5.0", "2.4.0"),
+            ("high_minor", "100.200.0", "100.199.0"),
+        ]
+    )
+    def test_valid(self, _name: str, version: str, expected: str) -> None:
+        # Tags are bare semver with no `v` prefix.
+        self.assertEqual(previous_minor(version), expected)
+
+    @parameterized.expand(
+        [
+            # Major bumps have no previous minor in their own major line.
+            ("major_one", "1.0.0"),
+            ("major_two", "2.0.0"),
+            # Only stable M.m.0 cuts have a previous minor.
+            ("patch", "1.2.3"),
+            ("dev", "1.2.0-dev.4"),
+            ("garbage", "not-a-version"),
+        ]
+    )
+    def test_invalid_raises(self, _name: str, version: str) -> None:
+        with self.assertRaises(ValueError):
+            previous_minor(version)
 
 
 class IsPrereleaseTest(unittest.TestCase):

@@ -138,6 +138,28 @@ def get_mypy_primer_projects() -> list[Project]:
             expected_mypy_success=True,
         ),
         Project(
+            location="https://github.com/twisted/twisted",
+            mypy_cmd="{mypy} src/twisted",
+            pyright_cmd="{pyright} src/twisted",
+            pyrefly_cmd="{pyrefly} src/twisted",
+            deps=[
+                "attrs",
+                "automat",
+                "constantly",
+                "hyperlink",
+                "incremental",
+                "zope.interface",
+                "typing_extensions",
+            ],
+        ),
+        Project(
+            location="https://github.com/hypothesisworks/hypothesis",
+            mypy_cmd="{mypy} hypothesis/src/hypothesis",
+            pyright_cmd="{pyright} hypothesis/src/hypothesis",
+            pyrefly_cmd="{pyrefly} hypothesis/src/hypothesis",
+            deps=["attrs", "sortedcontainers"],
+        ),
+        Project(
             location="https://github.com/sphinx-doc/sphinx",
             mypy_cmd="{mypy} sphinx",
             pyright_cmd="{pyright} sphinx",
@@ -161,6 +183,9 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} src",
             deps=["types-filelock", "types-freezegun", "types-setuptools"],
             expected_mypy_success=True,
+            # The upstream repo contains symlinks whose targets include a trailing newline.
+            # https://github.com/pypa/bandersnatch/pull/2280
+            skip_pyrefly=True,
         ),
         Project(
             location="https://github.com/hauntsaninja/boostedblob",

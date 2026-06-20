@@ -64,7 +64,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         opname: &Name,
         call_arg_type: &Type,
     ) -> Type {
-        self.record_resolved_trace(range, method_type.clone());
+        self.record_resolved_trace(range, &method_type);
         let callable = self.as_call_target_or_error(
             method_type,
             CallStyle::Method(opname),

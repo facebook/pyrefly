@@ -163,6 +163,46 @@ const config: Config = {
             content: "image/png",
           },
         },
+        // Agent discovery - API Catalog (RFC 9727)
+        // Points agents to machine-readable catalog of available resources
+        {
+          tagName: "link",
+          attributes: {
+            rel: "api-catalog",
+            href: baseUrl + ".well-known/api-catalog",
+            type: "application/linkset+json",
+          },
+        },
+        // Agent discovery - LLM-friendly documentation
+        // Provides alternate representation optimized for AI agents (per https://llmstxt.org/)
+        {
+          tagName: "link",
+          attributes: {
+            rel: "alternate",
+            type: "text/plain",
+            href: baseUrl + "llms.txt",
+            title: "LLM-friendly documentation index",
+          },
+        },
+        {
+          tagName: "link",
+          attributes: {
+            rel: "alternate",
+            type: "text/plain",
+            href: baseUrl + "llms-full.txt",
+            title: "Complete documentation content",
+          },
+        },
+        // Agent discovery - Agent Skills
+        // Points to machine-readable index of agent capabilities (per https://agentskills.io/)
+        {
+          tagName: "link",
+          attributes: {
+            rel: "agent-skills",
+            href: baseUrl + ".well-known/agent-skills/index.json",
+            type: "application/json",
+          },
+        },
       ],
     organizationName: 'facebook', // Usually your GitHub org/user name.
     projectName: 'Pyre', // Usually your repo name.

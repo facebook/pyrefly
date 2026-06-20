@@ -734,6 +734,82 @@ def f(x: str | int):
 );
 
 testcase!(
+    test_isinstance_any_union_consumed,
+    r#"
+from typing import Any, assert_type
+
+def test_any_union_consumed(x: int | Any) -> None:
+    if isinstance(x, str):
+        assert_type(x, str)
+
+def test_any_union_multiple_targets_consumed(x: int | Any) -> None:
+    if isinstance(x, (int, str)):
+        assert_type(x, int | str)
+    "#,
+);
+
+testcase!(
+    test_isinstance_any_union_tuple_target_consumed,
+    r#"
+from typing import Any, assert_type
+
+def test_any_union_tuple_target_consumed(x: tuple[int, str] | Any) -> None:
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, str] | tuple[Any, ...])
+    "#,
+);
+
+testcase!(
+    test_isinstance_alias_hiding_any_consumed,
+    r#"
+from typing import Any, assert_type
+
+type Alias = int | Any
+
+def test_alias_hiding_any_consumed(x: Alias) -> None:
+    if isinstance(x, str):
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_isinstance_dynamic_classinfo_keeps_definite_members,
+    r#"
+from typing import Any, reveal_type
+
+class A: ...
+class B: ...
+
+def test_dynamic_classinfo_keeps_definite_members(x: A, cls: Any) -> None:
+    if isinstance(x, cls):
+        if isinstance(x, B):
+            reveal_type(x)  # E: revealed type: A & B
+
+def test_type_any_classinfo_keeps_definite_members(x: A, cls: type[Any]) -> None:
+    if isinstance(x, cls):
+        if isinstance(x, B):
+            reveal_type(x)  # E: revealed type: A & B
+    "#,
+);
+
+testcase!(
+    test_isinstance_any_union_entry_points,
+    r#"
+from typing import Any, assert_type
+
+def test_type_eq_and_class_pattern_any_union_consumed(x: int | Any) -> None:
+    if type(x) is str:
+        assert_type(x, str)
+    if type(x) == str:
+        assert_type(x, str)
+
+    match x:
+        case str():
+            assert_type(x, str)
+    "#,
+);
+
+testcase!(
     test_dunder_bool_truthy_narrow,
     r#"
 from typing import assert_type, Literal
@@ -1207,6 +1283,38 @@ def f(x: type[A | B | C]):
 );
 
 testcase!(
+    test_isinstance_type_and_issubclass_alignment,
+    r#"
+from typing import assert_type, final
+
+class A: ...
+class B: ...
+class C: ...
+def f(obj: A | B | C, cls_obj: type[A | B | C], cls: type[A] | type[B]) -> None:
+    if isinstance(obj, cls):
+        assert_type(obj, A | B)
+    if issubclass(cls_obj, cls):
+        assert_type(cls_obj, type[A] | type[B])
+
+class Base: ...
+class Child(Base): ...
+@final
+class Other: ...
+def g(obj: Child | Other, cls_obj: type[Child] | type[Other], cls: type[Base]) -> None:
+    if isinstance(obj, cls):
+        assert_type(obj, Child)
+    if issubclass(cls_obj, cls):
+        assert_type(cls_obj, type[Child])
+
+def h(obj: tuple[int, str] | int, cls_obj: type[tuple[int, str]] | type[int]) -> None:
+    if isinstance(obj, tuple):
+        assert_type(obj, tuple[int, str])
+    if issubclass(cls_obj, tuple):
+        assert_type(cls_obj, type[tuple[int, str]])
+    "#,
+);
+
+testcase!(
     test_isinstance_alias,
     r#"
 from typing import assert_type
@@ -1380,6 +1488,40 @@ def f(x:  A | B | C, y: A | C):
         assert_type(y, A)
     else:
         assert_type(y, C)
+    "#,
+);
+
+testcase!(
+    test_typeis_type_intersection,
+    r#"
+from typing import TypeIs, assert_type, final
+class Struct: ...
+class Point(Struct): ...
+@final
+class Other: ...
+def is_struct_type(tp: object) -> TypeIs[type[Struct]]: ...
+def f(tp: type[Point] | type[Other]) -> None:
+    if is_struct_type(tp):
+        assert_type(tp, type[Point])
+    else:
+        assert_type(tp, type[Other])
+    "#,
+);
+
+testcase!(
+    test_typeis_any_keeps_definite_members,
+    r#"
+from typing import Any, TypeIs, reveal_type
+
+class A: ...
+class B: ...
+
+def is_any(x: object) -> TypeIs[Any]: ...
+
+def f(x: A) -> None:
+    if is_any(x):
+        if isinstance(x, B):
+            reveal_type(x)  # E: revealed type: A & B
     "#,
 );
 
@@ -2948,6 +3090,41 @@ def f(x: LeftChild) -> None:
 "#,
 );
 
+testcase!(
+    test_disjoint_bases_self_type,
+    r#"
+from typing import Self, assert_never
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Left:
+    def f(self, x: Self) -> None:
+        if isinstance(x, Right):
+            assert_never(x)
+
+@disjoint_base
+class Right: ...
+"#,
+);
+
+testcase!(
+    test_disjoint_bases_bounded_typevar,
+    r#"
+from typing import assert_never
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Left: ...
+
+@disjoint_base
+class Right: ...
+
+def f[T: Left](x: T) -> None:
+    if isinstance(x, Right):
+        assert_never(x)
+"#,
+);
+
 // Slotted analogue of `test_disjoint_bases_custom_propagation`.
 testcase!(
     test_disjoint_bases_slots_propagation,
@@ -2967,6 +3144,30 @@ class Right:
     __slots__ = ("y",)
 
 def f(x: LeftGrandchild) -> None:
+    if isinstance(x, Right):
+        assert_never(x)
+"#,
+);
+
+// Dataclass-slotted analogue of `test_disjoint_bases_slots_propagation`.
+testcase!(
+    test_disjoint_bases_dataclass_slots_propagation,
+    r#"
+from dataclasses import dataclass
+from typing import assert_never
+
+@dataclass(slots=True)
+class Left:
+    x: int
+
+class LeftChild(Left):
+    pass
+
+@dataclass(slots=True)
+class Right:
+    y: int
+
+def f(x: LeftChild) -> None:
     if isinstance(x, Right):
         assert_never(x)
 "#,
@@ -3671,5 +3872,59 @@ def a[T](x: T | MIS) -> T:
         return x
     else:
         raise ValueError("a")
+    "#,
+);
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var_module_level,
+    r#"
+from typing import assert_type
+def go() -> object: ...
+def gv() -> int | str: ...
+cond: bool = True
+other = go()
+value = gv()
+if cond:
+    pass
+elif isinstance(other, int):  # isinstance first materialized while the module scope is mid-fork
+    raise Exception()
+else:
+    raise Exception()
+if isinstance(value, int):
+    assert_type(value, int)
+"#,
+);
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var,
+    r#"
+from typing import assert_type
+def f(cond: bool, other: object, value: int | str) -> None:
+    if cond:
+        pass
+    elif isinstance(other, int):
+        return
+    else:
+        return
+    assert_type(value, int | str)
+    if isinstance(value, int):
+        assert_type(value, int)
+    "#,
+);
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var_user_class,
+    r#"
+from typing import assert_type
+class C: pass
+def f(cond: bool, other: object, value: int | str) -> None:
+    if cond:
+        pass
+    elif isinstance(other, C):  # narrows `other` via a builtin (isinstance) first used here
+        return
+    else:
+        return
+    if isinstance(value, int):
+        assert_type(value, int)
     "#,
 );

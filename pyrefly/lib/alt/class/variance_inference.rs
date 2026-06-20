@@ -26,6 +26,7 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::class_field::ClassFieldVariance;
 use crate::alt::types::class_bases::ClassBases;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::types::callable::Callable;
@@ -37,6 +38,7 @@ use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Variance;
+use crate::types::types::Forallable;
 use crate::types::types::OverloadType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -99,12 +101,6 @@ impl VarianceViolation {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct VarianceResult {
-    pub variance_map: VarianceMap,
-    pub violations: Vec<VarianceViolation>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct InferenceStatus {
     inferred_variance: Variance,
@@ -157,26 +153,7 @@ fn on_type(
     let sigs = typ.callable_signatures();
     if !sigs.is_empty() {
         for callable in sigs {
-            // Walk return type covariantly
-            on_type(variance, inj, &callable.ret, on_edge, on_var);
-
-            // Walk parameters contravariantly
-            match &callable.params {
-                Params::List(param_list) => {
-                    for param in param_list.items().iter() {
-                        on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
-                    }
-                }
-                Params::Ellipsis | Params::Materialization => {
-                    // Unknown params
-                }
-                Params::ParamSpec(prefix, param_spec) => {
-                    for p in prefix.iter() {
-                        on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
-                    }
-                    on_type(variance.inv(), inj, param_spec, on_edge, on_var);
-                }
-            }
+            on_callable(variance, inj, callable, false, on_edge, on_var);
         }
         return;
     }
@@ -275,6 +252,115 @@ fn on_type(
     }
 }
 
+fn on_callable(
+    variance: Variance,
+    inj: bool,
+    callable: &Callable,
+    skip_receiver: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    // Walk return type covariantly.
+    on_type(variance, inj, &callable.ret, on_edge, on_var);
+
+    // Walk parameters contravariantly. Receiver-bound methods skip their first parameter
+    // because lookup either binds it from dynamic dispatch or requantifies it for class access.
+    match &callable.params {
+        Params::List(param_list) => {
+            for param in param_list.items().iter().skip(usize::from(skip_receiver)) {
+                on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
+            }
+        }
+        Params::Ellipsis | Params::Materialization => {
+            // Unknown params
+        }
+        Params::ParamSpec(prefix, param_spec) => {
+            for p in prefix.iter().skip(usize::from(skip_receiver)) {
+                on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
+            }
+            on_type(variance.inv(), inj, param_spec, on_edge, on_var);
+        }
+    }
+}
+
+fn on_method(
+    variance: Variance,
+    inj: bool,
+    typ: &Type,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    on_method_impl(variance, inj, typ, true, on_edge, on_var);
+}
+
+fn on_method_impl(
+    variance: Variance,
+    inj: bool,
+    typ: &Type,
+    metadata_free_callable_is_method: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    let skip_receiver = |metadata: &FuncMetadata| !metadata.flags.is_staticmethod;
+    match typ {
+        Type::Callable(callable) if metadata_free_callable_is_method => {
+            on_callable(variance, inj, callable, true, on_edge, on_var)
+        }
+        Type::Callable(_) => on_type(variance, inj, typ, on_edge, on_var),
+        Type::Function(func) => on_callable(
+            variance,
+            inj,
+            &func.signature,
+            skip_receiver(&func.metadata),
+            on_edge,
+            on_var,
+        ),
+        Type::Forall(forall) => match &forall.body {
+            Forallable::Callable(callable) if metadata_free_callable_is_method => {
+                on_callable(variance, inj, callable, true, on_edge, on_var)
+            }
+            Forallable::Callable(_) => on_type(variance, inj, typ, on_edge, on_var),
+            Forallable::Function(func) => on_callable(
+                variance,
+                inj,
+                &func.signature,
+                skip_receiver(&func.metadata),
+                on_edge,
+                on_var,
+            ),
+            Forallable::TypeAlias(_) => on_type(variance, inj, typ, on_edge, on_var),
+        },
+        Type::Overload(overload) => {
+            for signature in overload.signatures.iter() {
+                match signature {
+                    OverloadType::Function(func) => on_callable(
+                        variance,
+                        inj,
+                        &func.signature,
+                        skip_receiver(&func.metadata),
+                        on_edge,
+                        on_var,
+                    ),
+                    OverloadType::Forall(forall) => on_callable(
+                        variance,
+                        inj,
+                        &forall.body.signature,
+                        skip_receiver(&forall.body.metadata),
+                        on_edge,
+                        on_var,
+                    ),
+                }
+            }
+        }
+        Type::Union(union) => {
+            for ty in &union.members {
+                on_method_impl(variance, inj, ty, false, on_edge, on_var);
+            }
+        }
+        _ => on_type(variance, inj, typ, on_edge, on_var),
+    }
+}
+
 fn on_class(
     class: &Class,
     heap: &TypeHeap,
@@ -315,22 +401,33 @@ fn on_class(
             continue;
         }
 
-        let (ty, _, read_only) = field.for_variance_inference();
-        // TODO: We need a much better way to distinguish between fields and methods than this
-        // currently, class field representation isn't good enough but we need to fix that soon
-        let variance =
-            if ty.is_toplevel_callable() || is_private_field(name) || read_only || field.is_final()
-            {
-                Variance::Covariant
-            } else {
-                Variance::Invariant
-            };
-        on_type(variance, true, ty, on_edge, on_var);
-
-        // For properties with both a getter and setter, the stored type is the setter function,
-        // but the getter is stored separately. Walk it so its covariant contribution is counted.
-        if let Some(getter) = ty.is_property_setter_with_getter() {
-            on_type(Variance::Covariant, true, &getter, on_edge, on_var);
+        match field.variance_inference() {
+            ClassFieldVariance::Method(ty) => {
+                on_method(Variance::Covariant, true, ty, on_edge, on_var);
+            }
+            ClassFieldVariance::Property(ty) => {
+                on_method(Variance::Covariant, true, ty, on_edge, on_var);
+                // For properties with both a getter and setter, the stored type is the setter
+                // function, but the getter is stored separately. Walk it so its covariant
+                // contribution is counted.
+                if let Some(getter) = ty.is_property_setter_with_getter() {
+                    on_method(Variance::Covariant, true, &getter, on_edge, on_var);
+                }
+            }
+            ClassFieldVariance::Field { ty, read_only } => {
+                // TODO: We still need a better distinction between callable-valued fields and
+                // descriptors, but receiver skipping only applies to fields modeled as methods.
+                let variance = if ty.is_toplevel_callable()
+                    || is_private_field(name)
+                    || read_only
+                    || field.is_final()
+                {
+                    Variance::Covariant
+                } else {
+                    Variance::Invariant
+                };
+                on_type(variance, true, ty, on_edge, on_var);
+            }
         }
     }
 }
@@ -600,11 +697,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         VarianceMap(class_variances)
     }
 
-    /// Compute variance for a class, optionally checking for violations.
-    ///
-    /// When `check_violations` is true, also checks that type variables with
-    /// declared variance are used in compatible positions.
-    pub fn compute_variance(&self, class: &Class, check_violations: bool) -> VarianceResult {
+    /// Compute variance for a class.
+    pub fn compute_variance(&self, class: &Class) -> VarianceMap {
         let env = self.compute_variance_env(class);
         let class_variances = env
             .get(class)
@@ -623,18 +717,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             })
             .collect::<SmallMap<_, _>>();
-        let variance_map = VarianceMap(class_variances);
-
-        let violations = if check_violations {
-            self.check_class_violations(class)
-        } else {
-            Vec::new()
-        };
-
-        VarianceResult {
-            variance_map,
-            violations,
-        }
+        VarianceMap(class_variances)
     }
 
     /// Check a class for variance violations.
@@ -643,11 +726,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// - Base classes: DEEP checking (recurse into all nested generics)
     /// - Methods: SHALLOW checking (only direct TypeVar usage, not nested Callables)
     /// - Fields: NO checking (mutable fields constrain variance during inference only)
-    fn check_class_violations(&self, class: &Class) -> Vec<VarianceViolation> {
+    pub fn check_variance_violations(
+        &self,
+        class: &Class,
+        class_bases: &ClassBases,
+        field_map: &SmallMap<Name, Arc<ClassField>>,
+    ) -> Vec<VarianceViolation> {
         let mut violations = Vec::new();
 
         // Check base classes deeply using on_type for traversal
-        for (base_type, range) in self.get_base_types_for_class(class).iter_with_ranges() {
+        for (base_type, range) in class_bases.iter_with_ranges() {
             let mut on_var =
                 |name: &Name, variance: Variance, _inj: bool, declared: PreInferenceVariance| {
                     check_typevar(name, variance, declared, range, &mut violations);
@@ -664,7 +752,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         // Check methods shallowly
         let class_fields = self.get_class_fields(class);
-        let field_map = self.get_class_field_map(class);
         for (name, field) in field_map.iter() {
             if name == &dunder::INIT || name == &dunder::NEW {
                 continue;

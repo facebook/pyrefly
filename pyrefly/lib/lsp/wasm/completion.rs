@@ -602,8 +602,8 @@ impl Transaction<'_> {
                     continue;
                 }
                 let module_description = handle_to_import_from.module().as_str().to_owned();
-                let (insert_text, additional_text_edits, imported_module) = {
-                    let (position, insert_text, module_name) = insert_import_edit(
+                let (detail_text, additional_text_edits, imported_module) = {
+                    let import_edit = insert_import_edit(
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
@@ -612,17 +612,21 @@ impl Transaction<'_> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
+                        range: module_info.to_lsp_range(import_edit.range),
+                        new_text: import_edit.insert_text.clone(),
                     };
-                    (insert_text, Some(vec![import_text_edit]), module_name)
+                    (
+                        format!("{}\n", import_edit.display_text),
+                        Some(vec![import_text_edit]),
+                        import_edit.module_name,
+                    )
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
                         label: name,
-                        detail: Some(insert_text),
+                        detail: Some(detail_text),
                         kind: export
                             .symbol_kind
                             .map_or(Some(CompletionItemKind::VARIABLE), |k| {
@@ -656,19 +660,21 @@ impl Transaction<'_> {
                 }
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
-                if let Some((submodule_name, position, insert_text, imported_module)) =
+                if let Some((submodule_name, import_edit)) =
                     self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
                 {
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
+                        range: module_info.to_lsp_range(import_edit.range),
+                        new_text: import_edit.insert_text.clone(),
                     };
                     let additional_text_edits = Some(vec![import_text_edit]);
-                    let auto_import_label_detail = format!(" (import {imported_module})");
+                    let auto_import_label_detail = format!(" (import {})", import_edit.module_name);
                     completions.push(RankedCompletion {
                         item: CompletionItem {
                             label: submodule_name,
-                            detail: Some(insert_text),
+                            // Use `display_text` so the detail stays human-readable
+                            // ("from parent import submodule") even for merge edits.
+                            detail: Some(format!("{}\n", import_edit.display_text)),
                             kind: Some(CompletionItemKind::MODULE),
                             additional_text_edits,
                             label_details: supports_completion_item_details.then_some(
@@ -964,6 +970,14 @@ impl Transaction<'_> {
         let covering_nodes = ast
             .as_ref()
             .map(|module| Ast::locate_node(module.as_ref(), position));
+        // Dict-key completion applies in any subscript / dict-key position (`d["k|"]`,
+        // `{"k|": ...}`, or the empty `d[|]`), which cuts across the identifier-context
+        // branches below, so handle it once up front. It claims the position only when
+        // the base actually has known keys; when claimed we suppress the overload
+        // literal completions that would otherwise duplicate the keys.
+        let dict_key_claimed = ast.as_ref().is_some_and(|module| {
+            self.add_dict_key_completions(handle, module.as_ref(), position, &mut result)
+        });
         // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
         // If the user might be typing the `import` keyword, add that as an autocomplete option.
         match covering_nodes
@@ -1177,12 +1191,8 @@ impl Transaction<'_> {
                             &mut result,
                             in_string_literal,
                         );
-                        let dict_key_claimed = self.add_dict_key_completions(
-                            handle,
-                            mod_module.as_ref(),
-                            position,
-                            &mut result,
-                        );
+                        // `dict_key_claimed` was computed up front; when a dict key was
+                        // offered we skip the overload literal completions.
                         if !dict_key_claimed {
                             self.add_literal_completions(
                                 handle,

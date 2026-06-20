@@ -2096,3 +2096,91 @@ def func(
     raise NotImplementedError
     "#,
 );
+
+testcase!(
+    test_overload_error_shows_relevant_signature_part,
+    r#"
+from typing import overload
+
+@overload
+def f(*args: int, **kwargs: str) -> int: ...
+@overload
+def f(*args: str, **kwargs: int) -> str: ...
+def f(*args, **kwargs):
+    return args[0]
+
+f(4.2)  # E: (*args: int, ...) -> int [closest match]\n    (*args: str, ...) -> str
+f(x=4.2)  # E: (..., **kwargs: str) -> int [closest match]\n    (..., **kwargs: int) -> str
+
+# When any arguments are unpacked, we conservatively fall back to showing full signatures
+f(*[4.2])  # E: (*args: int, **kwargs: str) -> int [closest match]\n    (*args: str, **kwargs: int) -> str
+f(**{"x": 4.2})  # E: (*args: int, **kwargs: str) -> int [closest match]\n    (*args: str, **kwargs: int) -> str
+    "#,
+);
+
+testcase!(
+    test_overload_error_shows_unpacked_kwargs,
+    r#"
+from typing import overload, TypedDict, Unpack
+
+class TD(TypedDict):
+    y: int
+
+@overload
+def f(x: int = ..., **kwargs: Unpack[TD]) -> int: ...
+@overload
+def f(x: str = ..., **kwargs: Unpack[TD]) -> str: ...
+def f(x=0, **kwargs):
+    return x
+
+f(y=4.2)  # E: (..., **kwargs: Unpack[TD]) -> int [closest match]\n    (..., **kwargs: Unpack[TD]) -> str
+    "#,
+);
+
+testcase!(
+    test_overload_error_does_not_truncate_on_different_param_names,
+    r#"
+from typing import overload
+
+@overload
+def f(x: int, /) -> int: ...
+@overload
+def f(y: str, /) -> str: ...
+def f(x, /): return x
+
+# Make sure we show 'y' in the second overload even though 'x' was matched in the first overload
+f(4.2)  # E: (x: int, /) -> int [closest match]\n    (y: str, /) -> str
+    "#,
+);
+
+testcase!(
+    test_overload_error_truncates_method_signatures,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: str, y: int = ...) -> str: ...
+    @overload
+    def f(self, x: int, y: str = ...) -> int: ...
+    def f(self, x, y=0): return x
+
+A().f(4.2)  # E: (x: str, ...) -> str [closest match]\n    (x: int, ...) -> int
+    "#,
+);
+
+testcase!(
+    test_overload_error_shows_missing_parameter,
+    r#"
+from typing import Any, overload
+
+@overload
+def f(x: int, y: str = ..., z: float = ...) -> int: ...
+@overload
+def f(x: str, y: int = ..., z: float = ...) -> str: ...
+def f(x, y="", z=0.0): return x
+
+y: Any = ...
+f(y=y)  # E: (x: int, y: str = ..., ...) -> int [closest match]\n    (x: str, y: int = ..., ...) -> str
+    "#,
+);

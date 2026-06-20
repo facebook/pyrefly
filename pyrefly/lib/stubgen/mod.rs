@@ -104,7 +104,7 @@ class BaseModel:
         ));
         let config_finder = t.config_finder();
 
-        let expanded = config_finder.checkpoint(f_globs.files()).unwrap();
+        let expanded = config_finder.checkpoint(f_globs.files_iter()).unwrap();
         let state = State::new(config_finder, TEST_THREAD_COUNT);
         let holder = Forgetter::new(state, false);
 

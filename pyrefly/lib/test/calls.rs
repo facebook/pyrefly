@@ -567,7 +567,9 @@ testcase!(
 def takes_str(x: str) -> None: ...
 
 maybe: str | None = "hello"
-takes_str(maybe)  # E: Argument `str | None` is not assignable to parameter `x` with type `str` in function `takes_str`\n  The type includes `None` which is not accepted here. Narrow the type with an `is not None` check.
+takes_str(maybe)  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+takes_str(None)  # E:  # !E: `is not None` check  # !E: changing the declared type
 
 if maybe is not None:
     takes_str(maybe)  # OK — narrowed
@@ -577,14 +579,61 @@ if maybe is not None:
 testcase!(
     test_bad_assignment_none_hint,
     r#"
-x: str = None  # E: `None` is not assignable to `str`\n  The declared type does not allow `None`. Either narrow with an `is not None` check or change the type to `str | None`.
+maybe: str | None = "hello"
+x: int | str = maybe  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `int | str | None`
     "#,
 );
 
 testcase!(
     test_bad_return_none_hint,
     r#"
-def foo() -> str:
-    return None  # E: Returned type `None` is not assignable to declared return type `str`\n  The return type does not allow `None`. Either handle the `None` case or change the return type to `str | None`.
+def foo(x: bool) -> str:
+    if x:
+        y = "hello"
+    else:
+        y = None
+    return y  # E: Consider narrowing the value with an `is not None` check or changing the declared type to `str | None`
+    "#,
+);
+
+testcase!(
+    test_implicit_return_no_none_hint,
+    r#"
+def f() -> str:  # E:  # !E: does not allow `None`
+    pass
+def g(x: str) -> str:  # E:  # !E: does not allow `None`
+    if x:
+        return x
+    "#,
+);
+
+testcase!(
+    test_bad_default_none_hint,
+    r#"
+def default() -> int | None: ...
+def f(x: int = default()):  # E: Consider changing the declared type to `int | None`  # !E: `is not None` check
+    pass
+    "#,
+);
+
+testcase!(
+    test_bare_none_hint,
+    r#"
+x: str = None  # E: Consider changing the declared type to `str | None`  # !E: `is not None` check
+    "#,
+);
+
+testcase!(
+    test_attribute_assignment_none_hint,
+    r#"
+class A:
+    def __init__(self):
+        self.x = 42
+
+def f(a: A, x: int | None):
+    a.x = x  # E: Consider narrowing the value with an `is not None` check  # !E: changing the declared type
+
+def g(a: A):
+    a.x = None  # E:  # !E: `is not None` check  # !E: changing the declared type
     "#,
 );

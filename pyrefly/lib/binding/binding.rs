@@ -56,6 +56,7 @@ use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
+use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -101,9 +102,11 @@ assert_bytes!(KeyTParams, 4);
 assert_bytes!(KeyClassBaseType, 4);
 assert_words!(KeyClassField, 4);
 assert_bytes!(KeyClassSynthesizedFields, 4);
+assert_bytes!(KeyClassChecks, 4);
 assert_bytes!(KeyAnnotation, 12);
 assert_bytes!(KeyClassMetadata, 4);
 assert_bytes!(KeyClassMro, 4);
+assert_bytes!(KeyClassDisjointBase, 4);
 assert_bytes!(KeyAbstractClassCheck, 4);
 assert_bytes!(KeyClassSubscriptSymmetry, 4);
 assert_words!(KeyLegacyTypeParam, 1);
@@ -122,6 +125,8 @@ assert_words!(BindingTParams, 10);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
 assert_bytes!(BindingClassMro, 4);
+assert_bytes!(BindingClassChecks, 4);
+assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
 assert_words!(BindingClassField, 11);
@@ -129,7 +134,7 @@ assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 10);
+assert_words!(BindingDecorator, 13);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 20);
 
@@ -138,13 +143,12 @@ pub enum AnyIdx {
     Key(Idx<Key>),
     KeyExpect(Idx<KeyExpect>),
     KeyTypeAlias(Idx<KeyTypeAlias>),
-    KeyConsistentOverrideCheck(Idx<KeyConsistentOverrideCheck>),
     KeyClass(Idx<KeyClass>),
     KeyTParams(Idx<KeyTParams>),
     KeyClassBaseType(Idx<KeyClassBaseType>),
     KeyClassField(Idx<KeyClassField>),
     KeyVariance(Idx<KeyVariance>),
-    KeyVarianceCheck(Idx<KeyVarianceCheck>),
+    KeyClassChecks(Idx<KeyClassChecks>),
     KeyClassSynthesizedFields(Idx<KeyClassSynthesizedFields>),
     KeyExport(Idx<KeyExport>),
     KeyDecorator(Idx<KeyDecorator>),
@@ -154,6 +158,7 @@ pub enum AnyIdx {
     KeyAnnotation(Idx<KeyAnnotation>),
     KeyClassMetadata(Idx<KeyClassMetadata>),
     KeyClassMro(Idx<KeyClassMro>),
+    KeyClassDisjointBase(Idx<KeyClassDisjointBase>),
     KeyAbstractClassCheck(Idx<KeyAbstractClassCheck>),
     KeyClassSubscriptSymmetry(Idx<KeyClassSubscriptSymmetry>),
     KeyLegacyTypeParam(Idx<KeyLegacyTypeParam>),
@@ -188,9 +193,6 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyExpect(idx) => $self.$method::<$crate::binding::binding::KeyExpect>(*idx),
             AnyIdx::KeyTypeAlias(idx) => {
                 $self.$method::<$crate::binding::binding::KeyTypeAlias>(*idx)
-            }
-            AnyIdx::KeyConsistentOverrideCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyConsistentOverrideCheck>(*idx)
             }
             AnyIdx::KeyClass(idx) => $self.$method::<$crate::binding::binding::KeyClass>(*idx),
             AnyIdx::KeyTParams(idx) => $self.$method::<$crate::binding::binding::KeyTParams>(*idx),
@@ -228,6 +230,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx)
             }
+            AnyIdx::KeyClassDisjointBase(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassDisjointBase>(*idx)
+            }
             AnyIdx::KeyAbstractClassCheck(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAbstractClassCheck>(*idx)
             }
@@ -241,8 +246,8 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyYieldFrom(idx) => {
                 $self.$method::<$crate::binding::binding::KeyYieldFrom>(*idx)
             }
-            AnyIdx::KeyVarianceCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyVarianceCheck>(*idx)
+            AnyIdx::KeyClassChecks(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassChecks>(*idx)
             }
         }
     };
@@ -255,9 +260,6 @@ macro_rules! dispatch_anyidx {
             }
             AnyIdx::KeyTypeAlias(idx) => {
                 $self.$method::<$crate::binding::binding::KeyTypeAlias>(*idx, $($args),+)
-            }
-            AnyIdx::KeyConsistentOverrideCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyConsistentOverrideCheck>(*idx, $($args),+)
             }
             AnyIdx::KeyClass(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClass>(*idx, $($args),+)
@@ -301,6 +303,9 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyClassMro(idx) => {
                 $self.$method::<$crate::binding::binding::KeyClassMro>(*idx, $($args),+)
             }
+            AnyIdx::KeyClassDisjointBase(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassDisjointBase>(*idx, $($args),+)
+            }
             AnyIdx::KeyAbstractClassCheck(idx) => {
                 $self.$method::<$crate::binding::binding::KeyAbstractClassCheck>(*idx, $($args),+)
             }
@@ -316,8 +321,8 @@ macro_rules! dispatch_anyidx {
             AnyIdx::KeyYieldFrom(idx) => {
                 $self.$method::<$crate::binding::binding::KeyYieldFrom>(*idx, $($args),+)
             }
-            AnyIdx::KeyVarianceCheck(idx) => {
-                $self.$method::<$crate::binding::binding::KeyVarianceCheck>(*idx, $($args),+)
+            AnyIdx::KeyClassChecks(idx) => {
+                $self.$method::<$crate::binding::binding::KeyClassChecks>(*idx, $($args),+)
             }
         }
     };
@@ -329,13 +334,12 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::Key(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyExpect(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyTypeAlias(idx) => write!(f, "{}", ctx.display(*idx)),
-            Self::KeyConsistentOverrideCheck(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClass(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyTParams(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassBaseType(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassField(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyVariance(idx) => write!(f, "{}", ctx.display(*idx)),
-            Self::KeyVarianceCheck(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyClassChecks(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassSynthesizedFields(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyExport(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyDecorator(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -345,6 +349,7 @@ impl DisplayWith<Bindings> for AnyIdx {
             Self::KeyAnnotation(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMetadata(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassMro(idx) => write!(f, "{}", ctx.display(*idx)),
+            Self::KeyClassDisjointBase(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyAbstractClassCheck(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyClassSubscriptSymmetry(idx) => write!(f, "{}", ctx.display(*idx)),
             Self::KeyLegacyTypeParam(idx) => write!(f, "{}", ctx.display(*idx)),
@@ -366,6 +371,7 @@ pub enum AnyExportedKey {
     KeyExport(KeyExport),
     KeyClassMetadata(KeyClassMetadata),
     KeyClassMro(KeyClassMro),
+    KeyClassDisjointBase(KeyClassDisjointBase),
     KeyAbstractClassCheck(KeyAbstractClassCheck),
     KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry),
     KeyTypeAlias(KeyTypeAlias),
@@ -449,17 +455,17 @@ impl Exported for KeyTypeAlias {
         AnyExportedKey::KeyTypeAlias(self.clone())
     }
 }
-impl Keyed for KeyConsistentOverrideCheck {
-    type Value = BindingConsistentOverrideCheck;
+impl Keyed for KeyClassChecks {
+    type Value = BindingClassChecks;
     type Answer = EmptyAnswer;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
-        AnyIdx::KeyConsistentOverrideCheck(idx)
+        AnyIdx::KeyClassChecks(idx)
     }
     fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
     where
         BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
     {
-        bindings.idx_to_key(bindings.get(idx).class_key).range()
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
     }
 }
 impl Keyed for KeyClass {
@@ -583,23 +589,6 @@ impl Keyed for KeyVariance {
 impl Exported for KeyVariance {
     fn to_anykey(&self) -> AnyExportedKey {
         AnyExportedKey::KeyVariance(self.clone())
-    }
-}
-impl Keyed for KeyVarianceCheck {
-    const EXPORTED: bool = false;
-    type Value = BindingVarianceCheck;
-    type Answer = EmptyAnswer;
-    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
-        AnyIdx::KeyVarianceCheck(idx)
-    }
-    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
-    where
-        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
-    {
-        bindings.idx_to_key(bindings.get(idx).class_idx).range()
-    }
-    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
-        None
     }
 }
 impl Keyed for KeyExport {
@@ -731,6 +720,28 @@ impl Keyed for KeyClassMro {
 impl Exported for KeyClassMro {
     fn to_anykey(&self) -> AnyExportedKey {
         AnyExportedKey::KeyClassMro(self.clone())
+    }
+}
+impl Keyed for KeyClassDisjointBase {
+    const EXPORTED: bool = true;
+    type Value = BindingClassDisjointBase;
+    type Answer = ClassDisjointBase;
+    fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
+        AnyIdx::KeyClassDisjointBase(idx)
+    }
+    fn range_with(idx: Idx<Self>, bindings: &Bindings) -> TextRange
+    where
+        BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
+    {
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
+    }
+    fn try_to_anykey(&self) -> Option<AnyExportedKey> {
+        Some(AnyExportedKey::KeyClassDisjointBase(self.clone()))
+    }
+}
+impl Exported for KeyClassDisjointBase {
+    fn to_anykey(&self) -> AnyExportedKey {
+        AnyExportedKey::KeyClassDisjointBase(self.clone())
     }
 }
 impl Keyed for KeyAbstractClassCheck {
@@ -1551,23 +1562,13 @@ impl DisplayWith<ModuleInfo> for KeyVariance {
     }
 }
 
-// A key for checking variance violations (separate from KeyVariance to avoid cycles)
+// Side-effect checks for class-level diagnostics that do not produce downstream answers.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct KeyVarianceCheck(pub ClassDefIndex);
+pub struct KeyClassChecks(pub ClassDefIndex);
 
-impl DisplayWith<ModuleInfo> for KeyVarianceCheck {
+impl DisplayWith<ModuleInfo> for KeyClassChecks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
-        write!(f, "KeyVarianceCheck(class{})", self.0)
-    }
-}
-
-// An expectation that attributes in this class need checking for inconsistent override
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct KeyConsistentOverrideCheck(pub ClassDefIndex);
-
-impl DisplayWith<ModuleInfo> for KeyConsistentOverrideCheck {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
-        write!(f, "KeyConsistentOverrideCheck(class{})", self.0)
+        write!(f, "KeyClassChecks(class{})", self.0)
     }
 }
 
@@ -1624,6 +1625,19 @@ pub struct KeyClassMro(pub ClassDefIndex);
 impl DisplayWith<ModuleInfo> for KeyClassMro {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
         write!(f, "KeyClassMro(class{})", self.0)
+    }
+}
+
+/// Disjoint-base representative for a class, used for PEP 800 narrowing and
+/// downstream inheritance checks. Owned by `KeyClassDisjointBase`, not
+/// `KeyClassMro`, so generated dataclass-slot promotion can read the
+/// already-solved MRO without a binding cycle.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct KeyClassDisjointBase(pub ClassDefIndex);
+
+impl DisplayWith<ModuleInfo> for KeyClassDisjointBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &ModuleInfo) -> fmt::Result {
+        write!(f, "KeyClassDisjointBase(class{})", self.0)
     }
 }
 
@@ -1777,6 +1791,7 @@ pub enum FunctionStubOrImpl {
 #[derive(Clone, Debug)]
 pub struct BindingDecorator {
     pub expr: Expr,
+    pub trailing_name: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingDecorator {
@@ -2723,6 +2738,9 @@ impl Binding {
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
+            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _) => {
+                Some(SymbolKind::Variable)
+            }
             // Receiver-constrained multi-target / unpacked rebinds are
             // class-shaped — match the `NameAssign` path above.
             Binding::MultiTargetAssign(_, _, _, Some(_))
@@ -2735,7 +2753,6 @@ impl Binding {
             | Binding::ReturnExplicit(_)
             | Binding::ReturnImplicit(_)
             | Binding::ReturnType(_)
-            | Binding::ContextValue(_, _, _, _)
             | Binding::AnnotatedType(_, _)
             | Binding::None
             | Binding::Any(_)
@@ -2748,7 +2765,6 @@ impl Binding {
             | Binding::PatternMatchMapping(_, _)
             | Binding::PatternMatchClassPositional(_, _, _, _)
             | Binding::PatternMatchClassKeyword(_)
-            | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_)
             | Binding::AssignToAttribute(_)
             | Binding::UsageLink(_)
@@ -2963,7 +2979,7 @@ impl DisplayWith<Bindings> for BindingTParams {
 pub struct BindingClassBaseType {
     pub class_idx: Idx<KeyClass>,
     /// The base class list, as expressions.
-    pub bases: Box<[BaseClass]>,
+    pub bases: Arc<[BaseClass]>,
     pub is_new_type: bool,
 }
 
@@ -3140,31 +3156,17 @@ impl DisplayWith<Bindings> for BindingVariance {
     }
 }
 
-/// Binding for checking variance violations.
-/// This is separate from BindingVariance to avoid cycles when checking violations.
+/// Class-level diagnostics grouped behind one `EmptyAnswer` key.
+///
+/// Checks that produce answers used by downstream lookups should remain separate keys.
 #[derive(Clone, Debug)]
-pub struct BindingVarianceCheck {
+pub struct BindingClassChecks {
     pub class_idx: Idx<KeyClass>,
 }
 
-impl DisplayWith<Bindings> for BindingVarianceCheck {
+impl DisplayWith<Bindings> for BindingClassChecks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(f, "BindingVarianceCheck({})", ctx.display(self.class_idx))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct BindingConsistentOverrideCheck {
-    pub class_key: Idx<KeyClass>,
-}
-
-impl DisplayWith<Bindings> for BindingConsistentOverrideCheck {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(
-            f,
-            "BindingConsistentOverrideCheck({})",
-            ctx.display(self.class_key)
-        )
+        write!(f, "BindingClassChecks({})", ctx.display(self.class_idx))
     }
 }
 
@@ -3181,7 +3183,7 @@ pub struct BindingShapedArrayMetadata {
 pub struct BindingClassMetadata {
     pub class_idx: Idx<KeyClass>,
     /// The base class list, as expressions.
-    pub bases: Box<[BaseClass]>,
+    pub bases: Arc<[BaseClass]>,
     /// The class keywords (these are keyword args that appear in the base class list, the
     /// Python runtime will dispatch most of them to the metaclass, but the metaclass
     /// itself can also potentially be one of these).
@@ -3223,6 +3225,24 @@ pub struct BindingClassMro {
 impl DisplayWith<Bindings> for BindingClassMro {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         write!(f, "BindingClassMro({}, ..)", ctx.display(self.class_idx))
+    }
+}
+
+/// Binding for the class's disjoint-base representative. The solver reads
+/// both metadata and MRO for `class_idx`; both must be available, so this
+/// binding must be inserted everywhere `BindingClassMro` is.
+#[derive(Clone, Debug)]
+pub struct BindingClassDisjointBase {
+    pub class_idx: Idx<KeyClass>,
+}
+
+impl DisplayWith<Bindings> for BindingClassDisjointBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
+        write!(
+            f,
+            "BindingClassDisjointBase({})",
+            ctx.display(self.class_idx)
+        )
     }
 }
 

@@ -675,7 +675,8 @@ token-type: method
 fn with_name_test() {
     let code = r#"
 with open("foo.txt") as f1, open("bar.txt") as f2:
-    pass
+    f1.read()
+    f2.read()
 "#;
     assert_full_semantic_tokens(
         &[("main", code)],
@@ -692,6 +693,18 @@ token-type: function, token-modifiers: [defaultLibrary]
 
 line: 1, column: 47, length: 2, text: f2
 token-type: variable
+
+line: 2, column: 4, length: 2, text: f1
+token-type: variable
+
+line: 2, column: 7, length: 4, text: read
+token-type: method
+
+line: 3, column: 4, length: 2, text: f2
+token-type: variable
+
+line: 3, column: 7, length: 4, text: read
+token-type: method
 "#,
     );
 }
@@ -702,7 +715,7 @@ fn exception_handler_name_test() {
 try:
     pass
 except Exception as e:
-    pass
+    e
 "#;
     assert_full_semantic_tokens(
         &[("main", code)],
@@ -712,6 +725,9 @@ line: 3, column: 7, length: 9, text: Exception
 token-type: class, token-modifiers: [defaultLibrary]
 
 line: 3, column: 20, length: 1, text: e
+token-type: variable
+
+line: 4, column: 4, length: 1, text: e
 token-type: variable
 "#,
     );

@@ -668,7 +668,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             true,
         )?;
         // Record the method type for hover support
-        self.record_resolved_trace(range, callee_ty.clone());
+        self.record_resolved_trace(range, &callee_ty);
         Some(self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -694,7 +694,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let callee_ty =
             self.type_of_attr_get(ty, method_name, range, errors, context, "Expr::call_method");
-        self.record_resolved_trace(range, callee_ty.clone());
+        self.record_resolved_trace(range, &callee_ty);
         self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -875,7 +875,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         callee_range,
                     );
                 }
-                self.record_resolved_trace(arguments_range, metaclass_dunder_call);
+                self.record_resolved_trace(arguments_range, &metaclass_dunder_call);
                 recorded_trace = true;
             }
             // Enum construction is routed through EnumMeta.__call__, which performs
@@ -949,7 +949,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 if !recorded_trace {
-                    self.record_resolved_trace(arguments_range, new_method);
+                    self.record_resolved_trace(arguments_range, &new_method);
                     recorded_trace = true;
                 }
                 if constructor_kind == ConstructorKind::TypeOfSelf {
@@ -1013,7 +1013,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
             if !recorded_trace {
-                self.record_resolved_trace(arguments_range, init_method);
+                self.record_resolved_trace(arguments_range, &init_method);
             }
         }
         if class_metadata.is_pydantic_model()

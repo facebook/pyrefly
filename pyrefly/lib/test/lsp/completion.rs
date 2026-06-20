@@ -1371,8 +1371,6 @@ Completion Results:
 
 - (Function) disjoint_base: from typing_extensions import disjoint_base
 
-- (Function) fix_missing_locations: from ast import fix_missing_locations
-
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 
 - (Module) typing_extensions: import typing_extensions
@@ -1714,8 +1712,6 @@ Completion Results:
     );
 }
 
-// todo(kylei): completion on known dict values
-// Pyright completes "a", "b"
 #[test]
 fn completion_dict() {
     let code = r#"
@@ -1731,9 +1727,57 @@ x["
 3 | x["
       ^
 Completion Results:
+- (Field) a: Literal[3]
+- (Field) b: Literal[4]
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn completion_dict_no_quote() {
+    // Before any key string is typed (`x[`), offer the known keys with quoted
+    // insert text so selecting one produces `x["a"`.
+    let code = r#"
+x = {"a": 3, "b": 4}
+x[
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+3 | x[
+      ^
+Completion Results:
+- (Field) a: Literal[3] inserting `"a"`
+- (Field) b: Literal[4] inserting `"b"`
+- (Variable) x: dict[str, int]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_dict_no_keys_for_list() {
+    // A list subscript has only index facets, never string keys, so the bare
+    // subscript path must not offer any dict-key (Field) completions.
+    let code = r#"
+xs = [1, 2, 3]
+xs[
+#  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert!(
+        labels.is_empty(),
+        "Expected no dict-key completions for a list subscript, got: {labels:?}"
     );
 }
 
@@ -2968,8 +3012,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[@8]) -> None: ...
-- (Field) p: @8
+- (Method) m: def m(self: C[@3]) -> None: ...
+- (Field) p: @3
 "#
         .trim(),
         report.trim(),
