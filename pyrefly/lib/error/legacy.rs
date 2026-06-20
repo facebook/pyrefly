@@ -35,7 +35,7 @@ fn default_severity() -> String {
 /// Used to serialize errors in a Pyre1-compatible format.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct LegacyError {
-    line: usize,
+    pub line: usize,
     pub column: usize,
     stop_line: usize,
     stop_column: usize,

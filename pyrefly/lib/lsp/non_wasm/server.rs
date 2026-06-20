@@ -261,7 +261,9 @@ use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
+use crate::error::baseline::BaselineProcessor;
 use crate::error::error::Error;
+use crate::error::legacy::LegacyErrors;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
 use crate::lsp::non_wasm::call_hierarchy::convert_external_references_to_incoming_calls;
@@ -1754,6 +1756,8 @@ impl Server {
                 // This does mean that iterating handles + sending diagnostics would become blocking.
                 // But in practice though the operations are usually cheap so it's OK.
                 self.publish_workspace_diagnostics_if_enabled();
+                // Update baseline file on save if existing errors in the current files matches the baseline_errors
+                self.auto_update_baseline_if_applicable();
             }
             LspEvent::CancelRequest(id) => {
                 telemetry_event.request_id = Some(id.to_string());
@@ -3457,6 +3461,62 @@ impl Server {
         // Clear stale diagnostics for files that were deleted from disk.
         for uri in deleted_uris {
             self.publish_diagnostics_for_uri(uri, Vec::new(), None, DiagnosticSource::DidClose);
+        }
+    }
+
+    fn auto_update_baseline_if_applicable(&self) {
+        let configs = self.workspaces.loaded_configs.clean_and_get_configs();
+        for config in configs {
+            let baseline_path = match &config.baseline {
+                Some(path) => path.clone(),
+                None => continue,
+            };
+            let root = match config.source.root() {
+                Some(root) => root,
+                None => continue,
+            };
+
+            let baseline = match BaselineProcessor::from_file(&baseline_path, root) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            let transaction = self.state.transaction();
+            let handles: Vec<Handle> = transaction
+                .handles()
+                .into_iter()
+                .filter(|handle| !handle.path().is_memory())
+                .collect();
+            if handles.is_empty() {
+                continue;
+            }
+
+            let collected = transaction.get_errors(&handles).collect_errors();
+            let mut all_errors = collected.ordinary;
+            let mut baseline_errors = Vec::new();
+            baseline.process_errors(&mut all_errors, &mut baseline_errors);
+
+            if !all_errors.is_empty() {
+                continue;
+            }
+            if baseline.matched_key_count(&baseline_errors) >= baseline.key_count() {
+                continue;
+            }
+
+            let legacy_errors = LegacyErrors::from_errors(root, &baseline_errors);
+            let json = match serde_json::to_string_pretty(&legacy_errors) {
+                Ok(j) => j,
+                Err(e) => {
+                    warn!("failed to serialize baseline errors: {e}");
+                    continue;
+                }
+            };
+            if let Err(e) = std::fs::write(&baseline_path, &json) {
+                warn!(
+                    "failed to write updated baseline at {:?}: {e}",
+                    baseline_path
+                );
+            }
         }
     }
 

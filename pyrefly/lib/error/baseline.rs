@@ -22,6 +22,7 @@ use crate::error::legacy::LegacyErrors;
 struct BaselineKey {
     path: String,
     name: String,
+    line: usize,
     column: usize,
 }
 
@@ -30,6 +31,7 @@ impl From<&LegacyError> for BaselineKey {
         Self {
             path: baseline_error.path.clone(),
             name: baseline_error.name.clone(),
+            line: baseline_error.line,
             column: baseline_error.column,
         }
     }
@@ -48,6 +50,7 @@ impl BaselineKey {
         Self {
             path: error.path().as_path().to_string_lossy().replace('\\', "/"),
             name: error.error_kind().to_name().to_owned(),
+            line: error.display_range().start.line_within_cell().get() as usize,
             column: error.display_range().start.column().get() as usize,
         }
     }
@@ -76,11 +79,28 @@ impl BaselineProcessor {
                 BaselineKey {
                     path: BaselineKey::normalize_path(path, relative_to),
                     name: e.name.clone(),
+                    line: e.line,
                     column: e.column,
                 }
             })
             .collect();
         Self { baseline_keys }
+    }
+
+    pub fn key_count(&self) -> usize {
+        self.baseline_keys.len()
+    }
+
+    /// How many unique baseline keys have at least one matching current error.
+    pub fn matched_key_count(&self, errors: &[Error]) -> usize {
+        let mut matched = HashSet::new();
+        for error in errors {
+            let key = BaselineKey::from_error(error);
+            if self.baseline_keys.contains(&key) {
+                matched.insert(key);
+            }
+        }
+        matched.len()
     }
 
     pub fn matches_baseline(&self, error: &Error) -> bool {
