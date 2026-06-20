@@ -346,4 +346,64 @@ mod tests {
         );
         assert!(processor.matches_baseline(&error));
     }
+
+    #[test]
+    fn test_matched_key_count() {
+        let cwd = std::env::current_dir().unwrap();
+        let baseline_json = serde_json::json!({
+            "errors": [
+                {
+                    "line": 1, "column": 5, "stop_line": 1, "stop_column": 10,
+                    "path": "/workspace/a.py", "code": -2, "name": "bad-return",
+                    "description": "err", "concise_description": "err"
+                },
+                {
+                    "line": 1, "column": 5, "stop_line": 1, "stop_column": 10,
+                    "path": "/workspace/b.py", "code": -2, "name": "bad-return",
+                    "description": "err", "concise_description": "err"
+                }
+            ]
+        });
+        let baseline_file: LegacyErrors = serde_json::from_value(baseline_json).unwrap();
+        let processor = BaselineProcessor::from_legacy_errors(&baseline_file, &cwd);
+
+        assert_eq!(processor.key_count(), 2);
+
+        let mk = |path: &str, offset: u32, kind: ErrorKind| -> Error {
+            let module = Module::new(
+                ModuleName::from_str("test"),
+                ModulePath::filesystem(PathBuf::from(path)),
+                Arc::new("x = bad()\n".to_owned()),
+            );
+            Error::new(
+                module,
+                TextRange::new(TextSize::new(offset), TextSize::new(offset + 5)),
+                "err".to_owned(),
+                Vec::new(),
+                kind,
+            )
+        };
+
+        // Both keys match (different paths)
+        let errors = vec![
+            mk("/workspace/a.py", 4, ErrorKind::BadReturn),
+            mk("/workspace/b.py", 4, ErrorKind::BadReturn),
+        ];
+        assert_eq!(processor.matched_key_count(&errors), 2);
+
+        // Only one key matches
+        let errors = vec![mk("/workspace/a.py", 4, ErrorKind::BadReturn)];
+        assert_eq!(processor.matched_key_count(&errors), 1);
+
+        // No keys match (different error kind)
+        let errors = vec![mk("/workspace/a.py", 4, ErrorKind::AssertType)];
+        assert_eq!(processor.matched_key_count(&errors), 0);
+
+        // Multiple errors matching same key → counts as 1
+        let errors = vec![
+            mk("/workspace/a.py", 4, ErrorKind::BadReturn),
+            mk("/workspace/a.py", 4, ErrorKind::BadReturn),
+        ];
+        assert_eq!(processor.matched_key_count(&errors), 1);
+    }
 }

@@ -1756,7 +1756,8 @@ impl Server {
                 // This does mean that iterating handles + sending diagnostics would become blocking.
                 // But in practice though the operations are usually cheap so it's OK.
                 self.publish_workspace_diagnostics_if_enabled();
-                // Update baseline file on save if existing errors in the current files matches the baseline_errors
+                // On save, update baseline file by removing fixed entries.
+                // Skip updating if new error of any severity exist.
                 self.auto_update_baseline_if_applicable();
             }
             LspEvent::CancelRequest(id) => {
