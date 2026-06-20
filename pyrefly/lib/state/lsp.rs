@@ -122,6 +122,31 @@ fn default_true() -> bool {
     true
 }
 
+/// Search file content for a symbol name and return the `TextRange` of its
+/// first occurrence as a whole word. Used by go-to-definition to locate
+/// symbols in non-Python source files (e.g. thrift struct/enum names).
+fn find_symbol_range_in_text(content: &str, symbol: &str) -> Option<TextRange> {
+    fn is_word_char(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let bytes = content.as_bytes();
+    let mut start = 0;
+    while let Some(pos) = content[start..].find(symbol) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0 || !is_word_char(bytes[abs_pos - 1]);
+        let after_pos = abs_pos + symbol.len();
+        let after_ok = after_pos >= bytes.len() || !is_word_char(bytes[after_pos]);
+        if before_ok && after_ok {
+            return Some(TextRange::new(
+                TextSize::new(abs_pos as u32),
+                TextSize::new(after_pos as u32),
+            ));
+        }
+        start = abs_pos + 1;
+    }
+    None
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AllOffPartial {
@@ -2160,13 +2185,49 @@ impl<'a> Transaction<'a> {
         // parsed as Python): navigate to the module file itself. Only applies
         // when extra file extensions are configured.
         let config_has_extra_extensions = self.config_has_extra_extensions(handle);
-        if config_has_extra_extensions && let Type::Module(ref module) = base_type {
-            let module_name = ModuleName::from_parts(module.parts());
-            if let Ok(Some(item)) =
-                self.find_definition_for_imported_module(handle, module_name, preference)
-                && !item.is_python_module()
+        if config_has_extra_extensions {
+            if let Type::Module(ref module) = base_type {
+                let module_name = ModuleName::from_parts(module.parts());
+                if let Ok(Some(item)) = self.find_symbol_in_non_python_module(
+                    handle,
+                    module_name,
+                    name.as_str(),
+                    preference,
+                ) && !item.is_python_module()
+                {
+                    return Ok(vec1![item]);
+                }
+            }
+            // Nested attribute fallback: handles `module.Container.member`
+            // where `module` is a non-Python file (e.g. .thrift). The base
+            // expression `module.Container` resolves to Any/Unknown because
+            // the type system can't resolve attributes on non-Python modules.
+            // We look at the AST to find the base's own base expression,
+            // check if it's a Module type, and if so search for the member
+            // as a whole-word match in the module source file.
+            if base_type.is_any()
+                && let Some(mod_module) = self.get_ast(handle)
             {
-                return Ok(vec1![item]);
+                let covering_nodes = Ast::locate_node(&mod_module, base_range.start());
+                for node in &covering_nodes {
+                    if let AnyNodeRef::ExprAttribute(attr) = node
+                        && attr.range() == base_range
+                        && let Some(Type::Module(ref module)) =
+                            answers.get_type_trace(attr.value.range())
+                    {
+                        let module_name = ModuleName::from_parts(module.parts());
+                        if let Ok(Some(item)) = self.find_symbol_in_non_python_module(
+                            handle,
+                            module_name,
+                            name.as_str(),
+                            preference,
+                        ) && !item.is_python_module()
+                        {
+                            return Ok(vec1![item]);
+                        }
+                        break;
+                    }
+                }
             }
         }
         Err(EmptyResponseReason::DefinitionNotFound {
@@ -2200,6 +2261,42 @@ impl<'a> Transaction<'a> {
             module: module_info,
             docstring_range: self.get_module_docstring_range(&handle),
             display_name: Some(module_name.to_string()),
+        }))
+    }
+
+    /// Search a non-Python source file for a symbol definition and return a
+    /// `FindDefinitionItemWithDocstring` pointing at the symbol's location.
+    /// Falls back to the module start if the symbol is not found.
+    ///
+    /// This handles go-to-definition for imports from non-Python files (e.g.
+    /// `.thrift`) by locating the symbol name in the source text, so the user
+    /// lands on the actual definition rather than just the top of the file.
+    fn find_symbol_in_non_python_module(
+        &self,
+        handle: &Handle,
+        module_name: ModuleName,
+        symbol_name: &str,
+        preference: FindPreference,
+    ) -> Result<Option<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let Some(module_handle) =
+            self.import_handle_with_preference(handle, module_name, preference)
+        else {
+            return Err(EmptyResponseReason::ModuleNotFound);
+        };
+        let _ = self.get_exports(&module_handle);
+        let module_info = self
+            .get_module_info(&module_handle)
+            .ok_or(EmptyResponseReason::ModuleInfoNotFound)?;
+
+        let definition_range =
+            find_symbol_range_in_text(module_info.contents(), symbol_name).unwrap_or_default();
+
+        Ok(Some(FindDefinitionItemWithDocstring {
+            metadata: DefinitionMetadata::Module,
+            definition_range,
+            module: module_info,
+            docstring_range: None,
+            display_name: Some(symbol_name.to_owned()),
         }))
     }
 
@@ -2481,9 +2578,10 @@ impl<'a> Transaction<'a> {
                         }
                         let resolved_module_name =
                             resolve_relative_module_name(handle, module_name, dots);
-                        if let Ok(Some(module_item)) = self.find_definition_for_imported_module(
+                        if let Ok(Some(module_item)) = self.find_symbol_in_non_python_module(
                             handle,
                             resolved_module_name,
+                            name_after_import.id.as_str(),
                             preference,
                         ) {
                             if module_item.is_python_module() {

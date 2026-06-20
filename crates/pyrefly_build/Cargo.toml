@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly_build"
-version = "1.1.0"
+version = "1.1.1"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -11,7 +11,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0.102"
 dupe = "0.9.1"
-itertools = "0.14.0"
+itertools = "0.15.0"
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
 regex = "1.12.4"

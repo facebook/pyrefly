@@ -429,6 +429,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             dataclass_defaults_from_base_class.clone(),
         );
         let dataclass_from_dataclass_transform = self.dataclass_from_dataclass_transform(
+            cls,
             &keywords,
             &decorators,
             dataclass_defaults_from_base_class,
@@ -943,13 +944,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         dataclass_transform_metadata
     }
 
-    /// The default `auto_attribs` for an attrs decorator that doesn't set it, based
-    /// on the decorator's name: `False` for `attr.s`/`attrs`/`attributes`, `True`
-    /// for `define`/`frozen`/`mutable`. Other names fall back to `!order_default`.
-    ///
-    /// `@attr.dataclass` is undocumented and aliased to `attr.s`, so it's matched by
-    /// name: same as `attr.s` but defaults `auto_attribs` to `True`.
-    fn attrs_default_auto_attribs(&self, decorator_range: TextRange, order_default: bool) -> bool {
+    /// The default `auto_attribs` for an attrs decorator that doesn't set it, based on the decorator's name:
+    /// - `attr.s`/`attrs`/`attributes` -> `False`
+    /// - `@attr.dataclass` -> `True`.
+    /// - `define`/`frozen`/`mutable` -> `None`
+    ///   The behavior for None is: try `True` and falls back
+    ///   to `False` when a field is assigned `attr.ib()`/`field()` with no annotation.
+    fn attrs_default_auto_attribs(
+        &self,
+        cls: &Class,
+        decorator_range: TextRange,
+        order_default: bool,
+    ) -> bool {
         let Some(idx) = self
             .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&KeyDecorator(decorator_range)))
@@ -960,7 +966,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let binding = self.bindings().get::<KeyDecorator>(idx);
         match binding.trailing_name.as_ref().map(Name::as_str) {
             Some("s" | "attrs" | "attributes") => false,
-            Some("define" | "mutable" | "frozen" | "dataclass") => true,
+            Some("dataclass") => true,
+            Some("define" | "mutable" | "frozen") => !self.get_class_fields(cls).is_some_and(|f| {
+                f.class_body_fields()
+                    .any(|name| f.is_attrs_field_specifier(name) && !f.is_field_annotated(name))
+            }),
             // Unknown decorator: attrs sets `order_default` only on its classic
             // decorators, so it stands in for "classic" here.
             _ => !order_default,
@@ -969,6 +979,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn dataclass_from_dataclass_transform(
         &self,
+        cls: &Class,
         keywords: &[(Name, Annotation)],
         decorators: &[(Arc<Decorator>, TextRange)],
         dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
@@ -1017,9 +1028,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut kws =
                     DataclassKeywords::from_type_map(&TypeMap::new(), defaults, strict_default);
                 if kws.auto_attribs.is_none() {
-                    kws.auto_attribs = Some(
-                        self.attrs_default_auto_attribs(*decorator_range, defaults.order_default),
-                    );
+                    kws.auto_attribs = Some(self.attrs_default_auto_attribs(
+                        cls,
+                        *decorator_range,
+                        defaults.order_default,
+                    ));
                 }
                 dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers.clone()));
             }
@@ -1030,9 +1043,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut kws =
                     DataclassKeywords::from_type_map(&call.keywords, defaults, strict_default);
                 if kws.auto_attribs.is_none() {
-                    kws.auto_attribs = Some(
-                        self.attrs_default_auto_attribs(*decorator_range, defaults.order_default),
-                    );
+                    kws.auto_attribs = Some(self.attrs_default_auto_attribs(
+                        cls,
+                        *decorator_range,
+                        defaults.order_default,
+                    ));
                 }
                 dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers.clone()));
             }

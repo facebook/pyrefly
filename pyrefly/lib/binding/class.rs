@@ -83,6 +83,8 @@ use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
+use crate::types::class::AttrsFieldSpecifier;
+use crate::types::class::AttrsFieldSpecifierKind;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFieldProperties;
 use crate::types::class::ClassFields;
@@ -468,15 +470,38 @@ impl<'a> BindingsBuilder<'a> {
 
             let docstring_range = field_docstrings.get(&range).copied();
 
-            // Recognize attrs field-specifier calls (`x = attr.ib()` / `field()`)
-            // here, while we still have the AST, so the solving stage can read a flag.
-            let is_attrs_field_specifier =
+            // Detect at binding (AST available) so solving reads by symbol identity, not type.
+            let attrs_field_specifier =
                 if let ClassFieldDefinition::AssignedInBody { value, .. } = &definition
                     && let ExprOrBinding::Expr(Expr::Call(call)) = value.as_ref()
+                    && let Some(kind) = match self.as_special_export(&call.func) {
+                        Some(SpecialExport::AttrsLegacyAttrib) => {
+                            Some(AttrsFieldSpecifierKind::Attrib)
+                        }
+                        Some(SpecialExport::AttrsNextGenField) => {
+                            Some(AttrsFieldSpecifierKind::Field)
+                        }
+                        _ => None,
+                    }
                 {
-                    self.as_special_export(&call.func) == Some(SpecialExport::AttrsField)
+                    // Only `attr.ib` accepts a positional default; `field`'s is keyword-only.
+                    let positional_default = (kind == AttrsFieldSpecifierKind::Attrib)
+                        .then(|| call.arguments.args.first())
+                        .flatten();
+                    let default_is_nothing = call
+                        .arguments
+                        .find_keyword("default")
+                        .map(|kw| &kw.value)
+                        .or(positional_default)
+                        .is_some_and(|e| {
+                            self.as_special_export(e) == Some(SpecialExport::AttrsNothing)
+                        });
+                    Some(AttrsFieldSpecifier {
+                        kind,
+                        default_is_nothing,
+                    })
                 } else {
-                    false
+                    None
                 };
 
             fields.insert_hashed(
@@ -485,7 +510,7 @@ impl<'a> BindingsBuilder<'a> {
                     is_annotated,
                     is_initialized_on_class,
                     is_defined_in_class_body,
-                    is_attrs_field_specifier,
+                    attrs_field_specifier,
                     range,
                     docstring_range,
                 ),
@@ -1090,8 +1115,8 @@ impl<'a> BindingsBuilder<'a> {
                 ClassFieldProperties::new(
                     member_annotation.is_some() || class_kind == SynthesizedClassKind::NamedTuple,
                     member_value.is_some(),
-                    true,  // Synthesized fields are class body fields
-                    false, // Synthesized fields are never attrs field specifiers
+                    true, // Synthesized fields are class body fields
+                    None, // Synthesized fields are never attrs field specifiers
                     range,
                     None, // Synthesized fields don't have docstrings
                 ),

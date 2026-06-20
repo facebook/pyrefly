@@ -2,7 +2,7 @@
 
 [package]
 name = "pyrefly"
-version = "1.1.0"
+version = "1.1.1"
 authors = ["Meta"]
 edition = "2024"
 repository = "https://github.com/facebook/pyrefly"
@@ -39,7 +39,7 @@ faster-hex = "0.6.1"
 fuzzy-matcher = "0.3.7"
 fxhash = "0.2.1"
 indicatif = { version = "0.18.4", features = ["futures", "improved_unicode", "rayon", "tokio"] }
-itertools = "0.14.0"
+itertools = "0.15.0"
 lsp-server = "0.7.9"
 lsp-types = { git = "https://github.com/astral-sh/lsp-types", rev = "e15db0593f0ecbbd80599c3f5880e4bf5da1ca0c" }
 num-traits = { version = "0.2.19", default-features = false }

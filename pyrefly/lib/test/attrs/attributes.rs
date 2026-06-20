@@ -6,11 +6,15 @@
  */
 
 use crate::attrs_testcase;
+use crate::test::attrs::util::attrs_env;
+use crate::testcase;
 
+// attrs names a private attribute's `__init__` parameter without its leading underscores
+// (`_private` -> `private`); the attribute itself keeps the underscore.
 attrs_testcase!(
-    bug = "Pyrefly does not recognize attrs' automatic underscore stripping behavior for private attributes",
     private_attrs,
     r#"
+from typing import assert_type, reveal_type
 import attr
 
 @attr.s(auto_attribs=True)
@@ -18,8 +22,188 @@ class Example:
     _private: str
     public: int
 
-# This is the correct usage per attrs behavior:
-obj = Example(private="secret", public=42) # E: Missing argument `_private` in function `Example.__init__` # E: Unexpected keyword argument `private` in function `Example.__init__`
+reveal_type(Example.__init__)  # E: revealed type: (self: Example, private: str, public: int) -> None
+obj = Example(private="secret", public=42)
+assert_type(obj._private, str)
+"#,
+);
+
+// An explicit `alias=` wins over underscore stripping: the param keeps the given name.
+attrs_testcase!(
+    test_attrs_private_attr_alias_overrides_stripping,
+    r#"
+from typing import reveal_type
+import attrs
+
+@attrs.define
+class C:
+    _x: int = attrs.field(alias="custom")
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, custom: int) -> None
+"#,
+);
+
+// A stripped name that collides with another field is a duplicate-argument error in attrs.
+attrs_testcase!(
+    test_attrs_private_attr_strip_name_collision,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class C:
+    x: int
+    _x: str  # E: collides with `x`
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int, _x: str) -> None
+"#,
+);
+
+// Only LEADING underscores are stripped; trailing underscores are kept (and a name with
+// trailing underscores is not name-mangled, so `__both__` keeps its trailing dunder).
+attrs_testcase!(
+    test_attrs_private_attr_strips_only_leading_underscores,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class C:
+    _lead: int
+    trail_: int
+    __both__: int
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, lead: int, trail_: int, both__: int) -> None
+"#,
+);
+
+// Stripping composes with `kw_only=True`: the param is renamed and placed after `*`.
+attrs_testcase!(
+    test_attrs_private_kw_only_field,
+    r#"
+from typing import reveal_type
+import attrs
+
+@attrs.define
+class C:
+    _x: int = attrs.field(kw_only=True)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, *, x: int) -> None
+"#,
+);
+
+// Stripping composes with a default: the param is renamed and optional, while the attribute
+// keeps its underscore.
+attrs_testcase!(
+    test_attrs_private_attr_with_default,
+    r#"
+from typing import assert_type, reveal_type
+import attr
+
+@attr.s(auto_attribs=True)
+class C:
+    _x: int = 5
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int = ...) -> None
+C()
+C(x=1)
+assert_type(C()._x, int)
+"#,
+);
+
+// The stripped name is the only accepted keyword: `_x=` is rejected and there is no `.x`
+// attribute, while `._x` keeps its type.
+attrs_testcase!(
+    test_attrs_private_attr_construction_and_access,
+    r#"
+from typing import assert_type
+import attrs
+
+@attrs.define
+class C:
+    _x: int
+
+c = C(x=1)
+assert_type(c._x, int)
+C(_x=1)  # E: Missing argument `x` # E: Unexpected keyword argument `_x`
+c.x  # E: Object of class `C` has no attribute `x`
+"#,
+);
+
+// Stripping applies across a deeper inheritance chain mixing private and public fields:
+// privates lose their leading underscore in `__init__` (in MRO order) while public fields
+// are unchanged.
+attrs_testcase!(
+    test_attrs_private_attr_mixed_deep_inheritance,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class Base:
+    _a: int
+    b: str
+
+@define
+class Mid(Base):
+    _c: float
+
+@define
+class Sub(Mid):
+    _d: int
+    e: bool
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, a: int, b: str, c: float, d: int, e: bool) -> None
+"#,
+);
+
+// Cross-module inheritance: a private field from a base class in another module is still
+// stripped in the subclass `__init__`.
+testcase!(
+    test_attrs_private_attr_inherited_cross_module,
+    {
+        let mut env = attrs_env();
+        env.add(
+            "base",
+            r#"
+from attrs import define
+
+@define
+class Base:
+    _a: int
+"#,
+        );
+        env
+    },
+    r#"
+from typing import reveal_type
+from attrs import define
+from base import Base
+
+@define
+class Sub(Base):
+    _b: int
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, a: int, b: int) -> None
+Sub(a=1, b=2)
+"#,
+);
+
+// GAP: a dunder-leading field `__y` is Python name-mangled to `_C__y` before attrs strips
+// leading underscores, so real attrs names the param `C__y`. Pyrefly does not model
+// name-mangling and yields `y`.
+attrs_testcase!(
+    bug = "pyrefly does not model Python name-mangling: `__y` should map to param `C__y`, not `y`",
+    test_attrs_dunder_leading_name_mangling_gap,
+    r#"
+from typing import reveal_type
+import attrs
+
+@attrs.define
+class C:
+    __y: int
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, y: int) -> None
 "#,
 );
 
@@ -192,14 +376,47 @@ A()  # E: Missing argument `x`
 "#,
 );
 
+// Under `auto_attribs=True`, attrs collects fields from annotations, so an unannotated
+// `attr.ib()` is not a valid field and attrs raises `UnannotatedAttributeError` at runtime.
 attrs_testcase!(
-    bug = "auto_attribs=True requires annotations, but we suppress the field-annotation error for all attrs classes",
     test_attrs_unannotated_attrib_auto_attribs,
     r#"
 import attr
 @attr.s(auto_attribs=True)
 class A:
-    x = attr.ib()  # !E: type annotation
+    x = attr.ib()  # E: needs a type annotation
+"#,
+);
+
+// The error is localized to the unannotated field: an annotated sibling is unaffected and is
+// the only `__init__` parameter (the unannotated field is dropped, matching attrs).
+attrs_testcase!(
+    test_attrs_unannotated_attrib_auto_attribs_mixed,
+    r#"
+from typing import reveal_type
+import attr
+@attr.s(auto_attribs=True)
+class A:
+    x: int
+    y = attr.ib()  # E: needs a type annotation
+
+reveal_type(A.__init__)  # E: revealed type: (self: A, x: int) -> None
+"#,
+);
+
+// The error is reported once, at the base class where the unannotated field is declared, and
+// not duplicated on a subclass that inherits it.
+attrs_testcase!(
+    test_attrs_unannotated_attrib_auto_attribs_inherited,
+    r#"
+import attr
+@attr.s(auto_attribs=True)
+class Base:
+    x = attr.ib()  # E: needs a type annotation
+
+@attr.s(auto_attribs=True)
+class Sub(Base):
+    y: int
 "#,
 );
 
@@ -217,6 +434,23 @@ class C:
 
 reveal_type(C.__init__)  # E: revealed type: (self: C, x: int) -> None
 C("hello")  # E: not assignable to parameter `x`
+"#,
+);
+
+// Next-gen `field()` is the opposite of `attr.ib`: attrs documents that type checkers ignore
+// its `type=` metadata, so the field stays untyped (`Any`) rather than `int`.
+attrs_testcase!(
+    test_attrs_field_type_keyword_ignored,
+    r#"
+from typing import reveal_type
+import attr, attrs
+
+@attr.s
+class C:
+    x = attrs.field(type=int)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: Any) -> None
+C("anything")  # `x` is untyped, so any argument is accepted
 "#,
 );
 
@@ -294,6 +528,22 @@ import attr
 @attr.s
 class C:
     x: int = attr.ib(type=str)  # E: both a type annotation and a `type` argument # E: `str` is not assignable to `int`
+"#,
+);
+
+// A `type=` keyword on a non-specifier call is not a field declaration, so no conflict error
+// fires even with an annotation (attrs only inspects `attr.ib`/`field` results).
+attrs_testcase!(
+    test_attrs_type_keyword_on_non_specifier_call,
+    r#"
+import attr
+
+def helper(type: int) -> int:
+    return 0
+
+@attr.s(auto_attribs=True)
+class C:
+    x: int = helper(type=5)
 "#,
 );
 

@@ -21,6 +21,7 @@ use pyrefly_types::facet::UnresolvedFacetChain;
 use pyrefly_types::facet::UnresolvedFacetKind;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::simplify::simplify_tuples;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::prelude::SliceExt;
@@ -39,6 +40,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -111,6 +113,12 @@ fn extend_facet_chain(resolved_chain: Option<&FacetChain>, facet: FacetKind) -> 
 /// is very high.
 const NARROW_ENUM_LIMIT: usize = 100;
 
+#[derive(Clone, Copy)]
+enum IntersectFallback {
+    Never,
+    Right,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     // Get the union of all members of an enum, minus the specified member
     fn subtract_enum_member(&self, instance: Instance, name: &Name) -> Type {
@@ -172,7 +180,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 && !self.get_enum_members(class).is_empty())
     }
 
-    fn intersect_impl(&self, left: &Type, right: &Type, fallback: &dyn Fn() -> Type) -> Type {
+    fn intersect_impl(&self, left: &Type, right: &Type, fallback: IntersectFallback) -> Type {
         let is_literal =
             |t: &Type| matches!(t, Type::Literal(_) | Type::LiteralString(_) | Type::None);
         if self.is_subset_eq(right, left) {
@@ -206,12 +214,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if self.is_subset_eq(left, right) {
             left.clone()
         } else if let (Type::Type(left), Type::Type(right)) = (left, right) {
-            let inner = self.intersect_with_fallback(left, right, &|| match fallback() {
-                Type::Type(fallback) => *fallback,
-                fallback if fallback.is_never() => fallback,
-                // Mixed union fallbacks like `type[A] | int` cannot be unwrapped for this leaf.
-                _ => (**right).clone(),
-            });
+            let inner = self.intersect_with_fallback(left, right, fallback);
             if inner.is_never() {
                 inner
             } else {
@@ -234,10 +237,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // intercepted by the is_subset_eq checks above. type(None) cannot be subclassed.
             self.heap.mk_never()
         } else {
-            let fallback = fallback();
-            if fallback.is_never() {
-                fallback
-            } else if let Type::ClassType(left_cls) = left
+            let fallback = match fallback {
+                IntersectFallback::Never => return self.heap.mk_never(),
+                IntersectFallback::Right if right.is_never() => return right.clone(),
+                IntersectFallback::Right => right,
+            };
+            if let Type::ClassType(left_cls) = left
                 && let Type::ClassType(right_cls) = right
                 && (self.is_final(left_cls.class_object())
                     || self.is_final(right_cls.class_object()))
@@ -252,7 +257,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if self.has_superclass(&left_base, &right_base)
                     || self.has_superclass(&right_base, &left_base)
                 {
-                    intersect(vec![left.clone(), right.clone()], fallback, self.heap)
+                    intersect(
+                        vec![left.clone(), right.clone()],
+                        fallback.clone(),
+                        self.heap,
+                    )
                 } else {
                     // A common subclass of these two classes cannot exist.
                     self.heap.mk_never()
@@ -269,7 +278,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         left: &Type,
         right: &Type,
-        fallback: &dyn Fn() -> Type,
+        fallback: IntersectFallback,
     ) -> Type {
         self.distribute_over_union(left, |l| {
             self.distribute_over_union(right, |r| self.intersect_impl(l, r, fallback))
@@ -277,7 +286,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn intersect(&self, left: &Type, right: &Type) -> Type {
-        self.intersect_with_fallback(left, right, &|| self.heap.mk_never())
+        self.intersect_with_fallback(left, right, IntersectFallback::Never)
     }
 
     /// Calculate the intersection of a number of types
@@ -510,29 +519,167 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(result)
     }
 
-    fn narrow_isinstance(&self, left: &Type, right: &Type) -> Type {
+    /// Strip top-level `Any` from `ty` for `isinstance` narrowing.
+    /// Justified because `isinstance` gives definite runtime evidence that lets us
+    /// eliminate the uncertainty of a top-level `Any`.
+    /// (Note: this sacrifices the gradual guarantee, which Pyrefly treats as a
+    /// guiding principle rather than a hard goal.)
+    ///
+    /// Returns `(non_any_part, had_any)`. `non_any_part` is `ty` with all top-level
+    /// `Any`s stripped (or `None` if `ty` is purely `Any`). `had_any` is true when
+    /// anything was stripped. When `false`, the caller can just do a naive intersection;
+    /// when `true`, it must also union in the isinstance target type, since an
+    /// `Any`-typed value may be the target at runtime.
+    fn strip_any_for_narrowing(
+        &self,
+        ty: &Type,
+        aliases: &mut SmallSet<TypeAliasData>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> (Option<Type>, bool) {
+        match ty {
+            Type::Any(_) => (None, true),
+            Type::Union(union) => {
+                let mut definites = Vec::new();
+                let mut has_dynamic_alternative = false;
+                for member in &union.members {
+                    let (definite, has_dynamic) =
+                        self.strip_any_for_narrowing(member, aliases, range, errors);
+                    if let Some(definite) = definite {
+                        definites.push(definite);
+                    }
+                    has_dynamic_alternative |= has_dynamic;
+                }
+                let definite = if definites.is_empty() {
+                    None
+                } else {
+                    Some(self.unions(definites))
+                };
+                (definite, has_dynamic_alternative)
+            }
+            Type::Intersect(intersection) => {
+                let (parts, fallback) = &**intersection;
+                let parts = parts
+                    .iter()
+                    .filter_map(|part| self.strip_any_for_narrowing(part, aliases, range, errors).0)
+                    .collect::<Vec<_>>();
+                if parts.is_empty() {
+                    (None, true)
+                } else {
+                    (Some(intersect(parts, fallback.clone(), self.heap)), false)
+                }
+            }
+            Type::UntypedAlias(alias) => {
+                if !aliases.insert((**alias).clone()) {
+                    return (Some(ty.clone()), false);
+                }
+                let expanded = self.untype_alias(alias);
+                let result = self.strip_any_for_narrowing(&expanded, aliases, range, errors);
+                aliases.shift_remove(&**alias);
+                result
+            }
+            Type::Var(_) => {
+                let forced = self.force_for_narrowing(ty, range, errors);
+                self.strip_any_for_narrowing(&forced, aliases, range, errors)
+            }
+            _ => (Some(ty.clone()), false),
+        }
+    }
+
+    fn narrow_isinstance_from_definite(&self, left: &Type, right: &Type) -> Type {
+        self.distribute_over_union(left, |l| {
+            self.with_fresh_class_info_target(l, right, |right| {
+                if right.is_any() {
+                    // This is essentially `isinstance(..., Any)`, which gives no useful narrowing information.
+                    // We currently emit `left & Any` directly with `left` as the fallback to land on the middle
+                    // ground between strictness and gradualness. Subject to future behavioral adjustments.
+                    intersect(vec![l.clone(), right], l.clone(), self.heap)
+                } else {
+                    // TODO: falling back to Never when the lhs is a union is a hack to get
+                    // reasonable behavior in cases like this:
+                    //     def f(x: int | list[int]):
+                    //         if isinstance(x, Iterable):
+                    //             reveal_type(x)
+                    // We want to narrow x to just `list[int]`, rather than `(int & Iterable[Unknown]) | list[int]`
+                    let fallback = if left.is_union() {
+                        IntersectFallback::Never
+                    } else {
+                        IntersectFallback::Right
+                    };
+                    self.intersect_with_fallback(l, &right, fallback)
+                }
+            })
+            .unwrap_or_else(|| l.clone())
+        })
+    }
+
+    fn narrow_isinstance(
+        &self,
+        left: &Type,
+        right: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let (definite, has_dynamic_alternative) =
+            self.strip_any_for_narrowing(left, &mut SmallSet::new(), range, errors);
         let mut res = Vec::new();
         for right in self.as_class_info(right.clone()) {
-            res.push(self.distribute_over_union(left, |l| {
-                self.with_fresh_class_info_target(l, &right, |right| {
-                    self.intersect_with_fallback(l, &right, &|| {
-                        // TODO: falling back to Never when the lhs is a union is a hack to get
-                        // reasonable behavior in cases like this:
-                        //     def f(x: int | list[int]):
-                        //         if isinstance(x, Iterable):
-                        //             reveal_type(x)
-                        // We want to narrow x to just `list[int]`, rather than `(int & Iterable[Unknown]) | list[int]`
-                        if left.is_union() {
-                            self.heap.mk_never()
-                        } else {
-                            right.clone()
-                        }
-                    })
-                })
-                .unwrap_or_else(|| l.clone())
-            }));
+            if let Some(definite) = &definite {
+                res.push(self.narrow_isinstance_from_definite(definite, &right));
+            }
+            if definite.is_none() || has_dynamic_alternative {
+                res.push(
+                    self.with_fresh_class_info_target(left, &right, |right| right)
+                        .unwrap_or_else(|| left.clone()),
+                );
+            }
         }
         self.unions(res)
+    }
+
+    fn narrow_typeis_target_from_definite(&self, left: &Type, right: &Type) -> Type {
+        if right.is_any() {
+            intersect(vec![left.clone(), right.clone()], left.clone(), self.heap)
+        } else {
+            // TODO: falling back to Never when the lhs is a union is a hack to get
+            // reasonable behavior in cases like this:
+            //     def f(x: int | Callable[[], int]):
+            //         if callable(x):
+            //             reveal_type(x)
+            // Both mypy and pyright say that the type of `x` on the last line is
+            // `() -> int`, whereas if we didn't fall back to Never, pyrefly would
+            // say `(int & (...) -> object) | () -> int`. A naive implementation of
+            // calling an intersection type would then lead to the type of `x()`
+            // being `object | int`. This is a surprising and unhelpful type, so we
+            // use Never as the fallback for now.
+            let fallback = if left.is_union() {
+                IntersectFallback::Never
+            } else {
+                IntersectFallback::Right
+            };
+            self.intersect_with_fallback(left, right, fallback)
+        }
+    }
+
+    fn narrow_typeis(
+        &self,
+        left: &Type,
+        right: &Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let (definite, has_dynamic_alternative) =
+            self.strip_any_for_narrowing(left, &mut SmallSet::new(), range, errors);
+        self.distribute_over_union(right, |right| {
+            let mut res = Vec::new();
+            if let Some(definite) = &definite {
+                res.push(self.narrow_typeis_target_from_definite(definite, right));
+            }
+            if definite.is_none() || has_dynamic_alternative {
+                res.push(right.clone());
+            }
+            self.unions(res)
+        })
     }
 
     fn narrow_is_not_instance(
@@ -568,7 +715,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     result = if let Type::Quantified(q) = &result {
                         let concrete = q.upper_bound(self.stdlib, self.heap);
                         let subtraction = self.subtract(&concrete, &right);
-                        self.intersect_with_fallback(&result, &subtraction, &|| subtraction.clone())
+                        self.intersect_with_fallback(
+                            &result,
+                            &subtraction,
+                            IntersectFallback::Right,
+                        )
                     } else {
                         self.subtract(&result, &right)
                     };
@@ -679,7 +830,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let Some(left_untyped) = self.untype_opt(left.clone(), range, errors) {
                 self.with_fresh_class_info_target(&left_untyped, &right, |right| {
                     self.issubclass_result(
-                        self.intersect_with_fallback(&left_untyped, &right, &|| right.clone()),
+                        self.intersect_with_fallback(
+                            &left_untyped,
+                            &right,
+                            IntersectFallback::Right,
+                        ),
                         left,
                     )
                 })
@@ -909,7 +1064,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match op {
                 AtomicNarrowOp::Is(v) | AtomicNarrowOp::Eq(v) => {
                     let right = self.expr_infer(v, errors);
-                    return Some(self.narrow_isinstance(base, &right));
+                    return Some(self.narrow_isinstance(base, &right, range, errors));
                 }
                 AtomicNarrowOp::IsNot(v) | AtomicNarrowOp::NotEq(v) => {
                     return Some(self.narrow_type_not_eq(base, v, errors));
@@ -1369,7 +1524,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorKind::InvalidPattern,
                     );
                 }
-                self.narrow_isinstance(ty, &right)
+                self.narrow_isinstance(ty, &right, v.range(), errors)
             }
             AtomicNarrowOp::IsNotInstance(v, source) => {
                 self.narrow_is_not_instance(ty, v, *source, errors)
@@ -1378,7 +1533,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // If type(X) == Y then X has to be exactly Y, not a subclass of Y
                 // We can't model that, so we narrow it exactly like isinstance(X, Y)
                 let right = self.expr_infer(v, errors);
-                self.narrow_isinstance(ty, &right)
+                self.narrow_isinstance(ty, &right, v.range(), errors)
             }
             // If type(X) != Y, X can still be a subclass of Y so we can't do negative refinement
             // unless Y is final, in which case X cannot be a subclass of Y
@@ -1435,26 +1590,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                     );
                     if let Type::TypeIs(t) = ret {
-                        return self.distribute_over_union(&t, |right| {
-                            self.intersect_with_fallback(ty, right, &|| {
-                                // TODO: falling back to Never when the lhs is a union is a hack to get
-                                // reasonable behavior in cases like this:
-                                //     def f(x: int | Callable[[], int]):
-                                //         if callable(x):
-                                //             reveal_type(x)
-                                // Both mypy and pyright say that the type of `x` on the last line is
-                                // `() -> int`, whereas if we didn't fall back to Never, pyrefly would
-                                // say `(int & (...) -> object) | () -> int`. A naive implementation of
-                                // calling an intersection type would then lead to the type of `x()`
-                                // being `object | int`. This is a surprising and unhelpful type, so we
-                                // use Never as the fallback for now.
-                                if ty.is_union() {
-                                    self.heap.mk_never()
-                                } else {
-                                    (*t).clone()
-                                }
-                            })
-                        });
+                        return self.narrow_typeis(ty, &t, range, errors);
                     }
                 }
                 ty.clone()

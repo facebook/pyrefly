@@ -60,6 +60,17 @@ use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
 
+/// Suppresses the assignment check against a field's declared type. Required-ness instead uses
+/// binding-phase identity; this type-based path covers generic assignments with no binding context.
+pub(crate) fn is_attrs_nothing(ty: &Type) -> bool {
+    let class = match ty {
+        Type::Literal(lit) if let Lit::Enum(e) = &lit.value => &e.class,
+        Type::ClassType(c) => c,
+        _ => return false,
+    };
+    class.has_qname("attr", "_Nothing") || class.has_qname("attrs", "_Nothing")
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
     /// `auto_attribs=False` collects only `attr.ib()`/`field()` assignments;
@@ -1021,9 +1032,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
 
                 if field_flags.init_by_name {
+                    // attrs strips leading underscores when naming a private field's init param.
+                    let stripped = name.as_str().trim_start_matches('_');
+                    let param_name = if matches!(dataclass.kind, DataclassKind::Attrs { .. })
+                        && !stripped.is_empty()
+                        && stripped.len() != name.as_str().len()
+                    {
+                        let stripped_name = Name::new(stripped);
+                        if dataclass.fields.contains(&stripped_name) {
+                            if let Some(range) = self
+                                .get_class_fields(cls)
+                                .and_then(|f| f.field_decl_range(&name))
+                            {
+                                self.error(
+                                    errors,
+                                    range,
+                                    ErrorKind::BadClassDefinition,
+                                    format!(
+                                        "Field `{name}` collides with `{stripped_name}` after stripping leading underscores"
+                                    ),
+                                );
+                            }
+                            name.clone()
+                        } else {
+                            stripped_name
+                        }
+                    } else {
+                        name.clone()
+                    };
                     params.push(self.as_param(
                         &field,
-                        &name,
+                        &param_name,
                         has_default,
                         is_kw_only,
                         strict,

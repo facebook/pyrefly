@@ -1616,7 +1616,7 @@ impl Scopes {
         self.current().stat.0.contains_key(name)
     }
 
-    fn is_implicit_builtin_name(&self, name: &Name) -> bool {
+    pub(crate) fn is_implicit_builtin_name(&self, name: &Name) -> bool {
         // Implicit builtins are only ever materialized into the module (outermost) scope, so
         // fast-reject any name that isn't one there before walking the scope stack. This is the
         // common case (most merged names are ordinary locals).
@@ -3456,7 +3456,6 @@ impl<'a> BindingsBuilder<'a> {
     fn merged_flow_info(
         &mut self,
         merge_item: MergeItem,
-        phi_name: &Name,
         phi_idx: Idx<Key>,
         merge_style: MergeStyle,
         n_branches: usize,
@@ -3580,19 +3579,15 @@ impl<'a> BindingsBuilder<'a> {
             n_branches
         };
         let n_missing_branches = n_total_branches - n_values;
-        let definition_status = if self.scopes.is_implicit_builtin_name(phi_name) {
-            DefinitionStatus::Defined
-        } else {
-            determine_definition_status(
-                merge_style,
-                base_has_value,
-                n_values,
-                n_branches,
-                n_missing_branches,
-                n_branches_with_termination_key,
-                missing_branch_termination_keys,
-            )
-        };
+        let definition_status = determine_definition_status(
+            merge_style,
+            base_has_value,
+            n_values,
+            n_branches,
+            n_missing_branches,
+            n_branches_with_termination_key,
+            missing_branch_termination_keys,
+        );
 
         // Helper to compute the final FlowStyle based on definition status.
         let compute_final_style = |styles: Vec<FlowStyle>| -> FlowStyle {
@@ -3775,7 +3770,6 @@ impl<'a> BindingsBuilder<'a> {
             let phi_idx = self.idx_for_promise(Key::Phi(Box::new((name.key().clone(), range))));
             let flow_info = self.merged_flow_info(
                 merge_item,
-                name.key(),
                 phi_idx,
                 merge_style,
                 n_branches,

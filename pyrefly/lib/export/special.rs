@@ -76,7 +76,9 @@ pub enum SpecialExport {
     ShapedArray,
     Sentinel,
     BuiltinsSentinel,
-    AttrsField,
+    AttrsLegacyAttrib,
+    AttrsNextGenField,
+    AttrsNothing,
 }
 
 impl SpecialExport {
@@ -144,7 +146,9 @@ impl SpecialExport {
             "shaped_array" => Some(Self::ShapedArray),
             "Sentinel" => Some(Self::Sentinel),
             "sentinel" => Some(Self::BuiltinsSentinel),
-            "attr" | "attrib" | "ib" | "field" => Some(Self::AttrsField),
+            "attr" | "attrib" | "ib" => Some(Self::AttrsLegacyAttrib),
+            "field" => Some(Self::AttrsNextGenField),
+            "NOTHING" => Some(Self::AttrsNothing),
             _ => None,
         }
     }
@@ -221,7 +225,9 @@ impl SpecialExport {
             Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
             Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
             Self::BuiltinsSentinel => matches!(m.as_str(), "builtins"),
-            Self::AttrsField => matches!(m.as_str(), "attr" | "attrs"),
+            Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
+                matches!(m.as_str(), "attr" | "attrs")
+            }
         }
     }
 

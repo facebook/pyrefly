@@ -11,17 +11,15 @@ use crate::attrs_testcase;
 //
 // Coverage of every class-level attrs decorator entry point. All are marked with PEP 681
 // `@dataclass_transform(...)` in attrs' stubs, so pyrefly routes them through its generic
-// dataclass synthesis path with only a thin attrs-specific layer.
-//
-// Handled correctly by dataclass_transform:
-//   - `@define` / `@attrs.define` / `@attr.define`           (modern, mutable)
-//   - `@mutable` / `@attrs.mutable` / `@attr.mutable`        (alias of define)
-//   - `@frozen` / `@attrs.frozen` / `@attr.frozen`           (frozen_default=True)
-//   - `@attr.s` / `@attr.s()` / `@attr.attrs` / `@attr.attributes` (auto_attribs=False:
-//     only `attr.ib()`/`field()` assignments are fields, bare annotations ignored)
-//   - `@attr.s(auto_attribs=True)` / `@attr.dataclass`       (auto_attribs=True)
-//   - per-decorator default keywords: order_default (classic), frozen_default,
-//     no-order (define)
+// dataclass synthesis path. dataclass_transform alone can't express attrs' per-decorator
+// `auto_attribs` rules, so an attrs-specific layer resolves which assignments are fields:
+//   - `@define` / `@mutable` / `@frozen` (+ `attr.`/`attrs.` forms): `auto_attribs=None`,
+//     i.e. annotation-driven unless a bare `attr.ib()`/`field()` assignment forces
+//     `auto_attribs=False`
+//   - `@attr.s` / `@attr.s()` / `@attr.attrs` / `@attr.attributes`: `auto_attribs=False`
+//     (only `attr.ib()`/`field()` assignments are fields; bare annotations ignored)
+//   - `@attr.s(auto_attribs=True)` / `@attr.dataclass`: `auto_attribs=True`
+//   - per-decorator default keywords: order_default (classic), frozen_default, no-order (define)
 //
 // NOT handled (bug-marked tests below):
 //   - `field()` / `attr.ib()` specifier params -> `Unknown` (converter-param leak)
@@ -295,6 +293,19 @@ assert_type(C(1).x, int)
 "#,
 );
 
+// `@attr.dataclass` defaults to `auto_attribs=True` by name (no auto-detect fallback), so an
+// unannotated specifier needs a type annotation.
+attrs_testcase!(
+    test_attr_dataclass_unannotated_needs_annotation,
+    r#"
+import attr
+
+@attr.dataclass
+class C:
+    x = attr.ib()  # E: needs a type annotation
+"#,
+);
+
 // `init=False` suppresses `__init__` synthesis.
 attrs_testcase!(
     test_attrs_define_init_false,
@@ -413,5 +424,69 @@ class Sub(Base):
     pass
 
 Sub(1).x = 2  # E: Cannot set field `x`
+"#,
+);
+
+// `@define` uses `auto_attribs=None`: attrs falls back to `auto_attribs=False` when a field
+// is assigned a bare `field()`/`attr.ib()` with no annotation, so the field is still collected.
+attrs_testcase!(
+    test_attrs_define_bare_field,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    x = field()
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: Any) -> None
+"#,
+);
+
+// Mixing a bare annotation with an unannotated `field()` makes attrs fall back to
+// `auto_attribs=False`, so only the `field()` assignment is a field; the bare `a` is an
+// annotation-only declaration (not a field, and unset at runtime).
+attrs_testcase!(
+    test_attrs_define_mixed_bare_field_and_annotation,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: int
+    b = field()
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, b: Any) -> None
+"#,
+);
+
+// `auto_attribs` is resolved from each class's own body, so a subclass and its base can use
+// different modes; fields are still inherited across the boundary (matches attrs runtime).
+attrs_testcase!(
+    test_attrs_define_auto_attribs_resolved_per_class,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class Base:
+    x = field()        # bare specifier -> Base is auto_attribs=False
+
+@define
+class Sub(Base):
+    y: int             # annotation -> Sub is auto_attribs=True
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, x: Any, y: int) -> None
+
+@define
+class Base2:
+    a: int             # annotation -> Base2 is auto_attribs=True
+
+@define
+class Sub2(Base2):
+    b = field()        # bare specifier -> Sub2 is auto_attribs=False
+
+reveal_type(Sub2.__init__)  # E: revealed type: (self: Sub2, a: int, b: Any) -> None
 "#,
 );

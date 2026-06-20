@@ -51,6 +51,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::dataclass::is_attrs_nothing;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::types::abstract_class::AbstractClassMembers;
@@ -3351,8 +3352,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
                 let annot_ty = annot.ty(self.heap, self.stdlib);
-                let hint = annot_ty.as_ref().map(|t| (t, tcc));
-                let expr_ty = self.expr_check(expr, hint, errors);
+                // Skip the assignment check for a NOTHING `default=`. Gating on the argument keeps
+                // ordinary `default=` calls (e.g. `ContextVar(default=None)`) on the hinted path.
+                let expr_ty = if let Expr::Call(call) = expr
+                    && let Some(default) =
+                        call.arguments.find_keyword("default").map(|kw| &kw.value)
+                    && is_attrs_nothing(&self.expr_infer(default, &self.error_swallower()))
+                {
+                    let got = self.expr_infer(expr, errors);
+                    if !is_attrs_nothing(&got)
+                        && let Some(annot_ty) = &annot_ty
+                    {
+                        self.check_type(&got, annot_ty, expr.range(), errors, tcc);
+                    }
+                    got
+                } else {
+                    let hint = annot_ty.as_ref().map(|t| (t, tcc));
+                    self.expr_check(expr, hint, errors)
+                };
                 let ty = if style == &AnnotationStyle::Direct {
                     // For direct assignments, user-provided annotation takes
                     // precedence over inferred expr type.

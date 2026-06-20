@@ -682,6 +682,18 @@ issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overl
 );
 
 testcase!(
+    test_runtime_checkable_protocol_never_no_unsafe_overlap,
+    r#"
+from collections.abc import Iterable
+from typing import Never
+
+def f(x: Never) -> None:
+    if isinstance(x, Iterable):
+        pass
+"#,
+);
+
+testcase!(
     test_runtime_checkable_missing_members_do_not_overlap,
     r#"
 from typing import Any, Generator, Iterable, Protocol, runtime_checkable
