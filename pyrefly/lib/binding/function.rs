@@ -814,6 +814,17 @@ impl<'a> BindingsBuilder<'a> {
             self.as_special_export(&d.expression) == Some(SpecialExport::ShapeDslFunction)
         });
 
+        let is_triton_jit = x.decorator_list.iter().any(|d| {
+            self.as_special_export(&d.expression) == Some(SpecialExport::TritonJit)
+        });
+
+        if is_triton_jit {
+            if let Err(msg) = pyrefly_triton::check_triton_function(&x) {
+                // Fallback: emit a note, no error
+                println!("Note: triton type inference failure: {}", msg);
+            }
+        }
+
         // Extract the IR function name from @uses_shape_dsl(ir_fn) if present.
         let uses_shape_dsl_ir_name = x.decorator_list.iter().find_map(|d| {
             let call = d.expression.as_call_expr()?;
