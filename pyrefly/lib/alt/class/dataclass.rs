@@ -121,6 +121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Compute kw_only fields once for all methods that need it
         let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
 
+        self.check_duplicate_kw_only_markers(cls, errors);
         self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
         self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
         if dataclass.kws.init {
@@ -308,6 +309,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Hint: add a `__set__` method to make `{cls}` a data descriptor"
                     ))
                     .emit();
+            }
+        }
+    }
+
+    fn check_duplicate_kw_only_markers(&self, cls: &Class, errors: &ErrorCollector) {
+        let Some(class_fields) = self.get_class_fields(cls) else {
+            return;
+        };
+        let mut seen_kw_only_marker = false;
+        for name in class_fields.class_body_fields() {
+            if !class_fields.is_field_annotated(name) {
+                continue;
+            }
+            if matches!(
+                self.get_dataclass_member(cls, name),
+                DataclassMember::KwOnlyMarker
+            ) {
+                if seen_kw_only_marker {
+                    self.error(
+                        errors,
+                        class_fields
+                            .field_decl_range(name)
+                            .unwrap_or_else(|| cls.range()),
+                        ErrorKind::BadClassDefinition,
+                        "`dataclasses.KW_ONLY` may only appear once in a dataclass".to_owned(),
+                    );
+                } else {
+                    seen_kw_only_marker = true;
+                }
             }
         }
     }
