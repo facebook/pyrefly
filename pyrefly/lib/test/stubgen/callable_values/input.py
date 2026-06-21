@@ -36,7 +36,7 @@ def same_return(x):
 
 # `Type::Overload`: an unbound overloaded function whose overloads have
 # DIFFERENT return types, so there is no single faithful return type and it
-# falls back to `Incomplete`.
+# falls back to `Callable[..., Incomplete]`.
 @overload
 def diff_return(x: int) -> int: ...
 @overload
@@ -81,7 +81,7 @@ gen_ref = generic_fn
 # `Type::Overload` (same returns → `Callable[..., bytes]`).
 ov_same = same_return
 
-# `Type::Overload` (differing returns → `Incomplete`).
+# `Type::Overload` (differing returns → `Callable[..., Incomplete]`).
 ov_diff = diff_return
 
 # `Type::BoundMethod` / `BoundMethodType::Function`.

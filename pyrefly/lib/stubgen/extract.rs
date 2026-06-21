@@ -518,7 +518,7 @@ fn callable_ellipsis(ret: &Type, ctx: &mut ExtractionContext) -> String {
 
 /// Render an overload set. If every signature shares the same return type we
 /// can render `Callable[..., Ret]`; otherwise there is no single faithful
-/// return type, so fall back to `Incomplete`.
+/// return type, so fall back to `Callable[..., Incomplete]` (still a callable).
 fn format_overload(overload: &Overload, ctx: &mut ExtractionContext) -> String {
     let ret = |sig: &OverloadType| -> Type {
         match sig {
@@ -530,8 +530,9 @@ fn format_overload(overload: &Overload, ctx: &mut ExtractionContext) -> String {
     if overload.signatures.iter().all(|s| ret(s) == first) {
         callable_ellipsis(&first, ctx)
     } else {
+        ctx.uses_callable = true;
         ctx.uses_incomplete = true;
-        "Incomplete".to_owned()
+        "Callable[..., Incomplete]".to_owned()
     }
 }
 

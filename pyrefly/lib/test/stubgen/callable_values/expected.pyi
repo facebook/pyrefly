@@ -50,7 +50,7 @@ collect: Callable[..., str]
 to_text: Callable[[Incomplete], str]
 gen_ref: Callable[..., int]
 ov_same: Callable[..., bytes]
-ov_diff: Incomplete
+ov_diff: Callable[..., Incomplete]
 bound_method: Callable[[int], str]
 bound_generic: Callable[..., int]
 bound_overloaded: Callable[..., bool]
