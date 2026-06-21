@@ -2148,3 +2148,23 @@ def get_files():
     return data_schema_files
 "#,
 );
+
+fn env_special_export_package_reexport() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("pkg", "pkg/__init__.py", "");
+    t.add_with_path(
+        "pkg.my_typing",
+        "pkg/my_typing.py",
+        "from typing import Annotated",
+    );
+    t
+}
+
+testcase!(
+    test_special_export_package_reexport_import,
+    env_special_export_package_reexport(),
+    r#"
+from pkg import my_typing as mt
+x: mt.Annotated[int, "metadata"] = 5
+"#,
+);

@@ -2350,7 +2350,9 @@ impl Scopes {
                         .or_else(|| lookup.is_special_export(base_module, name))
                 }
                 FlowStyle::ImportAs(m) => lookup.is_special_export(*m, name),
-                FlowStyle::Import(m, upstream_name) => lookup.is_special_export(*m, upstream_name),
+                FlowStyle::Import(m, upstream_name) => {
+                    lookup.is_special_export(m.append(upstream_name), name)
+                }
                 _ => None,
             }
         } else if let Some(flow_info) = self.get_flow_info(name) {
