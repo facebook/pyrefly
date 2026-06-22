@@ -199,7 +199,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             let names = tparams
                 .iter()
-                .map(|t| t.name().as_str())
+                .map(|t| format!("{}", t.display_name_with_prefix()))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("class `{}[{}]`", cls.name(), names)
@@ -230,7 +230,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             let names = tparams
                 .iter()
-                .map(|t| t.name().as_str())
+                .map(|t| format!("{}", t.display_name_with_prefix()))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("type alias `{}[{}]`", forall.body.name(), names)
