@@ -1774,8 +1774,7 @@ For example, read-only and required `TypedDict` fields cannot be deleted.
 This error arises when attempting to perform an operation between values of two incompatible types.
 
 ```python
-if "hello" in 1:  # int doesn't support `in`!
-  ...
+x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-operation]
 ```
 
 ## untyped-import
@@ -1811,6 +1810,22 @@ This error is raised when a `# pyrefly: ignore` comment is not used to suppress 
 Default severity: `ignore`
 
 This error is raised when a `# type: ignore` comment is not used to suppress any error, and can be safely removed. This rule is distinct from `unused-ignore` so that projects using multiple type checkers can leave `# type: ignore` comments for other tools (e.g. mypy) without pyrefly flagging them. Enable this rule if your project uses pyrefly exclusively.
+
+## useless-overload-body
+
+Default severity: `warn`
+
+This warning is raised when an `@overload` function contains executable body logic.
+Overload bodies are never executed at runtime, so only placeholder bodies like `pass`, `...`,
+a docstring-only body, `raise NotImplementedError(...)`, or `return NotImplemented` are useful.
+
+```python
+from typing import overload
+
+@overload
+def parse(x: int) -> int:
+    return x + 1  # warning: executable logic in an overload body
+```
 
 ## variance-mismatch
 
