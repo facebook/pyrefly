@@ -2782,9 +2782,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if func.metadata.flags.is_staticmethod || func.metadata.flags.is_classmethod {
                     return true;
                 }
-                func.signature
-                    .get_first_param()
-                    .is_none_or(|p| self.is_subset_eq(self_type, &p))
+                func.signature.get_first_param().is_none_or(|p| {
+                    // A non-protocol `self:` can't re-enter protocol conformance, so check
+                    // it directly. A protocol-typed `self:`, however, makes
+                    // `is_subset_eq(self_type, p)` re-enter this same filtering on the same
+                    // `(self_type, p)` pair — unbounded recursion for a self-referential
+                    // protocol. Guard only that case coinductively: on re-entry
+                    // of the same pair, assume the overload applies (keep it).
+                    let p_is_protocol = matches!(
+                        &p,
+                        Type::ClassType(cls) if self.type_order().is_protocol(cls.class_object())
+                    );
+                    if !p_is_protocol {
+                        return self.is_subset_eq(self_type, &p);
+                    }
+                    let key = (self_type.clone(), p.clone());
+                    if self.enter_overload_self_filter(key.clone()) {
+                        return true;
+                    }
+                    let applies = self.is_subset_eq(self_type, &p);
+                    self.exit_overload_self_filter(&key);
+                    applies
+                })
             })
             .cloned()
             .collect();
