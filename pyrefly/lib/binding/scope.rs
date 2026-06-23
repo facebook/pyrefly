@@ -59,6 +59,7 @@ use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyVariance;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::MethodDefinedAttribute;
 use crate::binding::binding::MethodSelfKind;
 use crate::binding::binding::MethodThatSetsAttr;
 use crate::binding::binding::NarrowUseLocation;
@@ -2772,7 +2773,7 @@ impl Scopes {
     /// - Panics if the current scope is not a class body.
     pub fn finish_class_and_get_field_definitions(
         &mut self,
-    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange)> {
+    ) -> SmallMap<Name, (ClassFieldDefinition, TextRange, Vec<MethodDefinedAttribute>)> {
         let mut field_definitions = SmallMap::new();
         let class_body = self.pop();
         let class_scope = {
@@ -2801,7 +2802,6 @@ impl Scopes {
                 }
             })
             .collect();
-
         class_body.stat.0.iter_hashed().for_each(
             |(name, static_info)| {
             if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
@@ -2863,26 +2863,54 @@ impl Scopes {
                         definition: value.idx,
                     },
                 };
-                field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
+                field_definitions
+                    .insert_hashed(name.owned(), (definition, static_info.range, Vec::new()));
             }
         });
+        let mut method_defined_fields: SmallMap<Name, Vec<MethodDefinedAttribute>> =
+            SmallMap::new();
         method_attrs.into_iter().for_each(
             |(name, method, InstanceAttribute(value, annotation, range, _))| {
-                if !field_definitions.contains_key_hashed(name.as_ref()) {
-                    field_definitions.insert_hashed(
-                        name,
-                        (
-                            ClassFieldDefinition::DefinedInMethod {
-                                value: Box::new(value),
-                                annotation,
-                                method,
-                            },
-                            range,
-                        ),
-                    );
-                }
+                method_defined_fields.entry_hashed(name).or_default().push(
+                    MethodDefinedAttribute {
+                        method,
+                        value,
+                        annotation,
+                        range,
+                    },
+                );
             },
         );
+        method_defined_fields
+            .into_iter_hashed()
+            .for_each(
+                |(name, assignments)| match field_definitions.entry_hashed(name) {
+                    Entry::Occupied(mut occupied) => {
+                        occupied.get_mut().2.extend(assignments);
+                    }
+                    Entry::Vacant(vacant) => {
+                        let mut iter = assignments.into_iter();
+                        if let Some(MethodDefinedAttribute {
+                            method,
+                            value,
+                            annotation,
+                            range,
+                        }) = iter.next()
+                        {
+                            let rest: Vec<MethodDefinedAttribute> = iter.collect();
+                            vacant.insert((
+                                ClassFieldDefinition::DefinedInMethod {
+                                    value: Box::new(value),
+                                    annotation,
+                                    method,
+                                },
+                                range,
+                                rest,
+                            ));
+                        }
+                    }
+                },
+            );
         field_definitions
     }
 
