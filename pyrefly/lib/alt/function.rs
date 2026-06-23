@@ -678,7 +678,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .arc_clone_ty();
         // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
         let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
-        if !has_return_annotation {
+        if !has_return_annotation && !def.metadata.flags.has_no_type_check {
             self.error(
                 errors,
                 stmt.name.range(),
@@ -905,6 +905,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(CalleeKind::Function(FunctionKind::AbstractMethod)) => {
                 Some(SpecialDecorator::AbstractMethod)
             }
+            Some(CalleeKind::Function(FunctionKind::NoTypeCheck)) => {
+                Some(SpecialDecorator::NoTypeCheck)
+            }
             Some(CalleeKind::Function(FunctionKind::DisjointBase)) => {
                 Some(SpecialDecorator::DisjointBase)
             }
@@ -988,6 +991,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             SpecialDecorator::AbstractMethod => {
                 flags.is_abstract_method = true;
+                true
+            }
+            SpecialDecorator::NoTypeCheck => {
+                flags.has_no_type_check = true;
                 true
             }
             SpecialDecorator::UsesShapeDsl => {

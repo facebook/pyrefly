@@ -687,6 +687,8 @@ pub struct FuncFlags {
     pub has_final_decoration: bool,
     /// A function decorated with `@abc.abstractmethod`
     pub is_abstract_method: bool,
+    /// A function decorated with `@typing.no_type_check` or `@typing_extensions.no_type_check`
+    pub has_no_type_check: bool,
     /// Function body is treated as a stub (e.g. body is `...` or absent in a stub file)
     pub lacks_implementation: bool,
     /// Is the function definition in a `.pyi` file
@@ -875,6 +877,8 @@ pub enum FunctionKind {
     RuntimeCheckable,
     Def(Arc<FuncId>),
     AbstractMethod,
+    /// A function decorated with `typing.no_type_check` or `typing_extensions.no_type_check`.
+    NoTypeCheck,
     /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
     CallbackProtocol(Box<ClassType>),
     TotalOrdering,
@@ -1235,6 +1239,7 @@ impl FunctionKind {
                 Self::DataclassTransform
             }
             ("abc", None, "abstractmethod") => Self::AbstractMethod,
+            ("typing" | "typing_extensions", None, "no_type_check") => Self::NoTypeCheck,
             ("functools", None, "total_ordering") => Self::TotalOrdering,
             ("typing" | "typing_extensions", None, "disjoint_base") => Self::DisjointBase,
             ("numba.core.decorators", None, "jit") => Self::NumbaJit,
@@ -1269,6 +1274,7 @@ impl FunctionKind {
             Self::RuntimeCheckable => ModuleName::typing(),
             Self::CallbackProtocol(cls) => cls.qname().module_name(),
             Self::AbstractMethod => ModuleName::abc(),
+            Self::NoTypeCheck => ModuleName::typing(),
             Self::TotalOrdering => ModuleName::functools(),
             Self::DisjointBase => ModuleName::typing(),
             Self::NumbaJit => ModuleName::from_str("numba"),
@@ -1298,6 +1304,7 @@ impl FunctionKind {
             Self::RuntimeCheckable => Cow::Owned(Name::new_static("runtime_checkable")),
             Self::CallbackProtocol(_) => Cow::Owned(dunder::CALL),
             Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
+            Self::NoTypeCheck => Cow::Owned(Name::new_static("no_type_check")),
             Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
             Self::DisjointBase => Cow::Owned(Name::new_static("disjoint_base")),
             Self::NumbaJit => Cow::Owned(Name::new_static("jit")),
@@ -1329,6 +1336,7 @@ impl FunctionKind {
             Self::NumbaNjit => None,
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
             Self::AbstractMethod => None,
+            Self::NoTypeCheck => None,
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
