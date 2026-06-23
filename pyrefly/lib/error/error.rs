@@ -11,11 +11,13 @@ use std::io;
 use std::io::Write;
 use std::path::Path;
 
+use dupe::Dupe;
 use itertools::Itertools;
 use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticTag;
 use lsp_types::Url;
+use pyrefly_python::ignore::Suppression;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
@@ -29,6 +31,7 @@ use ruff_annotate_snippets::Renderer;
 use ruff_annotate_snippets::Snippet;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use yansi::Paint;
@@ -429,6 +432,44 @@ impl Error {
             secondary_annotations: Vec::new(),
             quick_fixes: Vec::new(),
         }
+    }
+
+    /// Build an unused-suppression error spanning the `#` that starts `supp`'s comment.
+    pub fn unused_ignore(
+        module: &Module,
+        supp: &Suppression,
+        msg: String,
+        kind: ErrorKind,
+    ) -> Self {
+        let start = module.lined_buffer().line_start(supp.comment_line())
+            + TextSize::try_from(supp.comment_offset())
+                .expect("Python source offsets fit in TextSize");
+        Error::new(
+            module.dupe(),
+            TextRange::new(start, start + TextSize::new(1)),
+            msg,
+            Vec::new(),
+            kind,
+        )
+    }
+
+    /// Flag `supp`, a `# pyrefly: ignore`, as unused. `declared_len` is the declared code count
+    /// (0 = blanket); it picks the wording for the `unused` codes.
+    pub fn unused_pyrefly_ignore(
+        module: &Module,
+        supp: &Suppression,
+        declared_len: usize,
+        unused: &[&str],
+    ) -> Self {
+        let codes = unused.iter().join(", ");
+        let msg = if declared_len == 0 {
+            "Unused `# pyrefly: ignore` comment".to_owned()
+        } else if unused.len() == declared_len {
+            format!("Unused `# pyrefly: ignore` comment for code(s): {codes}")
+        } else {
+            format!("Unused error code(s) in `# pyrefly: ignore`: {codes}")
+        };
+        Error::unused_ignore(module, supp, msg, ErrorKind::UnusedIgnore)
     }
 
     /// Add a secondary labeled annotation to this error. These appear as additional
