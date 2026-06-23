@@ -131,6 +131,7 @@ take_callable(old_function)  # E: `old_function` is deprecated
 
 testcase!(
     test_type_call_dynamic_base,
+    TestEnv::new().enable_unsupported_dynamic_base_error(),
     r#"
 class Base: ...
 
