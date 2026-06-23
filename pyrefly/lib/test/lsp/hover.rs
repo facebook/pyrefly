@@ -989,6 +989,46 @@ Test docstring
 }
 
 #[test]
+fn hover_on_imported_enum_shows_members() {
+    let code = r#"
+from http import HTTPStatus
+#                ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(class) HTTPStatus: Literal[HTTPStatus.CONTINUE"),
+        "Expected enum hover to show members, got: {report}"
+    );
+    assert!(
+        report.contains("HTTPStatus.OK"),
+        "Expected enum hover to include later members, got: {report}"
+    );
+    assert!(
+        !report.contains("def __new__") && !report.contains("def __init__"),
+        "Enum hover should not show a constructor, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_imported_enum_call_shows_call() {
+    let code = r#"
+from http import HTTPStatus
+
+HTTPStatus(200)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) __new__") && report.contains("value: Any"),
+        "Expected enum call hover to show the call signature, got: {report}"
+    );
+    assert!(
+        !report.contains("Literal[HTTPStatus.CONTINUE"),
+        "Enum call hover should not show the member list, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_class_in_type_annotation_shows_constructor() {
     let code = r#"
 class Foo:

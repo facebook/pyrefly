@@ -792,6 +792,33 @@ pub fn get_hover(
                 return display;
             }
             if show_constructor {
+                let enum_class = match &cloned {
+                    Type::ClassDef(cls) => Some(cls),
+                    Type::ClassType(cls) => Some(cls.class_object()),
+                    Type::Type(t) => match &**t {
+                        Type::ClassType(cls) => Some(cls.class_object()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(cls) = enum_class
+                    && solver.get_metadata_for_class(cls).is_enum()
+                {
+                    let members: Vec<Type> = solver
+                        .get_enum_members(cls)
+                        .into_iter()
+                        .map(|lit| lit.to_implicit_type())
+                        .collect();
+                    let enum_display_type = if members.is_empty() {
+                        cloned
+                    } else {
+                        solver.heap.mk_union(members)
+                    };
+                    return enum_display_type.as_lsp_string_with_fallback_name(
+                        name_for_display.as_deref(),
+                        LspDisplayMode::Hover,
+                    );
+                }
                 let constructor = match cloned {
                     Type::ClassDef(ref cls)
                         if !solver.get_metadata_for_class(cls).is_typed_dict() =>
