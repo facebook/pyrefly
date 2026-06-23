@@ -435,6 +435,19 @@ impl NarrowingSubject {
     }
 }
 
+fn merge_facet_subjects(base: &FacetSubject, extra: &FacetSubject) -> FacetSubject {
+    let mut chain = base.chain.facets().clone();
+    chain.extend(extra.chain.facets().clone());
+    let origin = match (base.origin, extra.origin) {
+        (FacetOrigin::GetMethod, _) | (_, FacetOrigin::GetMethod) => FacetOrigin::GetMethod,
+        _ => FacetOrigin::Direct,
+    };
+    FacetSubject {
+        chain: UnresolvedFacetChain::new(chain),
+        origin,
+    }
+}
+
 impl NarrowOp {
     /// Produce a Python-like snippet for hover display.
     ///
@@ -535,19 +548,6 @@ impl NarrowOp {
     /// transformation merges facet chains: if the new subject has facets (e.g., `obj.attr`)
     /// and this operation has facets, they are concatenated.
     pub fn for_subject(&self, subject: &NarrowingSubject) -> Self {
-        fn merge_facet_subjects(base: &FacetSubject, extra: &FacetSubject) -> FacetSubject {
-            let mut chain = base.chain.facets().clone();
-            chain.extend(extra.chain.facets().clone());
-            let origin = match (base.origin, extra.origin) {
-                (FacetOrigin::GetMethod, _) | (_, FacetOrigin::GetMethod) => FacetOrigin::GetMethod,
-                _ => FacetOrigin::Direct,
-            };
-            FacetSubject {
-                chain: UnresolvedFacetChain::new(chain),
-                origin,
-            }
-        }
-
         fn for_facet_subject(
             subject: &NarrowingSubject,
             prop: Option<&FacetSubject>,
@@ -568,6 +568,21 @@ impl NarrowOp {
             }
             Self::And(ops) => Self::And(ops.map(|op| op.for_subject(subject))),
             Self::Or(ops) => Self::Or(ops.map(|op| op.for_subject(subject))),
+        }
+    }
+
+    /// Transforms this narrowing operation to apply to a facet of an anonymous subject.
+    pub fn for_facet_subject(&self, subject: &FacetSubject) -> Self {
+        match self {
+            Self::Atomic(prop, op) => Self::Atomic(
+                Some(match prop {
+                    None => subject.clone(),
+                    Some(prop) => merge_facet_subjects(subject, prop),
+                }),
+                op.clone(),
+            ),
+            Self::And(ops) => Self::And(ops.map(|op| op.for_facet_subject(subject))),
+            Self::Or(ops) => Self::Or(ops.map(|op| op.for_facet_subject(subject))),
         }
     }
 
