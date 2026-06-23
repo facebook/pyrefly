@@ -202,6 +202,8 @@ pub enum ErrorKind {
     InconsistentOverloadDefault,
     /// Internal Pyrefly error.
     InternalError,
+    /// An `@abstractmethod` is defined in a class that is not abstract.
+    InvalidAbstractMethod,
     /// Attempting to write an annotation that is invalid for some reason.
     InvalidAnnotation,
     /// Passing an argument that is invalid for reasons besides type.
@@ -469,6 +471,7 @@ impl ErrorKind {
             ErrorKind::DivisionByZero => Severity::Warn,
             ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
+            ErrorKind::InvalidAbstractMethod => Severity::Error,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
             ErrorKind::ImplicitAnyEmptyContainer => Severity::Ignore,

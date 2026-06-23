@@ -572,7 +572,7 @@ testcase!(
     test_no_missing_return_for_stubs,
     r#"
 from typing import Protocol, overload
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
 class P(Protocol):
     def f1(self) -> int:
@@ -622,7 +622,7 @@ class C:
     def f9(self) -> int:
         raise NotImplementedError()  # OK
 
-class AbstractC:
+class AbstractC(ABC):
     @abstractmethod
     def f1(self) -> int:
         """a"""

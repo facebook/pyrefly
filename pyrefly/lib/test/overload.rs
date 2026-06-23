@@ -1096,10 +1096,10 @@ def catch(f: S | None = None, *, exception: T) -> S | T: ...
 testcase!(
     test_abstract,
     r#"
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Literal, overload
 
-class Derp:
+class Derp(ABC):
     @overload
     @abstractmethod
     def f(self, m: Literal["x"] = "x") -> int: ...
