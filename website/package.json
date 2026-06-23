@@ -37,7 +37,7 @@
     "docusaurus-plugin-internaldocs-fb": "^1.19.1",
     "esbuild": "0.28.1",
     "file-loader": "^6.2.0",
-    "http-proxy-middleware": "2.0.9",
+    "http-proxy-middleware": "3.0.7",
     "image-size": "1.2.1",
     "lz-string": "^1.4.4",
     "monaco-editor": "^0.34.0",

@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use pyrefly_python::dunder;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
@@ -31,9 +32,11 @@ use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::unwrap::HintRef;
+use crate::binding::binding::Key;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LE;
@@ -59,22 +62,61 @@ use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
 
+/// Suppresses the assignment check against a field's declared type. Required-ness instead uses
+/// binding-phase identity; this type-based path covers generic assignments with no binding context.
+pub(crate) fn is_attrs_nothing(ty: &Type) -> bool {
+    let class = match ty {
+        Type::Literal(lit) if let Lit::Enum(e) = &lit.value => &e.class,
+        Type::ClassType(c) => c,
+        _ => return false,
+    };
+    class.has_qname("attr", "_Nothing") || class.has_qname("attrs", "_Nothing")
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Gets dataclass fields for an `@dataclass`-decorated class.
+    /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
+    /// `auto_attribs=False` collects only `attr.ib()`/`field()` assignments;
+    /// every other kind is annotation-driven.
     pub fn get_dataclass_fields(
         &self,
         cls: &Class,
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        kind: &DataclassKind,
     ) -> SmallSet<Name> {
+        let attrs_initializer_only = matches!(
+            kind,
+            DataclassKind::Attrs {
+                auto_attribs: Some(false),
+                ..
+            }
+        );
+        // attrs relocates a redefined field to its newest declaration site (it deletes the earlier
+        // occurrence and re-appends), whereas stdlib `@dataclass` keeps the original position (it
+        // reassigns a dict entry in place). `SmallSet::insert` keeps the existing position, so for
+        // attrs we `shift_remove` first to move the name to the end.
+        let relocate_redefined = matches!(kind, DataclassKind::Attrs { .. });
         let mut all_fields = SmallSet::new();
         for (_, metadata) in bases_with_metadata.iter().rev() {
             if let Some(dataclass) = metadata.dataclass_metadata() {
-                all_fields.extend(dataclass.fields.clone());
+                for name in dataclass.fields.iter() {
+                    if relocate_redefined {
+                        all_fields.shift_remove(name);
+                    }
+                    all_fields.insert(name.clone());
+                }
             }
         }
         if let Some(class_fields) = self.get_class_fields(cls) {
             for name in class_fields.class_body_fields() {
-                if class_fields.is_field_annotated(name) {
+                let is_field = if attrs_initializer_only {
+                    class_fields.is_attrs_field_specifier(name)
+                } else {
+                    class_fields.is_field_annotated(name)
+                };
+                if is_field {
+                    if relocate_redefined {
+                        all_fields.shift_remove(name);
+                    }
                     all_fields.insert(name.clone());
                 }
             }
@@ -96,6 +138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
         self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
+        self.check_attrs_default_decorator_return_types(cls, dataclass, errors);
         if dataclass.kws.init {
             let init_method = if let Some((root_model_type, has_strict)) =
                 self.get_pydantic_root_model_type_via_mro(cls, &metadata)
@@ -222,15 +265,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             fields.insert(dunder::SETATTR, self.get_frozen_setattr(cls));
             fields.insert(dunder::DELATTR, self.get_frozen_delattr(cls));
         }
-        // See rules for `__hash__` creation under "unsafe_hash":
-        // https://docs.python.org/3/library/dataclasses.html#module-contents
-        if dataclass.kws.unsafe_hash || (dataclass.kws.eq && dataclass.kws.frozen) {
-            fields.insert(dunder::HASH, self.get_dataclass_hash(cls));
-        } else if dataclass.kws.eq {
-            fields.insert(
-                dunder::HASH,
-                ClassSynthesizedField::new(self.heap.mk_none()),
-            );
+        // `__hash__` synthesis: stdlib dataclass follows CPython's rules; attrs follows its
+        // `hash=`/`unsafe_hash=` arguments. https://docs.python.org/3/library/dataclasses.html#module-contents
+        enum HashAction {
+            Synthesize,
+            SetNone,
+            Inherit,
+        }
+        let hash_action = match &dataclass.kind {
+            DataclassKind::Attrs { hash, .. } => match hash {
+                Some(true) => HashAction::Synthesize,
+                Some(false) => HashAction::Inherit,
+                None if !dataclass.kws.eq => HashAction::Inherit,
+                None if dataclass.kws.frozen => HashAction::Synthesize,
+                None => HashAction::SetNone,
+            },
+            DataclassKind::Dataclass { .. } => {
+                if dataclass.kws.unsafe_hash || (dataclass.kws.eq && dataclass.kws.frozen) {
+                    HashAction::Synthesize
+                } else if dataclass.kws.eq {
+                    HashAction::SetNone
+                } else {
+                    HashAction::Inherit
+                }
+            }
+        };
+        match hash_action {
+            HashAction::Synthesize => {
+                fields.insert(dunder::HASH, self.get_dataclass_hash(cls));
+            }
+            HashAction::SetNone => {
+                fields.insert(
+                    dunder::HASH,
+                    ClassSynthesizedField::new(self.heap.mk_none()),
+                );
+            }
+            HashAction::Inherit => {}
         }
         fields.insert(
             dunder::REPLACE,
@@ -345,6 +415,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .emit();
                     }
                 }
+            }
+        }
+    }
+
+    fn check_attrs_default_decorator_return_types(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        errors: &ErrorCollector,
+    ) {
+        let Some(fields) = self.get_class_fields(cls) else {
+            return;
+        };
+        for name in dataclass.fields.iter() {
+            let Some(method_range) = fields.attrs_default_decorator_method_range(name) else {
+                continue;
+            };
+            let DataclassMember::Field(field, field_flags) = self.get_dataclass_member(cls, name)
+            else {
+                continue;
+            };
+            if field_flags.converter_param.is_some() {
+                continue;
+            }
+            // The decorated method's member type is `Any`, so read its return type directly.
+            let return_ty = self
+                .get(&Key::ReturnType(ShortIdentifier::from_text_range(
+                    method_range,
+                )))
+                .arc_clone_ty();
+            let field_ty = field.value.ty();
+            if !self.is_subset_eq(&return_ty, &field_ty) {
+                let range = fields
+                    .field_decl_range(name)
+                    .expect("a field with a default-decorator spec is tracked in the field map");
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::BadClassDefinition,
+                    format!(
+                        "Return type `{return_ty}` of the `@{name}.default` method is not assignable to field `{name}` of type `{field_ty}`"
+                    ),
+                );
             }
         }
     }
@@ -677,13 +790,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
 
-        let mut converter_param = map
+        // Read the converter from an explicit `converter=` argument only, not the specifier
+        // signature (which always declares one) — else every plain field's param goes Unknown.
+        let converter_param = map
             .0
             .get(&DataclassFieldKeywords::CONVERTER)
             .map(|converter| self.get_converter_param(converter));
         // Note that we intentionally don't try to fill in `default`, since we can't distinguish
         // between a real default and something like `dataclasses.MISSING`.
-        if init.is_none() || kw_only.is_none() || alias.is_none() || converter_param.is_none() {
+        if init.is_none() || kw_only.is_none() || alias.is_none() {
             self.fill_in_field_keywords_from_function_signature(
                 func,
                 args,
@@ -696,7 +811,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut init,
                 &mut kw_only,
                 &mut alias,
-                &mut converter_param,
             );
         }
         DataclassFieldKeywords {
@@ -725,7 +839,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         init: &mut Option<bool>,
         kw_only: &mut Option<bool>,
         alias: &mut Option<Name>,
-        converter_param: &mut Option<Type>,
     ) {
         // Class-based field specifiers (e.g. `field_specifiers=(CustomField,)`) need to be
         // resolved to their constructor callable so that we can read keyword defaults from
@@ -790,9 +903,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(Name::new(s)),
                         _ => None,
                     });
-                }
-                if converter_param.is_none() && name == &DataclassFieldKeywords::CONVERTER {
-                    *converter_param = Some(self.get_converter_param(ty));
                 }
             }
         }
@@ -1008,9 +1118,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
 
                 if field_flags.init_by_name {
+                    // attrs strips leading underscores when naming a private field's init param.
+                    let stripped = name.as_str().trim_start_matches('_');
+                    let param_name = if matches!(dataclass.kind, DataclassKind::Attrs { .. })
+                        && !stripped.is_empty()
+                        && stripped.len() != name.as_str().len()
+                    {
+                        let stripped_name = Name::new(stripped);
+                        if dataclass.fields.contains(&stripped_name) {
+                            if let Some(range) = self
+                                .get_class_fields(cls)
+                                .and_then(|f| f.field_decl_range(&name))
+                            {
+                                self.error(
+                                    errors,
+                                    range,
+                                    ErrorKind::BadClassDefinition,
+                                    format!(
+                                        "Field `{name}` collides with `{stripped_name}` after stripping leading underscores"
+                                    ),
+                                );
+                            }
+                            name.clone()
+                        } else {
+                            stripped_name
+                        }
+                    } else {
+                        name.clone()
+                    };
                     params.push(self.as_param(
                         &field,
-                        &name,
+                        &param_name,
                         has_default,
                         is_kw_only,
                         strict,

@@ -29,6 +29,7 @@ use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::thread_pool::ThreadCount;
+use rayon::prelude::*;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::name::Name;
@@ -151,18 +152,28 @@ fn has_function_ancestor(parent: &NestingContext) -> bool {
     }
 }
 
-/// Build a class's qualified name from its nesting context.
-/// Returns e.g. `"Outer.Inner"` for a nested class or `"MyClass"` for a top-level one.
-fn class_qualified_name(
+/// Build a class's fully-qualified name: module prefix, nesting context, then class name. Returns
+/// e.g. `"pkg.mod.Outer.Inner"` for a nested class or `"pkg.mod.MyClass"` for a top-level one.
+fn class_fqn(
     module: &Module,
     parent: &NestingContext,
     class_name: impl std::fmt::Display,
 ) -> String {
+    let prefix = module_prefix(module);
     let parent_path = module.display(parent).to_string();
     if parent_path.is_empty() {
-        class_name.to_string()
+        format!("{prefix}{class_name}")
     } else {
-        format!("{parent_path}.{class_name}")
+        format!("{prefix}{parent_path}.{class_name}")
+    }
+}
+
+/// The module name with a trailing `.`, or empty for the unknown module; prefixed to symbol FQNs.
+fn module_prefix(module: &Module) -> String {
+    if module.name() != ModuleName::unknown() {
+        format!("{}.", module.name())
+    } else {
+        String::new()
     }
 }
 
@@ -390,30 +401,15 @@ fn filter_module_report_to_public(report: &mut ModuleReport, public_fqns: &HashS
         .names
         .retain(|n| is_public_fqn(n, &module_prefix, public_fqns));
 
-    // recompute all aggregates in a single pass; type ignores attach to the
-    // module itself, not symbols, so their count is unaffected by filtering
-    report.slots = SlotCounts::default();
+    // type ignores attach to the module, not symbols, so filtering leaves them untouched
+    report.slots = report
+        .symbol_reports
+        .iter()
+        .fold(SlotCounts::default(), |acc, sym| acc.merge(*sym.slots()));
     report.symbols = SymbolCounts {
         n_type_ignores: report.symbols.n_type_ignores,
-        ..SymbolCounts::default()
+        ..count_symbols(&report.symbol_reports, &module_prefix)
     };
-
-    for sym in &report.symbol_reports {
-        report.slots = report.slots.merge(*sym.slots());
-        match sym {
-            SymbolReport::Function { name, n_params, .. } if is_method(name, &module_prefix) => {
-                report.symbols.n_methods += 1;
-                report.symbols.n_method_params += *n_params;
-            }
-            SymbolReport::Function { n_params, .. } => {
-                report.symbols.n_functions += 1;
-                report.symbols.n_function_params += *n_params;
-            }
-            SymbolReport::Class { .. } => report.symbols.n_classes += 1,
-            SymbolReport::Attr { .. } => report.symbols.n_attrs += 1,
-            SymbolReport::Property { .. } => report.symbols.n_properties += 1,
-        }
-    }
 
     report.coverage = report.slots.coverage();
     report.strict_coverage = report.slots.strict_coverage();
@@ -494,11 +490,7 @@ fn parse_variables(
         }
     }
 
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let module_prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
     // Collect names already reported as functions or classes so we can skip them.
     let reported_names: SmallSet<&str> = functions
@@ -605,11 +597,6 @@ fn parse_instance_attrs(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Variable> {
     let mut attrs = Vec::new();
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
 
     for field_idx in bindings.keys::<KeyClassField>() {
         let field = bindings.get(field_idx);
@@ -672,10 +659,10 @@ fn parse_instance_attrs(
             _ => continue,
         };
 
-        let class_name = class_qualified_name(module, &cls_binding.parent, &cls_binding.def.name);
+        let class_name = class_fqn(module, &cls_binding.parent, &cls_binding.def.name);
         let range = field.range;
         attrs.push(Variable {
-            name: format!("{}{}.{}", module_prefix, class_name, field.name),
+            name: format!("{}.{}", class_name, field.name),
             annotation,
             slots,
             location: range_to_location(module, range),
@@ -695,11 +682,7 @@ fn parse_functions(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Function> {
     let mut functions = Vec::new();
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let module_prefix = module_prefix(module);
     let deleted = bindings.module_deletes();
 
     for idx in bindings.keys::<Key>() {
@@ -749,8 +732,8 @@ fn parse_functions(
                         if !is_public_name(fun.def.name.as_str()) {
                             continue;
                         }
-                        let class_qname = class_qualified_name(module, &cls.parent, &cls.def.name);
-                        format!("{module_prefix}{class_qname}.{}", fun.def.name)
+                        let class_qname = class_fqn(module, &cls.parent, &cls.def.name);
+                        format!("{class_qname}.{}", fun.def.name)
                     }
                     BindingClass::FunctionalClassDef(..) => {
                         continue;
@@ -768,20 +751,9 @@ fn parse_functions(
                 format!("{}{}", module_prefix, fun.def.name)
             };
 
-            // Get return annotation text and check if return type is known
-            let return_key = Key::ReturnType(*id);
-            let return_idx = bindings.key_to_idx(&return_key);
-            let return_annotation = if let Binding::ReturnType(ret) = bindings.get(return_idx) {
-                match &ret.kind {
-                    ReturnTypeKind::ShouldValidateAnnotation { range, .. }
-                    | ReturnTypeKind::ShouldTrustAnnotation { range, .. } => {
-                        Some(module.code_at(*range).to_owned())
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            let return_idx = bindings.key_to_idx(&Key::ReturnType(*id));
+            let return_annotation = return_annotation_range(bindings, return_idx)
+                .map(|range| module.code_at(range).to_owned());
 
             let resolved_return_ty = return_annotation
                 .as_ref()
@@ -917,10 +889,7 @@ fn parse_functions(
             if has_function_ancestor(&cls.parent) {
                 continue;
             }
-            let class_prefix = format!(
-                "{module_prefix}{}",
-                class_qualified_name(module, &cls.parent, &cls.def.name)
-            );
+            let class_prefix = class_fqn(module, &cls.parent, &cls.def.name);
             let target_qualified = format!("{}.{}", class_prefix, target_name);
             if let Some(target_func) = functions.iter().find(|f| f.name == target_qualified) {
                 let alias_name = format!("{}.{}", class_prefix, field.name);
@@ -944,6 +913,17 @@ fn parse_functions(
     functions
 }
 
+fn return_annotation_range(bindings: &Bindings, return_idx: Idx<Key>) -> Option<TextRange> {
+    if let Binding::ReturnType(ret) = bindings.get(return_idx)
+        && let ReturnTypeKind::ShouldValidateAnnotation { range, .. }
+        | ReturnTypeKind::ShouldTrustAnnotation { range, .. } = &ret.kind
+    {
+        Some(*range)
+    } else {
+        None
+    }
+}
+
 /// Only the first parameter (`self`/`cls`) is allowed to be unannotated.
 fn is_function_completely_annotated(
     bindings: &Bindings,
@@ -951,19 +931,8 @@ fn is_function_completely_annotated(
     undecorated_idx: Idx<KeyUndecoratedFunction>,
 ) -> bool {
     let fun = bindings.get(undecorated_idx);
-    let return_key = Key::ReturnType(ShortIdentifier::new(&fun.def.name));
-    let return_idx = bindings.key_to_idx(&return_key);
-    let has_return_annotation = if let Binding::ReturnType(ret) = bindings.get(return_idx) {
-        matches!(
-            &ret.kind,
-            ReturnTypeKind::ShouldValidateAnnotation { .. }
-                | ReturnTypeKind::ShouldTrustAnnotation { .. }
-        )
-    } else {
-        false
-    };
-
-    if !has_return_annotation {
+    let return_idx = bindings.key_to_idx(&Key::ReturnType(ShortIdentifier::new(&fun.def.name)));
+    if return_annotation_range(bindings, return_idx).is_none() {
         return false;
     }
 
@@ -1096,10 +1065,6 @@ fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> Option<Smal
         .map(|it| it.cloned().collect())
 }
 
-fn collect_dunder_all_or_empty(transaction: &Transaction, handle: &Handle) -> SmallSet<Name> {
-    collect_dunder_all(transaction, handle).unwrap_or_default()
-}
-
 /// The `(module_prefix, __all__ FQNs)` that gate which `.py`-only symbols a stub merge keeps,
 /// or `None` when the stub has no explicit `__all__` (leaving the merge unfiltered).
 fn stub_merge_filter(
@@ -1132,6 +1097,27 @@ fn is_method(name: &str, module_prefix: &str) -> bool {
     without_prefix.contains('.')
 }
 
+/// Count symbols by kind. The caller sets `n_type_ignores` separately.
+fn count_symbols(symbol_reports: &[SymbolReport], module_prefix: &str) -> SymbolCounts {
+    let mut symbols = SymbolCounts::default();
+    for sym in symbol_reports {
+        match sym {
+            SymbolReport::Function { name, n_params, .. } if is_method(name, module_prefix) => {
+                symbols.n_methods += 1;
+                symbols.n_method_params += *n_params;
+            }
+            SymbolReport::Function { n_params, .. } => {
+                symbols.n_functions += 1;
+                symbols.n_function_params += *n_params;
+            }
+            SymbolReport::Class { .. } => symbols.n_classes += 1,
+            SymbolReport::Attr { .. } => symbols.n_attrs += 1,
+            SymbolReport::Property { .. } => symbols.n_properties += 1,
+        }
+    }
+    symbols
+}
+
 /// Calculate the aggregate summary by summing per-module symbol counts.
 pub fn calculate_summary(module_reports: &[ModuleReport]) -> ReportSummary {
     let mut slots = SlotCounts::default();
@@ -1158,11 +1144,6 @@ fn parse_classes(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
     let mut classes = Vec::new();
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
     let deleted = bindings.module_deletes();
 
     // group method definitions by class
@@ -1209,10 +1190,7 @@ fn parse_classes(
             },
             None => continue,
         };
-        let class_name = format!(
-            "{module_prefix}{}",
-            class_qualified_name(module, parent, name)
-        );
+        let class_name = class_fqn(module, parent, name);
         let mro = answers
             .get_idx(bindings.key_to_idx(&KeyClassMro(ClassDefIndex(class_type.index().0))))
             .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
@@ -1229,31 +1207,15 @@ fn parse_classes(
         // Check inherited methods
         for ancestor_class_type in mro.ancestors_no_object() {
             let ancestor_class = ancestor_class_type.class_object();
-            let ancestor_name = {
-                let ancestor_module = ancestor_class.module();
-                let ancestor_module_prefix = if ancestor_module.name() != ModuleName::unknown() {
-                    format!("{}.", ancestor_module.name())
-                } else {
-                    String::new()
-                };
-                let ancestor_parent_path = ancestor_module
-                    .display(ancestor_class.qname().parent())
-                    .to_string();
-                if ancestor_parent_path.is_empty() {
-                    format!("{}{}", ancestor_module_prefix, ancestor_class.name())
-                } else {
-                    format!(
-                        "{}{}.{}",
-                        ancestor_module_prefix,
-                        ancestor_parent_path,
-                        ancestor_class.name()
-                    )
-                }
-            };
             // Skip methods inherited from builtins
             if ancestor_class.module_name().as_str() == "builtins" {
                 continue;
             }
+            let ancestor_name = class_fqn(
+                ancestor_class.module(),
+                ancestor_class.qname().parent(),
+                ancestor_class.name(),
+            );
             let Some(ancestor_class_fields) = transaction.get_class_fields(handle, ancestor_class)
             else {
                 continue;
@@ -1307,12 +1269,6 @@ fn collect_class_members(
     handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> SmallSet<String> {
-    let fqname_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
-
     let mut members = SmallSet::new();
     for idx in bindings.keys::<KeyClass>() {
         if tco_classes.contains(&idx) {
@@ -1328,8 +1284,7 @@ fn collect_class_members(
             continue;
         };
 
-        let qname = class_qualified_name(module, &binding.parent, &binding.def.name);
-        let fqname = format!("{fqname_prefix}{qname}");
+        let fqname = class_fqn(module, &binding.parent, &binding.def.name);
 
         let mro = answers
             .get_idx(bindings.key_to_idx(&KeyClassMro(cls.index())))
@@ -1360,11 +1315,7 @@ fn collect_reexport_fqns(
     exports_data: &Exports,
     dunder_all: &SmallSet<Name>,
 ) -> SmallSet<String> {
-    let module_prefix = if module.name() != ModuleName::unknown() {
-        format!("{}.", module.name())
-    } else {
-        String::new()
-    };
+    let module_prefix = module_prefix(module);
     exports
         .iter()
         .filter(|&(name, loc)| {
@@ -1394,7 +1345,7 @@ impl ModuleSymbols {
         let module = transaction.get_module_info(handle)?;
         let answers = transaction.get_answers(handle)?;
         let exports = transaction.get_exports(handle);
-        let dunder_all = collect_dunder_all_or_empty(transaction, handle);
+        let dunder_all = collect_dunder_all(transaction, handle).unwrap_or_default();
         let tco_classes = collect_type_check_only_classes(&bindings);
         let mut functions = parse_functions(
             &module,
@@ -1592,31 +1543,26 @@ fn build_module_report(
     let mut seen = SmallSet::new();
     names.retain(|n| seen.insert(n.clone()));
 
-    // Compute per-module symbol counts. Use the derived (file-based)
-    // module name for prefix matching, since symbol names are built from
-    // the derived name and only rewritten to the override name later.
+    // Match prefixes against the derived (file-based) name: symbol names are
+    // built from it and only rewritten to the override name later.
     let module_prefix = format!("{}.", derived_name);
-    let mut symbols = SymbolCounts {
+    let symbols = SymbolCounts {
         n_type_ignores: suppressions.len(),
-        ..SymbolCounts::default()
+        ..count_symbols(&symbol_reports, &module_prefix)
     };
-    // Count functions/methods using the `Function` list directly so we
-    // can use `n_params` (accurate even for implicit-return dunders).
-    for func in functions.iter().filter(|f| f.property_role.is_none()) {
-        if is_method(&func.name, &module_prefix) {
-            symbols.n_methods += 1;
-            symbols.n_method_params += func.n_params;
-        } else {
-            symbols.n_functions += 1;
-            symbols.n_function_params += func.n_params;
+
+    // A `--module` override renames the module, so rewrite symbol prefixes to match.
+    if name != derived_name {
+        let rewrite = |s: &mut String| {
+            if let Some(rest) = s.strip_prefix(&module_prefix) {
+                *s = format!("{name}.{rest}");
+            }
+        };
+        for n in &mut names {
+            rewrite(n);
         }
-    }
-    for sym in &symbol_reports {
-        match sym {
-            SymbolReport::Property { .. } => symbols.n_properties += 1,
-            SymbolReport::Attr { .. } => symbols.n_attrs += 1,
-            SymbolReport::Class { .. } => symbols.n_classes += 1,
-            SymbolReport::Function { .. } => {}
+        for sym in &mut symbol_reports {
+            rewrite(sym.name_mut());
         }
     }
 
@@ -1773,24 +1719,22 @@ pub fn collect_module_reports(
     };
     let config_finder = holder.as_ref().config_finder();
     let dir_cache = DirEntryCache::new(true);
-    for handle in &handles {
+    // Safe to parallelize: per-module collection is read-only and independent.
+    let transaction: &Transaction = transaction;
+    let collect_one = |handle: &Handle| -> Option<(ModuleReport, Vec<Error>)> {
         if shadowed.contains(handle.path().as_path()) {
-            continue;
+            return None;
         }
 
         // gh-3632: skip files whose module name isn't importable (shadowed parent).
         let module = handle.module();
         if module != ModuleName::unknown() {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
-            if find_import_filtered(&config, module, None, None, &dir_cache, None)
-                .finding()
-                .is_none()
-            {
-                continue;
-            }
+            find_import_filtered(&config, module, None, None, &dir_cache, None).finding()?;
         }
 
         if let Some(mut symbols) = ModuleSymbols::collect(transaction, handle) {
+            let mut errors = Vec::new();
             // Per source module, so stub-merged `.py` symbols render against their own file.
             if let Some(strict) = untyped_strict {
                 collect_untyped_errors(
@@ -1826,8 +1770,8 @@ pub fn collect_module_reports(
             let derived_name = handle.module().to_string();
             let name = module_name_override.clone().unwrap_or(derived_name.clone());
             let path = handle.path().as_path().display().to_string();
-            let mut module_report = build_module_report(
-                name.clone(),
+            let module_report = build_module_report(
+                name,
                 path,
                 &derived_name,
                 symbols.line_count(),
@@ -1836,24 +1780,17 @@ pub fn collect_module_reports(
                 &symbols.classes,
                 symbols.suppressions,
             );
-            // When --module overrides the name, rewrite symbol prefixes to match.
-            if module_name_override.is_some() && name != derived_name {
-                let old_prefix = format!("{}.", derived_name);
-                let new_prefix = format!("{}.", name);
-                for n in &mut module_report.names {
-                    if let Some(rest) = n.strip_prefix(&old_prefix) {
-                        *n = format!("{new_prefix}{rest}");
-                    }
-                }
-                for sym in &mut module_report.symbol_reports {
-                    let sym_name = sym.name_mut();
-                    if let Some(rest) = sym_name.strip_prefix(&old_prefix) {
-                        *sym_name = format!("{new_prefix}{rest}");
-                    }
-                }
-            }
-            module_reports.push(module_report);
+            Some((module_report, errors))
+        } else {
+            None
         }
+    };
+    let collected: Vec<(ModuleReport, Vec<Error>)> = holder
+        .as_ref()
+        .install(|| handles.par_iter().filter_map(collect_one).collect());
+    for (report, module_errors) in collected {
+        module_reports.push(report);
+        errors.extend(module_errors);
     }
 
     if let Some(public_fqns) = &public_fqns {
@@ -1955,26 +1892,19 @@ mod tests {
         build_module_report_for_test_with_env(py_file, TestEnv::new())
     }
 
-    /// Build a `ModuleReport` with a module name override, mirroring
-    /// the `collect_module_reports` --module flag logic.
+    /// Build a `ModuleReport` for the `--module` override case (file parses as `test`).
     fn build_module_report_with_override(py_file: &str, override_name: &str) -> ModuleReport {
-        let mut report = build_module_report_for_test(py_file);
-        let derived_name = "test";
-        let old_prefix = format!("{}.", derived_name);
-        let new_prefix = format!("{}.", override_name);
-        report.name = override_name.to_owned();
-        for n in &mut report.names {
-            if let Some(rest) = n.strip_prefix(&old_prefix) {
-                *n = format!("{new_prefix}{rest}");
-            }
-        }
-        for sym in &mut report.symbol_reports {
-            let sym_name = sym.name_mut();
-            if let Some(rest) = sym_name.strip_prefix(&old_prefix) {
-                *sym_name = format!("{new_prefix}{rest}");
-            }
-        }
-        report
+        let (p, module_path) = parse_test_module(py_file, TestEnv::new());
+        build_module_report(
+            override_name.to_owned(),
+            module_path,
+            "test",
+            p.line_count(),
+            &p.functions,
+            &p.variables,
+            &p.classes,
+            p.suppressions,
+        )
     }
 
     /// Merge a `.pyi` stub's symbols with its `.py` source, mirroring the production

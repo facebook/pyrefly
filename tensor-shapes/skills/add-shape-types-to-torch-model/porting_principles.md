@@ -1,12 +1,5 @@
 # Porting Principles
 
-## Why we port
-
-Ports demonstrate what happens when you write a real PyTorch model with tensor
-shape types. They prove real-world utility. If we exclude features or simplify
-models, we're proving nothing — the hard parts are exactly where value needs
-to be demonstrated.
-
 ## Priority order
 
 1. **Faithfulness** — include everything from the original.
@@ -28,7 +21,13 @@ proof that shapes are inferred is `assert_type` inside forward methods.
 
 ## Stub philosophy
 
-Shape-aware stubs serve all code for all time. They should capture the truth
-about each op, not just what the current models need. When you fix a stub or
-shape DSL function, make the fix general — don't special-case it for your
-model.
+Whether to change the stubs at all is the user's call (you confirmed it up
+front). If they're taking the stubs as given, leave them alone — record the
+untracked ops as gaps and move on.
+
+If they're open to improvements, a stub gap is often a root cause worth fixing
+rather than working around: a refined signature recovers the shape for *every*
+model that uses that op, not just this one. That makes contributing a fix the
+higher-leverage choice when it's in scope. When you do change a stub or shape DSL
+function, make the fix general — capture the truth about the op, don't
+special-case it for your model.

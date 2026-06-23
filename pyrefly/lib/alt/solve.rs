@@ -51,6 +51,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::dataclass::is_attrs_nothing;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::types::abstract_class::AbstractClassMembers;
@@ -866,6 +867,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
+            }
+            Type::Quantified(q) if q.is_type_var() => {
+                // A TypeVar iterates like its upper bound: `Z: tuple[str, int]` must
+                // unpack positionally rather than collapse to the element join via the
+                // iterable protocol. Mirrors attribute access on a bounded TypeVar.
+                self.iterate(
+                    &q.upper_bound(self.stdlib, self.heap),
+                    range,
+                    errors,
+                    orig_context,
+                )
             }
             Type::Union(f) => f
                 .members
@@ -2484,7 +2496,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let (annot, ty) =
-                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, None, errors);
+                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, false, errors);
                 if let Some(annot) = &annot
                     && let Some((AnnotationStyle::Forwarded, _)) = annot_key
                 {
@@ -3027,6 +3039,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 SuperObj::Instance(obj_type)
                             }
                         };
+                        // A zero-arg `super()` in a method of a class that directly subclasses
+                        // `NamedTuple` makes the class fail to define at runtime: the `__class__`
+                        // cell the compiler creates for `super()` is not propagated by the
+                        // NamedTuple machinery. See https://github.com/facebook/pyrefly/issues/3763.
+                        if self
+                            .get_metadata_for_class(obj_cls)
+                            .named_tuple_metadata()
+                            .is_some_and(|nt| nt.directly_extends_named_tuple)
+                        {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::InvalidSuperCall,
+                                "`super` call with no arguments is not allowed in a `NamedTuple` method".to_owned(),
+                            );
+                        }
                         self.heap.mk_super_instance(lookup_cls, obj)
                     }
                     None => self.heap.mk_any_implicit(),
@@ -3312,7 +3340,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         annot_key: Option<&(AnnotationStyle, Idx<KeyAnnotation>)>,
         receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
-        class_key: Option<Idx<KeyClass>>,
+        is_attrs_specifier: bool,
         errors: &ErrorCollector,
     ) -> (Option<Arc<AnnotationWithTarget>>, Type) {
         // Receiver-constrained class assignment: a same-scope rebind of a
@@ -3352,19 +3380,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
                 let annot_ty = annot.ty(self.heap, self.stdlib);
-                let hint = annot_ty.as_ref().map(|t| (t, tcc));
-                let expr_ty = self.expr_check(expr, hint, errors);
-                let ty = if matches!(annot.target, AnnotationTarget::ClassMember(_))
-                    && self.is_dataclass_field_specifier_assignment(class_key, expr)
+                // Skip the assignment check for a NOTHING `default=`. Gating on the argument keeps
+                // ordinary `default=` calls (e.g. `ContextVar(default=None)`) on the hinted path.
+                let expr_ty = if let Expr::Call(call) = expr
+                    && let Some(default) =
+                        call.arguments.find_keyword("default").map(|kw| &kw.value)
+                    && is_attrs_nothing(&self.expr_infer(default, &self.error_swallower()))
                 {
-                    // Inside a class body, field specifiers like `attrs.field()` are runtime
-                    // field objects, even when their stubs lie about returning the annotated type.
-                    // Model those reads as `Any` so decorator surfaces like `.validator` resolve.
-                    self.heap.mk_any_implicit()
-                } else if style == &AnnotationStyle::Direct {
-                    // For direct assignments, user-provided annotation takes
-                    // precedence over inferred expr type.
-                    annot_ty.unwrap_or(expr_ty)
+                    let got = self.expr_infer(expr, errors);
+                    if !is_attrs_nothing(&got)
+                        && let Some(annot_ty) = &annot_ty
+                    {
+                        self.check_type(&got, annot_ty, expr.range(), errors, tcc);
+                    }
+                    got
+                } else {
+                    let hint = annot_ty.as_ref().map(|t| (t, tcc));
+                    self.expr_check(expr, hint, errors)
+                };
+                let ty = if style == &AnnotationStyle::Direct {
+                    if is_attrs_specifier {
+                        self.heap.mk_any_implicit()
+                    } else {
+                        // For direct assignments, user-provided annotation takes
+                        // precedence over inferred expr type.
+                        annot_ty.unwrap_or(expr_ty)
+                    }
                 } else if style == &AnnotationStyle::ForwardedInitial
                     && expr_ty.is_any()
                     && let Some(annot) = annot_ty
@@ -3386,7 +3427,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // `x = ...` in a stub file means that the type of `x` is unknown
                 (None, self.heap.mk_any_implicit())
             }
-            None => (None, self.expr_check(expr, None, errors)),
+            None => {
+                // Bare `x = attr.ib(type=T)`/`field(...)` (legacy, unannotated): same
+                // `_CountingAttr` reasoning as the annotated case.
+                let expr_ty = self.expr_check(expr, None, errors);
+                let ty = if is_attrs_specifier {
+                    self.heap.mk_any_implicit()
+                } else {
+                    expr_ty
+                };
+                (None, ty)
+            }
         }
     }
 
@@ -3425,6 +3476,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_key: Option<Idx<KeyClass>>,
         legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         is_in_function_scope: bool,
+        is_attrs_field_specifier: bool,
         errors: &ErrorCollector,
     ) -> Type {
         let (annot, ty) = self.name_assign_infer(
@@ -3432,7 +3484,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             annot_key.as_ref(),
             receiver_idx,
             expr,
-            class_key,
+            is_attrs_field_specifier,
             errors,
         );
         if let Some(annot) = &annot
@@ -4244,6 +4296,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let result = self.expr_check(e, None, errors);
+        match special_export {
+            Some(SpecialExport::TypeVar) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidTypeVar,
+                    "TypeVar must be assigned to a variable".to_owned(),
+                );
+            }
+            Some(SpecialExport::ParamSpec) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidParamSpec,
+                    "ParamSpec must be assigned to a variable".to_owned(),
+                );
+            }
+            Some(SpecialExport::TypeVarTuple) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidTypeVarTuple,
+                    "TypeVarTuple must be assigned to a variable".to_owned(),
+                );
+            }
+            _ => {}
+        }
         if special_export != Some(SpecialExport::AssertType)
             && let Type::ClassType(cls) = &result
             && self.is_coroutine(&result)
@@ -5225,6 +5304,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.class_key,
                 &x.legacy_tparams,
                 x.is_in_function_scope,
+                x.is_attrs_field_specifier,
                 errors,
             ),
             Binding::TypeVar(x) => {

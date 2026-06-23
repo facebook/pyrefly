@@ -25,6 +25,20 @@ def baz(c: Coord) -> Mapping[str, str]:
 );
 
 testcase!(
+    test_fields_named_like_builtins,
+    r#"
+from typing import TypedDict
+
+class D(TypedDict):
+    str: str
+    object: object
+    any: object
+
+D(str="", object=object(), any=object())
+"#,
+);
+
+testcase!(
     bug = "Our handling of ClassVar and methods is fishy, and our error messages are not clear",
     test_typed_dict_with_illegal_members,
     r#"

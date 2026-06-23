@@ -551,6 +551,25 @@ x = missing_definition
 );
 
 testcase!(
+    test_export_all_wrongly_does_not_export_implicit_builtin,
+    TestEnv::one(
+        "foo",
+        r#"
+# At runtime, listing a name in `__all__` does not create a module attribute:
+# `from foo import len` and `from foo import *` both fail unless `len` is
+# explicitly bound in the module, e.g. with `from builtins import len`.
+__all__ = ["len"]  # E: Name `len` is listed in `__all__` but is not defined in the module
+len([])
+"#,
+    ),
+    r#"
+from typing import reveal_type
+from foo import len
+reveal_type(len)  # E: revealed type: Unknown
+"#,
+);
+
+testcase!(
     test_export_all_wrongly_star,
     env_export_all_wrongly(),
     r#"
@@ -1142,6 +1161,27 @@ testcase!(
     env_extra_builtins(),
     r#"
 x: X = X()
+"#,
+);
+
+fn env_extra_builtins_shadows_builtin() -> TestEnv {
+    TestEnv::one_with_path(
+        "__builtins__",
+        "__builtins__.pyi",
+        r#"
+def abs(x: object) -> str: ...
+"#,
+    )
+}
+
+testcase!(
+    // A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
+    // resolves to the user's `__builtins__` definition, which shadows the stdlib one.
+    test_extra_builtins_shadows_builtin,
+    env_extra_builtins_shadows_builtin(),
+    r#"
+from typing import assert_type
+assert_type(abs(1), str)
 "#,
 );
 
@@ -2106,5 +2146,25 @@ import myproject.data.__files__ as data_schema_files
 
 def get_files():
     return data_schema_files
+"#,
+);
+
+fn env_special_export_package_reexport() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("pkg", "pkg/__init__.py", "");
+    t.add_with_path(
+        "pkg.my_typing",
+        "pkg/my_typing.py",
+        "from typing import Annotated",
+    );
+    t
+}
+
+testcase!(
+    test_special_export_package_reexport_import,
+    env_special_export_package_reexport(),
+    r#"
+from pkg import my_typing as mt
+x: mt.Annotated[int, "metadata"] = 5
 "#,
 );

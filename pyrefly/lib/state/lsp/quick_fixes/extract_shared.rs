@@ -119,12 +119,7 @@ pub(crate) fn function_has_decorator(function_def: &StmtFunctionDef, decorator: 
 }
 
 pub(crate) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
-    match decorator {
-        Expr::Name(identifier) => identifier.id.as_str() == expected,
-        Expr::Attribute(attribute) => attribute.attr.as_str() == expected,
-        Expr::Call(call) => decorator_matches_name(call.func.as_ref(), expected),
-        _ => false,
-    }
+    Ast::decorator_trailing_name(decorator) == Some(expected)
 }
 
 /// Given a selection range, returns the first non-whitespace position within it.

@@ -18,7 +18,6 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
 use pyrefly_build::handle::Handle;
-use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
@@ -94,6 +93,7 @@ use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod dict_completions;
+mod extra_extensions;
 mod pytest;
 mod quick_fixes;
 
@@ -318,7 +318,11 @@ where
 
 /// For relative imports (dots > 0), resolve the module name using
 /// the current file's module name as context.
-fn resolve_relative_module_name(handle: &Handle, module_name: ModuleName, dots: u32) -> ModuleName {
+pub(crate) fn resolve_relative_module_name(
+    handle: &Handle,
+    module_name: ModuleName,
+    dots: u32,
+) -> ModuleName {
     if dots > 0 {
         let is_init = handle.path().is_init();
         let suffix = if module_name.as_str().is_empty() {
@@ -615,17 +619,6 @@ pub struct FindDefinitionItemWithDocstring {
     pub module: Module,
     pub docstring_range: Option<TextRange>,
     pub display_name: Option<String>,
-}
-
-impl FindDefinitionItemWithDocstring {
-    fn is_python_module(&self) -> bool {
-        self.module
-            .path()
-            .as_path()
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| PYTHON_EXTENSIONS.contains(&ext))
-    }
 }
 
 #[derive(Debug)]
@@ -1567,10 +1560,17 @@ impl<'a> Transaction<'a> {
                 original_name_range,
             ) => {
                 let Some((def_handle, export)) =
-                    self.resolve_named_import(handle, module_name, name, preference)
+                    self.resolve_named_import(handle, module_name, name.clone(), preference)
                 else {
-                    // The import target is unresolvable through any
-                    // chase path (export, submodule, `__getattr__`).
+                    let non_module_result = self.resolve_intermediate_non_python_module_definition(
+                        handle,
+                        module_name,
+                        name.as_str(),
+                        preference,
+                    );
+                    if non_module_result.is_some() {
+                        return non_module_result;
+                    }
                     // Fall back to the import statement itself so the
                     // user lands somewhere meaningful instead of
                     // getting no result at all.
@@ -2156,18 +2156,15 @@ impl<'a> Transaction<'a> {
         ) {
             return Ok(defs);
         }
-        // Fallback for non-Python modules (e.g. .thrift files that can't be
-        // parsed as Python): navigate to the module file itself. Only applies
-        // when extra file extensions are configured.
-        let config_has_extra_extensions = self.config_has_extra_extensions(handle);
-        if config_has_extra_extensions && let Type::Module(ref module) = base_type {
-            let module_name = ModuleName::from_parts(module.parts());
-            if let Ok(Some(item)) =
-                self.find_definition_for_imported_module(handle, module_name, preference)
-                && !item.is_python_module()
-            {
-                return Ok(vec1![item]);
-            }
+        if let Some(non_python_result) = self.find_definition_for_attribute_in_non_python_module(
+            handle,
+            name.as_str(),
+            preference,
+            &answers,
+            base_type,
+            base_range,
+        ) {
+            return Ok(non_python_result);
         }
         Err(EmptyResponseReason::DefinitionNotFound {
             name: name.to_string(),
@@ -2315,14 +2312,6 @@ impl<'a> Transaction<'a> {
             .collect()
     }
 
-    fn config_has_extra_extensions(&self, handle: &Handle) -> bool {
-        !self
-            .config_finder()
-            .python_file(handle.module_kind(), handle.path())
-            .extra_file_extensions
-            .is_empty()
-    }
-
     /// Find the definition, metadata and optionally the docstring for the given position.
     pub fn find_definition(
         &self,
@@ -2427,19 +2416,12 @@ impl<'a> Transaction<'a> {
                 {
                     return Ok(vec1![item]);
                 }
-                // Fallback: for __files__/__recursefiles__ directory imports, the
-                // virtual module doesn't exist on disk. Navigate to the parent module.
-                let module_str = resolved_module_name.as_str();
-                if let Some(parent) = module_str
-                    .strip_suffix(".__files__")
-                    .or_else(|| module_str.strip_suffix(".__recursefiles__"))
-                    && let Some(item) = self.find_definition_for_imported_module(
-                        handle,
-                        ModuleName::from_str(parent),
-                        preference,
-                    )?
-                {
-                    return Ok(vec1![item]);
+                if let Some(item) = self.find_definition_directory_import(
+                    handle,
+                    resolved_module_name.as_str(),
+                    preference,
+                )? {
+                    return Ok(item);
                 }
                 Err(EmptyResponseReason::DefinitionNotFound {
                     name: identifier.id.to_string(),
@@ -2456,45 +2438,14 @@ impl<'a> Transaction<'a> {
                     },
             }) => {
                 match self.find_definition_for_name_def(handle, &name_after_import, preference)? {
-                    Some(item) => {
-                        // When extra file extensions are configured and jumping through
-                        // everything, if the definition resolved back to the import
-                        // statement itself, the import couldn't be followed (e.g. the
-                        // source module is a non-Python file like .thrift). Fall through
-                        // to navigate to the source module file instead.
-                        let config_has_extra_extensions = self.config_has_extra_extensions(handle);
-                        // Do we want to get as close to the definition as possible?
-                        // If not, we don't want to keep searching for the module
-                        // on a non-Python file
-                        let jump_through_everything = matches!(
-                            preference.import_behavior,
-                            ImportBehavior::JumpThroughEverything,
-                        );
-                        // Is the thing we found the import statement?
-                        let found_item_is_import = item.definition_range == name_after_import.range;
-
-                        let is_eligible_for_fallback = config_has_extra_extensions
-                            && jump_through_everything
-                            && found_item_is_import;
-                        if !is_eligible_for_fallback {
-                            return Ok(vec1![item]);
-                        }
-                        let resolved_module_name =
-                            resolve_relative_module_name(handle, module_name, dots);
-                        if let Ok(Some(module_item)) = self.find_definition_for_imported_module(
-                            handle,
-                            resolved_module_name,
-                            preference,
-                        ) {
-                            if module_item.is_python_module() {
-                                Ok(vec1![item])
-                            } else {
-                                Ok(vec1![module_item])
-                            }
-                        } else {
-                            Ok(vec1![item])
-                        }
-                    }
+                    Some(item) => self.remap_find_definition_non_python_import_file(
+                        item,
+                        handle,
+                        preference,
+                        module_name,
+                        dots,
+                        name_after_import,
+                    ),
                     None => Err(EmptyResponseReason::DefinitionNotFound {
                         name: identifier.id.to_string(),
                         context: DefinitionContext::ImportedName,

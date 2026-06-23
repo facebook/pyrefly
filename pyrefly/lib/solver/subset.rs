@@ -628,7 +628,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             && let Type::ClassType(got_cls) = &got
             && (got_cls.is_builtin("list") || got_cls.is_builtin("tuple"))
         {
-            return Ok(());
+            // Check that the element type of the list/tuple is a subtype of
+            // `SequenceNotStr`'s element type. If either type does not have exactly
+            // one type argument, fall back to accepting the assignment.
+            return match (protocol.targs().as_slice(), got_cls.targs().as_slice()) {
+                ([want_elem], [got_elem]) => {
+                    self.is_subset_eq(&got_elem.clone(), &want_elem.clone())
+                }
+                _ => Ok(()),
+            };
         }
         let protocol_members = self
             .type_order

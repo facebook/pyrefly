@@ -265,6 +265,18 @@ impl Ast {
         Identifier::new(x.id, x.range)
     }
 
+    /// The trailing identifier of a decorator expression, looking through calls and
+    /// attribute access: `foo`, `mod.foo`, `foo(...)`, and `mod.foo(...)` all yield
+    /// `foo`. `None` for shapes with no trailing name (e.g. a subscript).
+    pub fn decorator_trailing_name(decorator: &Expr) -> Option<&str> {
+        match decorator {
+            Expr::Name(name) => Some(name.id.as_str()),
+            Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+            Expr::Call(call) => Self::decorator_trailing_name(&call.func),
+            _ => None,
+        }
+    }
+
     /// Returns true if this is a synthesized empty name from parser error recovery.
     ///
     /// The parser uses empty identifiers when recovering from syntax errors.
