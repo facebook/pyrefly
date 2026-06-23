@@ -175,7 +175,7 @@ Each file is a fully annotated port of a real-world PyTorch model with
 This script checks a ported model for common issues:
 
 ```bash
-.claude/skills/port-model/verify_port.sh test/tensor_shapes/models/<model>.py
+tensor-shapes/skills/add-shape-types-to-torch-model/verify_port.sh test/tensor_shapes/models/<model>.py
 ```
 
 It reports:

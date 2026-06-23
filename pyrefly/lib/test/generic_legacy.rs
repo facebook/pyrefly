@@ -293,6 +293,16 @@ Ts = TypeVarTuple(name = "Ts")
 );
 
 testcase!(
+    test_tvar_bare_call,
+    r#"
+from typing import TypeVar, ParamSpec, TypeVarTuple
+TypeVar("T")  # E: TypeVar must be assigned to a variable
+ParamSpec("P")  # E: ParamSpec must be assigned to a variable
+TypeVarTuple("Ts")  # E: TypeVarTuple must be assigned to a variable
+    "#,
+);
+
+testcase!(
     test_tvar_unexpected_keyword,
     r#"
 from typing import TypeVar, ParamSpec, TypeVarTuple

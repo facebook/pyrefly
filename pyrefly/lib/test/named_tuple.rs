@@ -1062,3 +1062,104 @@ def f(X: int) -> None:
     N = namedtuple("N", [X])  # E: Expected a string literal
 "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/3763
+testcase!(
+    test_named_tuple_super_call_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        super()  # E: NamedTuple
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_super_attr_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super().__repr__()  # E: NamedTuple
+"#,
+);
+
+testcase!(
+    test_named_tuple_classmethod_super_disallowed,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    @classmethod
+    def c(cls) -> int:
+        super()  # E: NamedTuple
+        return 0
+"#,
+);
+
+testcase!(
+    test_named_tuple_staticmethod_super_single_error,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    @staticmethod
+    def s() -> int:
+        super()  # E: `super` call with no arguments is not valid inside a staticmethod
+        return 0
+"#,
+);
+
+testcase!(
+    test_named_tuple_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_deep_subclass_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+class G(F):
+    pass
+class H(G):
+    def m(self) -> int:
+        super()
+        return self.x
+"#,
+);
+
+testcase!(
+    test_named_tuple_no_super_ok,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> int:
+        return self.x
+"#,
+);
+
+testcase!(
+    bug = "explicit super(F, self) in a NamedTuple also fails at runtime but is not flagged",
+    test_named_tuple_explicit_super_args_not_flagged,
+    r#"
+from typing import NamedTuple
+class F(NamedTuple):
+    x: int
+    def m(self) -> str:
+        return super(F, self).__repr__()
+"#,
+);

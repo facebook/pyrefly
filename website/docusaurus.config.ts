@@ -207,6 +207,8 @@ const config: Config = {
     organizationName: 'facebook', // Usually your GitHub org/user name.
     projectName: 'Pyre', // Usually your repo name.
     trailingSlash: true,
+    // Adds a Cmd+K / Ctrl+K shortcut to focus the (lunr-backed) search bar.
+    clientModules: [require.resolve('./src/js/searchHotkey.ts')],
     markdown: {
         mermaid: true,
     },

@@ -19,6 +19,7 @@ use ruff_python_ast::Pattern;
 use ruff_python_ast::PatternKeyword;
 use ruff_python_ast::StmtMatch;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingExpect;
@@ -46,6 +47,8 @@ use crate::types::facet::UnresolvedFacetKind;
 enum MatchSubject {
     /// No narrowing subject available.
     None,
+    /// The already-evaluated match subject has no user-visible narrowing name.
+    Anonymous,
     /// A single match subject (e.g., `match x:`).
     Single(NarrowingSubject),
     /// Per-element subjects from a tuple match (e.g., `match x, y:`).
@@ -62,6 +65,70 @@ impl MatchSubject {
     }
 }
 
+#[derive(Debug, Default)]
+struct PatternNarrowOps {
+    scope: NarrowOps,
+    subject: Option<(NarrowOp, TextRange)>,
+}
+
+impl PatternNarrowOps {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn from_scope(scope: NarrowOps) -> Self {
+        Self {
+            scope,
+            subject: None,
+        }
+    }
+
+    fn from_subject(op: NarrowOp, range: TextRange) -> Self {
+        Self {
+            scope: NarrowOps::new(),
+            subject: Some((op, range)),
+        }
+    }
+
+    fn and_subject(&mut self, other: Option<(NarrowOp, TextRange)>) {
+        match (&mut self.subject, other) {
+            (Some((op, range)), Some((other_op, other_range))) => {
+                *op = NarrowOp::And(vec![op.clone(), other_op]);
+                // Cover both operands so the merged range is independent of operand order.
+                *range = range.cover(other_range);
+            }
+            (None, Some(other)) => self.subject = Some(other),
+            _ => {}
+        }
+    }
+
+    fn and_all(&mut self, other: Self) {
+        self.scope.and_all(other.scope);
+        self.and_subject(other.subject);
+    }
+
+    fn or_all(&mut self, other: Self) {
+        self.scope.or_all(other.scope);
+        self.subject = match (self.subject.take(), other.subject) {
+            (Some((op, range)), Some((other_op, other_range))) => {
+                // Cover both operands so the merged range is independent of subpattern order.
+                Some((NarrowOp::Or(vec![op, other_op]), range.cover(other_range)))
+            }
+            _ => None,
+        };
+    }
+
+    fn negate(&self) -> Self {
+        Self {
+            scope: self.scope.negate(),
+            subject: self
+                .subject
+                .as_ref()
+                .map(|(op, range)| (op.negate(), *range)),
+        }
+    }
+}
+
 impl<'a> BindingsBuilder<'a> {
     /// Traverse a pattern and bind all the names; key is the reference for
     /// the value that's being matched on.
@@ -70,7 +137,7 @@ impl<'a> BindingsBuilder<'a> {
         match_subject: MatchSubject,
         pattern: Pattern,
         subject_idx: Idx<Key>,
-    ) -> NarrowOps {
+    ) -> PatternNarrowOps {
         // In typical code, match patterns are more like static types than normal values, so
         // we ignore match patterns for first-usage tracking.
         let narrowing_usage = &mut Usage::Narrowing(None);
@@ -78,25 +145,35 @@ impl<'a> BindingsBuilder<'a> {
             Pattern::MatchValue(mut p) => {
                 self.ensure_expr(&mut p.value, narrowing_usage);
                 if let Some(subject) = match_subject.as_single() {
-                    NarrowOps::from_single_narrow_op_for_subject(
+                    PatternNarrowOps::from_scope(NarrowOps::from_single_narrow_op_for_subject(
                         subject.clone(),
                         AtomicNarrowOp::Eq((*p.value).clone()),
                         p.range(),
+                    ))
+                } else if matches!(match_subject, MatchSubject::Anonymous) {
+                    PatternNarrowOps::from_subject(
+                        NarrowOp::Atomic(None, AtomicNarrowOp::Eq((*p.value).clone())),
+                        p.range(),
                     )
                 } else {
-                    NarrowOps::new()
+                    PatternNarrowOps::new()
                 }
             }
             Pattern::MatchSingleton(p) => {
                 let value = Ast::pattern_match_singleton_to_expr(&p);
                 if let Some(subject) = match_subject.as_single() {
-                    NarrowOps::from_single_narrow_op_for_subject(
+                    PatternNarrowOps::from_scope(NarrowOps::from_single_narrow_op_for_subject(
                         subject.clone(),
                         AtomicNarrowOp::Is(value),
                         p.range(),
+                    ))
+                } else if matches!(match_subject, MatchSubject::Anonymous) {
+                    PatternNarrowOps::from_subject(
+                        NarrowOp::Atomic(None, AtomicNarrowOp::Is(value)),
+                        p.range(),
                     )
                 } else {
-                    NarrowOps::new()
+                    PatternNarrowOps::new()
                 }
             }
             Pattern::MatchAs(p) => {
@@ -120,21 +197,27 @@ impl<'a> BindingsBuilder<'a> {
                     if let (Some(alias_name), Some(original_subject)) =
                         (&alias_name, original_subject.as_single())
                         && alias_name != original_subject.name()
-                        && let Some((alias_op, range)) = narrow_ops.0.get(alias_name).cloned()
+                        && let Some((alias_op, range)) = narrow_ops.scope.0.get(alias_name).cloned()
                     {
-                        narrow_ops.and_for_subject(
+                        narrow_ops.scope.and_for_subject(
                             original_subject,
                             alias_op.for_subject(original_subject),
                             range,
                         );
                     }
+                    if let (Some(alias_name), MatchSubject::Anonymous) =
+                        (&alias_name, original_subject)
+                        && let Some((alias_op, range)) = narrow_ops.scope.0.get(alias_name).cloned()
+                    {
+                        narrow_ops.and_subject(Some((alias_op, range)));
+                    }
                     narrow_ops
                 } else {
-                    NarrowOps::new()
+                    PatternNarrowOps::new()
                 }
             }
             Pattern::MatchSequence(x) => {
-                let mut narrow_ops = NarrowOps::new();
+                let mut narrow_ops = PatternNarrowOps::new();
                 let num_patterns = x.patterns.len();
                 let num_non_star_patterns = x
                     .patterns
@@ -191,7 +274,17 @@ impl<'a> BindingsBuilder<'a> {
                         NarrowOp::Atomic(facet.clone(), AtomicNarrowOp::IsSequence),
                         NarrowOp::Atomic(facet, len_narrow_op.clone()),
                     ]);
-                    narrow_ops.0.insert(name, (scope_narrow_op, x.range));
+                    narrow_ops.scope.0.insert(name, (scope_narrow_op, x.range));
+                } else if matches!(match_subject, MatchSubject::Anonymous) {
+                    let subject_op = if all_subpatterns_irrefutable {
+                        combined_narrow_op.clone()
+                    } else {
+                        NarrowOp::And(vec![
+                            combined_narrow_op.clone(),
+                            NarrowOp::Atomic(None, AtomicNarrowOp::Placeholder),
+                        ])
+                    };
+                    narrow_ops.and_subject(Some((subject_op, x.range)));
                 }
                 let mut seen_star = false;
                 for (i, x) in x.patterns.into_iter().enumerate() {
@@ -286,16 +379,17 @@ impl<'a> BindingsBuilder<'a> {
                 );
                 if all_subpatterns_irrefutable
                     && let Some(subject) = match_subject.as_single()
-                    && let Some((op, _)) = narrow_ops.0.get_mut(subject.name())
+                    && let Some((op, _)) = narrow_ops.scope.0.get_mut(subject.name())
                 {
                     op.strip_placeholders();
                 }
                 narrow_ops
             }
             Pattern::MatchMapping(x) => {
-                let mut narrow_ops = NarrowOps::new();
+                let mut narrow_ops = PatternNarrowOps::new();
                 let mut subject_idx = subject_idx;
                 let narrow_op = AtomicNarrowOp::IsMapping;
+                let has_keys = !x.keys.is_empty();
                 subject_idx = self.insert_binding(
                     Key::PatternNarrow(x.range()),
                     Binding::Narrow(
@@ -305,11 +399,23 @@ impl<'a> BindingsBuilder<'a> {
                     ),
                 );
                 if let Some(subject) = match_subject.as_single() {
-                    narrow_ops.and_all(NarrowOps::from_single_narrow_op_for_subject(
-                        subject.clone(),
-                        narrow_op,
-                        x.range,
+                    narrow_ops.and_all(PatternNarrowOps::from_scope(
+                        NarrowOps::from_single_narrow_op_for_subject(
+                            subject.clone(),
+                            narrow_op,
+                            x.range,
+                        ),
                     ));
+                } else if matches!(match_subject, MatchSubject::Anonymous) {
+                    let subject_op = if has_keys {
+                        NarrowOp::And(vec![
+                            NarrowOp::Atomic(None, AtomicNarrowOp::IsMapping),
+                            NarrowOp::Atomic(None, AtomicNarrowOp::Placeholder),
+                        ])
+                    } else {
+                        NarrowOp::Atomic(None, AtomicNarrowOp::IsMapping)
+                    };
+                    narrow_ops.and_subject(Some((subject_op, x.range)));
                 }
                 x.keys
                     .into_iter()
@@ -417,9 +523,23 @@ impl<'a> BindingsBuilder<'a> {
                         );
                         narrow_for_subject.and_all(placeholder);
                     }
-                    narrow_for_subject
+                    PatternNarrowOps::from_scope(narrow_for_subject)
+                } else if matches!(match_subject, MatchSubject::Anonymous) {
+                    let subject_op = if (!x.arguments.patterns.is_empty()
+                        || !x.arguments.keywords.is_empty())
+                        && !is_exhaustive_single_slot
+                        && !all_args_irrefutable
+                    {
+                        NarrowOp::And(vec![
+                            NarrowOp::Atomic(None, narrow_op.clone()),
+                            NarrowOp::Atomic(None, AtomicNarrowOp::Placeholder),
+                        ])
+                    } else {
+                        NarrowOp::Atomic(None, narrow_op.clone())
+                    };
+                    PatternNarrowOps::from_subject(subject_op, x.cls.range())
                 } else {
-                    NarrowOps::new()
+                    PatternNarrowOps::new()
                 };
 
                 // Handle positional patterns
@@ -432,7 +552,7 @@ impl<'a> BindingsBuilder<'a> {
                     // Only combine if the inner pattern produced narrow ops.
                     // If it's empty (e.g., a simple MatchAs like `value`), we don't want
                     // and_all to add Placeholders that would invalidate our outer narrow.
-                    if !inner_narrow_ops.0.is_empty() {
+                    if !inner_narrow_ops.scope.0.is_empty() || inner_narrow_ops.subject.is_some() {
                         narrow_ops.and_all(inner_narrow_ops);
                     }
                     return narrow_ops;
@@ -493,14 +613,14 @@ impl<'a> BindingsBuilder<'a> {
                 // subsequent match cases).
                 if all_args_irrefutable
                     && let Some(subject) = match_subject.as_single()
-                    && let Some((op, _)) = narrow_ops.0.get_mut(subject.name())
+                    && let Some((op, _)) = narrow_ops.scope.0.get_mut(subject.name())
                 {
                     op.strip_placeholders();
                 }
                 narrow_ops
             }
             Pattern::MatchOr(x) => {
-                let mut narrow_ops: Option<NarrowOps> = None;
+                let mut narrow_ops: Option<PatternNarrowOps> = None;
                 self.start_fork(x.range);
                 let n_subpatterns = x.patterns.len();
                 for (idx, pattern) in x.patterns.into_iter().enumerate() {
@@ -530,7 +650,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.bind_definition(name, Binding::Forward(subject_idx), FlowStyle::Other);
                 }
-                NarrowOps::new()
+                PatternNarrowOps::new()
             }
         }
     }
@@ -554,7 +674,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             match expr_to_subjects(&x.subject).first() {
                 Some(s) => MatchSubject::Single(s.clone()),
-                None => MatchSubject::None,
+                None => MatchSubject::Anonymous,
             }
         };
         let mut exhaustive = false;
@@ -568,6 +688,7 @@ impl<'a> BindingsBuilder<'a> {
         // x is bound to Narrow(x, Eq(None)) in the first case, and the negation, Narrow(x, NotEq(None)),
         // is carried over to the fallback case.
         let mut negated_prev_ops = NarrowOps::new();
+        let mut negated_prev_subject: Option<(NarrowOp, TextRange)> = None;
         for case in x.cases {
             let MatchCase {
                 pattern,
@@ -603,6 +724,15 @@ impl<'a> BindingsBuilder<'a> {
                         NarrowUseLocation::Start(*op_range),
                     ),
                 )
+            } else if let Some((narrow_op, op_range)) = &negated_prev_subject {
+                self.insert_binding(
+                    Key::PatternNarrow(case_range),
+                    Binding::Narrow(
+                        subject_idx,
+                        Box::new(narrow_op.clone()),
+                        NarrowUseLocation::Start(*op_range),
+                    ),
+                )
             } else if match_subject.as_single().is_some() && !negated_prev_ops.0.is_empty() {
                 self.insert_binding(
                     Key::PatternNarrow(case_range),
@@ -614,7 +744,7 @@ impl<'a> BindingsBuilder<'a> {
             let mut new_narrow_ops =
                 self.bind_pattern(match_subject.clone(), pattern, case_subject_idx);
             self.bind_narrow_ops(
-                &new_narrow_ops,
+                &new_narrow_ops.scope,
                 NarrowUseLocation::Span(case_range),
                 &Usage::Narrowing(None),
             );
@@ -622,7 +752,7 @@ impl<'a> BindingsBuilder<'a> {
             // intentional: if the pattern itself can never match the subject type,
             // the case is unreachable regardless of any guard condition.
             if let Some(narrowing_subject) = match_subject.as_single()
-                && let Some((op, range)) = new_narrow_ops.0.get(narrowing_subject.name())
+                && let Some((op, range)) = new_narrow_ops.scope.0.get(narrowing_subject.name())
             {
                 self.insert_binding(
                     KeyExpect::MatchCaseReachability(case_range),
@@ -646,7 +776,7 @@ impl<'a> BindingsBuilder<'a> {
                     Key::Anon(guard.range()),
                     Binding::Expr(None, Box::new(*guard)),
                 );
-                new_narrow_ops.and_all(guard_narrow_ops)
+                new_narrow_ops.and_all(PatternNarrowOps::from_scope(guard_narrow_ops))
             }
             // Only accumulate narrows for the match subject. Alias names
             // from MatchAs were already copied to the subject via
@@ -654,13 +784,20 @@ impl<'a> BindingsBuilder<'a> {
             // shadow outer variables. When there is no narrowing subject
             // (e.g. `match make_color():`), drop all narrows so that alias
             // names don't resolve against unrelated outer variables.
-            new_narrow_ops.0.retain(|name, _| {
+            new_narrow_ops.scope.0.retain(|name, _| {
                 match_subject
                     .as_single()
                     .as_ref()
                     .is_some_and(|s| name == s.name())
             });
-            negated_prev_ops.and_all(new_narrow_ops.negate());
+            let negated_new_narrow_ops = new_narrow_ops.negate();
+            negated_prev_ops.and_all(negated_new_narrow_ops.scope);
+            if let Some((new_op, new_range)) = negated_new_narrow_ops.subject {
+                negated_prev_subject = Some(match negated_prev_subject {
+                    Some((prev_op, _)) => (NarrowOp::And(vec![prev_op, new_op]), new_range),
+                    None => (new_op, new_range),
+                });
+            }
             self.stmts(body, parent);
             self.finish_branch();
         }

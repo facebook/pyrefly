@@ -1371,8 +1371,6 @@ Completion Results:
 
 - (Function) disjoint_base: from typing_extensions import disjoint_base
 
-- (Function) fix_missing_locations: from ast import fix_missing_locations
-
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 
 - (Module) typing_extensions: import typing_extensions
@@ -3014,8 +3012,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[@8]) -> None: ...
-- (Field) p: @8
+- (Method) m: def m(self: C[@3]) -> None: ...
+- (Field) p: @3
 "#
         .trim(),
         report.trim(),

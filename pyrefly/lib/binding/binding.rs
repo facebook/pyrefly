@@ -1791,7 +1791,7 @@ pub enum FunctionStubOrImpl {
 #[derive(Clone, Debug)]
 pub struct BindingDecorator {
     pub expr: Expr,
-    pub attrs_default_field: Option<Name>,
+    pub trailing_name: Option<Name>,
 }
 
 impl DisplayWith<Bindings> for BindingDecorator {
@@ -2105,6 +2105,9 @@ pub struct NameAssign {
     /// the textual assignment is still bound as a real `NameAssign` so the
     /// RHS remains available for its own diagnostics and bookkeeping.
     pub receiver_idx: Option<Idx<Key>>,
+    /// Whether the RHS is an attrs field specifier call (`field()` / `attr.ib()`). The in-body
+    /// value is then `Any` so `@<field>.default` / `@<field>.validator` accesses resolve.
+    pub is_attrs_field_specifier: bool,
 }
 
 impl NameAssign {
@@ -2747,6 +2750,9 @@ impl Binding {
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
+            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _) => {
+                Some(SymbolKind::Variable)
+            }
             // Receiver-constrained multi-target / unpacked rebinds are
             // class-shaped — match the `NameAssign` path above.
             Binding::MultiTargetAssign(_, _, _, Some(_))
@@ -2759,7 +2765,6 @@ impl Binding {
             | Binding::ReturnExplicit(_)
             | Binding::ReturnImplicit(_)
             | Binding::ReturnType(_)
-            | Binding::ContextValue(_, _, _, _)
             | Binding::AnnotatedType(_, _)
             | Binding::None
             | Binding::Any(_)
@@ -2772,7 +2777,6 @@ impl Binding {
             | Binding::PatternMatchMapping(_, _)
             | Binding::PatternMatchClassPositional(_, _, _, _)
             | Binding::PatternMatchClassKeyword(_)
-            | Binding::ExceptionHandler(_, _)
             | Binding::SuperInstance(_)
             | Binding::AssignToAttribute(_)
             | Binding::UsageLink(_)

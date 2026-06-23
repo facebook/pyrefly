@@ -581,6 +581,7 @@ pub struct NamedTupleMetadata {
     /// If true, the namedtuple fields were dynamically generated (e.g., using a
     /// generator or variable) and couldn't be statically resolved.
     pub has_dynamic_fields: bool,
+    pub directly_extends_named_tuple: bool,
 }
 
 /// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
@@ -600,6 +601,33 @@ impl Default for InitDefaults {
     }
 }
 
+/// The dataclass flavor. `auto_attribs` is attrs-only; both variants carry the
+/// `field_specifiers` recognized as field declarations (e.g. `attr.ib`).
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub enum DataclassKind {
+    Dataclass {
+        field_specifiers: Vec<CalleeKind>,
+    },
+    Attrs {
+        auto_attribs: Option<bool>,
+        /// Resolved attrs `hash=`/`unsafe_hash=` value (`unsafe_hash` wins): `Some(true)` forces
+        /// `__hash__`, `Some(false)` leaves it inherited, `None` uses the `eq`/`frozen` default.
+        hash: Option<bool>,
+        field_specifiers: Vec<CalleeKind>,
+    },
+}
+
+impl DataclassKind {
+    pub fn field_specifiers(&self) -> &[CalleeKind] {
+        match self {
+            Self::Dataclass { field_specifiers }
+            | Self::Attrs {
+                field_specifiers, ..
+            } => field_specifiers,
+        }
+    }
+}
+
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct DataclassMetadata {
     /// Every annotated dataclass field, in class-body declaration order.
@@ -610,13 +638,14 @@ pub struct DataclassMetadata {
     /// duplicating every instance-field name.
     pub pseudo_field_names: SmallSet<Name>,
     pub kws: DataclassKeywords,
-    pub field_specifiers: Vec<CalleeKind>,
     pub alias_keyword: Name,
     pub init_defaults: InitDefaults,
     /// Whether a default can be passed positionally to field specifier calls
     pub default_can_be_positional: bool,
     /// Fields targeted by `@field_validator(mode='before'|'plain')`, including inherited.
     pub pydantic_before_validator_fields: SmallSet<Name>,
+    /// Which dataclass flavor this is; carries attrs `auto_attribs`.
+    pub kind: DataclassKind,
 }
 
 impl DataclassMetadata {

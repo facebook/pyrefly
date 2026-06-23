@@ -540,6 +540,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if flags.is_staticmethod {
             self_type = None;
         }
+
+        // The `self`/`cls` receiver of a method is supplied implicitly at call time, so a
+        // default value on it is unreachable and almost always a mistake (e.g. `def m(self=1)`).
+        // `self_type` is `Some` exactly when there is an implicit receiver (instance methods,
+        // classmethods including `__init_subclass__`/`__class_getitem__`, properties, and
+        // `__new__`); it is `None` for staticmethods and top-level functions. A variadic-only
+        // receiver lands in `vararg`, so `.first()` here correctly yields `None`.
+        // See https://github.com/facebook/pyrefly/issues/3729.
+        if self_type.is_some()
+            && let Some(first) = def
+                .parameters
+                .posonlyargs
+                .first()
+                .or_else(|| def.parameters.args.first())
+            && let Some(default) = &first.default
+        {
+            self.error(
+                errors,
+                default.range(),
+                ErrorKind::BadFunctionDefinition,
+                format!(
+                    "Parameter `{}` is the `self`/`cls` parameter and cannot have a default value",
+                    first.parameter.name
+                ),
+            );
+        }
+
         let FunctionParamsResult {
             params,
             paramspec,

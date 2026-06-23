@@ -682,6 +682,18 @@ issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overl
 );
 
 testcase!(
+    test_runtime_checkable_protocol_never_no_unsafe_overlap,
+    r#"
+from collections.abc import Iterable
+from typing import Never
+
+def f(x: Never) -> None:
+    if isinstance(x, Iterable):
+        pass
+"#,
+);
+
+testcase!(
     test_runtime_checkable_missing_members_do_not_overlap,
     r#"
 from typing import Any, Generator, Iterable, Protocol, runtime_checkable
@@ -1033,5 +1045,84 @@ class Series(ElementOpsMixin[S2_co], Protocol):
 def main2(s: Series[timedelta]) -> None:
     td = timedelta(1)
     assert_type(s / td, Series[float])
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_referencing_protocol_terminates,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+R = TypeVar("R", covariant=True)
+
+
+class Lens(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /) -> R2: ...
+
+
+class BaseLens(Lens[S, R], Protocol):
+    def at(self) -> Lens[S, R]:
+        return self
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_mutual_recursion_terminates,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+
+
+class A(Protocol[S]):
+    @overload
+    def __call__[S2, R2](self: B[S2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: B[S2], state: S2, /) -> R2: ...
+
+
+class B(Protocol[S]):
+    @overload
+    def __call__[S2, R2](self: A[S2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: A[S2], state: S2, /) -> R2: ...
+
+
+class Impl(A[S], B[S], Protocol):
+    def at(self) -> A[S]:
+        return self
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_non_conforming_still_rejected,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+R = TypeVar("R", covariant=True)
+
+
+class Lens(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /) -> R2: ...
+    def extra(self) -> int: ...
+
+
+class HasCallNoExtra(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: HasCallNoExtra[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: HasCallNoExtra[S2, R2], state: S2, /) -> R2: ...
+
+
+def f(x: HasCallNoExtra[int, str]) -> Lens[int, str]:
+    return x  # E: not assignable to declared return type
 "#,
 );

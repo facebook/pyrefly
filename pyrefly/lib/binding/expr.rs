@@ -430,9 +430,7 @@ impl<'a> BindingsBuilder<'a> {
                 if self.scopes.is_definitely_unreachable() {
                     return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
                 }
-                let suggestion = self
-                    .scopes
-                    .suggest_similar_name(&name.id, name.range.start());
+                let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -1226,6 +1224,13 @@ impl<'a> BindingsBuilder<'a> {
             Expr::StringLiteral(literal)
                 if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
             {
+                if literal.flags.prefix().is_raw() {
+                    self.error(
+                        literal.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "Raw string literals are not allowed in type expressions".to_owned(),
+                    );
+                }
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
                         *x = expr;
@@ -1420,11 +1425,12 @@ impl<'a> BindingsBuilder<'a> {
         for mut x in decorators {
             let attrs_default_field = self.attrs_default_decorator_field(&x.expression);
             self.ensure_expr(&mut x.expression, usage);
+            let trailing_name = Ast::decorator_trailing_name(&x.expression).map(Name::new);
             let k = self.insert_binding(
                 KeyDecorator(x.range),
                 BindingDecorator {
                     expr: x.expression,
-                    attrs_default_field,
+                    trailing_name,
                 },
             );
             decorator_keys.push(k);

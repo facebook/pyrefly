@@ -682,8 +682,14 @@ my_export
 
 #[test]
 fn prefer_public_stdlib_module_for_reexports() {
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", "BytesIO\n# ^")], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", "BytesIO\n# ^"),
+            ("_io", "class BytesIO: pass\n"),
+            ("io", "from _io import BytesIO as BytesIO\n"),
+        ],
+        get_test_report,
+    );
     assert_eq!(
         r#"
 # main.py
@@ -746,6 +752,12 @@ BytesIO
 # pyrefly: ignore [unknown-name]
 BytesIO
 # ^
+
+
+
+# _io.py
+
+# io.py
 "#
         .trim(),
         report.trim(),
@@ -1432,22 +1444,12 @@ fn test_import_from_stdlib() {
         &[("a", "TypeVar('T')\n# ^")],
         get_test_report,
     );
-    // TODO: Ideally `typing` would be preferred over `ast`.
     assert_eq!(
         r#"
 # a.py
 1 | TypeVar('T')
       ^
 Code Actions Results:
-# Title: Insert import: `from ast import TypeVar`
-
-## Before:
-TypeVar('T')
-# ^
-## After:
-from ast import TypeVar
-TypeVar('T')
-# ^
 # Title: Insert import: `from typing import TypeVar`
 
 ## Before:

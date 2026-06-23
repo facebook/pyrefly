@@ -54,6 +54,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::instance::Instance;
 use crate::alt::types::instance::InstanceKind;
@@ -1509,7 +1510,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 annotation: annot,
                 ..
             } => {
-                let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
+                let mut direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
                 if metadata.is_protocol()
                     && direct_annotation.is_none()
                     && !is_dunder(name.as_str())
@@ -1528,16 +1529,103 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
-                    let flags = self.compute_dataclass_field_initialization(call, dm);
-                    // A bare assignment of a `field()` specifier with no type annotation is a runtime error in CPython
-                    if flags.is_some() && direct_annotation.is_none() && !metadata.is_attrs_class()
+                    // `type=` only has meaning on a real attrs specifier (`attr.ib`/`field`). attrs
+                    // raises `ValueError` if such a field also has an annotation. Otherwise
+                    // `attr.ib(type=T)` supplies the field's type; `field(type=T)` is metadata only
+                    // (type checkers ignore it).
+                    if matches!(&dm.kind, DataclassKind::Attrs { .. })
+                        && let Some(type_expr) = call.arguments.find_keyword("type")
+                        && let Some(fields) = self.get_class_fields(class)
+                        && fields.is_attrs_field_specifier(name)
                     {
-                        self.error(
-                            errors,
-                            range,
-                            ErrorKind::BadClassDefinition,
-                            format!("`{name}` is a dataclass field but has no type annotation"),
-                        );
+                        if direct_annotation.is_some() {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::BadClassDefinition,
+                                format!(
+                                    "`{name}` cannot have both a type annotation and a `type` argument"
+                                ),
+                            );
+                        } else if fields.attrs_specifier_honors_type(name) {
+                            let ty = self.untype(
+                                self.expr_infer(&type_expr.value, errors),
+                                type_expr.value.range(),
+                                errors,
+                            );
+                            direct_annotation = Some(Annotation {
+                                qualifiers: Vec::new(),
+                                ty: Some(ty),
+                            });
+                        }
+                    }
+                    let mut flags = self.compute_dataclass_field_initialization(call, dm);
+                    if flags.is_some() {
+                        // A field specifier with no type annotation is a definition-time error,
+                        // except under classic attrs (`auto_attribs=False`), where an unannotated
+                        // `attr.ib()` is a valid field. Unresolved `auto_attribs` (`None`) is
+                        // treated as classic to avoid false positives.
+                        if direct_annotation.is_none() {
+                            let missing_annotation = match &dm.kind {
+                                DataclassKind::Dataclass { .. } => Some(format!(
+                                    "`{name}` is a dataclass field but has no type annotation"
+                                )),
+                                DataclassKind::Attrs { auto_attribs, .. }
+                                    if *auto_attribs == Some(true) =>
+                                {
+                                    Some(format!(
+                                        "`{name}` needs a type annotation because the class uses `auto_attribs=True`"
+                                    ))
+                                }
+                                DataclassKind::Attrs { .. } => None,
+                            };
+                            if let Some(message) = missing_annotation {
+                                self.error(errors, range, ErrorKind::BadClassDefinition, message);
+                            }
+                        }
+                        // `attr.ib` accepts `default` positionally, so a positional arg
+                        // counts as a default here too.
+                        if matches!(&dm.kind, DataclassKind::Attrs { .. })
+                            && (call.arguments.find_keyword("default").is_some()
+                                || !call.arguments.args.is_empty())
+                            && call.arguments.find_keyword("factory").is_some()
+                        {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::BadClassDefinition,
+                                format!("`{name}` cannot specify both `default` and `factory`"),
+                            );
+                        }
+                    }
+                    // Drop a NOTHING default so the field stays required.
+                    if let Some(f) = &mut flags
+                        && self
+                            .get_class_fields(class)
+                            .is_some_and(|cf| cf.default_is_attrs_nothing(name))
+                    {
+                        f.default = None;
+                    }
+                    // A `@<field>.default` method supplies the default, making the field optional.
+                    // It is mutually exclusive with an explicit `default=`/`factory=`, mirroring
+                    // attrs' `DefaultAlreadySetError`.
+                    if let Some(f) = &mut flags
+                        && self
+                            .get_class_fields(class)
+                            .is_some_and(|cf| cf.default_is_attrs_decorator(name))
+                    {
+                        if f.default.is_some() {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::BadClassDefinition,
+                                format!(
+                                    "`{name}` cannot specify both an explicit default and a `@{name}.default` method"
+                                ),
+                            );
+                        } else {
+                            f.default = Some(self.heap.mk_any_implicit());
+                        }
                     }
                     ClassFieldInitialization::ClassBody(flags.map(Box::new))
                 } else {
@@ -2438,7 +2526,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let func_ty = self.expr_infer(func, &ignore_errors);
         let func_kind = func_ty.callee_kind();
         if let Some(func_kind) = func_kind
-            && dm.field_specifiers.contains(&func_kind)
+            && dm.kind.field_specifiers().contains(&func_kind)
         {
             let flags = self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
             Some(flags)
@@ -2751,9 +2839,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if func.metadata.flags.is_staticmethod || func.metadata.flags.is_classmethod {
                     return true;
                 }
-                func.signature
-                    .get_first_param()
-                    .is_none_or(|p| self.is_subset_eq(self_type, &p))
+                func.signature.get_first_param().is_none_or(|p| {
+                    // A non-protocol `self:` can't re-enter protocol conformance, so check
+                    // it directly. A protocol-typed `self:`, however, makes
+                    // `is_subset_eq(self_type, p)` re-enter this same filtering on the same
+                    // `(self_type, p)` pair — unbounded recursion for a self-referential
+                    // protocol. Guard only that case coinductively: on re-entry
+                    // of the same pair, assume the overload applies (keep it).
+                    let p_is_protocol = matches!(
+                        &p,
+                        Type::ClassType(cls) if self.type_order().is_protocol(cls.class_object())
+                    );
+                    if !p_is_protocol {
+                        return self.is_subset_eq(self_type, &p);
+                    }
+                    let key = (self_type.clone(), p.clone());
+                    if self.enter_overload_self_filter(key.clone()) {
+                        return true;
+                    }
+                    let applies = self.is_subset_eq(self_type, &p);
+                    self.exit_overload_self_filter(&key);
+                    applies
+                })
             })
             .cloned()
             .collect();
@@ -3896,16 +4003,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<WithDefiningClass<Arc<ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
             let field = self.get_non_synthesized_field_from_current_class_only(cls, name)?;
-            if !field.has_explicit_annotation()
-                || matches!(
-                    field.initialization(),
-                    ClassFieldInitialization::Method | ClassFieldInitialization::ClassMethod
-                )
-            {
-                None
-            } else {
-                Some(field)
+            if matches!(
+                field.initialization(),
+                ClassFieldInitialization::Method | ClassFieldInitialization::ClassMethod
+            ) {
+                return None;
             }
+            let recognized = field.has_explicit_annotation()
+                || (matches!(
+                    self.get_metadata_for_class(cls)
+                        .dataclass_metadata()
+                        .map(|dm| &dm.kind),
+                    Some(DataclassKind::Attrs {
+                        auto_attribs: Some(false),
+                        ..
+                    })
+                ) && self
+                    .get_class_fields(cls)
+                    .is_some_and(|f| f.is_attrs_field_specifier(name)));
+            recognized.then_some(field)
         })
     }
 

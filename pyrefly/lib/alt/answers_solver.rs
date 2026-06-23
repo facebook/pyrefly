@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
+use fxhash::FxHashSet;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
@@ -1602,6 +1603,10 @@ pub struct ThreadState {
     /// is pushed here. When the nested call takes its sink, the previous
     /// one is restored.
     trace_sink_stack: RefCell<Vec<Option<TraceSideEffects>>>,
+    /// `(self_type, self_param)` pairs whose overload-self-type compatibility
+    /// check is currently in progress, used as a coinductive guard against
+    /// self-referential protocols. See `filter_overloads_by_self_type`.
+    overload_self_filter_stack: RefCell<FxHashSet<(Type, Type)>>,
 }
 
 impl ThreadState {
@@ -1614,6 +1619,7 @@ impl ThreadState {
             lambda_param_vars: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
+            overload_self_filter_stack: RefCell::new(FxHashSet::default()),
         }
     }
 
@@ -1964,6 +1970,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .borrow()
             .get(&(def_idx, height))
             .cloned()
+    }
+
+    /// Mark an overload-self-type compatibility check `(self_type, self_param)` as in
+    /// progress. Returns `true` if it was already active, signaling a coinductive cycle
+    /// (a self-referential protocol). See `filter_overloads_by_self_type`.
+    pub(crate) fn enter_overload_self_filter(&self, key: (Type, Type)) -> bool {
+        !self
+            .thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .insert(key)
+    }
+
+    pub(crate) fn exit_overload_self_filter(&self, key: &(Type, Type)) {
+        self.thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .remove(key);
     }
 
     /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's

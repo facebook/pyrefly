@@ -280,6 +280,26 @@ assert_type(f([1], [2]), list[int])
 );
 
 testcase!(
+    test_overloaded_shadow_builtin_range,
+    r#"
+from typing import overload
+
+class Block[T]:
+    pass
+
+@overload
+def range(stop: int) -> Block[int]: ...
+@overload
+def range(stop: int, stop2: int) -> Block[int]: ...
+def range(stop: int, stop2: int | None = None) -> Block[int]:
+    return Block()
+
+def f() -> Block[int]:
+    return range(1)  # E: Returned type `Block[int] | range`
+"#,
+);
+
+testcase!(
     test_unordered_defs,
     r#"
 def f() -> int:
@@ -1270,6 +1290,20 @@ match x:
 );
 
 testcase!(
+    test_syntax_error_empty_import_name,
+    r#"
+from os import , # E: Parse # E: Parse
+    "#,
+);
+
+testcase!(
+    test_import_python_empty_import_name,
+    r#"
+import_python("a.b.c.cinc", "")
+    "#,
+);
+
+testcase!(
     test_mangled_for,
     r#"
 # This has identical Identifiers in the AST, which seems like the right AST.
@@ -1887,7 +1921,7 @@ testcase!(
     test_crash_on_decorator_assign,
     r#"
 from typing import TypeVar
-@T=TypeVar()  # E: Expected newline, found `=` # E: Missing argument `name`
+@T=TypeVar()  # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
 "#,
 );
 

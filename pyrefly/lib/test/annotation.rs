@@ -23,6 +23,15 @@ assert_type(D.x, int)  # E: assert_type(Unknown, int) failed
 );
 
 testcase!(
+    test_raw_string_type_annotation,
+    r#"
+def f(x: r"int") -> R"str":  # E: Raw string literals are not allowed in type expressions  # E: Raw string literals are not allowed in type expressions
+    y: r"bool" = True  # E: Raw string literals are not allowed in type expressions
+    return ""
+"#,
+);
+
+testcase!(
     test_union_operator_with_bare_string_literal,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"

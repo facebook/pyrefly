@@ -11,19 +11,18 @@ use crate::attrs_testcase;
 //
 // Coverage of every class-level attrs decorator entry point. All are marked with PEP 681
 // `@dataclass_transform(...)` in attrs' stubs, so pyrefly routes them through its generic
-// dataclass synthesis path with only a thin attrs-specific layer.
-//
-// Handled correctly by dataclass_transform:
-//   - `@define` / `@attrs.define` / `@attr.define`           (modern, mutable)
-//   - `@mutable` / `@attrs.mutable` / `@attr.mutable`        (alias of define)
-//   - `@frozen` / `@attrs.frozen` / `@attr.frozen`           (frozen_default=True)
-//   - `@attr.s(auto_attribs=True)` / `@attr.attrs` / `@attr.attributes`
-//   - per-decorator default keywords: order_default (classic), frozen_default,
-//     no-order (define)
+// dataclass synthesis path. dataclass_transform alone can't express attrs' per-decorator
+// `auto_attribs` rules, so an attrs-specific layer resolves which assignments are fields:
+//   - `@define` / `@mutable` / `@frozen` (+ `attr.`/`attrs.` forms): `auto_attribs=None`,
+//     i.e. annotation-driven unless a bare `attr.ib()`/`field()` assignment forces
+//     `auto_attribs=False`
+//   - `@attr.s` / `@attr.s()` / `@attr.attrs` / `@attr.attributes`: `auto_attribs=False`
+//     (only `attr.ib()`/`field()` assignments are fields; bare annotations ignored)
+//   - `@attr.s(auto_attribs=True)` / `@attr.dataclass`: `auto_attribs=True`
+//   - per-decorator default keywords: order_default (classic), frozen_default, no-order (define)
 //
 // NOT handled (bug-marked tests below):
 //   - `field()` / `attr.ib()` specifier params -> `Unknown` (converter-param leak)
-//   - `@attr.s()` with `auto_attribs=False` -> bare annotations wrongly become fields
 
 // `@define`: fields come from annotations (auto_attribs is implicit).
 attrs_testcase!(
@@ -105,14 +104,10 @@ assert_type(c.y, int | None)
 "#,
 );
 
-// `c.x` is correctly `int`, but the synthesized `__init__` params come out `Unknown`.
-// Cause: attrs' `field()` has a `converter` parameter, so `as_param` uses the (empty)
-// converter's input type instead of the field's declared type. Field specifiers without
-// a `converter` (plain dataclasses, custom transforms) keep the annotation. Same root
-// cause as `attributes::test_attrs_attrib_fail`. When fixed, drop the `bug` marker and
-// flip the expectation to `(self: C, x: int, y: int = ...)`.
+// `field()` with an explicit annotation and no `converter`: the synthesized `__init__`
+// param types are the declared annotations. (A converter is only read from an explicit
+// `converter=` argument, never from the field specifier's signature.)
 attrs_testcase!(
-    bug = "field() annotation not propagated into synthesized __init__; params are Unknown, it should be (self: C, x: int, y: int = ...)",
     test_attrs_define_field_init_signature,
     r#"
 from typing import reveal_type
@@ -123,7 +118,7 @@ class C:
     x: int = field()
     y: int = field(default=0)
 
-reveal_type(C.__init__)  # E: revealed type: (self: C, x: Unknown, y: Unknown = ...) -> None
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int, y: int = ...) -> None
 "#,
 );
 
@@ -217,10 +212,9 @@ assert_type(B(1).x, int)
 "#,
 );
 
-// Same `converter`-parameter bug as `field()`: an `attr.ib()` field's `__init__` param
-// is `Unknown`, though the attribute type is read correctly.
+// A classic `attr.ib()` field with an explicit annotation and no `converter`: the
+// `__init__` param type is the declared annotation.
 attrs_testcase!(
-    bug = "classic attr.ib() fields get Unknown __init__ params; should be (self: C, x: int)",
     test_attrs_classic_s_no_auto_attribs,
     r#"
 from typing import reveal_type
@@ -230,15 +224,11 @@ import attr
 class C:
     x: int = attr.ib()
 
-reveal_type(C.__init__)  # E: revealed type: (self: C, x: Unknown) -> None
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int) -> None
 "#,
 );
 
-// `auto_attribs=False` (the `@attr.s()` default) is not modeled: bare annotations have
-// no `attr.ib()`, so there should be no fields and init should be `(self: C)`, but
-// pyrefly wrongly treats the annotations as fields.
 attrs_testcase!(
-    bug = "auto_attribs=False not modeled; bare annotations wrongly become fields (init should be (self: C))",
     test_attrs_classic_s_no_auto_attribs_ignores_annotations,
     r#"
 from typing import reveal_type
@@ -249,7 +239,7 @@ class C:
     x: int
     y: int
 
-reveal_type(C.__init__)  # E: revealed type: (self: C, x: int, y: int) -> None
+reveal_type(C.__init__)  # E: revealed type: (self: C) -> None
 "#,
 );
 
@@ -300,6 +290,19 @@ class C:
     x: int
 
 assert_type(C(1).x, int)
+"#,
+);
+
+// `@attr.dataclass` defaults to `auto_attribs=True` by name (no auto-detect fallback), so an
+// unannotated specifier needs a type annotation.
+attrs_testcase!(
+    test_attr_dataclass_unannotated_needs_annotation,
+    r#"
+import attr
+
+@attr.dataclass
+class C:
+    x = attr.ib()  # E: needs a type annotation
 "#,
 );
 
@@ -406,6 +409,97 @@ hash(C(1))  # OK
 "#,
 );
 
+// `hash=True` is attrs' deprecated alias for `unsafe_hash=True`. Without it `@define`
+// (eq=True, frozen=False) would set `__hash__ = None`, making the class unhashable.
+attrs_testcase!(
+    test_attrs_define_hash_alias,
+    r#"
+from typing import Hashable
+from attrs import define
+
+def f(x: Hashable) -> None: ...
+
+@define(hash=True)
+class C:
+    x: int
+
+f(C(1))  # OK
+"#,
+);
+
+// The alias also applies to the classic `@attr.s` decorator.
+attrs_testcase!(
+    test_attrs_classic_hash_alias,
+    r#"
+from typing import Hashable
+import attr
+
+def f(x: Hashable) -> None: ...
+
+@attr.s(hash=True)
+class C:
+    x = attr.ib()
+
+f(C(1))  # OK
+"#,
+);
+
+// `hash=False` overrides the `eq`-driven default: `__hash__` is left inherited (hashable)
+// rather than set to `None`.
+attrs_testcase!(
+    test_attrs_define_hash_false_inherits,
+    r#"
+from typing import Hashable
+from attrs import define
+
+def f(x: Hashable) -> None: ...
+
+@define(hash=False)
+class C:
+    x: int
+
+f(C(1))  # OK
+"#,
+);
+
+// `unsafe_hash=` wins over the deprecated `hash=`: with an unhashable base, `unsafe_hash=True`
+// still synthesizes `__hash__`, so the class is hashable.
+attrs_testcase!(
+    test_attrs_unsafe_hash_overrides_hash,
+    r#"
+from typing import Hashable
+from attrs import define
+
+def f(x: Hashable) -> None: ...
+
+class Base:
+    __hash__ = None
+
+@define(unsafe_hash=True, hash=False)
+class C(Base):
+    x: int
+
+f(C(1))  # OK
+"#,
+);
+
+// Field-level `hash=` is accepted; class hashability follows the class-level decision.
+attrs_testcase!(
+    test_attrs_field_hash_accepted,
+    r#"
+from typing import Hashable
+from attrs import define, field
+
+def f(x: Hashable) -> None: ...
+
+@define(hash=True)
+class C:
+    x: int = field(hash=False)
+
+f(C(1))  # OK
+"#,
+);
+
 // Frozen propagates to subclasses: a plain subclass of a `@frozen` class inherits the
 // synthesized frozen `__setattr__`, so attribute assignment is still rejected.
 attrs_testcase!(
@@ -421,5 +515,138 @@ class Sub(Base):
     pass
 
 Sub(1).x = 2  # E: Cannot set field `x`
+"#,
+);
+
+// `@define` uses `auto_attribs=None`: attrs falls back to `auto_attribs=False` when a field
+// is assigned a bare `field()`/`attr.ib()` with no annotation, so the field is still collected.
+attrs_testcase!(
+    test_attrs_define_bare_field,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    x = field()
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: Any) -> None
+"#,
+);
+
+// Mixing a bare annotation with an unannotated `field()` makes attrs fall back to
+// `auto_attribs=False`, so only the `field()` assignment is a field; the bare `a` is an
+// annotation-only declaration (not a field, and unset at runtime).
+attrs_testcase!(
+    test_attrs_define_mixed_bare_field_and_annotation,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class C:
+    a: int
+    b = field()
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, b: Any) -> None
+"#,
+);
+
+// `auto_attribs` is resolved from each class's own body, so a subclass and its base can use
+// different modes; fields are still inherited across the boundary (matches attrs runtime).
+attrs_testcase!(
+    test_attrs_define_auto_attribs_resolved_per_class,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class Base:
+    x = field()        # bare specifier -> Base is auto_attribs=False
+
+@define
+class Sub(Base):
+    y: int             # annotation -> Sub is auto_attribs=True
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, x: Any, y: int) -> None
+
+@define
+class Base2:
+    a: int             # annotation -> Base2 is auto_attribs=True
+
+@define
+class Sub2(Base2):
+    b = field()        # bare specifier -> Sub2 is auto_attribs=False
+
+reveal_type(Sub2.__init__)  # E: revealed type: (self: Sub2, a: int, b: Any) -> None
+"#,
+);
+
+// A subclass that re-declares an inherited field relocates it to the redefinition position,
+// matching attrs (a redefined field moves to its newest declaration site).
+attrs_testcase!(
+    test_attrs_subclass_override_reorders,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class Base:
+    x: int
+    y: str
+
+@define
+class Sub(Base):
+    z: bool
+    x: int  # redeclaring x relocates it after y, z
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, y: str, z: bool, x: int) -> None
+"#,
+);
+
+// The relocated field uses the override type. Changing a read-write field's type is independently
+// flagged (attribute invariance), but the field still moves and `__init__` reflects the new type.
+attrs_testcase!(
+    test_attrs_subclass_override_changes_type,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class Base:
+    x: int
+    y: str
+
+@define
+class Sub(Base):
+    z: bool
+    x: float  # E: not consistent with `int`
+
+reveal_type(Sub.__init__)  # E: revealed type: (self: Sub, y: str, z: bool, x: float) -> None
+"#,
+);
+
+// The corrected order propagates transitively: a grandchild re-declaring a grandparent field
+// relocates it to the grandchild position.
+attrs_testcase!(
+    test_attrs_multilevel_override_reorders,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class A:
+    a: int
+    b: int
+
+@define
+class B(A):
+    c: int
+
+@define
+class C(B):
+    a: int  # re-declare grandparent field a
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, b: int, c: int, a: int) -> None
 "#,
 );

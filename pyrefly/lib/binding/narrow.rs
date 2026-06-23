@@ -1133,12 +1133,15 @@ impl NarrowOps {
         builder: &'a BindingsBuilder,
         name: &Name,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
-        let name_read_info = builder
-            .scopes
-            .look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
+        let name_read_info =
+            builder.look_up_name_for_read(Hashed::new(name), &Usage::Narrowing(None));
         match name_read_info {
             NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
-            _ => None,
+            // Only flow values have a narrowable original binding; anywhere-static entries,
+            // implicit builtins, and missing names do not.
+            NameReadInfo::Anywhere { .. }
+            | NameReadInfo::ImplicitBuiltin { .. }
+            | NameReadInfo::NotFound => None,
         }
     }
 

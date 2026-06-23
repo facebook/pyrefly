@@ -65,7 +65,6 @@ use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentHighlight;
 use lsp_types::DocumentHighlightKind;
 use lsp_types::DocumentHighlightParams;
-use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolParams;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::FileEvent;
@@ -238,6 +237,7 @@ use pyrefly_util::telemetry::TelemetryServerState;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::thread_pool::ThreadPool;
 use pyrefly_util::watch_pattern::WatchPattern;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -271,6 +271,7 @@ use crate::lsp::non_wasm::call_hierarchy::transform_incoming_calls;
 use crate::lsp::non_wasm::call_hierarchy::transform_outgoing_calls;
 use crate::lsp::non_wasm::code_lens::runnable_lsp_code_lens;
 use crate::lsp::non_wasm::convert_module_package::convert_module_package_code_actions;
+use crate::lsp::non_wasm::document_symbols::flatten_to_symbol_information;
 use crate::lsp::non_wasm::external_provider::ExternalProvider;
 use crate::lsp::non_wasm::external_provider::compute_qualified_name;
 use crate::lsp::non_wasm::lsp::apply_change_events;
@@ -343,6 +344,7 @@ use crate::state::state::Transaction;
 use crate::state::subscriber::CompositeSubscriber;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::state::subscriber::Subscriber;
+use crate::tsp::type_conversion::convert_type_with_resolvers;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassType;
 
@@ -438,76 +440,55 @@ pub trait TspInterface: Send + Sync + 'static {
     /// (e.g. on the wrong platform).
     fn get_python_search_paths(&self, from_url: &Url) -> Result<Vec<String>, String>;
 
-    /// Return the inferred type at the given position in a file.
+    /// Compute the type at the given position and convert it to the TSP wire
+    /// format.
     ///
-    /// `uri` is a file URI string (e.g. `file:///path/to/file.py`).
-    /// `line` and `character` are zero-based positions within the file.
+    /// `uri` is a file URI string (e.g. `file:///path/to/file.py`); `line` and
+    /// `character` are zero-based. Every declaration location in the result is
+    /// resolved against the *same* transaction that computed the type. Because
+    /// computing a type already demands its `Stdlib`, that transaction is warm,
+    /// so the export lookups during conversion cannot hit a cold `get_stdlib`.
     ///
     /// Returns `None` when the URI cannot be resolved, the position is invalid,
     /// or no type information is available at that location.
-    fn get_type_at_position(
-        &self,
-        uri: &str,
-        line: u32,
-        character: u32,
-    ) -> Option<pyrefly_types::types::Type>;
+    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type>;
 
-    /// Return the computed (inferred) type for a node spanning the given range.
+    /// Return the computed (inferred) type for a node spanning the given range,
+    /// converted to the TSP wire format.
     ///
-    /// Unlike [`get_type_at_position`], which resolves the identifier at a
-    /// single position, this is range-aware: when the requested range covers a
-    /// whole call expression (e.g. `Foo()`), it returns the call's result type
-    /// rather than the callee's declaration sitting at the range's start. Used
-    /// by the TSP `getComputedType` endpoint, where the client sends the full
-    /// source range of the node it cares about.
+    /// Unlike [`TspInterface::type_at_position`], which resolves the identifier
+    /// at a single position, this is range-aware: when the requested range
+    /// covers a whole call expression (e.g. `Foo()`), it returns the call's
+    /// result type rather than the callee's declaration sitting at the range's
+    /// start. Used by the TSP `getComputedType` endpoint, where the client
+    /// sends the full source range of the node it cares about. Falls back to
+    /// the position-based (declaration-preserving) lookup when the range is not
+    /// a call expression.
     ///
     /// `start_line`/`start_character` and `end_line`/`end_character` are the
-    /// zero-based bounds of the node range. Falls back to the position-based
-    /// (declaration-preserving) lookup when the range is not a call expression.
-    fn get_computed_type_at_range(
+    /// zero-based bounds of the node range. As with [`type_at_position`],
+    /// declaration locations are resolved against the same warm transaction
+    /// that produced the type, so the export lookups cannot hit a cold
+    /// `get_stdlib`.
+    fn computed_type_at_range(
         &self,
         uri: &str,
         start_line: u32,
         start_character: u32,
         end_line: u32,
         end_character: u32,
-    ) -> Option<pyrefly_types::types::Type>;
+    ) -> Option<tsp_types::Type>;
 
-    /// Return the contextually expected type at the given position.
-    ///
-    /// The expected type is what the surrounding context demands of the
-    /// expression at the cursor: a call argument's parameter type, an
-    /// annotated assignment / return / attribute target's declared type, etc.
-    /// When no such context applies, falls back to the computed type at the
-    /// position (so the result is never `None` where a computed type exists).
-    fn get_expected_type_at_position(
+    /// As [`TspInterface::type_at_position`], but returns the contextually
+    /// expected type — a call argument's parameter type, an annotated target's
+    /// declared type, etc. — falling back to the computed type where no
+    /// expected-type context applies.
+    fn expected_type_at_position(
         &self,
         uri: &str,
         line: u32,
         character: u32,
-    ) -> Option<pyrefly_types::types::Type>;
-
-    /// Resolve the source range of a function name from its `FuncDefIndex`.
-    ///
-    /// Uses the binding table to look up `KeyUndecoratedFunctionRange` for
-    /// the function's module, returning the `TextRange` of the function
-    /// name identifier. Returns `None` when the function has no
-    /// `FuncDefIndex` or the module's bindings are unavailable.
-    fn resolve_func_def_range(
-        &self,
-        func_id: &pyrefly_types::callable::FuncId,
-    ) -> Option<TextRange>;
-
-    /// Resolve an importable module to its backing filesystem path using the
-    /// import-resolution context of `source_uri`.
-    ///
-    /// Returns `None` when the source URI is invalid, cannot be mapped to a
-    /// path, or the target module cannot be resolved.
-    fn resolve_module_uri(
-        &self,
-        source_uri: &str,
-        module: &pyrefly_types::module::ModuleType,
-    ) -> Option<PathBuf>;
+    ) -> Option<tsp_types::Type>;
 
     /// Resolve a URI to a filesystem path.
     ///
@@ -2295,14 +2276,13 @@ impl Server {
                             params, &x.id,
                         )
                     {
-                        let response =
-                            match self.hierarchical_document_symbols(&transaction, params) {
-                                Ok(response) => response.map(DocumentSymbolResponse::Nested),
-                                Err(reason) => {
-                                    telemetry_event.set_empty_response_reason(reason);
-                                    None
-                                }
-                            };
+                        let response = match self.document_symbol(&transaction, params) {
+                            Ok(response) => response,
+                            Err(reason) => {
+                                telemetry_event.set_empty_response_reason(reason);
+                                None
+                            }
+                        };
                         self.send_response(new_response(x.id, Ok(response)));
                     }
                 } else if let Some(params) = as_request::<WorkspaceSymbolRequest>(&x) {
@@ -5198,34 +5178,46 @@ impl Server {
         })))
     }
 
-    fn hierarchical_document_symbols(
+    fn document_symbol(
         &self,
         transaction: &Transaction<'_>,
         params: DocumentSymbolParams,
-    ) -> Result<Option<Vec<DocumentSymbol>>, EmptyResponseReason> {
+    ) -> Result<Option<DocumentSymbolResponse>, EmptyResponseReason> {
         let uri = &params.text_document.uri;
         let maybe_cell_idx = self.maybe_get_code_cell_index(uri);
         let path = self
             .path_for_uri_or_notebook_cell(uri)
             .ok_or(EmptyResponseReason::NoFilePath)?;
-        if self
-            .workspaces
-            .get_with(path, |(_, workspace)| workspace.disable_language_services)
-        {
+        if self.workspaces.get_with(path, |(_, workspace)| {
+            workspace.disabled_language_services.is_some()
+        }) {
             return Err(EmptyResponseReason::LanguageServicesDisabled);
         }
-        let Some(true) = self
+
+        // Avoid creating a handle when the client doesn't support document symbols
+        let document_symbols_caps = self
             .initialize_params
             .capabilities
             .text_document
             .as_ref()
-            .and_then(|t| t.document_symbol.as_ref())
-            .and_then(|d| d.hierarchical_document_symbol_support)
-        else {
+            .and_then(|t| t.document_symbol.as_ref());
+        if document_symbols_caps.is_none() {
             return Ok(None);
-        };
+        }
+
+        let supports_hierarchical = document_symbols_caps
+            .and_then(|d| d.hierarchical_document_symbol_support)
+            == Some(true);
+
         let handle = self.make_handle_if_enabled(uri, Some(DocumentSymbolRequest::METHOD))?;
-        Ok(transaction.symbols(&handle, maybe_cell_idx))
+        let symbols = transaction.symbols(&handle, maybe_cell_idx);
+        Ok(symbols.map(|syms| {
+            if supports_hierarchical {
+                DocumentSymbolResponse::Nested(syms)
+            } else {
+                DocumentSymbolResponse::Flat(flatten_to_symbol_information(syms, uri))
+            }
+        }))
     }
 
     /// Run local and external workspace symbol queries in parallel, merging
@@ -6246,6 +6238,106 @@ impl Server {
             |items| items,
         )
     }
+
+    /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
+    /// start a transaction, returning it alongside the handle and the resolved
+    /// in-file position.
+    fn open_at_position<'a>(
+        &'a self,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<(Transaction<'a>, Handle, TextSize)> {
+        let url = Url::parse(uri)
+            .ok()
+            .or_else(|| Url::from_file_path(uri).ok())?;
+        let path = self.path_for_uri_or_notebook_cell(&url)?;
+        let notebook_cell = self.maybe_get_code_cell_index(&url);
+
+        let handle = make_open_handle(&self.state, &path);
+        let transaction = self.state.transaction();
+        let module_info = transaction.get_module_info(&handle)?;
+        let position =
+            module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
+        Some((transaction, handle, position))
+    }
+
+    /// Convert `ty` to the TSP wire format, resolving every declaration location
+    /// against `transaction` — the same transaction that produced `ty`, reached
+    /// through `source_handle`'s import context.
+    ///
+    /// Reusing that transaction is what keeps conversion both cheap and correct:
+    /// computing `ty` already populated the transaction's `Stdlib`, so the
+    /// export lookups below cannot hit the cold `get_stdlib` path and need no
+    /// warm-up run; and a single transaction serves the whole query instead of
+    /// one per resolved symbol.
+    fn convert_type_in_transaction(
+        &self,
+        transaction: &Transaction,
+        source_handle: &Handle,
+        ty: &pyrefly_types::types::Type,
+    ) -> tsp_types::Type {
+        // A `Def` function's name range, looked up in its module's binding table.
+        // The handle reuses `source_handle`'s `SysInfo` (as `get_class_fields`
+        // does for cross-module lookups) so the function's module is found under
+        // the same `SysInfo` the transaction computed it with; re-deriving a
+        // config-default `SysInfo` would miss the module in a multi-`SysInfo`
+        // transaction and silently collapse the range to zero.
+        let resolve_func_range = |func_id: &pyrefly_types::callable::FuncId| {
+            let def_index = func_id.def_index?;
+            let handle = Handle::new(
+                func_id.module.name(),
+                func_id.module.path().dupe(),
+                source_handle.sys_info().dupe(),
+            );
+            let bindings = transaction.get_bindings(&handle)?;
+            let key = KeyUndecoratedFunctionRange(def_index);
+            let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+            Some(bindings.get(idx).0.range())
+        };
+        // An importable module's backing filesystem path.
+        let resolve_module_path = |module: &pyrefly_types::module::ModuleType| {
+            let module_name = ModuleName::from_str(&module.to_string());
+            let finding = transaction
+                .import_handle(source_handle, module_name, None)
+                .finding()?;
+            let path = to_real_path(finding.path())?;
+            Some(path.canonicalize().unwrap_or(path))
+        };
+        // An exported symbol's original definition, following re-exports.
+        let resolve_export = |module_name: ModuleName, name: &Name| {
+            resolve_export_location(transaction, source_handle, module_name, name)
+        };
+        convert_type_with_resolvers(
+            ty,
+            Some(&resolve_func_range),
+            Some(&resolve_module_path),
+            Some(&resolve_export),
+        )
+    }
+}
+
+/// Resolve an exported symbol's original definition (following re-exports) to a
+/// `(ModulePath, Range)`, looked up in `transaction` from `source_handle`'s
+/// import context.
+///
+/// The target module is reached via `import_handle`, so it inherits
+/// `source_handle`'s `SysInfo` — the one whose `Stdlib` this transaction already
+/// computed. That keeps the export lookup on the warm `get_stdlib` path:
+/// re-deriving the handle from the module path would pick a config-derived
+/// `SysInfo` that was never computed, panicking in `get_stdlib` whenever the
+/// transaction holds more than one `SysInfo`.
+pub(crate) fn resolve_export_location(
+    transaction: &Transaction,
+    source_handle: &Handle,
+    module_name: ModuleName,
+    name: &Name,
+) -> Option<(ModulePath, lsp_types::Range)> {
+    let target_handle = transaction
+        .import_handle(source_handle, module_name, None)
+        .finding()?;
+    let (module, range) = transaction.lookup_export_location(&target_handle, name)?;
+    Some((module.path().dupe(), module.to_lsp_range(range)))
 }
 
 impl TspInterface for Server {
@@ -6356,38 +6448,24 @@ impl TspInterface for Server {
         Ok(paths)
     }
 
-    fn get_type_at_position(
-        &self,
-        uri: &str,
-        line: u32,
-        character: u32,
-    ) -> Option<pyrefly_types::types::Type> {
-        let url = Url::parse(uri)
-            .ok()
-            .or_else(|| Url::from_file_path(uri).ok())?;
-        let path = self.path_for_uri_or_notebook_cell(&url)?;
-        let notebook_cell = self.maybe_get_code_cell_index(&url);
-
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
-        let module_info = transaction.get_module_info(&handle)?;
-        let position =
-            module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
+    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type> {
+        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
         // For TSP, return the raw declared type without coercing callees in
         // call position. This keeps the function's `Declaration::Regular`
         // intact on the wire, which TSP clients need to re-resolve the
         // signature (parameters, overloads) from source.
-        transaction.get_type_at_preserving_declaration(&handle, position)
+        let ty = transaction.get_type_at_preserving_declaration(&handle, position)?;
+        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
     }
 
-    fn get_computed_type_at_range(
+    fn computed_type_at_range(
         &self,
         uri: &str,
         start_line: u32,
         start_character: u32,
         end_line: u32,
         end_character: u32,
-    ) -> Option<pyrefly_types::types::Type> {
+    ) -> Option<tsp_types::Type> {
         let url = Url::parse(uri)
             .ok()
             .or_else(|| Url::from_file_path(uri).ok())?;
@@ -6412,66 +6490,28 @@ impl TspInterface for Server {
             notebook_cell,
         );
         let range = TextRange::new(start, end);
-        transaction.get_computed_type_at_range(&handle, range)
+        // Range-aware lookup: a whole call-expression range resolves to the
+        // call's result type, other ranges to the declaration-preserving type.
+        // Convert against the *same* transaction that produced `ty`, so export
+        // location resolution stays warm and cannot hit a cold `get_stdlib`.
+        let ty = transaction.get_computed_type_at_range(&handle, range)?;
+        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
     }
 
-    fn get_expected_type_at_position(
+    fn expected_type_at_position(
         &self,
         uri: &str,
         line: u32,
         character: u32,
-    ) -> Option<pyrefly_types::types::Type> {
-        let url = Url::parse(uri)
-            .ok()
-            .or_else(|| Url::from_file_path(uri).ok())?;
-        let path = self.path_for_uri_or_notebook_cell(&url)?;
-        let notebook_cell = self.maybe_get_code_cell_index(&url);
-
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
-        let module_info = transaction.get_module_info(&handle)?;
-        let position =
-            module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
+    ) -> Option<tsp_types::Type> {
+        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
         // Prefer the contextually expected type; fall back to the computed type
-        // (preserving declarations, as `get_type_at_position` does) so the
-        // result is meaningful even outside an expected-type context.
-        transaction
+        // (preserving declarations) so the result is meaningful even outside an
+        // expected-type context.
+        let ty = transaction
             .get_expected_type_at(&handle, position)
-            .or_else(|| transaction.get_type_at_preserving_declaration(&handle, position))
-    }
-
-    fn resolve_func_def_range(
-        &self,
-        func_id: &pyrefly_types::callable::FuncId,
-    ) -> Option<TextRange> {
-        let def_index = func_id.def_index?;
-        let handle = handle_from_module_path(&self.state, func_id.module.path().dupe());
-        let transaction = self.state.transaction();
-        let bindings = transaction.get_bindings(&handle)?;
-        let key = KeyUndecoratedFunctionRange(def_index);
-        let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
-        Some(bindings.get(idx).0.range())
-    }
-
-    fn resolve_module_uri(
-        &self,
-        source_uri: &str,
-        module: &pyrefly_types::module::ModuleType,
-    ) -> Option<PathBuf> {
-        let url = Url::parse(source_uri)
-            .ok()
-            .or_else(|| Url::from_file_path(source_uri).ok())?;
-        let source_path = self.path_for_uri_or_notebook_cell(&url)?;
-
-        let source_handle = make_open_handle(&self.state, &source_path);
-        let transaction = self.state.transaction();
-        let module_name = ModuleName::from_str(&module.to_string());
-        let finding = transaction
-            .import_handle(&source_handle, module_name, None)
-            .finding()?;
-
-        let path = to_real_path(finding.path())?;
-        Some(path.canonicalize().unwrap_or(path))
+            .or_else(|| transaction.get_type_at_preserving_declaration(&handle, position))?;
+        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
     }
 
     fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {

@@ -8,6 +8,7 @@
 //! Query interface for pyrefly. Just experimenting for the moment - not intended for external use.
 
 use core::panic;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::iter;
 use std::path::PathBuf;
@@ -108,6 +109,14 @@ use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
+
+mod type_table;
+pub use type_table::IndexedTypeShapeKind;
+pub use type_table::LocatedTypeTableRef;
+use type_table::TypeTableBuilder;
+pub use type_table::TypeTableResponseData;
+use type_table::located_type_table_refs;
+use type_table::type_to_indexed_shape;
 
 const REPR: Name = Name::new_static("__repr__");
 
@@ -240,7 +249,7 @@ pub enum TypeShapeKind {
 /// `Type::TypedDict`, and `Type::PartialTypedDict`.
 /// They are not synthesized from class metadata, and therefore are not emitted
 /// for class/type-position shapes that would require metadata lookup.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeShapeTrait {
     /// A non-partial typed dict value shape.
@@ -1762,7 +1771,7 @@ impl Query {
         name: ModuleName,
         path: ModulePath,
     ) -> Option<Vec<(PythonASTRange, String)>> {
-        self.get_types_in_file_with(name, path, |_context, _ty, display| display)
+        self.get_types_in_file_transformed(name, path, |_context, _ty, display| display)
     }
 
     pub fn get_type_shapes_in_file(
@@ -1770,7 +1779,7 @@ impl Query {
         name: ModuleName,
         path: ModulePath,
     ) -> Option<Vec<(PythonASTRange, TypeShape)>> {
-        self.get_types_in_file_with(name, path, type_shape_from)
+        self.get_types_in_file_transformed(name, path, type_shape_from)
     }
 
     pub fn get_type_shapes_in_file_with_timing(
@@ -1781,7 +1790,43 @@ impl Query {
         self.get_types_in_file_with_timing(name, path, type_shape_from)
     }
 
-    fn get_types_in_file_with<T, F>(
+    pub fn get_type_table_in_file(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+    ) -> Option<TypeTableResponseData> {
+        let type_table = RefCell::new(TypeTableBuilder::new());
+        let types = self.get_types_in_file_transformed(name, path, |context, ty, display| {
+            let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
+            (type_index, display)
+        })?;
+        Some(TypeTableResponseData {
+            type_table: type_table.into_inner().into_type_table(),
+            types: located_type_table_refs(types),
+        })
+    }
+
+    pub fn get_type_table_in_file_with_timing(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+    ) -> Option<(TypeTableResponseData, TypeQueryTiming)> {
+        let type_table = RefCell::new(TypeTableBuilder::new());
+        let (types, timing) =
+            self.get_types_in_file_with_timing(name, path, |context, ty, display| {
+                let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
+                (type_index, display)
+            })?;
+        Some((
+            TypeTableResponseData {
+                type_table: type_table.into_inner().into_type_table(),
+                types: located_type_table_refs(types),
+            },
+            timing,
+        ))
+    }
+
+    fn get_types_in_file_transformed<T, F>(
         &self,
         name: ModuleName,
         path: ModulePath,
