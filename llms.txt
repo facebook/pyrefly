@@ -18,6 +18,7 @@
 - [Pydantic Support](pydantic): Pyrefly support for Pydantic.
 - [Pydantic Lax Mode Type Conversions](pydantic-lax-conversions): Complete reference of how Pyrefly converts types in Pydantic lax mode.
 - [FAQ](pyrefly-faq): Frequently Asked Questions about Pyrefly, a PEP 484 compliant Type Checker for Python and IDE extension.
+- [Pytest Support](pytest): Pyrefly support for pytest fixtures and test navigation.
 - [Typing Features and PEPS](python-features-and-peps): Typing features and associated PEPs available in each Python version.
 - [Python Typing 101](python-typing-for-beginners): A gentle, example‑driven introduction to static type hints in Python.
 - [Coverage](report): Measure and enforce type coverage in your Python codebase with Pyrefly.
