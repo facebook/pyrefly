@@ -1157,9 +1157,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }))
             }
-            // Only filter members of a union to avoid inferring `Never` excessively
+            // Positive narrowing only filters union members to avoid inferring `Never`
+            // excessively. Negative narrowing may also eliminate a non-union base.
             AtomicNarrowOp::IsInstance(_, _) | AtomicNarrowOp::IsNotInstance(_, _)
-                if base.is_union() =>
+                if base.is_union() || matches!(op, AtomicNarrowOp::IsNotInstance(_, _)) =>
             {
                 let suppress_errors = self.error_swallower();
                 Some(self.distribute_over_union(base, |t| {
