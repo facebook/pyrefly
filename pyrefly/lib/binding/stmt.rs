@@ -1210,6 +1210,7 @@ impl<'a> BindingsBuilder<'a> {
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
+                let mut following_runtime_only_branch = false;
                 for (range, mut test, body) in Ast::if_branches_owned(x) {
                     self.start_branch();
                     self.bind_narrow_ops(
@@ -1244,7 +1245,11 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                     is_first_branch = false;
+                    let later_branches_are_type_checking = test
+                        .as_ref()
+                        .is_some_and(SysInfo::is_not_type_checking_guard);
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
+                        following_runtime_only_branch |= later_branches_are_type_checking;
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
                         // However, we still need to check for `yield`/`yield from` in the skipped
@@ -1258,9 +1263,10 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         NarrowOps::from_expr(self, test.as_ref())
                     };
-                    let is_type_checking_branch =
-                        test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
+                    let is_type_checking_branch = following_runtime_only_branch
+                        || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
                     if let Some(test_expr) = test {
+                        following_runtime_only_branch |= later_branches_are_type_checking;
                         // Typecheck the test condition during solving.
                         self.insert_binding(
                             KeyExpect::Bool(test_expr.range()),

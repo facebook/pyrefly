@@ -529,8 +529,18 @@ impl SysInfo {
             }
             Expr::BoolOp(x) => match x.op {
                 BoolOp::And => x.values.iter().any(Self::is_type_checking_guard),
-                BoolOp::Or => x.values.iter().all(Self::is_type_checking_guard),
+                BoolOp::Or => x.values.iter().any(Self::is_type_checking_guard),
             },
+            _ => false,
+        }
+    }
+
+    /// Returns whether the expression is a runtime-only guard like `not TYPE_CHECKING`.
+    pub fn is_not_type_checking_guard(x: &Expr) -> bool {
+        match x {
+            Expr::UnaryOp(x) if matches!(x.op, UnaryOp::Not) => {
+                Self::is_type_checking_guard(&x.operand)
+            }
             _ => false,
         }
     }

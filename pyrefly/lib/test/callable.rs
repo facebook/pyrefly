@@ -1047,6 +1047,15 @@ async def k() -> str: ...  # E: Function body cannot consist only of `...` when 
 if TYPE_CHECKING:
     def tc() -> str: ...
 
+DOCS_BUILDING = False
+if TYPE_CHECKING or DOCS_BUILDING:
+    def tc_or_docs() -> str: ...
+
+if not TYPE_CHECKING:
+    pass
+else:
+    def tc_else() -> str: ...
+
 class P(Protocol):
     def m(self) -> str: ...
 
