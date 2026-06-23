@@ -457,3 +457,19 @@ class Right:
 class Conflict(Left, Right): ...  # E: inherits from incompatible disjoint bases `BaseModel`, `Right`
 "#,
 );
+
+// pydantic field named 'self' must not collide with the synthesized '__init__''s implicit 'self' param.
+// same as the stdlib dataclass fix.
+pydantic_testcase!(
+    test_pydantic_field_named_self,
+    r#"
+from pydantic import BaseModel
+from typing import assert_type
+
+class Model(BaseModel):
+    self: str
+
+m = Model(self="test")
+assert_type(m.self, str)
+"#,
+);

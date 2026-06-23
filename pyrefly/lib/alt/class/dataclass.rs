@@ -986,7 +986,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         kw_only_by_class: &SmallMap<Class, SmallSet<Name>>,
         errors: &ErrorCollector,
     ) -> ClassSynthesizedField {
-        let mut params = vec![self.class_self_param(cls, false)];
+        /// detects when a field named "self" exists and names receiver param "__dataclass_self__" which is what CPython dataclasses does at runtime
+        let self_param = if dataclass.fields.contains(&Name::new_static("self")) {
+            Param::Pos(
+                Name::new_static("__dataclass_self__"),
+                self.instantiate(cls),
+                Required::Required,
+            )
+        } else {
+            self.class_self_param(cls, false)
+        };
+        let mut params = vec![self_param];
         let mut has_seen_default = false;
         for (name, field, field_flags) in self.iter_fields(cls, dataclass, true, kw_only_by_class) {
             let strict = field_flags.strict.unwrap_or(strict_default);

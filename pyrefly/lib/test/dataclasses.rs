@@ -2586,3 +2586,19 @@ class C:
 reveal_type(C.__init__)  # E: revealed type: (self: C, _x: int) -> None
 "#,
 );
+
+// A dataclass field named 'self" must not collide with the implicit "self" parameter of the synthesized "__init__". cpython renames the instance param to "__dataclass_self__".
+testcase!(
+    test_dataclass_field_named_self,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class C:
+    self: str
+
+c = C(self="test")
+assert_type(c.self, str)
+"#,
+);
