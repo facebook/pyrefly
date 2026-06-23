@@ -1351,6 +1351,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None
             }
         };
+        let wrapped_arg = self.functools_wrapped_arg(metadata, args, keywords, errors);
         let res = match call_target {
             CallTarget::Class(cls, constructor_kind, as_quantified_bound) => {
                 if cls.has_qname("typing", "Any") {
@@ -1576,6 +1577,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 style.propagate()
             }
         };
+        if let Some((func_metadata, wrapped)) = wrapped_arg {
+            let mut kws = TypeMap::new();
+            kws.0.insert(Name::new_static("__wrapped__"), wrapped);
+            return self.heap.mk_kw_call(KwCall {
+                func_metadata,
+                keywords: kws,
+                return_ty: res,
+            });
+        }
         if let Some(func_metadata) = kw_metadata {
             let mut kws = TypeMap::new();
             for kw in keywords {
@@ -1591,6 +1601,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             res
         }
+    }
+
+    fn functools_wrapped_arg(
+        &self,
+        metadata: Option<&FuncMetadata>,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+        errors: &ErrorCollector,
+    ) -> Option<(FuncMetadata, Type)> {
+        let metadata = metadata?;
+        let wrapped = match metadata.kind {
+            FunctionKind::FunctoolsWraps => self
+                .positional_arg_type(args, 0, errors)
+                .or_else(|| self.keyword_arg_type(keywords, "wrapped", errors)),
+            FunctionKind::FunctoolsUpdateWrapper => self
+                .positional_arg_type(args, 1, errors)
+                .or_else(|| self.keyword_arg_type(keywords, "wrapped", errors)),
+            _ => None,
+        }?;
+        Some((metadata.clone(), wrapped))
+    }
+
+    fn positional_arg_type(
+        &self,
+        args: &[CallArg],
+        index: usize,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        match args.get(index)? {
+            CallArg::Arg(value) => Some((*value).infer(self, errors)),
+            CallArg::Star(..) => None,
+        }
+    }
+
+    fn keyword_arg_type(
+        &self,
+        keywords: &[CallKeyword],
+        name: &str,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        keywords.iter().find_map(|kw| {
+            (kw.arg.is_some_and(|id| id.as_str() == name)).then(|| kw.value.infer(self, errors))
+        })
     }
 
     /// Wrapper for `callable_infer` that handles trying a call with and without a contextual hint.
@@ -2216,10 +2269,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut ty = self.expr_infer(&x.arguments.args[0], errors);
         let mut seen = SmallSet::new();
         loop {
-            if !self.has_attr(&ty, &wrapped_attr) {
+            if !seen.insert(ty.clone()) {
                 return Some(ty);
             }
-            if !seen.insert(ty.clone()) {
+            if let Some(next) = self.functools_wrapped_from_kw_call(&ty) {
+                ty = next;
+                continue;
+            }
+            if !self.has_attr(&ty, &wrapped_attr) {
                 return Some(ty);
             }
             let attr_errors = self.error_swallower();
@@ -2236,6 +2293,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             ty = next;
         }
+    }
+
+    fn functools_wrapped_from_kw_call(&self, ty: &Type) -> Option<Type> {
+        let Type::KwCall(call) = ty else {
+            return None;
+        };
+        match call.func_metadata.kind {
+            FunctionKind::FunctoolsWraps | FunctionKind::FunctoolsUpdateWrapper => {}
+            _ => return None,
+        }
+        call.keywords
+            .0
+            .get(&Name::new_static("__wrapped__"))
+            .cloned()
     }
 
     pub fn freeform_call_infer(
