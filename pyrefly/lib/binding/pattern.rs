@@ -390,7 +390,7 @@ impl<'a> BindingsBuilder<'a> {
                         anonymous_subject_narrow_ops_for_sequence_patterns(&x.patterns).subject
                 {
                     subject_idx = self.insert_binding(
-                        Key::PatternNarrow(range),
+                        Key::PatternNarrow(TextRange::empty(range.start())),
                         Binding::Narrow(subject_idx, Box::new(op), NarrowUseLocation::Span(range)),
                     );
                 }

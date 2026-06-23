@@ -481,9 +481,9 @@ def foo(x: tuple[int, int] | tuple[str]):
     match x:
         # these two cases should be impossible to match
         case [str(), str()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
-            assert_type(x, tuple[int, int])
+            assert_type(x, Never)
         case [int()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
-            assert_type(x, tuple[str])
+            assert_type(x, Never)
 "#,
 );
 
