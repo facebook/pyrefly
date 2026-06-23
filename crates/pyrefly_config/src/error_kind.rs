@@ -370,6 +370,8 @@ pub enum ErrorKind {
     UnsupportedOperation,
     /// Import is missing an expected stubs package
     UntypedImport,
+    /// Result of a call expression is not used.
+    UnusedCallResult,
     /// Result of async function call is never used or awaited
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
@@ -502,6 +504,7 @@ impl ErrorKind {
             ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
             ErrorKind::UntypedImport => Severity::Warn,
+            ErrorKind::UnusedCallResult => Severity::Ignore,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
