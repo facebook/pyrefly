@@ -1138,6 +1138,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }))
             }
+            AtomicNarrowOp::IsInstance(_, _) | AtomicNarrowOp::IsNotInstance(_, _) => {
+                Some(self.distribute_over_union(base, |t| {
+                    let base_info = TypeInfo::of_ty(t.clone());
+                    let facet_ty = self.get_facet_chain_type(
+                        &base_info,
+                        &FacetChain::new(Vec1::new(facet.clone())),
+                        range,
+                    );
+                    let narrowed_facet = self.atomic_narrow(&facet_ty, op, range, errors);
+                    if narrowed_facet.is_never() {
+                        self.heap.mk_never()
+                    } else {
+                        t.clone()
+                    }
+                }))
+            }
             _ => None,
         }
     }
