@@ -56,9 +56,18 @@ jobs:
               labels.push('typechecking');
             }
 
+            // Narrowing
+            if (text.includes('narrowing') || text.includes('refinement')) {
+              labels.push('typechecking');
+              labels.push('narrowing');
+            }
+
             // Framework/library mentions
             if (text.includes('pydantic') || text.includes('basemodel')) {
               labels.push('pydantic');
+            }
+            if (text.includes('pytorch')) {
+              labels.push('pytorch');
             }
             if (text.includes('django')) {
               labels.push('django');
