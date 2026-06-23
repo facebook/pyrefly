@@ -636,6 +636,15 @@ impl<'a> BindingsBuilder<'a> {
         // Compute def_idx before building the binding, since the NameAssign needs
         // its own idx for partial type inference support.
         let def_idx = current.into_idx();
+        // Only an in-class-body `field()`/`attr.ib()` is an attrs field specifier whose value is a
+        // `_CountingAttr` (typed `Any` so `@<field>.default`/`.validator` resolve). Gating on the
+        // class body keeps this off the hot path for ordinary assignments.
+        let is_attrs_field_specifier = self.scopes.in_class_body()
+            && matches!(value.as_ref(), Expr::Call(call)
+            if matches!(
+                self.as_special_export(&call.func),
+                Some(SpecialExport::AttrsLegacyAttrib | SpecialExport::AttrsNextGenField)
+            ));
         let binding = if is_definitely_type_alias {
             let range = value.range();
             let key_type_alias = KeyTypeAlias(self.type_alias_index());
@@ -663,6 +672,7 @@ impl<'a> BindingsBuilder<'a> {
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,
+                is_attrs_field_specifier,
             }))
         };
         self.insert_binding_idx(def_idx, binding);

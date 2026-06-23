@@ -126,6 +126,16 @@ impl BaseClassParseResult {
     }
 }
 
+/// The dataclass configuration derived from a `@dataclass_transform` decorator or an inherited
+/// transform base.
+struct TransformDataclass {
+    keywords: DataclassKeywords,
+    /// Callees recognized as field specifiers (PEP 681), e.g. `attrs.field`.
+    field_specifiers: Vec<CalleeKind>,
+    /// attrs' `hash=`/`unsafe_hash=` argument; `None` for non-attrs classes or when unset.
+    attrs_hash: Option<bool>,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn class_metadata_of(
         &self,
@@ -703,9 +713,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(NamedTupleMetadata {
                         elements: self.get_named_tuple_elements(cls, errors),
                         has_dynamic_fields,
+                        directly_extends_named_tuple: true,
                     })
                 } else {
-                    metadata.named_tuple_metadata().cloned()
+                    metadata
+                        .named_tuple_metadata()
+                        .map(|nt| NamedTupleMetadata {
+                            elements: nt.elements.clone(),
+                            has_dynamic_fields: nt.has_dynamic_fields,
+                            directly_extends_named_tuple: false,
+                        })
                 }
             })
     }
@@ -984,7 +1001,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators: &[(Arc<Decorator>, TextRange)],
         dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
         pydantic_config: Option<&PydanticConfig>,
-    ) -> Option<(DataclassKeywords, Vec<CalleeKind>)> {
+    ) -> Option<TransformDataclass> {
         // This is set when we should apply dataclass-like transformations to the class. The class
         // should be transformed if:
         // - it inherits from a base class decorated with `dataclass_transform(...)`, or
@@ -1020,7 +1037,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
 
-            dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers));
+            dataclass_from_dataclass_transform = Some(TransformDataclass {
+                keywords: kws,
+                field_specifiers: defaults.field_specifiers,
+                attrs_hash: None,
+            });
         }
         for (decorator, decorator_range) in decorators {
             // `@foo` where `foo` is decorated with `@dataclass_transform(...)`
@@ -1034,7 +1055,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         defaults.order_default,
                     ));
                 }
-                dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers.clone()));
+                dataclass_from_dataclass_transform = Some(TransformDataclass {
+                    keywords: kws,
+                    field_specifiers: defaults.field_specifiers.clone(),
+                    attrs_hash: None,
+                });
             }
             // `@foo(...)` where `foo` is decorated with `@dataclass_transform(...)`
             else if let Type::KwCall(call) = &decorator.ty
@@ -1049,29 +1074,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         defaults.order_default,
                     ));
                 }
-                dataclass_from_dataclass_transform = Some((kws, defaults.field_specifiers.clone()));
+                let attrs_hash =
+                    if Self::field_specifiers_reference_attrs(&defaults.field_specifiers) {
+                        DataclassKeywords::attrs_hash_from_map(&call.keywords)
+                    } else {
+                        None
+                    };
+                dataclass_from_dataclass_transform = Some(TransformDataclass {
+                    keywords: kws,
+                    field_specifiers: defaults.field_specifiers.clone(),
+                    attrs_hash,
+                });
             }
         }
         dataclass_from_dataclass_transform
     }
 
+    fn field_specifiers_reference_attrs(field_specifiers: &[CalleeKind]) -> bool {
+        field_specifiers.iter().any(|callee| {
+            matches!(callee,
+                CalleeKind::Function(FunctionKind::Def(id))
+                    if id.module.name() == ModuleName::attr()
+                        || id.module.name() == ModuleName::attrs()
+            )
+        })
+    }
+
     fn is_attrs_class(
         &self,
-        dataclass_from_dataclass_transform: &Option<(DataclassKeywords, Vec<CalleeKind>)>,
+        dataclass_from_dataclass_transform: &Option<TransformDataclass>,
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
     ) -> bool {
-        let has_attrs_field_specifiers =
-            if let Some((_, field_specifiers)) = dataclass_from_dataclass_transform {
-                field_specifiers.iter().any(|callee| {
-                    matches!(callee,
-                        CalleeKind::Function(FunctionKind::Def(id))
-                            if id.module.name() == ModuleName::attr()
-                                || id.module.name() == ModuleName::attrs()
-                    )
-                })
-            } else {
-                false
-            };
+        let has_attrs_field_specifiers = dataclass_from_dataclass_transform
+            .as_ref()
+            .is_some_and(|t| Self::field_specifiers_reference_attrs(&t.field_specifiers));
         let has_attrs_base = bases_with_metadata
             .iter()
             .any(|(_, metadata)| metadata.is_attrs_class());
@@ -1169,7 +1205,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         decorators: &[(Arc<Decorator>, TextRange)],
         bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
-        dataclass_from_dataclass_transform: Option<(DataclassKeywords, Vec<CalleeKind>)>,
+        dataclass_from_dataclass_transform: Option<TransformDataclass>,
         pydantic_config: Option<&PydanticConfig>,
         pydantic_before_validator_fields: &[Name],
         is_attrs_class: bool,
@@ -1313,7 +1349,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 return (None, false);
             }
         }
-        if let Some((kws, field_specifiers)) = dataclass_from_dataclass_transform {
+        if let Some(TransformDataclass {
+            keywords: kws,
+            field_specifiers,
+            attrs_hash,
+        }) = dataclass_from_dataclass_transform
+        {
             // Inherit before-validator fields from base pydantic models, then add our own.
             let mut inherited_before_validator_fields: SmallSet<Name> = bases_with_metadata
                 .iter()
@@ -1329,6 +1370,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let kind = if is_attrs_class {
                 DataclassKind::Attrs {
                     auto_attribs: kws.auto_attribs,
+                    hash: attrs_hash,
                     field_specifiers,
                 }
             } else {

@@ -220,6 +220,7 @@ impl DataclassKeywords {
     const KW_ONLY: Name = Name::new_static("kw_only");
     const EQ: Name = Name::new_static("eq");
     const UNSAFE_HASH: Name = Name::new_static("unsafe_hash");
+    const HASH: Name = Name::new_static("hash");
     const SLOTS: Name = Name::new_static("slots");
     const STRICT: Name = Name::new_static("strict");
     const AUTO_ATTRIBS: Name = Name::new_static("auto_attribs");
@@ -253,6 +254,12 @@ impl DataclassKeywords {
             // `dataclass_from_dataclass_transform` where `order_default` is known.
             auto_attribs: map.get_bool(&Self::AUTO_ATTRIBS),
         }
+    }
+
+    /// Reads attrs' `hash=`/`unsafe_hash=` argument; `unsafe_hash` wins over the deprecated `hash`.
+    pub fn attrs_hash_from_map(map: &TypeMap) -> Option<bool> {
+        map.get_bool(&Self::UNSAFE_HASH)
+            .or_else(|| map.get_bool(&Self::HASH))
     }
 
     pub fn new() -> Self {

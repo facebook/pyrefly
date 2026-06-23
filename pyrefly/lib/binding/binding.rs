@@ -2096,6 +2096,9 @@ pub struct NameAssign {
     /// the textual assignment is still bound as a real `NameAssign` so the
     /// RHS remains available for its own diagnostics and bookkeeping.
     pub receiver_idx: Option<Idx<Key>>,
+    /// Whether the RHS is an attrs field specifier call (`field()` / `attr.ib()`). The in-body
+    /// value is then `Any` so `@<field>.default` / `@<field>.validator` accesses resolve.
+    pub is_attrs_field_specifier: bool,
 }
 
 impl NameAssign {

@@ -1606,6 +1606,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     {
                         f.default = None;
                     }
+                    // A `@<field>.default` method supplies the default, making the field optional.
+                    // It is mutually exclusive with an explicit `default=`/`factory=`, mirroring
+                    // attrs' `DefaultAlreadySetError`.
+                    if let Some(f) = &mut flags
+                        && self
+                            .get_class_fields(class)
+                            .is_some_and(|cf| cf.default_is_attrs_decorator(name))
+                    {
+                        if f.default.is_some() {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::BadClassDefinition,
+                                format!(
+                                    "`{name}` cannot specify both an explicit default and a `@{name}.default` method"
+                                ),
+                            );
+                        } else {
+                            f.default = Some(self.heap.mk_any_implicit());
+                        }
+                    }
                     ClassFieldInitialization::ClassBody(flags.map(Box::new))
                 } else {
                     ClassFieldInitialization::ClassBody(None)

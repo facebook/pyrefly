@@ -581,6 +581,7 @@ pub struct NamedTupleMetadata {
     /// If true, the namedtuple fields were dynamically generated (e.g., using a
     /// generator or variable) and couldn't be statically resolved.
     pub has_dynamic_fields: bool,
+    pub directly_extends_named_tuple: bool,
 }
 
 /// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
@@ -609,6 +610,9 @@ pub enum DataclassKind {
     },
     Attrs {
         auto_attribs: Option<bool>,
+        /// Resolved attrs `hash=`/`unsafe_hash=` value (`unsafe_hash` wins): `Some(true)` forces
+        /// `__hash__`, `Some(false)` leaves it inherited, `None` uses the `eq`/`frozen` default.
+        hash: Option<bool>,
         field_specifiers: Vec<CalleeKind>,
     },
 }
