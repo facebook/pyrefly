@@ -8,15 +8,18 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_config::error_kind::Severity;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::Tool;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
@@ -28,6 +31,7 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
+use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::thread_pool::ThreadCount;
 use rayon::prelude::*;
 use ruff_python_ast::Expr;
@@ -1599,31 +1603,98 @@ fn untyped_error(module: &Module, slots: &SlotCounts, range: TextRange, name: &s
     )
 }
 
+/// Coverage ignore codes that silenced nothing, i.e. whose kind never fired on their line.
+/// `warned` maps each in-scope line to the kinds that fired there.
+fn unused_coverage_ignores(
+    module: &Module,
+    warned: &SmallMap<LineNumber, SmallSet<ErrorKind>>,
+) -> Vec<Error> {
+    let mut errors = Vec::new();
+    for (line, supps) in module.ignore().iter() {
+        let Some(fired) = warned.get(line) else {
+            continue;
+        };
+
+        for supp in supps.iter().filter(|s| s.tool() == Tool::Pyrefly) {
+            let codes = supp.error_codes();
+            let unused: Vec<&str> = codes
+                .iter()
+                .map(String::as_str)
+                .filter(|&c| {
+                    ErrorKind::from_str(c).is_ok_and(|k| k.is_coverage() && !fired.contains(&k))
+                })
+                .collect();
+            if !unused.is_empty() {
+                // `UnusedIgnore` is hidden by default; show it like the coverage findings.
+                errors.push(
+                    Error::unused_pyrefly_ignore(module, supp.comment_line(), codes.len(), &unused)
+                        .with_severity(Severity::Warn),
+                );
+            }
+        }
+    }
+    errors
+}
+
+/// Collect untyped-symbol findings, and exclude `# pyrefly: ignore`d symbols from coverage by
+/// zeroing their slots (so they drop out of the percentage, not just the output).
+///
+/// `untyped_strict` is `None` for `coverage report` (exclude only) and `Some(strict)` for
+/// `coverage check` (also emit findings, counting `Any` as untyped when strict).
 fn collect_untyped_errors(
     errors: &mut Vec<Error>,
     module: &Module,
-    functions: &[Function],
-    variables: &[Variable],
-    strict: bool,
+    functions: &mut [Function],
+    variables: &mut [Variable],
+    untyped_strict: Option<bool>,
     public_fqns: Option<&HashSet<String>>,
+    enabled_ignores: &SmallSet<Tool>,
 ) {
+    let strict = untyped_strict.unwrap_or(false);
+    let emit = untyped_strict.is_some();
+
+    // Only consider `# pyrefly: ignore`; Pyrefly is the only checker that measures type coverage.
+    let pyrefly_enabled = enabled_ignores.contains(&Tool::Pyrefly);
+    let mut coverage_ignores = SmallSet::new();
+    if pyrefly_enabled {
+        coverage_ignores.insert(Tool::Pyrefly);
+    }
     let module_prefix = format!("{}.", module.name());
     let is_public =
         |name: &str| public_fqns.is_none_or(|fqns| is_public_fqn(name, &module_prefix, fqns));
-    // Property accessors share a name; emit one error per property, as `report` merges them.
-    let mut seen_properties = SmallSet::new();
-    for func in functions {
-        if is_untyped(&func.slots, strict)
-            && is_public(&func.name)
-            && (func.property_role.is_none() || seen_properties.insert(&func.name))
-        {
-            errors.push(untyped_error(module, &func.slots, func.range, &func.name));
+
+    // Accessors of a property share a name and `report` merges them, so warn once per name.
+    let mut seen_properties: SmallSet<String> = SmallSet::new();
+
+    // Coverage kinds fired per in-scope line, recorded pre-suppression so a silenced warning still
+    // marks its ignore used. An absent line is out of scope: no unused ignores.
+    let mut warned: SmallMap<LineNumber, SmallSet<ErrorKind>> = SmallMap::new();
+    let line_of = |range| module.display_range(range).start.line_within_file();
+    let funcs = functions
+        .iter_mut()
+        .map(|f| (&f.name, f.range, &mut f.slots, f.property_role.is_some()));
+    let vars = variables
+        .iter_mut()
+        .map(|v| (&v.name, v.range, &mut v.slots, false));
+    for (name, range, slots, is_property) in funcs.chain(vars) {
+        if !is_public(name) {
+            continue;
+        }
+
+        let kinds = warned.entry(line_of(range)).or_default();
+        if is_untyped(slots, strict) {
+            let error = untyped_error(module, slots, range, name);
+            kinds.insert(error.error_kind());
+            if error.is_ignored(&coverage_ignores) {
+                *slots = SlotCounts::default();
+            } else if emit && (!is_property || seen_properties.insert(name.clone())) {
+                errors.push(error);
+            }
         }
     }
-    for var in variables {
-        if is_untyped(&var.slots, strict) && is_public(&var.name) {
-            errors.push(untyped_error(module, &var.slots, var.range, &var.name));
-        }
+
+    if emit && pyrefly_enabled {
+        errors.extend(unused_coverage_ignores(module, &warned));
     }
 }
 
@@ -1725,27 +1796,26 @@ pub fn collect_module_reports(
         if shadowed.contains(handle.path().as_path()) {
             return None;
         }
+        let config = config_finder.python_file(handle.module_kind(), handle.path());
 
         // gh-3632: skip files whose module name isn't importable (shadowed parent).
         let module = handle.module();
         if module != ModuleName::unknown() {
-            let config = config_finder.python_file(handle.module_kind(), handle.path());
             find_import_filtered(&config, module, None, None, &dir_cache, None).finding()?;
         }
 
         if let Some(mut symbols) = ModuleSymbols::collect(transaction, handle) {
             let mut errors = Vec::new();
             // Per source module, so stub-merged `.py` symbols render against their own file.
-            if let Some(strict) = untyped_strict {
-                collect_untyped_errors(
-                    &mut errors,
-                    &symbols.module,
-                    &symbols.functions,
-                    &symbols.variables,
-                    strict,
-                    public_fqns.as_ref(),
-                );
-            }
+            collect_untyped_errors(
+                &mut errors,
+                &symbols.module,
+                &mut symbols.functions,
+                &mut symbols.variables,
+                untyped_strict,
+                public_fqns.as_ref(),
+                config.enabled_ignores(handle.path().as_path()),
+            );
 
             // When a .pyi stub shadows a .py file, include uncovered .py symbols.
             if let Some(py_handle) = pyi_to_py.get(&handle.path().as_path().to_path_buf())
@@ -1755,16 +1825,17 @@ pub fn collect_module_reports(
                 let own_functions = symbols.functions.len();
                 let own_variables = symbols.variables.len();
                 symbols.merge_uncovered_py_symbols(transaction, handle, py_symbols);
-                if let Some(strict) = untyped_strict {
-                    collect_untyped_errors(
-                        &mut errors,
-                        &py_module,
-                        &symbols.functions[own_functions..],
-                        &symbols.variables[own_variables..],
-                        strict,
-                        public_fqns.as_ref(),
-                    );
-                }
+                let py_config =
+                    config_finder.python_file(py_handle.module_kind(), py_handle.path());
+                collect_untyped_errors(
+                    &mut errors,
+                    &py_module,
+                    &mut symbols.functions[own_functions..],
+                    &mut symbols.variables[own_variables..],
+                    untyped_strict,
+                    public_fqns.as_ref(),
+                    py_config.enabled_ignores(py_handle.path().as_path()),
+                );
             }
 
             let derived_name = handle.module().to_string();
@@ -1870,6 +1941,160 @@ mod tests {
         let handle = handle_fn("test");
         let symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
         (symbols, module_path)
+    }
+
+    /// Run the coverage exclusion/findings pass over inline source with default-enabled ignores,
+    /// mirroring the production path. Returns the mutated symbols and any emitted findings.
+    fn collect_inline(
+        code: &str,
+        untyped_strict: Option<bool>,
+        public_fqns: Option<&HashSet<String>>,
+    ) -> (ModuleSymbols, Vec<Error>) {
+        let mut env = TestEnv::new();
+        env.add_with_path("test", "test.py", code);
+        let (state, handle_fn) = env
+            .with_default_require_level(Require::Everything)
+            .to_state();
+        let handle = handle_fn("test");
+        let mut symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
+        let mut errors = Vec::new();
+        collect_untyped_errors(
+            &mut errors,
+            &symbols.module,
+            &mut symbols.functions,
+            &mut symbols.variables,
+            untyped_strict,
+            public_fqns,
+            &Tool::default_enabled(),
+        );
+        (symbols, errors)
+    }
+
+    /// Coverage findings (warnings + unused-coverage-ignore errors) for inline source.
+    fn coverage_findings(code: &str, public_fqns: Option<&HashSet<String>>) -> Vec<Error> {
+        collect_inline(code, Some(false), public_fqns).1
+    }
+
+    #[test]
+    fn test_coverage_inline_ignore_suppresses() {
+        // Inline ignores silence the matching coverage warning (by code or bare);
+        // the unannotated sibling without a comment is still reported.
+        let findings = coverage_findings(
+            r#"
+def ignored(x):  # pyrefly: ignore[coverage-missing]
+    return x
+def bare(x):  # pyrefly: ignore
+    return x
+def partial(x: int, y):  # pyrefly: ignore[coverage-partial]
+    return x
+def reported(x):
+    return x
+"#,
+            None,
+        );
+        let headers: Vec<&str> = findings.iter().map(|e| e.msg_header()).collect();
+        assert_eq!(headers, vec!["`test.reported` is untyped"]);
+    }
+
+    #[test]
+    fn test_coverage_unused_ignore_skips_out_of_scope() {
+        // Under `--public-only`, a coverage ignore on a non-public symbol is out of scope,
+        // not unused: it is still needed when coverage runs over the whole module.
+        let public_fqns = HashSet::from(["test.public_fn".to_owned()]);
+        let findings = coverage_findings(
+            r#"
+def _helper(x):  # pyrefly: ignore[coverage-missing]
+    return x
+def public_fn(x: int) -> int:
+    return x
+"#,
+            Some(&public_fqns),
+        );
+        assert!(findings.is_empty(), "got: {findings:?}");
+    }
+
+    #[test]
+    fn test_coverage_unused_ignore_reported() {
+        // A coverage-code ignore on a fully-typed symbol matches nothing: unused.
+        let findings = coverage_findings(
+            r#"
+def typed(x: int) -> int:  # pyrefly: ignore[coverage-missing]
+    return x
+"#,
+            None,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].msg_header(),
+            "Unused `# pyrefly: ignore` comment for code(s): coverage-missing"
+        );
+        // Raised to `Warn` from its hidden default so it shows like coverage findings.
+        assert_eq!(findings[0].severity(), Severity::Warn);
+    }
+
+    /// Build a `ModuleReport` from inline source through the production pipeline (exclusion pass
+    /// then report build), so coverage ignores affect the totals. `untyped_strict` mirrors the
+    /// command: `None` for `report`, `Some(strict)` for `check`.
+    fn coverage_report(code: &str, untyped_strict: Option<bool>) -> ModuleReport {
+        let (symbols, _) = collect_inline(code, untyped_strict, None);
+        build_module_report(
+            "test".to_owned(),
+            "test.py".to_owned(),
+            "test",
+            symbols.line_count(),
+            &symbols.functions,
+            &symbols.variables,
+            &symbols.classes,
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn test_coverage_ignore_excluded_from_totals() {
+        // The point of a coverage ignore: the silenced symbol must drop out of the percentage,
+        // not just stop printing. `f`'s two slots (param + return) are excluded entirely, so
+        // coverage is 100% over zero remaining typables — for both `report` and `check`.
+        for untyped_strict in [None, Some(false)] {
+            let report = coverage_report(
+                "def f(x):  # pyrefly: ignore[coverage-missing]\n    return x\n",
+                untyped_strict,
+            );
+            assert_eq!(report.slots.n_typable, 0, "{untyped_strict:?}");
+            assert_eq!(report.coverage, 100.0, "{untyped_strict:?}");
+        }
+        // Without the ignore the same symbol still counts: 2 untyped slots, 0% coverage.
+        let report = coverage_report("def f(x):\n    return x\n", Some(false));
+        assert_eq!(report.slots.n_typable, 2);
+        assert_eq!(report.slots.n_untyped, 2);
+        assert_eq!(report.coverage, 0.0);
+    }
+
+    #[test]
+    fn test_coverage_ignore_excludes_every_property_accessor() {
+        // `report` merges a property's accessors into one symbol, so an ignore must zero every
+        // accessor's slots, not just the first. The ignore sits on the decorator line because a
+        // decorated symbol's range (hence its diagnostic) starts there.
+        let report = coverage_report(
+            r#"
+class C:
+    @property  # pyrefly: ignore
+    def x(self):
+        return 1
+    @x.setter  # pyrefly: ignore
+    def x(self, v):
+        pass
+"#,
+            Some(false),
+        );
+        assert_eq!(report.slots.n_typable, 0);
+    }
+
+    #[test]
+    fn test_coverage_type_ignore_does_not_exclude() {
+        // `# type: ignore` suppresses type errors, not coverage, so the symbol still counts.
+        let report = coverage_report("def f(x):  # type: ignore\n    return x\n", Some(false));
+        assert_eq!(report.slots.n_typable, 2);
+        assert_eq!(report.slots.n_untyped, 2);
     }
 
     fn build_module_report_for_test_with_env(file: &str, env: TestEnv) -> ModuleReport {
@@ -2193,7 +2418,7 @@ mod tests {
             "variables.py",
         ] {
             // `.pyi` entries are stub-merged with their `.py` source.
-            let (p, module_path) = if let Some(stem) = file.strip_suffix(".pyi") {
+            let (mut p, module_path) = if let Some(stem) = file.strip_suffix(".pyi") {
                 (
                     merged_stub_symbols(file, &format!("{stem}.py")),
                     "test.pyi".to_owned(),
@@ -2225,10 +2450,11 @@ mod tests {
                 collect_untyped_errors(
                     &mut errors,
                     &p.module,
-                    &p.functions,
-                    &p.variables,
-                    strict,
+                    &mut p.functions,
+                    &mut p.variables,
+                    Some(strict),
                     None,
+                    &Tool::default_enabled(),
                 );
                 let mut got: Vec<&str> = errors
                     .iter()
