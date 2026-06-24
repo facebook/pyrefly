@@ -994,18 +994,26 @@ fn hover_on_imported_enum_shows_members() {
 from http import HTTPStatus
 #                ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert!(
-        report.contains("(class) HTTPStatus: Literal[HTTPStatus.CONTINUE"),
-        "Expected enum hover to show members, got: {report}"
-    );
-    assert!(
-        report.contains("HTTPStatus.OK"),
-        "Expected enum hover to include later members, got: {report}"
-    );
-    assert!(
-        !report.contains("def __new__") && !report.contains("def __init__"),
-        "Enum hover should not show a constructor, got: {report}"
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | from http import HTTPStatus
+                     ^
+```python
+(class) HTTPStatus: Literal[HTTPStatus.CONTINUE, HTTPStatus.SWITCHING_PROTOCOLS, HTTPStatus.PROCESSING, HTTPStatus.EARLY_HINTS, HTTPStatus.OK, HTTPStatus.CREATED, HTTPStatus.ACCEPTED, HTTPStatus.NON_AUTHORITATIVE_INFORMATION, HTTPStatus.NO_CONTENT, HTTPStatus.RESET_CONTENT, HTTPStatus.PARTIAL_CONTENT, HTTPStatus.MULTI_STATUS, HTTPStatus.ALREADY_REPORTED, HTTPStatus.IM_USED, HTTPStatus.MULTIPLE_CHOICES, HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND, HTTPStatus.SEE_OTHER, HTTPStatus.NOT_MODIFIED, HTTPStatus.USE_PROXY, HTTPStatus.TEMPORARY_REDIRECT, HTTPStatus.PERMANENT_REDIRECT, HTTPStatus.BAD_REQUEST, HTTPStatus.UNAUTHORIZED, HTTPStatus.PAYMENT_REQUIRED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.METHOD_NOT_ALLOWED, HTTPStatus.NOT_ACCEPTABLE, HTTPStatus.PROXY_AUTHENTICATION_REQUIRED, HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.CONFLICT, HTTPStatus.GONE, HTTPStatus.LENGTH_REQUIRED, HTTPStatus.PRECONDITION_FAILED, HTTPStatus.CONTENT_TOO_LARGE, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, HTTPStatus.URI_TOO_LONG, HTTPStatus.REQUEST_URI_TOO_LONG, HTTPStatus.UNSUPPORTED_MEDIA_TYPE, HTTPStatus.RANGE_NOT_SATISFIABLE, HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, HTTPStatus.EXPECTATION_FAILED, HTTPStatus.IM_A_TEAPOT, HTTPStatus.MISDIRECTED_REQUEST, HTTPStatus.UNPROCESSABLE_CONTENT, HTTPStatus.UNPROCESSABLE_ENTITY, HTTPStatus.LOCKED, HTTPStatus.FAILED_DEPENDENCY, HTTPStatus.TOO_EARLY, HTTPStatus.UPGRADE_REQUIRED, HTTPStatus.PRECONDITION_REQUIRED, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE, HTTPStatus.UNAVAILABLE_FOR_LEGAL_REASONS, HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.NOT_IMPLEMENTED, HTTPStatus.BAD_GATEWAY, HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.GATEWAY_TIMEOUT, HTTPStatus.HTTP_VERSION_NOT_SUPPORTED, HTTPStatus.VARIANT_ALSO_NEGOTIATES, HTTPStatus.INSUFFICIENT_STORAGE, HTTPStatus.LOOP_DETECTED, HTTPStatus.NOT_EXTENDED, HTTPStatus.NETWORK_AUTHENTICATION_REQUIRED]
+```
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
