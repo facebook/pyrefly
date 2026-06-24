@@ -177,7 +177,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn intersect_impl(&self, left: &Type, right: &Type, fallback: IntersectFallback) -> Type {
-        if self.is_subset_eq(right, left) {
+        if Self::enum_instance(left, right).is_some() {
+            right.clone()
+        } else if Self::enum_instance(right, left).is_some() {
+            left.clone()
+        } else if self.is_subset_eq(right, left) {
             if left.is_toplevel_callable()
                 && right.is_toplevel_callable()
                 && self.is_subset_eq(left, right)
@@ -280,9 +284,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         right: &Type,
         fallback: IntersectFallback,
     ) -> Type {
-        self.distribute_over_union(left, |l| {
-            self.distribute_over_union(right, |r| self.intersect_impl(l, r, fallback))
-        })
+        let mut narrowed = Vec::new();
+        self.map_over_union(left, |l| {
+            self.map_over_union(right, |r| {
+                let t = self.intersect_impl(l, r, fallback);
+                if !t.is_never() {
+                    narrowed.push(t);
+                }
+            });
+        });
+        match narrowed.len() {
+            0 => self.heap.mk_never(),
+            1 => narrowed.pop().expect("narrowed has one element"),
+            _ => self.unions(narrowed),
+        }
     }
 
     fn intersect(&self, left: &Type, right: &Type) -> Type {
@@ -392,26 +407,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some((left, &right.member))
         } else {
             None
-        }
-    }
-
-    /// Narrow a type to values identity-equal to `right` (`is` semantics).
-    fn narrow_is(&self, ty: &Type, right: &Type) -> Type {
-        let mut narrowed = Vec::new();
-        self.map_over_union(ty, |t| {
-            let t = if Self::enum_instance(t, right).is_some() {
-                right.clone()
-            } else {
-                self.intersect(t, right)
-            };
-            if !t.is_never() {
-                narrowed.push(t);
-            }
-        });
-        match narrowed.len() {
-            0 => self.heap.mk_never(),
-            1 => narrowed.pop().expect("narrowed has one element"),
-            _ => self.unions(narrowed),
         }
     }
 
@@ -1082,10 +1077,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &FacetChain::new(Vec1::new(facet.clone())),
                 range,
             );
-            if Self::is_identity_literal(right)
-                && !self.is_subset_eq(right, &facet_ty)
-                && Self::enum_instance(&facet_ty, right).is_none()
-            {
+            if Self::is_identity_literal(right) && self.intersect(&facet_ty, right).is_never() {
                 self.heap.mk_never()
             } else {
                 t.clone()
@@ -1600,7 +1592,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::Is(v) => {
                 let right = self.expr_infer(v, errors);
                 // Get our best approximation of ty & right.
-                self.narrow_is(ty, &right)
+                self.intersect(ty, &right)
             }
             AtomicNarrowOp::IsNot(v) => {
                 let right = self.expr_infer(v, errors);
