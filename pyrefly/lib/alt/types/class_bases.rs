@@ -23,6 +23,8 @@ use pyrefly_util::display::commas_iter;
 use ruff_python_ast::Expr;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
+use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -30,6 +32,7 @@ use crate::alt::solve::TypeFormContext;
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassExpr;
 use crate::binding::binding::Key;
+use crate::binding::binding::KeyTParams;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
@@ -342,6 +345,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     // A base class may reference a legacy TypeVar that is out of scope.
                     // Skip NewType, which reports its own "unbound generic" error for the same type.
+                    if !is_new_type {
+                        self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
+                    }
+                    Some((ty, x.range()))
+                }
+                BaseClass::Call(x) => {
+                    let mut ty =
+                        self.expr_untype(x, TypeFormContext::BaseClassList, &fake_error_collector);
+                    // Call arguments retain raw TypeVars, including parameters bound by this class.
+                    if let Some(idx) = self
+                        .bindings()
+                        .key_to_idx_hashed_opt(Hashed::new(&KeyTParams(cls.index())))
+                    {
+                        let quantified = self
+                            .bindings()
+                            .get(idx)
+                            .legacy_tparams
+                            .iter()
+                            .filter_map(|key| {
+                                let parameter = self.get_idx(*key).parameter()?;
+                                let value = self.legacy_tparam_value(self.bindings().get(*key));
+                                Some((value.into_ty(), parameter))
+                            })
+                            .collect::<SmallMap<_, _>>();
+                        ty.transform_types_in_type_variable_positions(&mut |t| {
+                            if let Some(parameter) = quantified.get(t) {
+                                *t = (*parameter).clone().to_type(self.heap);
+                            }
+                        });
+                    }
                     if !is_new_type {
                         self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
                     }

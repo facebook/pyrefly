@@ -360,7 +360,20 @@ impl<'a> BindingsBuilder<'a> {
                 },
             );
 
-            let base_class = self.base_class_of(base.clone());
+            // Call bases require the delayed validation installed for ordinary class statements.
+            let base_class = match self.base_class_of(base.clone()) {
+                BaseClass::InvalidExpr(Expr::Call(call))
+                    if !matches!(
+                        self.as_special_export(&call.func),
+                        Some(
+                            SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple
+                        )
+                    ) =>
+                {
+                    BaseClass::Call(Expr::Call(call))
+                }
+                base_class => base_class,
+            };
             // NOTE(grievejia): If any of the class base is a specialized generic class (e.g. `Foo[Bar]`), and if the tparam of the
             // generic class has a bound or constraint, we won't be validating the type `Bar` against that bound/constraint of the
             // tparam eagerly in order to avoid dependency cycle. But the validation needs to happen somewhere.
@@ -373,7 +386,7 @@ impl<'a> BindingsBuilder<'a> {
             // usage tracking.
             if matches!(
                 base_class,
-                BaseClass::BaseClassExpr(..) | BaseClass::TypeOf(..)
+                BaseClass::BaseClassExpr(..) | BaseClass::Call(..) | BaseClass::TypeOf(..)
             ) {
                 self.insert_binding(
                     KeyExpect::TypeCheckBaseClassExpr(base.range()),
