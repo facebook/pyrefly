@@ -55,9 +55,11 @@ use crate::alt::answers::OverloadedCallee;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
+use crate::alt::class::class_field::ClassField;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
@@ -2779,6 +2781,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             Vec::new()
         };
+
+        if exceeded_max_iterations {
+            // An *inferred* instance attribute whose type never converges is
+            // degenerately recursive (each iteration nests another container layer,
+            // e.g. `list[list[...]]`). Commit `Any` for those fields instead of the
+            // unrolled blowup, so it does not produce spurious downstream errors.
+            // Restricted to `DefinedInMethod` fields: annotated members and class-body
+            // type aliases (e.g. `type X = int | list[C.X]`) are intentional recursion
+            // whose errors must be preserved, not collapsed to `Any`.
+            let any_field: Arc<dyn Any + Send + Sync> =
+                Arc::new(Arc::new(ClassField::recursive(self.heap)));
+            for (calc_id, state) in scc.node_state.iter_mut() {
+                if let AnyIdx::KeyClassField(idx) = &calc_id.1
+                    && matches!(
+                        calc_id.0.get(*idx).definition,
+                        ClassFieldDefinition::DefinedInMethod { .. }
+                    )
+                    && let SccNodeState::Done { answer, .. } = state
+                {
+                    *answer = any_field.dupe();
+                }
+            }
+        }
 
         let did_commit = self.commit_final_answers(scc);
         if did_commit {

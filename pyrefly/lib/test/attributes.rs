@@ -2911,3 +2911,19 @@ def f(a: A):
     assert_type(a.val, int | str)
     "#,
 );
+
+testcase!(
+    test_self_referential_attribute_collapses_to_any,
+    r#"
+from typing import Any, assert_type
+class C:
+    def m(self) -> None:
+        # `self.x = [self.x]` is self-referential and never converges (each fixpoint
+        # iteration nests another `list[...]`). Rather than commit the degenerate
+        # unrolled type, a non-convergent inferred attribute collapses to `Any`
+        # (the non-convergence is still reported).
+        self.x = [self.x]  # E: Fixpoint iteration did not converge
+def f(c: C):
+    assert_type(c.x, Any)
+    "#,
+);
