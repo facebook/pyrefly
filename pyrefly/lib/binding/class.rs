@@ -357,7 +357,7 @@ impl<'a> BindingsBuilder<'a> {
             // usage tracking.
             if matches!(
                 base_class,
-                BaseClass::BaseClassExpr(..) | BaseClass::TypeOf(..)
+                BaseClass::BaseClassExpr(..) | BaseClass::Call(..) | BaseClass::TypeOf(..)
             ) {
                 self.insert_binding(
                     KeyExpect::TypeCheckBaseClassExpr(base.range()),
