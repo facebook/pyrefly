@@ -429,7 +429,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         arguments[1].range(),
                         ErrorKind::BadSpecialization,
-                        "`...` is not a valid return type for `Callable`".to_owned(),
+                        "`...` is not a valid return type".to_owned(),
                     );
                     self.heap.mk_any_error()
                 } else {

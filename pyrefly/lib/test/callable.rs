@@ -1516,7 +1516,7 @@ testcase!(
     test_callable_ellipsis_return,
     r#"
 from typing import Callable, reveal_type
-def f(x: Callable[..., ...]):  # E: `...` is not a valid return type for `Callable`
+def f(x: Callable[..., ...]):  # E: `...` is not a valid return type
     reveal_type(x)  # E: revealed type: (...) -> Unknown
 "#,
 );
