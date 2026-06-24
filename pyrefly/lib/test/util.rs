@@ -121,6 +121,9 @@ pub struct TestEnv {
     string_as_iterable_warning: bool,
     strict_callable_subtyping: bool,
     spec_compliant_overloads: bool,
+    no_any_return_error: bool,
+    no_any_return_explicit_error: bool,
+    no_any_return_implicit_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
@@ -155,6 +158,9 @@ impl TestEnv {
             string_as_iterable_warning: false,
             strict_callable_subtyping: false,
             spec_compliant_overloads: false,
+            no_any_return_error: false,
+            no_any_return_explicit_error: false,
+            no_any_return_implicit_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -322,6 +328,21 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_no_any_return_error(mut self) -> Self {
+        self.no_any_return_error = true;
+        self
+    }
+
+    pub fn enable_no_any_return_explicit_error(mut self) -> Self {
+        self.no_any_return_explicit_error = true;
+        self
+    }
+
+    pub fn enable_no_any_return_implicit_error(mut self) -> Self {
+        self.no_any_return_implicit_error = true;
+        self
+    }
+
     pub fn with_default_require_level(mut self, level: Require) -> Self {
         self.default_require_level = level;
         self
@@ -446,6 +467,15 @@ impl TestEnv {
         }
         if self.not_required_key_access_error {
             errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
+        }
+        if self.no_any_return_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturn, Severity::Error);
+        }
+        if self.no_any_return_explicit_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturnExplicit, Severity::Error);
+        }
+        if self.no_any_return_implicit_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturnImplicit, Severity::Error);
         }
         if self.pytorch_efficiency_lint_error {
             config.root.pytorch_efficiency_lints = Some(true);
