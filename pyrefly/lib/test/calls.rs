@@ -662,3 +662,37 @@ def f() -> list[object]:
     return collect(["x"], 1 + "oops")  # E: `+` is not supported between `Literal[1]` and `Literal['oops']`
     "#,
 );
+
+testcase!(
+    test_lambda_infers_arg_types_from_outer_call,
+    r#"
+from typing import reveal_type
+
+lst: list[int] = []
+lst.sort(key=lambda e: reveal_type(e))  # E: revealed type: int
+    "#,
+);
+
+testcase!(
+    test_lambda_infers_arg_types_from_outer_call_large_union,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass
+class Event1:
+    id: int
+
+@dataclass
+class Event2:
+    id: int
+
+@dataclass
+class Event3:
+    id: int
+
+AnyEvent = Event1 | Event2 | Event3
+lst: list[AnyEvent] = []
+lst.sort(key=lambda e: reveal_type(e).id)  # E: revealed type: Event1 | Event2 | Event3
+    "#,
+);
