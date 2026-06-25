@@ -17,6 +17,7 @@
 //! Note that Pyright will only honor such codes after `# pyright: ignore[code]`.
 //!
 //! You can also use `# mypy: ignore-errors`, `# pyrefly: ignore-errors`
+//! or `# pyrefly: ignore-errors[invalid-type]`
 //! or `# type: ignore` at the beginning of a file to suppress all errors.
 //!
 //! For Pyre compatibility we also allow `# pyre-ignore` and `# pyre-fixme`
@@ -471,8 +472,8 @@ fn is_in_multiline_string(
 pub fn parse_ignore_all(
     code: &str,
     multiline_string_ranges: &[(LineNumber, LineNumber)],
-) -> SmallMap<Tool, LineNumber> {
-    let mut res = SmallMap::new();
+) -> Vec<Suppression> {
+    let mut res = Vec::new();
     let mut prev_ignore = None;
     let mut seen_docstring = false;
 
@@ -504,7 +505,11 @@ pub fn parse_ignore_all(
         if let Some((tool, prev_line)) = prev_ignore {
             // The previous `# type: ignore` was followed by another comment or
             // blank line, so it is a whole-file suppression.
-            res.entry(tool).or_insert(prev_line);
+            res.push(Suppression {
+                tool,
+                kind: Vec::new(),
+                comment_line: prev_line,
+            });
             prev_ignore = None;
         }
 
@@ -514,11 +519,23 @@ pub fn parse_ignore_all(
         }
         lex.trim_start();
         if lex.starts_with("pyre-ignore-all-errors") {
-            res.entry(Tool::Pyre).or_insert(line);
+            res.push(Suppression {
+                tool: Tool::Pyre,
+                kind: Vec::new(),
+                comment_line: line,
+            });
         } else if let Some(tool) = lex.starts_with_tool() {
             lex.trim_start();
-            if lex.starts_with("ignore-errors") && lex.blank() {
-                res.entry(tool).or_insert(line);
+            if lex.starts_with("ignore-errors") {
+                if let Some(kind) = parse_ignore_all_kind(&mut lex) {
+                    if tool == Tool::Pyrefly || kind.is_empty() {
+                        res.push(Suppression {
+                            tool,
+                            kind,
+                            comment_line: line,
+                        });
+                    }
+                }
             } else if !seen_docstring && lex.starts_with("ignore") && lex.blank() {
                 // After a docstring, bare `# type: ignore` is not recognized
                 // as an ignore-all directive.
@@ -527,6 +544,21 @@ pub fn parse_ignore_all(
         }
     }
     res
+}
+
+fn parse_ignore_all_kind(lex: &mut Lexer<'_>) -> Option<Vec<String>> {
+    lex.trim_start();
+    if lex.starts_with("[") {
+        let rest = lex.0;
+        let (inside, after) = rest.split_once(']').unwrap_or((rest, ""));
+        let mut after = Lexer(after);
+        if after.blank() {
+            return Some(inside.split(',').map(|x| x.trim().to_owned()).collect());
+        }
+    } else if lex.blank() {
+        return Some(Vec::new());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -699,54 +731,81 @@ x = """
 
     #[test]
     fn test_parse_ignore_all() {
-        fn f(x: &str, ignores: &[(Tool, u32)]) {
+        fn f(x: &str, ignores: &[(Tool, u32, &[&str])]) {
             assert_eq!(
                 parse_ignore_all(x, &[]),
                 ignores
                     .iter()
-                    .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
-                    .collect(),
+                    .map(|x| Suppression {
+                        tool: x.0,
+                        kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
+                        comment_line: LineNumber::new(x.1).unwrap(),
+                    })
+                    .collect::<Vec<_>>(),
                 "{x:?}"
             );
         }
 
-        f("# pyrefly: ignore-errors\nx = 5", &[(Tool::Pyrefly, 1)]);
+        f(
+            "# pyrefly: ignore-errors\nx = 5",
+            &[(Tool::Pyrefly, 1, &[])],
+        );
+        f(
+            "# pyrefly: ignore-errors[bad-assignment]\nx = 5",
+            &[(Tool::Pyrefly, 1, &["bad-assignment"])],
+        );
+        f(
+            "# pyrefly: ignore-errors [ bad-assignment, bad-return ]\nx = 5",
+            &[(Tool::Pyrefly, 1, &["bad-assignment", "bad-return"])],
+        );
         f(
             "# comment\n# pyrefly: ignore-errors\nx = 5",
-            &[(Tool::Pyrefly, 2)],
+            &[(Tool::Pyrefly, 2, &[])],
         );
         f(
             "#comment\n  # indent\n# pyrefly: ignore-errors\nx = 5",
-            &[(Tool::Pyrefly, 3)],
+            &[(Tool::Pyrefly, 3, &[])],
         );
         f("x = 5\n# pyrefly: ignore-errors", &[]);
-        f("# type: ignore\n\nx = 5", &[(Tool::Type, 1)]);
+        f("# type: ignore\n\nx = 5", &[(Tool::Type, 1, &[])]);
         f(
             "# comment\n# type: ignore\n# comment\nx = 5",
-            &[(Tool::Type, 2)],
+            &[(Tool::Type, 2, &[])],
         );
         f("# type: ignore\nx = 5", &[]);
-        f("# pyre-ignore-all-errors\nx = 5", &[(Tool::Pyre, 1)]);
+        f("# pyre-ignore-all-errors\nx = 5", &[(Tool::Pyre, 1, &[])]);
         f(
             "# mypy: ignore-errors\n#pyrefly:ignore-errors",
-            &[(Tool::Mypy, 1), (Tool::Pyrefly, 2)],
+            &[(Tool::Mypy, 1, &[]), (Tool::Pyrefly, 2, &[])],
         );
+        f("# mypy: ignore-errors[bad-assignment]\nx = 5", &[]);
 
         // Anything else on the line (other than space) makes it invalid
         f("# pyrefly: ignore-errors because I want to\nx = 5", &[]);
         f("# pyrefly: ignore-errors # because I want to\nx = 5", &[]);
-        f("# pyrefly: ignore-errors \nx = 5", &[(Tool::Pyrefly, 1)]);
+        f(
+            "# pyrefly: ignore-errors[bad-assignment] # because I want to\nx = 5",
+            &[],
+        );
+        f(
+            "# pyrefly: ignore-errors \nx = 5",
+            &[(Tool::Pyrefly, 1, &[])],
+        );
     }
 
     #[test]
     fn test_parse_ignore_all_with_docstring() {
-        fn f(x: &str, ranges: &[(LineNumber, LineNumber)], ignores: &[(Tool, u32)]) {
+        fn f(x: &str, ranges: &[(LineNumber, LineNumber)], ignores: &[(Tool, u32, &[&str])]) {
             assert_eq!(
                 parse_ignore_all(x, ranges),
                 ignores
                     .iter()
-                    .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
-                    .collect(),
+                    .map(|x| Suppression {
+                        tool: x.0,
+                        kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
+                        comment_line: LineNumber::new(x.1).unwrap(),
+                    })
+                    .collect::<Vec<_>>(),
                 "{x:?}"
             );
         }
@@ -758,7 +817,7 @@ x = """
                 LineNumber::from_zero_indexed(0),
                 LineNumber::from_zero_indexed(2),
             )],
-            &[(Tool::Pyrefly, 4)],
+            &[(Tool::Pyrefly, 4, &[])],
         );
 
         // bare `# type: ignore` after docstring should NOT be recognized
@@ -778,7 +837,7 @@ x = """
                 LineNumber::from_zero_indexed(1),
                 LineNumber::from_zero_indexed(3),
             )],
-            &[(Tool::Pyrefly, 1)],
+            &[(Tool::Pyrefly, 1, &[])],
         );
     }
 }

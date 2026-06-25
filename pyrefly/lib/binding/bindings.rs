@@ -355,7 +355,7 @@ impl Bindings {
             metadata: Arc::new(BindingsMetadata::new()),
             module_ranges: Arc::new(ModuleRanges {
                 multi_line: Vec::new(),
-                ignore_all: SmallMap::new(),
+                ignore_all: Vec::new(),
             }),
             scope_trace: None,
             module_deletes: SmallSet::new(),
