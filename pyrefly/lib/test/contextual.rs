@@ -839,6 +839,23 @@ f(list())
 );
 
 testcase!(
+    // Regression: a list/set literal against `Alias | Collection[Alias]`, where the
+    // `Literal[...]` alias is wide, must still pick up the `Collection` element hint.
+    // Flattening the alias used to count its members against `MAX_DECOMPOSE_HINT_WIDTH`,
+    // incorrectly triggering the cap so the literal fell back to `list[str]`.
+    test_list_hint_with_wide_literal_alias_union,
+    r#"
+from typing import Literal, TypeAlias
+from collections.abc import Collection
+L: TypeAlias = Literal["a", "b", "c", "d", "e", "f", "g", "h"]
+def f(*, x: L | Collection[L] = "a") -> None: ...
+f(x=["a", "b"])
+f(x={"a", "b"})
+f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
+    "#,
+);
+
+testcase!(
     // Regression: when a TypeVar's only constraints are upper bounds, multiple
     // such bounds where one is a subtype of the other must collapse to the
     // *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider
