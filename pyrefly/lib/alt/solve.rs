@@ -6012,7 +6012,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | TypeFormContext::ParamSpecDefault
         ) && matches!(
             ty,
-            Type::Concatenate(_, _) | Type::ParamSpecValue(_) | Type::ParamSpec(_)
+            Type::Concatenate(_, _) | Type::ParamSpecValue(_) | Type::ParamSpec(_) | Type::Ellipsis
         ) {
             return self.error(
                 errors,

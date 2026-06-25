@@ -611,6 +611,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorKind::InvalidTypeVarTuple,
                         "`TypeVarTuple` must be unpacked".to_owned(),
                     )
+                } else if matches!(arg, Type::Ellipsis) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        "`...` cannot be used for type parameter".to_owned(),
+                    )
                 } else if arg.is_kind_param_spec() {
                     self.error(
                         errors,

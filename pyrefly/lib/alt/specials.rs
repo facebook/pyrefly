@@ -428,7 +428,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         arguments[1].range(),
-                        ErrorKind::BadSpecialization,
+                        ErrorKind::InvalidAnnotation,
                         "`...` is not a valid return type".to_owned(),
                     );
                     self.heap.mk_any_error()
