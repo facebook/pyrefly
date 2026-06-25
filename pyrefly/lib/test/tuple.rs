@@ -454,6 +454,24 @@ def test(x: tuple[int, str, bool], y: tuple[int, ...], start: int, stop: int, st
 );
 
 testcase!(
+    test_slice_decimal_step,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+    ys[::1.5]  # E: Slice indices must be integers or have an `__index__` method
+"#,
+);
+
+testcase!(
+    test_slice_zero_step,
+    r#"
+def test(xs: list[int], ys: tuple[int, ...]) -> None:
+    xs[::0]  # E: Slice step cannot be zero
+    ys[::0]  # E: Slice step cannot be zero
+"#,
+);
+
+testcase!(
     test_slice_subset,
     r#"
 def f(x: slice) -> None:

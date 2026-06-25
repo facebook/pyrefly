@@ -30,16 +30,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         tuple: Tuple,
         index: &Expr,
+        index_ty: Option<&Type>,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
         let fallback = || {
+            let index_arg = match index_ty {
+                Some(ty) => CallArg::ty(ty, index.range()),
+                None => CallArg::expr(index),
+            };
             self.call_method_or_error(
                 &Type::Tuple(tuple.clone()),
                 &dunder::GETITEM,
                 range,
-                &[CallArg::expr(index)],
+                &[index_arg],
                 &[],
                 errors,
                 context,
@@ -47,7 +52,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         match index {
             Expr::Slice(slice) => self
-                .infer_tuple_slice(&tuple, slice)
+                .infer_tuple_slice(&tuple, slice, index_ty)
                 .unwrap_or_else(fallback),
             _ => self
                 .infer_tuple_index(&tuple, index, errors)
@@ -59,12 +64,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         int_tuple: &IntTuple,
         index: &Expr,
+        index_ty: Option<&Type>,
         range: TextRange,
         errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
     ) -> Type {
         let tuple = int_tuple.to_tuple();
-        let fallback = || self.infer_tuple_subscript(tuple.clone(), index, range, errors, context);
+        let fallback =
+            || self.infer_tuple_subscript(tuple.clone(), index, index_ty, range, errors, context);
         match index {
             Expr::Slice(_) => fallback(),
             _ => self
@@ -73,15 +80,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn infer_tuple_slice(&self, tuple: &Tuple, slice: &ExprSlice) -> Option<Type> {
+    fn infer_tuple_slice(
+        &self,
+        tuple: &Tuple,
+        slice: &ExprSlice,
+        slice_ty: Option<&Type>,
+    ) -> Option<Type> {
         if slice.step.is_some() {
             return None;
         }
+        let slice_targs = Self::slice_targs(slice_ty);
         match tuple {
-            Tuple::Concrete(elts) => self.infer_concrete_slice(elts, &slice.lower, &slice.upper),
+            Tuple::Concrete(elts) => {
+                self.infer_concrete_slice(elts, &slice.lower, &slice.upper, slice_targs)
+            }
             Tuple::Unpacked(f) => {
                 let (prefix, middle, suffix) = &**f;
-                self.infer_unpacked_slice(prefix, middle, suffix, &slice.lower, &slice.upper)
+                self.infer_unpacked_slice(
+                    prefix,
+                    middle,
+                    suffix,
+                    &slice.lower,
+                    &slice.upper,
+                    slice_targs,
+                )
             }
             _ => None,
         }
@@ -137,16 +159,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Returns Ok(Some(_)) if the expression is a literal integer
     /// Returns Ok(None) if the expression is absent
     /// Returns Err(()) if the expression is present but is not a literal integer
-    fn parse_slice_literal(&self, expr: &Option<Box<Expr>>) -> Result<Option<i64>, ()> {
+    fn parse_slice_literal(
+        &self,
+        expr: &Option<Box<Expr>>,
+        ty: Option<&Type>,
+    ) -> Result<Option<i64>, ()> {
+        if let Some(ty) = ty {
+            return Self::parse_slice_literal_type(ty);
+        }
         if let Some(expr) = expr {
             let literal_type = self.expr_infer(expr, &self.error_swallower());
-            match &literal_type {
-                Type::Literal(lit) => Ok(lit.value.as_index_i64()),
-                _ => Err(()),
-            }
+            Self::parse_slice_literal_type(&literal_type)
         } else {
             Ok(None)
         }
+    }
+
+    fn parse_slice_literal_type(ty: &Type) -> Result<Option<i64>, ()> {
+        match ty {
+            Type::None => Ok(None),
+            Type::Literal(lit) => lit.value.as_index_i64().map(Some).ok_or(()),
+            _ => Err(()),
+        }
+    }
+
+    fn slice_targs(slice_ty: Option<&Type>) -> Option<&[Type; 3]> {
+        let Some(Type::ClassType(cls)) = slice_ty else {
+            return None;
+        };
+        if !cls.is_builtin("slice") {
+            return None;
+        }
+        Some(
+            cls.targs()
+                .as_slice()
+                .try_into()
+                .expect("slice class should have exactly three type arguments"),
+        )
     }
 
     fn infer_concrete_slice(
@@ -154,10 +203,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         elts: &[Type],
         lower_expr: &Option<Box<Expr>>,
         upper_expr: &Option<Box<Expr>>,
+        slice_targs: Option<&[Type; 3]>,
     ) -> Option<Type> {
         let len = elts.len() as i64;
-        let lower_literal = self.parse_slice_literal(lower_expr).ok()?.unwrap_or(0);
-        let upper_literal = self.parse_slice_literal(upper_expr).ok()?.unwrap_or(len);
+        let lower_literal = self
+            .parse_slice_literal(lower_expr, slice_targs.map(|[lower, _, _]| lower))
+            .ok()?
+            .unwrap_or(0);
+        let upper_literal = self
+            .parse_slice_literal(upper_expr, slice_targs.map(|[_, upper, _]| upper))
+            .ok()?
+            .unwrap_or(len);
 
         // Normalize negative indices (e.g., -1 becomes len-1)
         let lower = if lower_literal < 0 {
@@ -223,9 +279,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         suffix: &[Type],
         lower_expr: &Option<Box<Expr>>,
         upper_expr: &Option<Box<Expr>>,
+        slice_targs: Option<&[Type; 3]>,
     ) -> Option<Type> {
-        let lower_literal = self.parse_slice_literal(lower_expr).ok()?.unwrap_or(0);
-        let upper_literal = self.parse_slice_literal(upper_expr).ok()?;
+        let lower_literal = self
+            .parse_slice_literal(lower_expr, slice_targs.map(|[lower, _, _]| lower))
+            .ok()?
+            .unwrap_or(0);
+        let upper_literal = self
+            .parse_slice_literal(upper_expr, slice_targs.map(|[_, upper, _]| upper))
+            .ok()?;
         match (lower_literal, upper_literal) {
             // Positive lower, positive upper
             (lower, Some(upper)) if lower >= 0 && upper >= 0 => {

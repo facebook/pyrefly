@@ -1,4 +1,6 @@
 # @generated
+from typing import Literal
+
 from typing import TYPE_CHECKING
 
 USE_EXTENSIONS: Literal[True] = True

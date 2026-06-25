@@ -969,11 +969,10 @@ a, b = "x"
 );
 
 testcase!(
-    bug = "Should detect zero step size in slice",
     test_slice_zero_step,
     r#"
 items = [1, 2, 3, 4]
-bad = items[::0]
+bad = items[::0]  # E: Slice step cannot be zero
 "#,
 );
 
