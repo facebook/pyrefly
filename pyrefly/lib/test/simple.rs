@@ -972,6 +972,34 @@ def test(
 );
 
 testcase!(
+    test_ellipsis_invalid_type_form,
+    r#"
+from typing import Callable, ParamSpec, TypeVar, Generic
+
+# `...` leaking into non-ParamSpec positions is rejected.
+class C1[T: ...]: ...                # E: `Ellipsis` is not allowed in this context
+x1: list[...]                        # E: `...` cannot be used for type parameter
+x2: dict[int, ...]                   # E: `...` cannot be used for type parameter
+x3: type[...]                        # E: `Ellipsis` is not allowed in this context
+TBad = TypeVar("TBad", bound=...)    # E: `Ellipsis` is not allowed in this context
+
+# Still rejected via existing paths.
+def g() -> ...: ...                  # E: Expression cannot be used in annotations
+y_ret: Callable[..., ...]            # E: `...` is not a valid return type
+y_tup: tuple[...]                    # E: Invalid position for `...`
+
+# `...` remains valid where a ParamSpec or homogeneous tuple is expected.
+T = TypeVar("T")
+P = ParamSpec("P")
+ok1: Callable[..., int]
+ok2: tuple[int, ...]
+PD = ParamSpec("PD", default=...)
+class X(Generic[T, P]): ...
+def f(a: X[int, ...]) -> None: ...
+"#,
+);
+
+testcase!(
     test_invalid_type_arguments,
     r#"
 from typing import assert_type
