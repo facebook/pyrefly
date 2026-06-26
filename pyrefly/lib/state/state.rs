@@ -115,6 +115,7 @@ use crate::export::special::SpecialExport;
 use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
+use crate::module::typeshed::stdlib_config;
 use crate::solver::solver::VarRecurser;
 use crate::state::epoch::Epoch;
 use crate::state::errors::Errors;
@@ -1890,7 +1891,11 @@ impl<'a> Transaction<'a> {
     /// redundant single-threaded work on rechecks and multi-epoch runs.
     ///
     /// Returns `true` if all entries were already cached (no work done).
-    fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) -> bool {
+    fn compute_stdlib(
+        &mut self,
+        sys_infos: SmallSet<SysInfo>,
+        typeshed_path: Option<&Path>,
+    ) -> bool {
         // Filter out SysInfos that already have a computed stdlib.
         let missing: SmallSet<SysInfo> = sys_infos
             .into_iter()
@@ -1899,7 +1904,9 @@ impl<'a> Transaction<'a> {
         if missing.is_empty() {
             return true;
         }
-        let loader = self.get_cached_loader(&BundledTypeshedStdlib::config());
+        // The stdlib is loaded from the configured `typeshed_path` when one is set,
+        // so a custom typeshed fully replaces the bundled stdlib (see `stdlib_config`).
+        let loader = self.get_cached_loader(&stdlib_config(typeshed_path));
         // Use defaults (disabled) for stdlib - depth limiting is for user code
         let thread_state = ThreadState::new(None);
         for k in missing.into_iter_hashed() {
@@ -2046,8 +2053,14 @@ impl<'a> Transaction<'a> {
             .iter()
             .map(|x| x.sys_info().dupe())
             .collect::<SmallSet<_>>();
+        // The stdlib loader honors `typeshed_path` so a custom typeshed replaces the
+        // bundled stdlib. typeshed_path is effectively uniform across a project, so we
+        // use the first handle that has one configured.
+        let typeshed_path = handles
+            .iter()
+            .find_map(|h| self.data.state.get_config(h).typeshed_path.clone());
         let stdlib_start = Instant::now();
-        let stdlib_cached = self.compute_stdlib(sys_infos);
+        let stdlib_cached = self.compute_stdlib(sys_infos, typeshed_path.as_deref());
         let compute_stdlib_time = stdlib_start.elapsed();
         {
             let mut stats = self.stats.lock();
@@ -2267,6 +2280,12 @@ impl<'a> Transaction<'a> {
         // We clear the global config cache, rather than making a dedicated copy.
         // This is reasonable, because we will cache the result on ModuleData.
         self.data.state.config_finder.clear();
+
+        // The stdlib loader config depends on `typeshed_path`, which this config
+        // change may have altered. Drop the cached stdlib so `compute_stdlib`
+        // rebuilds it against the new config rather than serving a stale (possibly
+        // bundled) snapshot.
+        self.data.stdlib.clear();
 
         // Wipe the copy of ConfigFile on each module that has changed.
         // If they change, set find to dirty.
