@@ -11,10 +11,12 @@ use std::slice;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::AtomicNodeIndex;
+use ruff_python_ast::CmpOp;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprBooleanLiteral;
+use ruff_python_ast::ExprCompare;
 use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprStringLiteral;
@@ -40,12 +42,14 @@ use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
 use ruff_python_parser::ParseOptions;
+use ruff_python_parser::Parsed;
 use ruff_python_parser::UnsupportedSyntaxError;
 use ruff_python_parser::parse_expression_range;
 use ruff_python_parser::parse_unchecked;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use thin_vec::ThinVec;
 
 use crate::sys_info::PythonVersion;
 
@@ -94,14 +98,24 @@ impl Ast {
         contents: &str,
         source_type: PySourceType,
     ) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
-        Ast::parse_with_version(contents, PythonVersion::default(), source_type)
+        let (parsed, parse_errors, unsupported_syntax_errors) =
+            Ast::parse_with_version(contents, PythonVersion::default(), source_type);
+        (
+            parsed.into_syntax(),
+            parse_errors,
+            unsupported_syntax_errors,
+        )
     }
 
     pub fn parse_with_version(
         contents: &str,
         version: PythonVersion,
         source_type: PySourceType,
-    ) -> (ModModule, Vec<ParseError>, Vec<UnsupportedSyntaxError>) {
+    ) -> (
+        Parsed<ModModule>,
+        Vec<ParseError>,
+        Vec<UnsupportedSyntaxError>,
+    ) {
         // PySourceType of Python vs Stub doesn't actually change the parsing
         let options = ParseOptions::from(source_type).with_target_version(RuffPythonVersion {
             major: version.major as u8,
@@ -112,7 +126,7 @@ impl Ast {
             .unwrap();
         let parse_errors = res.errors().to_owned();
         let unsupported_syntax_errors = res.unsupported_syntax_errors().to_owned();
-        (res.into_syntax(), parse_errors, unsupported_syntax_errors)
+        (res, parse_errors, unsupported_syntax_errors)
     }
 
     pub fn parse_expr(contents: &str, pos: TextSize) -> anyhow::Result<Expr> {
@@ -177,13 +191,50 @@ impl Ast {
     /// Like `if_branches`, but returns owned values.
     pub fn if_branches_owned(
         x: StmtIf,
-    ) -> impl Iterator<Item = (TextRange, Option<Expr>, Vec<Stmt>)> {
+    ) -> impl Iterator<Item = (TextRange, Option<Expr>, ThinVec<Stmt>)> {
         let first = iter::once((x.range, Some(*x.test), x.body));
         let elses = x
             .elif_else_clauses
             .into_iter()
             .map(|x| (x.range, x.test, x.body));
         first.chain(elses)
+    }
+
+    pub fn is_main_guard(test: &Expr) -> bool {
+        let Expr::Compare(ExprCompare {
+            left,
+            ops,
+            comparators,
+            ..
+        }) = test
+        else {
+            return false;
+        };
+
+        if ops.len() != 1 || comparators.len() != 1 {
+            return false;
+        }
+
+        let op = ops[0];
+        if !matches!(op, CmpOp::Eq | CmpOp::Is) {
+            return false;
+        }
+
+        let left = left.as_ref();
+        let right = &comparators[0];
+        (Self::is_name_dunder_name(left) && Self::is_main_string(right))
+            || (Self::is_main_string(left) && Self::is_name_dunder_name(right))
+    }
+
+    fn is_name_dunder_name(expr: &Expr) -> bool {
+        matches!(expr, Expr::Name(name) if name.id.as_str() == "__name__")
+    }
+
+    fn is_main_string(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) if value.to_str() == "__main__"
+        )
     }
 
     /// Iterates over parameters, returning the parameters and defaults
@@ -212,6 +263,18 @@ impl Ast {
     /// But there, there isn't an identifier, but morally should be, so create the implicit one.
     pub fn expr_name_identifier(x: ExprName) -> Identifier {
         Identifier::new(x.id, x.range)
+    }
+
+    /// The trailing identifier of a decorator expression, looking through calls and
+    /// attribute access: `foo`, `mod.foo`, `foo(...)`, and `mod.foo(...)` all yield
+    /// `foo`. `None` for shapes with no trailing name (e.g. a subscript).
+    pub fn decorator_trailing_name(decorator: &Expr) -> Option<&str> {
+        match decorator {
+            Expr::Name(name) => Some(name.id.as_str()),
+            Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+            Expr::Call(call) => Self::decorator_trailing_name(&call.func),
+            _ => None,
+        }
     }
 
     /// Returns true if this is a synthesized empty name from parser error recovery.
@@ -412,6 +475,16 @@ impl Ast {
 
     pub fn is_mangled_attr(name: &Name) -> bool {
         name.starts_with("__") && !name.ends_with("__")
+    }
+
+    // Parameters and variables that are prefixed (but not suffixed) with a single underscore
+    // are potentially unused, so we should skip some diagnostics/errors.
+    // Examples: `_`, `_x`
+    // Non-examples: `x`, `__x__`, `__x`, `_x_`
+    pub fn is_intentionally_unused(name: &str) -> bool {
+        name.starts_with('_')
+            && !name.starts_with("__")
+            && (name.len() == 1 || !name.ends_with('_'))
     }
 
     pub fn is_list_literal_or_comprehension(expr: &Expr) -> bool {

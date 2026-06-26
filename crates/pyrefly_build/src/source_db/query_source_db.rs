@@ -35,6 +35,7 @@ use crate::query::PythonLibraryManifest;
 use crate::query::QueryResult;
 use crate::query::SourceDbQuerier;
 use crate::query::TargetManifestDatabase;
+use crate::query::path_is_from_stubs_package;
 use crate::source_db::ModulePathCache;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
@@ -273,7 +274,8 @@ impl QuerySourceDatabase {
         let mut queue = VecDeque::new();
         let mut visited = SmallSet::new();
         let mut namespace_candidates: SmallSet<ModulePath> = SmallSet::new();
-        let mut filter_candidate = None;
+        let mut exact_candidate = None;
+        let mut filter_candidate: Option<(bool, ModulePath)> = None;
         queue.push_front(target);
 
         while let Some(current_target) = queue.pop_front() {
@@ -285,15 +287,22 @@ impl QuerySourceDatabase {
             };
 
             match self.find_in_manifest(module, manifest, style_filter, &mut namespace_candidates) {
-                Some(ManifestLookupResult::ExactMatch(result)) => return Some(result),
-                // Only take the first `StyleMismatch`, since, in theory, there should be at most
-                // one distinct valid result. The result here should be the opposite `ModuleStyle`
-                // from the `style_filter` or default we apply in `Self::find_in_manifest`. The
-                // only time we'd have multiple unique results is if the same module name maps
-                // to multiple distinct files, which is kind of undefined behavior and more of a
-                // build system problem to solve.
-                Some(ManifestLookupResult::StyleMismatch(result)) if filter_candidate.is_none() => {
-                    filter_candidate = Some(result);
+                Some(ManifestLookupResult::ExactMatch(result))
+                    if path_is_from_stubs_package(result.as_path()) =>
+                {
+                    return Some(result);
+                }
+                Some(ManifestLookupResult::ExactMatch(result)) if exact_candidate.is_none() => {
+                    exact_candidate = Some(result);
+                }
+                Some(ManifestLookupResult::StyleMismatch(result)) => {
+                    let from_stubs = path_is_from_stubs_package(result.as_path());
+                    if filter_candidate
+                        .as_ref()
+                        .is_none_or(|(candidate_from_stubs, _)| from_stubs && !candidate_from_stubs)
+                    {
+                        filter_candidate = Some((from_stubs, result));
+                    }
                 }
                 _ => (),
             }
@@ -301,7 +310,11 @@ impl QuerySourceDatabase {
             manifest.deps.iter().for_each(|t| queue.push_back(t.dupe()));
         }
 
-        if let Some(filtered_candidate) = filter_candidate {
+        if let Some(exact_candidate) = exact_candidate {
+            return Some(exact_candidate);
+        }
+
+        if let Some((_, filtered_candidate)) = filter_candidate {
             return Some(filtered_candidate);
         }
 
@@ -313,6 +326,10 @@ impl SourceDatabase for QuerySourceDatabase {
     fn modules_to_check(&self) -> Vec<Handle> {
         // TODO(connernilsen): implement modules_to_check
         vec![]
+    }
+
+    fn may_contain_module(&self, module: ModuleName) -> bool {
+        self.inner.read().known_modules.contains(&module)
     }
 
     fn lookup(
@@ -565,6 +582,14 @@ mod tests {
             QuerySourceDatabase::from_target_manifest_db(raw_db, &root, &files),
             root,
         )
+    }
+
+    #[test]
+    fn test_may_contain_module_uses_known_modules() {
+        let (db, _) = get_db();
+
+        assert!(db.may_contain_module(ModuleName::from_str("pyre.client.log.log")));
+        assert!(!db.may_contain_module(ModuleName::from_str("shape_extensions")));
     }
 
     #[test]
@@ -847,6 +872,53 @@ mod tests {
             "generated/main.py",
             None,
             Some("build-out/materialized/generated/__init__.py"),
+        );
+    }
+
+    #[test]
+    fn test_sourcedb_lookup_prefers_stub_package_for_same_module() {
+        let raw_db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//app:lib".to_owned()) => TargetManifest::lib(
+                    &[("app.model", &["app/model.py"])],
+                    &[
+                        "//aaa/torch:torch",
+                        "//zzz/torch-stubs:torch-stubs",
+                    ],
+                    "app/BUCK",
+                    &[],
+                    None,
+                ),
+                Target::from_string("//aaa/torch:torch".to_owned()) => TargetManifest::lib(
+                    &[("torch", &["third-party/torch/torch/__init__.pyi"])],
+                    &[],
+                    "third-party/torch/BUCK",
+                    &[],
+                    None,
+                ),
+                Target::from_string("//zzz/torch-stubs:torch-stubs".to_owned()) => TargetManifest::lib(
+                    &[("torch-stubs", &["pyrefly/tensor-shapes/torch-stubs/__init__.pyi"])],
+                    &["//aaa/torch:torch"],
+                    "pyrefly/tensor-shapes/BUCK",
+                    &[],
+                    None,
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+        let root = raw_db.root.to_path_buf();
+        let files = smallset! { root.join("app/model.py") };
+        let db = QuerySourceDatabase::from_target_manifest_db(raw_db, &root, &files);
+
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("torch"),
+                Some(&root.join("app/model.py")),
+                None
+            ),
+            Some(ModulePath::filesystem(
+                root.join("pyrefly/tensor-shapes/torch-stubs/__init__.pyi")
+            ))
         );
     }
 

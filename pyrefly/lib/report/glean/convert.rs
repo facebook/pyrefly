@@ -42,6 +42,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
+use thin_vec::ThinVec;
 use vec1::Vec1;
 
 use crate::module::module_info::ModuleInfo;
@@ -127,11 +128,11 @@ fn all_modules_with_range(
 }
 
 fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
-    let decorators_range = decorators
-        .first()
-        .map(|first| first.range().cover(decorators.last().unwrap().range()));
-
-    decorators_range.map_or(range, |x| range.add_start(x.len() + TextSize::from(1)))
+    let Some(last) = decorators.last() else {
+        return range;
+    };
+    let new_start = (last.range().end() + TextSize::from(1)).min(range.end());
+    TextRange::new(new_start, range.end())
 }
 
 fn to_span(range: TextRange) -> src::ByteSpan {
@@ -1512,7 +1513,7 @@ impl GleanState<'_> {
         node.visit(&mut |expr| self.visit_expr(expr, container));
     }
 
-    fn generate_facts(&mut self, ast: &Vec<Stmt>, range: TextRange) {
+    fn generate_facts(&mut self, ast: &ThinVec<Stmt>, range: TextRange) {
         self.module_facts(range);
         let mut nodes = VecDeque::new();
 

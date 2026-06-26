@@ -48,6 +48,7 @@ use crate::class::ClassKind;
 use crate::class::ClassType;
 use crate::dimension;
 use crate::dimension::SizeExpr;
+use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
 use crate::keywords::DataclassTransformMetadata;
@@ -58,10 +59,11 @@ use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
+use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
-use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::Restriction;
@@ -642,7 +644,7 @@ impl VisitMut<Type> for Union {
 
 /// An nn.Module instance with captured constructor arguments.
 ///
-/// Analogous to how `TensorType` wraps `ClassType` + shape info, `NNModuleType`
+/// Analogous to how `ShapedArrayType` wraps `ClassType` + shape info, `NNModuleType`
 /// wraps `ClassType` + a field map of captured init args. This allows DSL forward
 /// functions to access constructor parameters (e.g., `kernel_size`, `stride`)
 /// directly from the type, without requiring every shape-relevant parameter to
@@ -695,7 +697,7 @@ impl Ord for NNModuleType {
     }
 }
 
-impl pyrefly_util::visit::Visit<Type> for NNModuleType {
+impl Visit<Type> for NNModuleType {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
         self.class.recurse(f);
         for (_, ty) in self.fields.iter() {
@@ -704,7 +706,7 @@ impl pyrefly_util::visit::Visit<Type> for NNModuleType {
     }
 }
 
-impl pyrefly_util::visit::VisitMut<Type> for NNModuleType {
+impl VisitMut<Type> for NNModuleType {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         self.class.recurse_mut(f);
         for (_, ty) in self.fields.iter_mut() {
@@ -713,7 +715,7 @@ impl pyrefly_util::visit::VisitMut<Type> for NNModuleType {
     }
 }
 
-impl crate::equality::TypeEq for NNModuleType {
+impl TypeEq for NNModuleType {
     fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
         crate::equality::TypeEq::type_eq(&self.class, &other.class, ctx)
             && self.fields.len() == other.fields.len()
@@ -782,9 +784,9 @@ pub enum Type {
     /// For a TypedDict type `C`, `Partial[C]` represents an object with any subset of read-write
     /// keys from `C`, where each present key has the same value type as in `C`.
     PartialTypedDict(TypedDict),
-    /// Tensor type with shape information
+    /// Shaped-array type with shape information.
     /// Example: Tensor[2, 3] represents a 2x3 tensor
-    Tensor(Box<TensorType>),
+    ShapedArray(Box<ShapedArrayType>),
     /// nn.Module instance with captured constructor arguments.
     /// Wraps a ClassType + field map of init args, enabling DSL forward
     /// functions to access shape-relevant constructor parameters directly.
@@ -857,6 +859,9 @@ pub enum Type {
     /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
     /// stores a reference that is untyped once we actually look up the value.
     UntypedAlias(Box<TypeAliasData>),
+    // Sentinel types, documented here: https://docs.python.org/3.15/library/functions.html#sentinel
+    // First introduced in PEP 661: https://peps.python.org/pep-0661/
+    Sentinel(Sentinel),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -902,7 +907,7 @@ impl Visit for Type {
             Type::ClassType(x) => x.visit(f),
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
-            Type::Tensor(x) => x.visit(f),
+            Type::ShapedArray(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
             Type::Size(x) => x.visit(f),
             Type::Dim(x) => x.visit(f),
@@ -918,6 +923,7 @@ impl Visit for Type {
             Type::Annotated(x, _metadata) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
+            Type::Sentinel(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
@@ -958,7 +964,7 @@ impl VisitMut for Type {
             Type::ClassType(x) => x.visit_mut(f),
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
-            Type::Tensor(x) => x.visit_mut(f),
+            Type::ShapedArray(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
             Type::Size(x) => x.visit_mut(f),
             Type::Dim(x) => x.visit_mut(f),
@@ -974,6 +980,7 @@ impl VisitMut for Type {
             Type::Annotated(x, _metadata) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
+            Type::Sentinel(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
@@ -1133,6 +1140,11 @@ impl Type {
 
     pub fn is_literal_string(&self) -> bool {
         self.lit_string_style().is_some()
+    }
+
+    /// A scalar type cannot decompose into a container element type.
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, Type::Literal(_) | Type::LiteralString(_) | Type::None)
     }
 
     /// If this type is a literal string (either `LiteralString` or a `Literal` string value),
@@ -1392,6 +1404,12 @@ impl Type {
             Type::Overload(overload) => overload.is_typeis(),
             _ => false,
         }
+    }
+
+    pub fn is_assert_shape(&self) -> bool {
+        self.visit_toplevel_func_metadata(&|meta| {
+            meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
+        })
     }
 
     pub fn is_none(&self) -> bool {
@@ -1742,7 +1760,7 @@ impl Type {
         sigs
     }
 
-    fn widen_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
+    fn promote_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
         match &*ty {
             Type::Literal(lit) if lit.style == LitStyle::Implicit => {
                 *ty = lit.value.general_class_type(stdlib).clone().to_type()
@@ -1757,27 +1775,21 @@ impl Type {
         match &mut self {
             Type::Union(union) => {
                 for member in &mut union.members {
-                    Self::widen_one_implicit_literal(member, stdlib);
+                    Self::promote_one_implicit_literal(member, stdlib);
                 }
             }
-            _ => Self::widen_one_implicit_literal(&mut self, stdlib),
+            _ => Self::promote_one_implicit_literal(&mut self, stdlib),
         }
         self
     }
 
     pub fn promote_implicit_literals(mut self, stdlib: &Stdlib) -> Type {
         fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
-            // Don't recurse into NNModule fields — they carry captured constructor
-            // args (e.g., padding=Literal[1]) that DSL forward functions need as
-            // concrete literals to compute output shapes.
-            if matches!(ty, Type::NNModule(_)) {
-                return;
-            }
             ty.recurse_mut(&mut |ty| g(ty, f));
             f(ty);
         }
         g(&mut self, &mut |ty| {
-            Self::widen_one_implicit_literal(ty, stdlib)
+            Self::promote_one_implicit_literal(ty, stdlib)
         });
         self
     }
@@ -1824,12 +1836,12 @@ impl Type {
         })
     }
 
-    pub fn explicit_literals(self) -> Self {
+    pub fn with_literal_style(self, style: LitStyle) -> Self {
         self.transform(&mut |ty| {
             if let Type::Literal(lit) = ty {
-                lit.style = LitStyle::Explicit;
-            } else if let Type::LiteralString(style) = ty {
-                *style = LitStyle::Explicit;
+                lit.style = style;
+            } else if let Type::LiteralString(lit_style) = ty {
+                *lit_style = style;
             }
         })
     }
@@ -1870,9 +1882,19 @@ impl Type {
         self
     }
 
-    pub fn as_quantified(&self) -> Option<Quantified> {
+    /// If this type represents a (possibly narrowed) quantified (i.e., `Q`  or `Q & T`), returns
+    /// the quantified `Q` plus the type `T` it is narrowed to.
+    pub fn as_quantified(&self) -> Option<(&Quantified, Option<&Type>)> {
         match self {
-            Type::Quantified(q) => Some((**q).clone()),
+            Type::Quantified(q) => Some((q, None)),
+            Type::Intersect(x) => match x.0.as_slice() {
+                [Type::Quantified(q), t] | [t, Type::Quantified(q)]
+                    if !matches!(t, Type::Quantified(_)) =>
+                {
+                    Some((q, Some(t)))
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1924,6 +1946,7 @@ impl Type {
             Type::ParamSpec(t) => Some(t.qname()),
             Type::SelfType(cls) => Some(cls.qname()),
             Type::Literal(lit) if let Lit::Enum(e) = &lit.value => Some(e.class.qname()),
+            Type::Sentinel(s) => Some(s.qname()),
             _ => None,
         }
     }
@@ -1937,6 +1960,7 @@ impl Type {
             Type::Literal(lit) if let Lit::Str(x) = &lit.value => Some(!x.is_empty()),
             Type::Type(_) => Some(true),
             Type::None => Some(false),
+            Type::Sentinel(_) => Some(true),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
             Type::Union(u) => {
                 let mut answer = None;

@@ -50,7 +50,7 @@ use crate::query::SourceDbQuerier;
 use crate::query::buck::BxlArgs;
 use crate::query::buck::BxlQuerier;
 use crate::query::custom::CustomQuerier;
-use crate::query::custom::CustomQueryArgs;
+pub use crate::query::custom::CustomQueryArgs;
 use crate::source_db::Target;
 use crate::source_db::query_source_db::QuerySourceDatabase;
 
@@ -107,9 +107,9 @@ impl Display for BuildSystemArgs {
 #[serde(rename_all = "kebab-case")]
 pub struct BuildSystem {
     #[serde(flatten)]
-    args: BuildSystemArgs,
+    pub args: BuildSystemArgs,
     #[serde(default)]
-    ignore_if_build_system_missing: bool,
+    pub ignore_if_build_system_missing: bool,
     // TODO(connernilsen): remove once internal stubs are deprecated
     /// Are there any sources we should use before looking at the build system (like stubs)?
     #[serde(default)]
@@ -119,10 +119,10 @@ pub struct BuildSystem {
     /// Are there any targets that should be included as a catch-all if the standard
     /// search strategy fails?
     #[serde(default)]
-    catch_all_targets: Vec<Target>,
+    pub catch_all_targets: Vec<Target>,
     /// Should we only use the catch_all_targets?
     #[serde(default)]
-    catch_all_targets_only: bool,
+    pub catch_all_targets_only: bool,
 }
 
 impl BuildSystem {

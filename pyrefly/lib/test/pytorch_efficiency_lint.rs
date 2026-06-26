@@ -40,6 +40,57 @@ fn env_with_lint() -> TestEnv {
     env().enable_pytorch_efficiency_lint_error()
 }
 
+fn add_shape_extensions(e: &mut TestEnv) {
+    e.add(
+        "shape_extensions",
+        r#"
+from typing import Any
+
+shaped_array: Any
+"#,
+    );
+}
+
+fn shaped_array_env_with_lint() -> TestEnv {
+    let mut e = TestEnv::new().enable_pytorch_efficiency_lint_error();
+    add_shape_extensions(&mut e);
+    e.add(
+        "arrays",
+        r#"
+from shape_extensions import shaped_array
+
+@shaped_array(shape="Shape")
+class Array[*Shape]:
+    def item(self) -> int | float: ...
+    def cuda(self) -> "Array[*Shape]": ...
+    def to(self, device: object) -> "Array[*Shape]": ...
+"#,
+    );
+    e
+}
+
+fn decorated_torch_env_with_lint() -> TestEnv {
+    let mut e = TestEnv::new().enable_pytorch_efficiency_lint_error();
+    add_shape_extensions(&mut e);
+    e.add(
+        "torch",
+        r#"
+from shape_extensions import shaped_array
+
+class device: ...
+
+@shaped_array(shape="Shape")
+class Tensor[*Shape]:
+    def item(self) -> int | float: ...
+    def to(self, device: device) -> "Tensor[*Shape]": ...
+    def cuda(self) -> "Tensor[*Shape]": ...
+
+def zeros(*size: int, device: device | None = None) -> Tensor: ...
+"#,
+    );
+    e
+}
+
 testcase!(
     test_tensor_item_call,
     env_with_lint(),
@@ -59,6 +110,20 @@ import torch
 
 def f(x: torch.Tensor) -> None:
     v = x.item()
+"#,
+);
+
+testcase!(
+    test_ordinary_torch_tensor_lints,
+    env_with_lint(),
+    r#"
+import torch
+
+def f(x: torch.Tensor, device: torch.device) -> None:
+    x.item()  # E: `Tensor.item()` causes implicit GPU-to-CPU synchronization
+    x.cuda()  # E: `Tensor.cuda()` hard-codes the target device
+    print(x)  # E: printing a `Tensor` causes implicit GPU-to-CPU synchronization
+    torch.zeros(2, 3).to(device)  # E: `torch.zeros(...).to(device)` creates the tensor on CPU first, then copies it
 "#,
 );
 
@@ -97,6 +162,20 @@ def f(x: torch.Tensor) -> None:
 "#,
 );
 
+testcase!(
+    test_non_torch_shaped_array_lints_ok,
+    shaped_array_env_with_lint(),
+    r#"
+from arrays import Array
+
+def f(x: Array[2, 3], device: object) -> None:
+    x.item()
+    x.cuda()
+    x.to(device)
+    print(x)
+"#,
+);
+
 // --- C3: Redundant .to(device) on tensor factory calls ---
 
 testcase!(
@@ -129,6 +208,20 @@ import torch
 
 def f(x: torch.Tensor, device: torch.device) -> None:
     y = x.to(device)
+"#,
+);
+
+testcase!(
+    test_decorated_torch_tensor_lints,
+    decorated_torch_env_with_lint(),
+    r#"
+import torch
+
+def f(x: torch.Tensor[2, 3], device: torch.device) -> None:
+    x.item()  # E: `Tensor.item()` causes implicit GPU-to-CPU synchronization
+    x.cuda()  # E: `Tensor.cuda()` hard-codes the target device
+    print(x)  # E: printing a `Tensor` causes implicit GPU-to-CPU synchronization
+    torch.zeros(2, 3).to(device)  # E: `torch.zeros(...).to(device)` creates the tensor on CPU first, then copies it
 "#,
 );
 

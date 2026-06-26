@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
+use fxhash::FxHashSet;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
@@ -54,9 +55,11 @@ use crate::alt::answers::OverloadedCallee;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
+use crate::alt::class::class_field::ClassField;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
@@ -91,6 +94,27 @@ use crate::types::stdlib::Stdlib;
 use crate::types::type_info::TypeInfo;
 use crate::types::types::Type;
 use crate::types::types::Var;
+
+pub struct TypeCheckOptions<'a> {
+    errors: &'a ErrorCollector,
+    context: &'a dyn Fn() -> TypeCheckContext,
+    call_context: Option<&'a CallContext>,
+}
+
+impl<'a> TypeCheckOptions<'a> {
+    pub fn new(errors: &'a ErrorCollector, context: &'a dyn Fn() -> TypeCheckContext) -> Self {
+        Self {
+            errors,
+            context,
+            call_context: None,
+        }
+    }
+
+    pub fn with_call_context(mut self, call_context: &'a CallContext) -> Self {
+        self.call_context = Some(call_context);
+        self
+    }
+}
 
 /// Compactly represents the identity of a binding, for the purposes of
 /// understanding the calculation stack.
@@ -1567,7 +1591,10 @@ pub struct ThreadState {
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
     /// Solve-time mapping from per-module lambda parameter IDs to the
     /// thread-local Var that represents that parameter in the current solve.
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, LambdaParamId), Var>>,
+    ///
+    /// The `ModulePath` is needed to distinguish the in-memory and on-disk
+    /// versions of the same module, which can coexist in the IDE (issue #3789).
+    lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1578,6 +1605,10 @@ pub struct ThreadState {
     /// is pushed here. When the nested call takes its sink, the previous
     /// one is restored.
     trace_sink_stack: RefCell<Vec<Option<TraceSideEffects>>>,
+    /// `(self_type, self_param)` pairs whose overload-self-type compatibility
+    /// check is currently in progress, used as a coinductive guard against
+    /// self-referential protocols. See `filter_overloads_by_self_type`.
+    overload_self_filter_stack: RefCell<FxHashSet<(Type, Type)>>,
 }
 
 impl ThreadState {
@@ -1590,6 +1621,7 @@ impl ThreadState {
             lambda_param_vars: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
+            overload_self_filter_stack: RefCell::new(FxHashSet::default()),
         }
     }
 
@@ -1614,6 +1646,13 @@ impl ThreadState {
     pub(crate) fn record_type_trace(&self, loc: TextRange, ty: Arc<Type>) {
         if let Some(sink) = self.trace_sink.borrow_mut().as_mut() {
             sink.types.insert(loc, ty);
+        }
+    }
+
+    /// Append an expected type trace to the active sink. No-op if no sink is installed.
+    pub(crate) fn record_expected_type_trace(&self, loc: TextRange, ty: Arc<Type>) {
+        if let Some(sink) = self.trace_sink.borrow_mut().as_mut() {
+            sink.expected_types.insert(loc, ty);
         }
     }
 
@@ -1842,14 +1881,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.thread_state
             .lambda_param_vars
             .borrow_mut()
-            .insert((self.module().name(), id), var);
+            .insert((self.module().name(), self.module().path().dupe(), id), var);
     }
 
     fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
-            .get(&(self.module().name(), id))
+            .get(&(self.module().name(), self.module().path().dupe(), id))
             .copied()
     }
 
@@ -1888,6 +1927,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.thread_state
     }
 
+    /// Record an expected type trace.
+    pub(crate) fn record_expected_type_trace(&self, loc: TextRange, ty: &Type) {
+        // Guard on the trace sink before cloning: in a normal (non-tracing) check
+        // there is no sink installed, so the clone would be pure waste.
+        if self.current().tracing_enabled() {
+            self.trace_state()
+                .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        }
+    }
+
     /// Store a partial answer for inline first-use pinning.
     /// `def_idx` is the Key::Definition idx of the NameAssign.
     /// Keyed by (def_idx, current CalcStack height).
@@ -1923,6 +1972,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .borrow()
             .get(&(def_idx, height))
             .cloned()
+    }
+
+    /// Mark an overload-self-type compatibility check `(self_type, self_param)` as in
+    /// progress. Returns `true` if it was already active, signaling a coinductive cycle
+    /// (a self-referential protocol). See `filter_overloads_by_self_type`.
+    pub(crate) fn enter_overload_self_filter(&self, key: (Type, Type)) -> bool {
+        !self
+            .thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .insert(key)
+    }
+
+    pub(crate) fn exit_overload_self_filter(&self, key: &(Type, Type)) {
+        self.thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .remove(key);
     }
 
     /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's
@@ -2715,6 +2782,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Vec::new()
         };
 
+        if exceeded_max_iterations {
+            // An *inferred* instance attribute whose type never converges is
+            // degenerately recursive (each iteration nests another container layer,
+            // e.g. `list[list[...]]`). Commit `Any` for those fields instead of the
+            // unrolled blowup, so it does not produce spurious downstream errors.
+            // Restricted to `DefinedInMethod` fields: annotated members and class-body
+            // type aliases (e.g. `type X = int | list[C.X]`) are intentional recursion
+            // whose errors must be preserved, not collapsed to `Any`.
+            let any_field: Arc<dyn Any + Send + Sync> =
+                Arc::new(Arc::new(ClassField::recursive(self.heap)));
+            for (calc_id, state) in scc.node_state.iter_mut() {
+                if let AnyIdx::KeyClassField(idx) = &calc_id.1
+                    && matches!(
+                        calc_id.0.get(*idx).definition,
+                        ClassFieldDefinition::DefinedInMethod { .. }
+                    )
+                    && let SccNodeState::Done { answer, .. } = state
+                {
+                    *answer = any_field.dupe();
+                }
+            }
+        }
+
         let did_commit = self.commit_final_answers(scc);
         if did_commit {
             for (calc_id, answer, previous) in &non_convergent_members {
@@ -3002,38 +3092,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Check if `got` matches `want`, returning `want` if the check fails.
-    pub fn check_and_return_type_info(
-        &self,
-        got: TypeInfo,
-        want: &Type,
-        loc: TextRange,
-        errors: &ErrorCollector,
-        tcc: &dyn Fn() -> TypeCheckContext,
-    ) -> TypeInfo {
-        if self.check_type(got.ty(), want, loc, errors, tcc) {
-            got
-        } else {
-            got.with_ty(want.clone())
-        }
-    }
-
-    pub fn check_and_return_type_info_with_call_context(
-        &self,
-        got: TypeInfo,
-        want: &Type,
-        loc: TextRange,
-        errors: &ErrorCollector,
-        tcc: &dyn Fn() -> TypeCheckContext,
-        call_context: &CallContext,
-    ) -> TypeInfo {
-        if self.check_type_with_call_context(got.ty(), want, loc, errors, tcc, call_context) {
-            got
-        } else {
-            got.with_ty(want.clone())
-        }
-    }
-
-    /// Check if `got` matches `want`, returning `want` if the check fails.
+    /// Convenience wrapper around `check_type_with_options`.
     pub fn check_and_return_type(
         &self,
         got: Type,
@@ -3042,30 +3101,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> Type {
-        if self.check_type(&got, want, loc, errors, tcc) {
+        if self.check_type_with_options(&got, want, loc, TypeCheckOptions::new(errors, tcc)) {
             got
         } else {
             want.clone()
         }
     }
 
-    pub fn check_and_return_type_with_call_context(
-        &self,
-        got: Type,
-        want: &Type,
-        loc: TextRange,
-        errors: &ErrorCollector,
-        tcc: &dyn Fn() -> TypeCheckContext,
-        call_context: &CallContext,
-    ) -> Type {
-        if self.check_type_with_call_context(&got, want, loc, errors, tcc, call_context) {
-            got
-        } else {
-            want.clone()
-        }
-    }
-
-    /// Check if `got` matches `want`, returning `true` on success and `false` on failure.
+    /// Check if `got` matches `want`. Convenience wrapper around `check_type_with_options`.
     pub fn check_type(
         &self,
         got: &Type,
@@ -3074,48 +3117,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
     ) -> bool {
-        let subset_result = match tcc().kind {
-            TypeCheckKind::CallArgument(..)
-            | TypeCheckKind::CallVarArgs(..)
-            | TypeCheckKind::CallKwArgs(..)
-            | TypeCheckKind::CallUnpackKwArg(..) => {
-                let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
-                self.solver()
-                    .is_subset_eq(got, want, self.type_order(), Some(&call_context))
-            }
-            _ => self.is_subset_eq_with_reason(got, want),
-        };
-        match subset_result {
-            Ok(()) => {
-                self.check_string_as_iterable(got, want, loc, errors);
-                true
-            }
-            Err(error) => {
-                self.report_type_error(got, want, errors, loc, tcc, error);
-                false
-            }
-        }
+        self.check_type_with_options(got, want, loc, TypeCheckOptions::new(errors, tcc))
     }
 
-    pub fn check_type_with_call_context(
+    /// Check if `got` matches `want`.
+    pub fn check_type_with_options(
         &self,
         got: &Type,
         want: &Type,
         loc: TextRange,
-        errors: &ErrorCollector,
-        tcc: &dyn Fn() -> TypeCheckContext,
-        call_context: &CallContext,
+        options: TypeCheckOptions,
     ) -> bool {
-        match self
-            .solver()
-            .is_subset_eq(got, want, self.type_order(), Some(call_context))
-        {
+        // Record expected type for LSP query
+        self.record_expected_type_trace(loc, want);
+
+        let subset_result = match options.call_context {
+            Some(call_context) => {
+                self.solver()
+                    .is_subset_eq(got, want, self.type_order(), Some(call_context))
+            }
+            None => match (options.context)().kind {
+                TypeCheckKind::CallArgument(..)
+                | TypeCheckKind::CallVarArgs(..)
+                | TypeCheckKind::CallKwArgs(..)
+                | TypeCheckKind::CallUnpackKwArg(..) => {
+                    let call_context = CallContext::outside().with_argument_side(ArgumentSide::Got);
+                    self.solver()
+                        .is_subset_eq(got, want, self.type_order(), Some(&call_context))
+                }
+                _ => self.is_subset_eq_with_reason(got, want),
+            },
+        };
+        match subset_result {
             Ok(()) => {
-                self.check_string_as_iterable(got, want, loc, errors);
+                self.check_string_as_iterable(got, want, loc, options.errors);
                 true
             }
             Err(error) => {
-                self.report_type_error(got, want, errors, loc, tcc, error);
+                self.report_type_error(got, want, options.errors, loc, options.context, error);
                 false
             }
         }
@@ -3191,7 +3230,62 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .with_detail(format!("Did you mean `{replacement}`?"))
                 .with_quick_fix(ErrorQuickFix::ReplaceWithEnumMember { replacement });
         }
+        if Self::type_contains_none(got) && !Self::type_contains_none(want) {
+            let hint = match tcc().kind {
+                TypeCheckKind::ExplicitFunctionReturn
+                | TypeCheckKind::AnnAssign
+                | TypeCheckKind::AnnotatedName(_)
+                    if !got.is_none() =>
+                {
+                    Some(format!(
+                        "Consider narrowing the value with an `is not None` check or changing the declared type to `{} | None`",
+                        self.for_display(want.clone()),
+                    ))
+                }
+                TypeCheckKind::ImplicitFunctionReturn(_) => {
+                    // For implicit returns (missing return statement), the error message
+                    // "Function declared to return X, but one or more paths are missing
+                    // an explicit return" is already clear. Adding a None hint here is
+                    // confusing because the user didn't explicitly return None.
+                    // Skip the hint for implicit returns.
+                    None
+                }
+                TypeCheckKind::Attribute(_)
+                | TypeCheckKind::CallArgument(..)
+                | TypeCheckKind::CallKwArgs(..)
+                | TypeCheckKind::CallUnpackKwArg(..)
+                | TypeCheckKind::CallVarArgs(..) => {
+                    if got.is_none() {
+                        // Skip the hint. Narrowing the value doesn't make sense if there's no
+                        // non-None part to narrow to, and changing the attribute or parameter type
+                        // is often unactionable, since the definition may be in third-party code.
+                        None
+                    } else {
+                        // We only suggest narrowing. Changing the attribute or parameter type is
+                        // often unactionable, since the definition may be in third-party code.
+                        Some("Consider narrowing the value with an `is not None` check".to_owned())
+                    }
+                }
+                _ => Some(format!(
+                    "Consider changing the declared type to `{} | None`",
+                    self.for_display(want.clone())
+                )),
+            };
+            if let Some(hint) = hint {
+                builder = builder
+                    .with_detail(format!("The declared type does not allow `None`. {hint}."));
+            }
+        }
         builder.emit();
+    }
+
+    /// Returns true if the type is `None` or a union containing `None`.
+    fn type_contains_none(ty: &Type) -> bool {
+        match ty {
+            Type::None => true,
+            Type::Union(u) => u.members.iter().any(|m| matches!(m, Type::None)),
+            _ => false,
+        }
     }
 
     pub fn distribute_over_union(&self, ty: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {

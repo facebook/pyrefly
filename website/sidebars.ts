@@ -82,6 +82,11 @@ let docsSidebar = [
             },
             {
                 type: 'doc' as const,
+                id: 'pytest',
+                label: 'Pytest Support',
+            },
+            {
+                type: 'doc' as const,
                 id: 'django',
                 label: 'Django Support',
             },

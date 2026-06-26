@@ -912,7 +912,7 @@ impl TestClient {
                         && params
                             .diagnostics
                             .iter()
-                            .any(|d| d.message.contains(message))
+                            .any(|d| matches!(&d.message, lsp_types::DiagnosticMessage::String(s) if s.contains(message)))
                     {
                         Some(Ok(()))
                     } else {

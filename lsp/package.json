@@ -93,11 +93,14 @@
             }
         ],
         "configurationDefaults": {
+            "basedpyright.disableLanguageServices": true,
+            "cursorpyright.disableLanguageServices": true,
             "editor.semanticTokenColorCustomizations": {
                 "rules": {
                     "variable.readonly:python": "#4EC9B0"
                 }
-            }
+            },
+            "windsurfPyright.disableLanguageServices": true
         },
         "configuration": {
             "properties": {
@@ -367,7 +370,7 @@
         "@vscode/test-cli": "^0.0.10",
         "@vscode/test-electron": "^2.5.2",
         "@vscode/vsce": "^2.9.2",
-        "esbuild": "^0.25.1",
+        "esbuild": "^0.28.1",
         "npm-run-all": "^4.1.5",
         "typescript": "^4.4.3"
     },

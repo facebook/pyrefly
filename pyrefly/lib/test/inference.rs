@@ -126,6 +126,38 @@ def h(cls) -> None: ...  # E: `h` is missing an annotation for parameter `cls`
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3542
+testcase!(
+    test_underscore_params_suppress_implicit_any,
+    TestEnv::new().enable_implicit_any_parameter_error(),
+    r#"
+# Single `_` and `_`-prefixed params (single underscore, not ending with `_`)
+# should not trigger implicit-any-parameter error
+def foo(_) -> int:  # ok - intentionally unused
+    return 1
+
+def bar(_x) -> int:  # ok
+    return 1
+
+# Params starting with `__` or ending with `_` should still error
+def baz(__x) -> int:  # E: `baz` is missing an annotation for parameter `__x`
+    return 1
+
+def qux(x_) -> int:  # E: `qux` is missing an annotation for parameter `x_`
+    return 1
+
+def quux(__x__) -> int:  # E: `quux` is missing an annotation for parameter `__x__`
+    return 1
+
+def corge(_x_) -> int:  # E: `corge` is missing an annotation for parameter `_x_`
+    return 1
+
+# Regular params without annotation should still error
+def grault(x) -> int:  # E: `grault` is missing an annotation for parameter `x`
+    return 1
+"#,
+);
+
 testcase!(
     test_implicit_any_with_complete_annotations,
     TestEnv::new().enable_implicit_any_error(),

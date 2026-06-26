@@ -3,8 +3,21 @@ import types
 from _typeshed import SupportsAllComparisons, SupportsItems
 from collections.abc import Callable, Hashable, Iterable, Sized
 from types import GenericAlias
-from typing import Any, Final, Generic, Literal, NamedTuple, TypedDict, TypeVar, final, overload, type_check_only
-from typing_extensions import ParamSpec, Self, TypeAlias, disjoint_base
+from typing import (
+    Any,
+    Final,
+    Generic,
+    Literal,
+    NamedTuple,
+    ParamSpec,
+    TypeAlias,
+    TypedDict,
+    TypeVar,
+    final,
+    overload,
+    type_check_only,
+)
+from typing_extensions import Self, disjoint_base
 
 __all__ = [
     "update_wrapper",
@@ -34,21 +47,18 @@ _RWrapper = TypeVar("_RWrapper")
 if sys.version_info >= (3, 14):
     @overload
     def reduce(function: Callable[[_T, _S], _T], iterable: Iterable[_S], /, initial: _T) -> _T: ...
-
 else:
     @overload
     def reduce(function: Callable[[_T, _S], _T], iterable: Iterable[_S], initial: _T, /) -> _T:
         """
         reduce(function, iterable[, initial]) -> value
 
-        Apply a function of two arguments cumulatively to the items of an iterable, from left to right.
-
-        This effectively reduces the iterable to a single value.  If initial is present,
-        it is placed before the items of the iterable in the calculation, and serves as
-        a default when the iterable is empty.
-
-        For example, reduce(lambda x, y: x+y, [1, 2, 3, 4, 5])
-        calculates ((((1 + 2) + 3) + 4) + 5).
+        Apply a function of two arguments cumulatively to the items of a sequence
+        or iterable, from left to right, so as to reduce the iterable to a single
+        value.  For example, reduce(lambda x, y: x+y, [1, 2, 3, 4, 5]) calculates
+        ((((1+2)+3)+4)+5).  If initial is present, it is placed before the items
+        of the iterable in the calculation, and serves as a default when the
+        iterable is empty.
         """
         ...
 
@@ -57,14 +67,12 @@ def reduce(function: Callable[[_T, _T], _T], iterable: Iterable[_T], /) -> _T:
     """
     reduce(function, iterable[, initial]) -> value
 
-    Apply a function of two arguments cumulatively to the items of an iterable, from left to right.
-
-    This effectively reduces the iterable to a single value.  If initial is present,
-    it is placed before the items of the iterable in the calculation, and serves as
-    a default when the iterable is empty.
-
-    For example, reduce(lambda x, y: x+y, [1, 2, 3, 4, 5])
-    calculates ((((1 + 2) + 3) + 4) + 5).
+    Apply a function of two arguments cumulatively to the items of a sequence
+    or iterable, from left to right, so as to reduce the iterable to a single
+    value.  For example, reduce(lambda x, y: x+y, [1, 2, 3, 4, 5]) calculates
+    ((((1+2)+3)+4)+5).  If initial is present, it is placed before the items
+    of the iterable in the calculation, and serves as a default when the
+    iterable is empty.
     """
     ...
 
@@ -193,6 +201,7 @@ def cmp_to_key(mycmp: Callable[[_T, _T], int]) -> Callable[[_T], SupportsAllComp
       Function that compares two objects.
     """
     ...
+
 @disjoint_base
 class partial(Generic[_T]):
     @property
@@ -253,6 +262,7 @@ else:
 class _SingleDispatchCallable(Generic[_T]):
     registry: types.MappingProxyType[Any, Callable[..., _T]]
     def dispatch(self, cls: Any) -> Callable[..., _T]: ...
+
     # @fun.register(complex)
     # def _(arg, verbose=False): ...
     @overload
@@ -264,6 +274,7 @@ class _SingleDispatchCallable(Generic[_T]):
     # fun.register(int, lambda x: x)
     @overload
     def register(self, cls: _RegType, func: Callable[..., _T]) -> Callable[..., _T]: ...
+
     def _clear_cache(self) -> None: ...
     def __call__(self, /, *args: Any, **kwargs: Any) -> _T: ...
 
@@ -275,22 +286,26 @@ class singledispatchmethod(Generic[_T]):
     def __init__(self, func: Callable[..., _T]) -> None: ...
     @property
     def __isabstractmethod__(self) -> bool: ...
+
     @overload
     def register(self, cls: _RegType, method: None = None) -> Callable[[Callable[..., _T]], Callable[..., _T]]: ...
     @overload
     def register(self, cls: Callable[..., _T], method: None = None) -> Callable[..., _T]: ...
     @overload
     def register(self, cls: _RegType, method: Callable[..., _T]) -> Callable[..., _T]: ...
+
     def __get__(self, obj: _S, cls: type[_S] | None = None) -> Callable[..., _T]: ...
 
 class cached_property(Generic[_T_co]):
     func: Callable[[Any], _T_co]
     attrname: str | None
     def __init__(self, func: Callable[[Any], _T_co]) -> None: ...
+
     @overload
     def __get__(self, instance: None, owner: type[Any] | None = None) -> Self: ...
     @overload
     def __get__(self, instance: object, owner: type[Any] | None = None) -> _T_co: ...
+
     def __set_name__(self, owner: type[Any], name: str) -> None: ...
     # __set__ is not defined at runtime, but @cached_property is designed to be settable
     def __set__(self, instance: object, value: _T_co) -> None: ...  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]

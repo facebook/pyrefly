@@ -215,3 +215,15 @@ $ mkdir -p $TMPDIR/.hidden_workspace/project && \
 ERROR *main.py* ?bad-assignment? (glob)
 [1]
 ```
+
+## We can also find hidden pyrefly configs (.pyrefly.toml)
+
+
+```scrut {output_stream: stdout}
+$ mkdir $TMPDIR/hidden_config && touch $TMPDIR/hidden_config/.pyrefly.toml && \
+> touch $TMPDIR/hidden_config/main.py && \
+> $PYREFLY dump-config $TMPDIR/hidden_config/main.py
+Configuration at `*/hidden_config/.pyrefly.toml` (glob)
+* (glob+)
+[0]
+```

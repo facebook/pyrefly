@@ -67,6 +67,7 @@ use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
+use crate::error::error::ErrorRenderer;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyError;
 use crate::error::legacy::LegacyErrors;
@@ -431,11 +432,12 @@ fn write_errors_to_file(
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
 
-fn write_errors_to_console(
+pub(crate) fn write_errors_to_console(
     format: OutputFormat,
     relative_to: &Path,
     errors: &[Error],
@@ -445,6 +447,7 @@ fn write_errors_to_console(
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -455,11 +458,11 @@ fn write_error_text_to_file(
     errors: &[Error],
     verbose: bool,
 ) -> anyhow::Result<()> {
-    let mut file = BufWriter::new(File::create(path)?);
+    let mut renderer = ErrorRenderer::plain(BufWriter::new(File::create(path)?));
     for e in errors {
-        e.write_line(&mut file, relative_to, verbose)?;
+        renderer.write(e, relative_to, verbose)?;
     }
-    file.flush()?;
+    renderer.flush()?;
     Ok(())
 }
 
@@ -468,9 +471,14 @@ fn write_error_text_to_console(
     errors: &[Error],
     verbose: bool,
 ) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stdout.lock()), color_choice);
     for error in errors {
-        error.print_colors(relative_to, verbose);
+        renderer.write(error, relative_to, verbose)?;
+        renderer.flush()?;
     }
+    renderer.flush()?;
     Ok(())
 }
 
@@ -537,6 +545,126 @@ fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
     buffered_write_error_github(stdout(), errors)
 }
 
+/// True for characters allowed by the XML 1.0 `Char` production. Everything else
+/// (NUL and most other C0 controls, U+FFFE, U+FFFF) is illegal *anywhere* in an
+/// XML document — including inside CDATA, which has no escape mechanism — so such
+/// characters must be dropped or the document is not well-formed. Rust `char`
+/// already excludes surrogates, so they need no special handling here.
+fn is_xml_char(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
+    )
+}
+
+fn xml_escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            // Tabs/newlines are valid but get normalized to spaces in attribute
+            // values, so emit them as character references to preserve them.
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
+            c if is_xml_char(c) => out.push(c),
+            _ => {} // drop characters illegal in XML
+        }
+    }
+    out
+}
+
+fn xml_escape_cdata(s: &str) -> String {
+    // CDATA admits any valid XML character except the delimiter "]]>", which
+    // would close the section early — split it across CDATA boundaries. Illegal
+    // XML characters have no CDATA escape, so they are dropped outright.
+    s.chars()
+        .filter(|c| is_xml_char(*c))
+        .collect::<String>()
+        .replace("]]>", "]]]]><![CDATA[>")
+}
+
+/// Render diagnostics as a JUnit `<testsuites>` report. JUnit XML has no notion
+/// of severity, so every diagnostic is emitted as a `<failure>` whose `type` is
+/// the Pyrefly error kind (the conventional "failure type" slot). Severity
+/// filtering happens upstream via `--min-severity`, so by default only errors
+/// reach us; warnings appear only when the caller lowers the threshold.
+fn write_error_junit_xml<W: Write>(
+    mut writer: W,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let n = errors.len();
+
+    writeln!(writer, r#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
+    writeln!(writer, "<testsuites>")?;
+    writeln!(
+        writer,
+        r#"  <testsuite name="pyrefly" tests="{n}" failures="{n}" errors="0" time="0">"#
+    )?;
+
+    for err in errors {
+        let error_path = err.path().as_path();
+        let path = error_path
+            .strip_prefix(relative_to)
+            .unwrap_or(error_path)
+            .to_string_lossy()
+            .into_owned();
+        let line = err.display_range().start.line_within_cell().get();
+        let kind = err.error_kind().to_name();
+
+        writeln!(
+            writer,
+            r#"    <testcase classname="{}" name="{}:L{}" file="{}" line="{}" time="0">"#,
+            xml_escape_attr(&path),
+            xml_escape_attr(kind),
+            line,
+            xml_escape_attr(&path),
+            line,
+        )?;
+        writeln!(
+            writer,
+            r#"      <failure type="{}" message="{}"><![CDATA[{}]]></failure>"#,
+            xml_escape_attr(kind),
+            xml_escape_attr(err.msg_header()),
+            xml_escape_cdata(&err.msg()),
+        )?;
+        writeln!(writer, "    </testcase>")?;
+    }
+
+    writeln!(writer, "  </testsuite>")?;
+    writeln!(writer, "</testsuites>")?;
+    Ok(())
+}
+
+fn buffered_write_error_junit_xml(
+    writer: impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_junit_xml(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_junit_xml_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let file = File::create(path)?;
+    buffered_write_error_junit_xml(file, relative_to, errors)
+}
+
+fn write_error_junit_xml_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_junit_xml(stdout(), relative_to, errors)
+}
+
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
     let normalized = severity_to_str(severity);
     match normalized.as_str() {
@@ -592,7 +720,7 @@ pub struct Handles {
 }
 
 impl Handles {
-    pub fn new(files: Vec<PathBuf>) -> Self {
+    pub fn new(files: impl IntoIterator<Item = PathBuf>) -> Self {
         let mut handles = Self {
             path_data: HashSet::new(),
         };
@@ -600,6 +728,14 @@ impl Handles {
             handles.path_data.insert(ModulePath::filesystem(file));
         }
         handles
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.path_data.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.path_data.len()
     }
 
     pub fn all(
@@ -811,14 +947,15 @@ impl CheckArgs {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>, CheckResult)> {
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         timings.list_files = list_files_start.elapsed();
+        let handles = Handles::new(expanded_file_list);
         debug!(
             "Checking {} files (listing took {})",
-            expanded_file_list.len(),
+            handles.len(),
             Timings::show(timings.list_files),
         );
-        if expanded_file_list.is_empty() {
+        if handles.is_empty() {
             return Ok((
                 CommandExitStatus::Success,
                 Vec::new(),
@@ -830,7 +967,6 @@ impl CheckArgs {
         }
 
         let state = Forgetter::new(State::new(config_finder, thread_count), true);
-        let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
             state.as_ref().new_transaction(require_levels.default, None),
@@ -931,7 +1067,7 @@ impl CheckArgs {
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder, thread_count);
@@ -1446,6 +1582,81 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn junit_xml_output_format_writes_well_formed_xml() {
+        let errors = vec![
+            sample_error("first error".into()),
+            sample_error("second error".into()),
+        ];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#),
+            "missing XML declaration: {output}"
+        );
+        assert!(
+            output.contains(r#"<testsuite name="pyrefly" tests="2" failures="2""#),
+            "missing testsuite element: {output}"
+        );
+        assert!(
+            output.contains("<failure type="),
+            "missing failure element: {output}"
+        );
+        assert!(
+            output.contains("repo/foo.py"),
+            "missing file path: {output}"
+        );
+        assert!(
+            output.ends_with("</testsuites>\n"),
+            "missing closing tag: {output}"
+        );
+    }
+
+    #[test]
+    fn junit_xml_escapes_special_chars_in_messages() {
+        let errors = vec![sample_error(r#"a < b & c > d "e" 'f'"#.into())];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("&lt;"), "< not escaped: {output}");
+        assert!(output.contains("&amp;"), "& not escaped: {output}");
+        assert!(output.contains("&gt;"), "> not escaped: {output}");
+        assert!(output.contains("&quot;"), "\" not escaped: {output}");
+        assert!(output.contains("&apos;"), "' not escaped: {output}");
+
+        // CDATA split for ]]>
+        let errors2 = vec![sample_error("x ]]> y".into())];
+        let mut buf2 = Vec::new();
+        write_error_junit_xml(&mut buf2, Path::new("/"), &errors2).unwrap();
+        let output2 = String::from_utf8(buf2).unwrap();
+        assert!(
+            output2.contains("]]]]><![CDATA["),
+            "CDATA ]]> was not split across CDATA boundaries: {output2}"
+        );
+    }
+
+    #[test]
+    fn junit_xml_strips_invalid_control_chars() {
+        // NUL and other C0 control characters are illegal in XML even inside a
+        // CDATA section, so they must be dropped (not just escaped) to keep the
+        // document well-formed. The surrounding text must survive.
+        let errors = vec![sample_error("bad\u{0}\u{8}\u{1f}msg".into())];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            !output
+                .chars()
+                .any(|c| !matches!(c, '\n' | '\t') && (c as u32) < 0x20),
+            "illegal control char leaked into output: {output:?}"
+        );
+        assert!(
+            output.contains("badmsg"),
+            "surrounding message text was lost: {output}"
+        );
     }
 
     #[test]

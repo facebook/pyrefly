@@ -684,7 +684,8 @@ del c [0]
 }
 
 #[test]
-fn hover_over_getitem_without_space_doesnt_show_signature() {
+fn hover_over_getitem_without_space_shows_signature() {
+    // Regression test for https://github.com/facebook/pyrefly/issues/1838
     let code = r#"
 class Container:
     def __getitem__(self, idx: int) -> int: ...
@@ -694,23 +695,17 @@ c[0]
 #^ ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
-6 | c[0]
-     ^
-```python
-(variable) c: Container
-```
-
-6 | c[0]
-       ^
-```python
-(attribute) __getitem__: Literal[0]
-```
-"#
-        .trim(),
-        report.trim(),
+    // Hovering the base `c` still shows the variable.
+    assert!(
+        report.contains("(variable) c: Container"),
+        "Expected variable hover for base `c`, got: {report}"
+    );
+    // Hovering inside the brackets shows the dunder method, matching `c [0]`.
+    assert!(
+        report.contains(
+            "```python\n(method) __getitem__: def __getitem__(\n    self: Container,\n    idx: int\n) -> int: ...\n```"
+        ),
+        "Expected __getitem__ signature in hover, got: {report}"
     );
 }
 
@@ -1372,6 +1367,64 @@ Box[str]("hello")
     assert!(
         report.contains("Box[str]"),
         "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_covariant() {
+    let code = r#"
+class Foo[T]:
+#         ^
+    def foo(self) -> T: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Foo (covariant)"),
+        "Expected covariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_contravariant() {
+    let code = r#"
+class Sink[T]:
+#          ^
+    def consume(self, value: T) -> None: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Sink (contravariant)"),
+        "Expected contravariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_invariant() {
+    let code = r#"
+class Container[T]:
+#               ^
+    def get(self) -> T: ...
+    def set(self, value: T) -> None: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Container (invariant)"),
+        "Expected invariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_bivariant_as_invariant() {
+    // T is unused in the class body — bivariant, but displayed as invariant
+    let code = r#"
+class Phantom[T]:
+#             ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Phantom (invariant)"),
+        "Expected bivariant displayed as invariant, got: {report}"
     );
 }
 

@@ -6,7 +6,7 @@ machine architecture issues.
 Not all Python object types are supported; in general, only objects
 whose value is independent from a particular invocation of Python can be
 written and read by this module. The following types are supported:
-None, integers, floating-point numbers, strings, bytes, bytearrays,
+None, integers, floating point numbers, strings, bytes, bytearrays,
 tuples, lists, sets, dictionaries, and code objects, where it
 should be understood that tuples, lists and dictionaries are only
 supported as long as the values contained therein are themselves
@@ -17,7 +17,7 @@ Variables:
 
 version -- indicates the format that the module uses. Version 0 is the
     historical format, version 1 shares interned strings and version 2
-    uses a binary format for floating-point numbers.
+    uses a binary format for floating point numbers.
     Version 3 shares common object references (New in version 3.4).
 
 Functions:
@@ -32,8 +32,7 @@ import builtins
 import sys
 import types
 from _typeshed import ReadableBuffer, SupportsRead, SupportsWrite
-from typing import Any, Final
-from typing_extensions import TypeAlias
+from typing import Any, Final, TypeAlias
 
 version: Final[int]
 
@@ -58,7 +57,11 @@ _Marshallable: TypeAlias = (
     | ReadableBuffer
 )
 
-if sys.version_info >= (3, 14):
+if sys.version_info >= (3, 15):
+    def dump(value: _Marshallable, file: SupportsWrite[bytes], version: int = 6, /, *, allow_code: bool = True) -> None: ...
+    def dumps(value: _Marshallable, version: int = 6, /, *, allow_code: bool = True) -> bytes: ...
+
+elif sys.version_info >= (3, 14):
     def dump(value: _Marshallable, file: SupportsWrite[bytes], version: int = 5, /, *, allow_code: bool = True) -> None: ...
     def dumps(value: _Marshallable, version: int = 5, /, *, allow_code: bool = True) -> bytes: ...
 

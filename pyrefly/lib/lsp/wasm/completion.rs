@@ -250,47 +250,6 @@ impl Transaction<'_> {
         }
     }
 
-    /// Like `add_literal_completions_from_type`, but deduplicates using a shared `seen` set.
-    /// This is used when collecting literal completions across multiple overloads.
-    fn add_literal_completions_from_type_dedup(
-        param_type: &Type,
-        completions: &mut Vec<RankedCompletion>,
-        in_string_literal: bool,
-        seen: &mut SmallSet<(String, Option<String>)>,
-    ) {
-        match param_type {
-            Type::Literal(lit) => {
-                let label = lit.value.to_string_escaped(true);
-                let detail = format!("{param_type}");
-                if seen.insert((label.clone(), Some(detail.clone()))) {
-                    let insert_text = if in_string_literal && let Lit::Str(s) = &lit.value {
-                        s.to_string()
-                    } else {
-                        label.clone()
-                    };
-                    completions.push(RankedCompletion::new(CompletionItem {
-                        label,
-                        kind: Some(CompletionItemKind::VALUE),
-                        detail: Some(detail),
-                        insert_text: Some(insert_text),
-                        ..Default::default()
-                    }));
-                }
-            }
-            Type::Union(u) => {
-                for member in &u.members {
-                    Self::add_literal_completions_from_type_dedup(
-                        member,
-                        completions,
-                        in_string_literal,
-                        seen,
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// Adds completions for magic methods (dunder methods like `__init__`, `__str__`, etc.).
     fn add_magic_method_completions(
         identifier: &Identifier,
@@ -478,20 +437,6 @@ impl Transaction<'_> {
         }
     }
 
-    fn expected_call_argument_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        let CallInfo {
-            callables,
-            chosen_overload_index,
-            active_argument,
-            ..
-        } = self.get_callables_from_call(handle, position)?;
-        let callable = callables.get(chosen_overload_index.unwrap_or(0))?.clone();
-        let params = Self::normalize_singleton_function_type_into_params(callable)?;
-        let arg_index = Self::active_parameter_index(&params, &active_argument)?;
-        let param = params.get(arg_index)?;
-        Some(param.as_type().clone())
-    }
-
     fn is_incompatible_with_expected_type(
         &self,
         handle: &Handle,
@@ -594,7 +539,13 @@ impl Transaction<'_> {
         has_added_any
     }
 
-    /// Adds literal completions for function call arguments based on parameter types.
+    /// Adds literal completions from the expected type at `position`.
+    ///
+    /// `get_expected_type_at` supplies the contextually expected type for both
+    /// call arguments (the active parameter's type) and the solver-recorded
+    /// contexts (annotated assignments, returns, attribute/subscript targets,
+    /// TypedDict values, yields), so a single source covers every
+    /// literal-completion site.
     fn add_literal_completions(
         &self,
         handle: &Handle,
@@ -602,30 +553,8 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
         in_string_literal: bool,
     ) {
-        if let Some(CallInfo {
-            callables,
-            active_argument,
-            provided_arg_ranges,
-            ..
-        }) = self.get_callables_from_call(handle, position)
-        {
-            let callables =
-                self.filter_compatible_overloads(handle, callables, &provided_arg_ranges);
-            let mut seen = SmallSet::new();
-            for callable in callables {
-                if let Some(params) =
-                    Self::normalize_singleton_function_type_into_params(callable.clone())
-                    && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-                    && let Some(param) = params.get(arg_index)
-                {
-                    Self::add_literal_completions_from_type_dedup(
-                        param.as_type(),
-                        completions,
-                        in_string_literal,
-                        &mut seen,
-                    );
-                }
-            }
+        if let Some(expected) = self.get_expected_type_at(handle, position) {
+            Self::add_literal_completions_from_type(&expected, completions, in_string_literal);
         }
     }
 
@@ -673,8 +602,8 @@ impl Transaction<'_> {
                     continue;
                 }
                 let module_description = handle_to_import_from.module().as_str().to_owned();
-                let (insert_text, additional_text_edits, imported_module) = {
-                    let (position, insert_text, module_name) = insert_import_edit(
+                let (detail_text, additional_text_edits, imported_module) = {
+                    let import_edit = insert_import_edit(
                         &ast,
                         self.config_finder(),
                         handle.dupe(),
@@ -683,17 +612,21 @@ impl Transaction<'_> {
                         import_format,
                     );
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
+                        range: module_info.to_lsp_range(import_edit.range),
+                        new_text: import_edit.insert_text.clone(),
                     };
-                    (insert_text, Some(vec![import_text_edit]), module_name)
+                    (
+                        format!("{}\n", import_edit.display_text),
+                        Some(vec![import_text_edit]),
+                        import_edit.module_name,
+                    )
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
                         label: name,
-                        detail: Some(insert_text),
+                        detail: Some(detail_text),
                         kind: export
                             .symbol_kind
                             .map_or(Some(CompletionItemKind::VARIABLE), |k| {
@@ -727,19 +660,21 @@ impl Transaction<'_> {
                 }
                 let module_name_str = module_name.as_str().to_owned();
                 let source = autoimport_source(&module_name_str);
-                if let Some((submodule_name, position, insert_text, imported_module)) =
+                if let Some((submodule_name, import_edit)) =
                     self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
                 {
                     let import_text_edit = TextEdit {
-                        range: module_info.to_lsp_range(TextRange::at(position, TextSize::new(0))),
-                        new_text: insert_text.clone(),
+                        range: module_info.to_lsp_range(import_edit.range),
+                        new_text: import_edit.insert_text.clone(),
                     };
                     let additional_text_edits = Some(vec![import_text_edit]);
-                    let auto_import_label_detail = format!(" (import {imported_module})");
+                    let auto_import_label_detail = format!(" (import {})", import_edit.module_name);
                     completions.push(RankedCompletion {
                         item: CompletionItem {
                             label: submodule_name,
-                            detail: Some(insert_text),
+                            // Use `display_text` so the detail stays human-readable
+                            // ("from parent import submodule") even for merge edits.
+                            detail: Some(format!("{}\n", import_edit.display_text)),
                             kind: Some(CompletionItemKind::MODULE),
                             additional_text_edits,
                             label_details: supports_completion_item_details.then_some(
@@ -1035,6 +970,14 @@ impl Transaction<'_> {
         let covering_nodes = ast
             .as_ref()
             .map(|module| Ast::locate_node(module.as_ref(), position));
+        // Dict-key completion applies in any subscript / dict-key position (`d["k|"]`,
+        // `{"k|": ...}`, or the empty `d[|]`), which cuts across the identifier-context
+        // branches below, so handle it once up front. It claims the position only when
+        // the base actually has known keys; when claimed we suppress the overload
+        // literal completions that would otherwise duplicate the keys.
+        let dict_key_claimed = ast.as_ref().is_some_and(|module| {
+            self.add_dict_key_completions(handle, module.as_ref(), position, &mut result)
+        });
         // Because of parser error recovery, `from x impo...` looks like `from x import impo...`
         // If the user might be typing the `import` keyword, add that as an autocomplete option.
         match covering_nodes
@@ -1113,7 +1056,7 @@ impl Transaction<'_> {
                 identifier: _,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
-                let expected_type = self.expected_call_argument_type(handle, position);
+                let expected_type = self.get_expected_type_at(handle, position);
                 allow_function_call_parens = true;
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
@@ -1135,7 +1078,7 @@ impl Transaction<'_> {
                     context,
                     IdentifierContext::Expr(ExprContext::Load | ExprContext::Invalid)
                 ) {
-                    self.expected_call_argument_type(handle, position)
+                    self.get_expected_type_at(handle, position)
                 } else {
                     None
                 };
@@ -1227,7 +1170,7 @@ impl Transaction<'_> {
                     ) {
                         // Skip global completions — we handled the import case.
                     } else {
-                        let expected_type = self.expected_call_argument_type(handle, position);
+                        let expected_type = self.get_expected_type_at(handle, position);
                         if nodes.is_empty() {
                             Self::add_keyword_completions(handle, &mut result);
                             self.add_local_variable_completions(
@@ -1248,12 +1191,8 @@ impl Transaction<'_> {
                             &mut result,
                             in_string_literal,
                         );
-                        let dict_key_claimed = self.add_dict_key_completions(
-                            handle,
-                            mod_module.as_ref(),
-                            position,
-                            &mut result,
-                        );
+                        // `dict_key_claimed` was computed up front; when a dict key was
+                        // offered we skip the overload literal completions.
                         if !dict_key_claimed {
                             self.add_literal_completions(
                                 handle,

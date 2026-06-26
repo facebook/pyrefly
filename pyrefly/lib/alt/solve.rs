@@ -17,7 +17,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::facet::FacetKind;
-use pyrefly_types::tensor::TensorType;
+use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_alias::TypeAliasRef;
@@ -48,12 +48,15 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::callable::CallArg;
+use crate::alt::class::attrs::is_attrs_nothing;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
+use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -71,11 +74,12 @@ use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassBaseType;
+use crate::binding::binding::BindingClassChecks;
+use crate::binding::binding::BindingClassDisjointBase;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
 use crate::binding::binding::BindingClassSynthesizedFields;
-use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
@@ -84,7 +88,6 @@ use crate::binding::binding::BindingTParams;
 use crate::binding::binding::BindingTypeAlias;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingVariance;
-use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::BranchInfo;
@@ -143,6 +146,7 @@ use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
+use crate::types::class::AttrsFieldSpecifierKind;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::TypeDisplayContext;
@@ -348,6 +352,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             pydantic_before_validator_fields,
             django_field_info,
             capture_init,
+            shaped_array_metadata,
         } = binding;
         let metadata = match &self.get_idx(*k).0 {
             None => ClassMetadata::recursive(),
@@ -361,6 +366,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 pydantic_before_validator_fields,
                 django_field_info,
                 capture_init.as_deref(),
+                shaped_array_metadata.as_deref(),
                 errors,
             ),
         };
@@ -377,6 +383,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Some(cls) => self.calculate_class_mro(cls, errors),
         };
         Arc::new(mro)
+    }
+
+    pub fn solve_class_disjoint_base(
+        &self,
+        binding: &BindingClassDisjointBase,
+        errors: &ErrorCollector,
+    ) -> Arc<ClassDisjointBase> {
+        let answer = match &self.get_idx(binding.class_idx).0 {
+            None => ClassDisjointBase::recursive(),
+            Some(cls) => self.calculate_class_disjoint_base(cls, errors),
+        };
+        Arc::new(answer)
     }
 
     pub fn solve_abstract_members(
@@ -673,6 +691,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             Expr::Subscript(x)
+                if let Some(ty) =
+                    self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors) =>
+            {
+                Annotation::new_type(ty)
+            }
+            Expr::Subscript(x)
                 if let unpacked_slice = Ast::unpack_slice(&x.slice)
                     && !unpacked_slice.is_empty()
                     && let Some(qualifier) =
@@ -845,6 +869,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
             }
+            Type::Quantified(q) if q.is_type_var() => {
+                // A TypeVar iterates like its upper bound: `Z: tuple[str, int]` must
+                // unpack positionally rather than collapse to the element join via the
+                // iterable protocol. Mirrors attribute access on a bounded TypeVar.
+                self.iterate(
+                    &q.upper_bound(self.stdlib, self.heap),
+                    range,
+                    errors,
+                    orig_context,
+                )
+            }
             Type::Union(f) => f
                 .members
                 .iter()
@@ -929,7 +964,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             expected_types.push(self.heap.mk_none());
             expected = "`BaseException` or `None`"
         }
-        if !self.is_subset_eq(&actual_type, &self.heap.mk_union(expected_types)) {
+        if !self.is_subset_eq(&actual_type, &self.unions(expected_types)) {
             self.error(
                 errors,
                 range,
@@ -1325,28 +1360,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Check whether a type alias body contains a cyclic self-reference.
     ///
     /// Two kinds of invalid self-reference are detected:
-    /// 1. Direct top-level union member: `type X = int | X` (X appears as a
-    ///    direct union alternative, producing `int | int | ...` which is just `int`)
-    /// 2. Unguarded nested reference inside a builtin class, `type[...]`, or
-    ///    tuple: `type X = list[X]` (X appears inside a container with no union
-    ///    base case, producing an uninhabitable infinite type)
+    /// 1. Direct top-level member of a union or tuple:
+    ///    * `type X = int | X` - produces `int | int | ...` which is just `int`
+    ///    * `type X = tuple[int, X]` - uninhabitable infinite type
+    ///    * `type X = tuple[X, ...]` - inhabited only by arbitrarily nested empty tuples
+    /// 2. Reference nested inside a union or builtin class containing no non-self-reference:
+    ///    * `type X = list[X]` - inhabited only by arbitrarily nested empty lists
     ///
-    /// Valid recursive aliases like `type X = int | list[X]` have a base case
-    /// (`int`) in the union, so the self-reference is "guarded".
-    ///
-    /// We only check for unguarded references inside builtin classes,
+    /// We only check for invalid self-references inside builtin classes,
     /// `type[...]`, and tuples, not user-defined generic classes. A
     /// user-defined `class C[T]: x: T | None` makes `type A = C[A]`
     /// inhabitable (e.g. `C(x=C(x=None))`), so we can't assume all generic
     /// containers require their type parameter.
     /// Returns `true` if a cyclic self-reference was found.
-    fn check_type_alias_for_cyclic_reference(
-        &self,
-        name: &Name,
-        ta: &TypeAlias,
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> bool {
+    fn type_alias_has_cyclic_reference(&self, name: &Name, ta: &TypeAlias) -> bool {
         // Unwrap the type[body] wrapper. We operate on the inner body because
         // map_over_union wraps inner union members in type[...] when traversing
         // inside Type::Type, which would prevent matching UntypedAlias nodes.
@@ -1359,76 +1386,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let is_self_ref = |ty: &Type| matches!(ty, Type::UntypedAlias(ta) if ta.name() == name);
 
-        // Check 1: Direct top-level union member (e.g. `int | X`).
-        let mut direct_self_ref = false;
-        self.map_over_union(body, |ty| {
-            direct_self_ref |= is_self_ref(ty);
-        });
+        fn collect_tuple_members(tuple: &Tuple) -> Vec<&Type> {
+            match tuple {
+                Tuple::Concrete(ts) => ts.iter().collect(),
+                Tuple::Unbounded(t) => vec![t],
+                Tuple::Unpacked(ts) => {
+                    ts.0.iter()
+                        .chain(if let Type::Tuple(inner) = &ts.1 {
+                            collect_tuple_members(inner)
+                        } else {
+                            Vec::new()
+                        })
+                        .chain(ts.2.iter())
+                        .collect()
+                }
+            }
+        }
 
-        // Check 2: Unguarded nested reference (e.g. `list[X]`).
-        // A self-reference is "guarded" if it appears inside a union where at
-        // least one sibling branch does not (transitively) contain the self-ref.
-        // Returns true if the type contains a self-reference that is not guarded
-        // by a union base case, only recursing into known builtin collections.
-        fn has_unguarded_self_ref(ty: &Type, is_self_ref: &dyn Fn(&Type) -> bool) -> bool {
+        // Check 1: Direct top-level union or tuple member (e.g. `int | X`).
+        let has_direct_self_ref = {
+            let mut has_self_ref = false;
+            self.map_over_union(body, |t| {
+                has_self_ref |= is_self_ref(t);
+            });
+            has_self_ref |= matches!(body, Type::Tuple(tuple) if collect_tuple_members(tuple).into_iter().any(is_self_ref));
+            has_self_ref
+        };
+
+        // Check 2: nested self-reference without a non-self-reference (e.g. `list[X]`).
+        fn contains_only_self_ref(ty: &Type, is_self_ref: &dyn Fn(&Type) -> bool) -> bool {
             if is_self_ref(ty) {
                 return true;
             }
             match ty {
-                Type::Union(f) => {
-                    // If any member is free of self-refs, it provides a base case
-                    // and all other self-referencing members are guarded.
-                    let mut has_self_ref = false;
-                    let mut has_base_case = false;
-                    for m in &f.members {
-                        if has_unguarded_self_ref(m, is_self_ref) {
-                            has_self_ref = true;
-                        } else {
-                            has_base_case = true;
-                        }
-                    }
-                    has_self_ref && !has_base_case
-                }
-                // Builtin classes use their type parameters in required
-                // positions (as elements, fields, or yielded values), so a
-                // self-reference with no union base case is uninhabitable.
-                Type::ClassType(cls) if cls.class_object().module_name().as_str() == "builtins" => {
+                Type::Union(union) => union
+                    .members
+                    .iter()
+                    .all(|t| contains_only_self_ref(t, is_self_ref)),
+                Type::ClassType(cls)
+                    if cls.class_object().module_name().as_str() == "builtins"
+                        && !cls.targs().is_empty() =>
+                {
                     cls.targs()
                         .as_slice()
                         .iter()
-                        .any(|arg| has_unguarded_self_ref(arg, is_self_ref))
+                        .all(|t| contains_only_self_ref(t, is_self_ref))
                 }
-                // type[X] wraps X, so a self-ref is unguarded here too.
-                Type::Type(inner) => has_unguarded_self_ref(inner, is_self_ref),
-                // Tuples: fixed-length tuples require all elements, and
-                // unbounded tuples are degenerate (only empty tuple inhabits).
-                // In either case a self-ref with no union base case is invalid.
-                Type::Tuple(_) => {
-                    let mut found = false;
-                    ty.recurse(&mut |child: &Type| {
-                        if has_unguarded_self_ref(child, is_self_ref) {
-                            found = true;
-                        }
-                    });
-                    found
+                Type::Type(t) => contains_only_self_ref(t, is_self_ref),
+                Type::Tuple(tuple) => {
+                    let members = collect_tuple_members(tuple);
+                    !members.is_empty()
+                        && members
+                            .into_iter()
+                            .all(|t| contains_only_self_ref(t, is_self_ref))
                 }
-                // For user-defined generic classes and other types, we don't
-                // recurse — the class may have optional fields of type T that
-                // provide a base case we can't see here.
                 _ => false,
             }
         }
-
-        if direct_self_ref || has_unguarded_self_ref(body, &is_self_ref) {
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidTypeAlias,
-                format!("Found cyclic self-reference in `{name}`"),
-            );
-            return true;
-        }
-        false
+        has_direct_self_ref || contains_only_self_ref(body, &is_self_ref)
     }
 
     /// `typealiastype_tparams` refers specifically to the elements of the tuple literal passed to the `TypeAliasType` constructor
@@ -1464,8 +1479,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // If a cycle is found, replace the body with an error type to prevent
         // infinite recursion when downstream operations (e.g. attribute lookup,
         // subset checks) try to resolve the alias.
-        if self.check_type_alias_for_cyclic_reference(name, &ta, range, errors) {
-            return self.heap.mk_any_error();
+        if self.type_alias_has_cyclic_reference(name, &ta) {
+            return self.error(
+                errors,
+                range,
+                ErrorKind::InvalidTypeAlias,
+                format!("Found cyclic self-reference in `{name}`"),
+            );
         }
 
         // Step 3: Extract type parameters from the (now expanded) body.
@@ -1882,11 +1902,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let mut default_ty = None;
         if let Some(default_expr) = &tp.default {
-            let default = self.expr_untype(
-                default_expr,
-                TypeFormContext::quantified_kind_default(tp.kind),
-                errors,
-            );
+            let is_dim_bound = |ty: &Type| {
+                matches!(ty, Type::Dim(_))
+                    || matches!(ty, Type::ClassType(cls) if cls.has_qname("shape_extensions", "Dim"))
+            };
+            let default = if self.solver().tensor_shapes
+                && matches!(&restriction, Restriction::Bound(bound) if is_dim_bound(bound))
+                && let Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. }) =
+                    default_expr
+                && let ruff_python_ast::Number::Int(i) = value
+                && let Some(n) = i.as_i64()
+            {
+                Type::Size(SizeExpr::Literal(n))
+            } else {
+                self.expr_untype(
+                    default_expr,
+                    TypeFormContext::quantified_kind_default(tp.kind),
+                    errors,
+                )
+            };
             default_ty = Some(self.validate_type_var_default(
                 &tp.name,
                 tp.kind,
@@ -2463,7 +2497,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 let (annot, ty) =
-                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, errors);
+                    self.name_assign_infer(name, annot_key.as_ref(), None, expr, None, errors);
                 if let Some(annot) = &annot
                     && let Some((AnnotationStyle::Forwarded, _)) = annot_key
                 {
@@ -2589,7 +2623,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Uses MRO to walk ALL ancestors (not just direct bases).
     /// Only adds if the ancestor directly declares the field.
     /// Skips library code to keep the index focused on user source code.
-    fn populate_parent_methods_map(&self, cls: &Class) {
+    fn populate_parent_methods_map(
+        &self,
+        cls: &Class,
+        class_field_map: &SmallMap<Name, Arc<ClassField>>,
+    ) {
         if Self::should_skip_module_for_indexing(cls.module().path()) {
             return;
         }
@@ -2598,7 +2636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return;
         };
         let mro = self.get_mro_for_class(cls);
-        for (field_name, _field) in self.get_class_field_map(cls).iter() {
+        for (field_name, _field) in class_field_map.iter() {
             // Apply the same filters as check_consistent_override_for_field.
             // Skip special methods that don't participate in override checks:
             // - Object construction: __new__, __init__, __init_subclass__
@@ -2635,33 +2673,56 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub fn solve_consistent_override_check(
+    /// Run class-level diagnostics that do not produce downstream answers.
+    ///
+    /// The checks share one `EmptyAnswer` key so class diagnostics can be forced without
+    /// allocating separate pure side-effect bindings. The order has no semantic dependency;
+    /// override checks run first to match the previous diagnostic order.
+    pub fn solve_class_checks(
         &self,
-        binding: &BindingConsistentOverrideCheck,
+        binding: &BindingClassChecks,
         errors: &ErrorCollector,
     ) -> Arc<EmptyAnswer> {
-        if let Some(cls) = &self.get_idx(binding.class_key).0 {
+        let class = self.get_idx(binding.class_idx);
+        if let Some(cls) = &class.0 {
             let class_bases = self.get_base_types_for_class(cls);
-
-            self.populate_parent_methods_map(cls);
-
-            for (name, field) in self.get_class_field_map(cls).iter() {
-                self.check_consistent_override_for_field(
-                    cls,
-                    name,
-                    field.as_ref(),
-                    class_bases.as_ref(),
-                    errors,
-                );
-            }
-
-            // If we are inheriting from multiple base types, we should
-            // check whether the multiple inheritance is consistent
-            if class_bases.as_ref().base_type_count() > 1 {
-                self.check_consistent_multiple_inheritance(cls, errors);
-            }
+            let class_field_map = self.get_class_field_map(cls);
+            self.check_consistent_override_for_class(
+                cls,
+                class_bases.as_ref(),
+                &class_field_map,
+                errors,
+            );
+            self.check_variance_for_class(cls, class_bases.as_ref(), &class_field_map, errors);
         }
         Arc::new(EmptyAnswer)
+    }
+
+    /// Check method and attribute override consistency for a class.
+    fn check_consistent_override_for_class(
+        &self,
+        cls: &Class,
+        class_bases: &ClassBases,
+        class_field_map: &SmallMap<Name, Arc<ClassField>>,
+        errors: &ErrorCollector,
+    ) {
+        self.populate_parent_methods_map(cls, class_field_map);
+
+        for (name, field) in class_field_map.iter() {
+            self.check_consistent_override_for_field(
+                cls,
+                name,
+                field.as_ref(),
+                class_bases,
+                errors,
+            );
+        }
+
+        // If we are inheriting from multiple base types, we should
+        // check whether the multiple inheritance is consistent
+        if class_bases.base_type_count() > 1 {
+            self.check_consistent_multiple_inheritance(cls, errors);
+        }
     }
 
     pub fn solve_class(
@@ -2782,10 +2843,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         if let Some(class) = &class.0 {
             // Only compute variance map, don't check violations here.
-            // Violations are checked separately in solve_variance_check to avoid
-            // cycles from calling get_class_field_map during variance computation.
-            let result = self.compute_variance(class, false);
-            Arc::new(result.variance_map)
+            // Variance violations are checked as part of `KeyClassChecks` alongside
+            // other class-level diagnostics. This avoids adding class-field dependencies
+            // for fully-specified generic classes, where computing the downstream
+            // `KeyVariance` answer does not need variance inference.
+            Arc::new(self.compute_variance(class))
         } else {
             Arc::new(VarianceMap::default())
         }
@@ -2793,85 +2855,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check variance violations for a class.
     ///
-    /// This is separate from solve_variance_binding to avoid cycles when
-    /// calling get_class_field_map during variance computation.
-    ///
-    /// Checking behavior:
-    /// - Base classes: DEEP checking (recurse into all nested generics)
-    /// - Methods: SHALLOW checking (only direct TypeVar usage, not nested Callables)
-    /// - Fields: NO checking (mutable fields constrain variance during inference only)
-    pub fn solve_variance_check(
+    /// This is separate from solve_variance_binding so the downstream `KeyVariance`
+    /// answer does not pick up field dependencies only needed for diagnostics. See
+    /// `check_variance_violations` for the diagnostic traversal rules.
+    fn check_variance_for_class(
         &self,
-        binding: &BindingVarianceCheck,
+        class: &Class,
+        class_bases: &ClassBases,
+        class_field_map: &SmallMap<Name, Arc<ClassField>>,
         errors: &ErrorCollector,
-    ) -> Arc<EmptyAnswer> {
-        let class = self.get_idx(binding.class_idx);
+    ) {
+        // Get type parameters and their declared variances
+        let tparams = self.get_class_tparams(class);
 
-        if let Some(class) = &class.0 {
-            // Get type parameters and their declared variances
-            let tparams = self.get_class_tparams(class);
+        // Only check violations when there are covariant/contravariant
+        // TypeVars — invariant TypeVars are valid in any position.
+        let has_non_invariant_variance = tparams.as_vec().iter().any(|p| {
+            matches!(
+                p.variance(),
+                PreInferenceVariance::Covariant | PreInferenceVariance::Contravariant
+            )
+        });
 
-            // Only check violations when there are covariant/contravariant
-            // TypeVars — invariant TypeVars are valid in any position.
-            let has_non_invariant_variance = tparams.as_vec().iter().any(|p| {
-                matches!(
-                    p.variance(),
-                    PreInferenceVariance::Covariant | PreInferenceVariance::Contravariant
-                )
-            });
-
-            if has_non_invariant_variance {
-                let result = self.compute_variance(class, true);
-
-                for violation in &result.violations {
-                    let message = violation.format_message();
-                    self.error(errors, violation.range, ErrorKind::InvalidVariance, message);
-                }
+        if has_non_invariant_variance {
+            for violation in self.check_variance_violations(class, class_bases, class_field_map) {
+                let message = violation.format_message();
+                self.error(errors, violation.range, ErrorKind::InvalidVariance, message);
             }
+        }
 
-            // For protocols: warn when an invariant TypeVar could be declared
-            // with a narrower variance. We only check invariant TypeVars here
-            // because wrong variance on covariant/contravariant TypeVars is
-            // already caught by InvalidVariance at the usage site.
-            let metadata = self.get_metadata_for_class(class);
-            if metadata.is_protocol()
-                && tparams.as_vec().iter().any(|p| {
-                    p.kind() == QuantifiedKind::TypeVar
-                        && p.variance() == PreInferenceVariance::Invariant
-                })
-            {
-                let inferred = self.infer_variance_ignoring_declared(class);
-                for tparam in tparams.as_vec() {
-                    if tparam.kind() != QuantifiedKind::TypeVar
-                        || tparam.variance() != PreInferenceVariance::Invariant
-                    {
-                        continue;
-                    }
-                    let inferred_v = inferred.get(tparam.name());
-                    let effective_v = if inferred_v == Variance::Bivariant {
-                        Variance::Covariant
-                    } else {
-                        inferred_v
-                    };
-                    if effective_v != Variance::Invariant {
-                        self.error(
-                            errors,
-                            // TODO: ideally this would point to where the TypeVar
-                            // is bound in the class header rather than the class name.
-                            class.range(),
-                            ErrorKind::VarianceMismatch,
-                            format!(
-                                "Type variable `{}` in class `{}` is declared as invariant, but could be {} based on its usage",
-                                tparam.name(),
-                                class.name(),
-                                effective_v,
-                            ),
-                        );
-                    }
+        // For protocols: warn when an invariant TypeVar could be declared
+        // with a narrower variance. We only check invariant TypeVars here
+        // because wrong variance on covariant/contravariant TypeVars is
+        // already caught by InvalidVariance at the usage site.
+        let metadata = self.get_metadata_for_class(class);
+        if metadata.is_protocol()
+            && tparams.as_vec().iter().any(|p| {
+                p.kind() == QuantifiedKind::TypeVar
+                    && p.variance() == PreInferenceVariance::Invariant
+            })
+        {
+            let inferred = self.infer_variance_ignoring_declared(class);
+            for tparam in tparams.as_vec() {
+                if tparam.kind() != QuantifiedKind::TypeVar
+                    || tparam.variance() != PreInferenceVariance::Invariant
+                {
+                    continue;
+                }
+                let inferred_v = inferred.get(tparam.name());
+                let effective_v = if inferred_v == Variance::Bivariant {
+                    Variance::Covariant
+                } else {
+                    inferred_v
+                };
+                if effective_v != Variance::Invariant {
+                    self.error(
+                        errors,
+                        // TODO: ideally this would point to where the TypeVar
+                        // is bound in the class header rather than the class name.
+                        class.range(),
+                        ErrorKind::VarianceMismatch,
+                        format!(
+                            "Type variable `{}` in class `{}` is declared as invariant, but could be {} based on its usage",
+                            tparam.name(),
+                            class.name(),
+                            effective_v,
+                        ),
+                    );
                 }
             }
         }
-        Arc::new(EmptyAnswer)
     }
 
     /// Get the class that attribute lookup on `super(cls, obj)` should be done on.
@@ -2987,6 +3040,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 SuperObj::Instance(obj_type)
                             }
                         };
+                        // A zero-arg `super()` in a method of a class that directly subclasses
+                        // `NamedTuple` makes the class fail to define at runtime: the `__class__`
+                        // cell the compiler creates for `super()` is not propagated by the
+                        // NamedTuple machinery. See https://github.com/facebook/pyrefly/issues/3763.
+                        if self
+                            .get_metadata_for_class(obj_cls)
+                            .named_tuple_metadata()
+                            .is_some_and(|nt| nt.directly_extends_named_tuple)
+                        {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::InvalidSuperCall,
+                                "`super` call with no arguments is not allowed in a `NamedTuple` method".to_owned(),
+                            );
+                        }
                         self.heap.mk_super_instance(lookup_cls, obj)
                     }
                     None => self.heap.mk_any_implicit(),
@@ -3021,8 +3090,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
             Restriction::Bound(bound_ty) => {
                 let default_for_check = match default {
-                    Type::TypeVar(tv) => tv.bound_type(self.stdlib, self.heap),
-                    Type::Quantified(q) if q.is_type_var() => q.bound_type(self.stdlib, self.heap),
+                    Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
+                    Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
                     _ => default.clone(),
                 };
                 if !self.is_subset_eq(&default_for_check, bound_ty) {
@@ -3272,6 +3341,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         annot_key: Option<&(AnnotationStyle, Idx<KeyAnnotation>)>,
         receiver_idx: Option<Idx<Key>>,
         expr: &Expr,
+        attrs_field_specifier: Option<AttrsFieldSpecifierKind>,
         errors: &ErrorCollector,
     ) -> (Option<Arc<AnnotationWithTarget>>, Type) {
         // Receiver-constrained class assignment: a same-scope rebind of a
@@ -3288,7 +3358,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let receiver_ty = self.get_idx(receiver_idx).arc_clone_ty();
             let tcc: &dyn Fn() -> TypeCheckContext =
                 &|| TypeCheckContext::of_kind(TypeCheckKind::AnnotatedName(name.clone()));
-            let expr_ty = self.expr(expr, Some((&receiver_ty, tcc)), errors);
+            let expr_ty = self.expr_check(expr, Some((&receiver_ty, tcc)), errors);
             let visible_ty = if self.is_subset_eq(&expr_ty, &receiver_ty) {
                 expr_ty
             } else {
@@ -3311,12 +3381,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .with_annotation(annot_range, "declared type".to_owned())
                 };
                 let annot_ty = annot.ty(self.heap, self.stdlib);
-                let hint = annot_ty.as_ref().map(|t| (t, tcc));
-                let expr_ty = self.expr(expr, hint, errors);
+                // The annotation is authoritative for an attrs specifier, so we don't check the
+                // call's return (which `validator=` can widen) against it. We instead check the
+                // value the field will hold: the `default=`/positional value, or the `factory=`
+                // callable's return. A `converter=` intercepts that value (its type becomes the
+                // converter's input, enforced on `__init__`), so we skip the check when present.
+                let expr_ty = if attrs_field_specifier.is_some()
+                    && let Expr::Call(call) = expr
+                {
+                    let got = self.expr_infer(expr, errors);
+                    if let Some(annot_ty) = &annot_ty
+                        && call.arguments.find_keyword("converter").is_none()
+                    {
+                        if let Some(default) = call
+                            .arguments
+                            .find_keyword("default")
+                            .map(|kw| &kw.value)
+                            // Only legacy `attr.ib` accepts a positional `default`; `field` is
+                            // keyword-only, so a positional there is not a default value.
+                            .or_else(|| {
+                                (attrs_field_specifier == Some(AttrsFieldSpecifierKind::Attrib))
+                                    .then(|| call.arguments.args.first())
+                                    .flatten()
+                            })
+                            && !is_attrs_nothing(&self.expr_infer(default, &self.error_swallower()))
+                        {
+                            self.expr_check(default, Some((annot_ty, tcc)), errors);
+                        } else if let Some(factory) = call.arguments.find_keyword("factory") {
+                            // Check factory return against annotation
+                            let factory_ty =
+                                self.expr_infer(&factory.value, &self.error_swallower());
+                            let callable = self.constructor_to_callable_distributed(&factory_ty);
+                            if let Some(ret) = callable
+                                .as_ref()
+                                .unwrap_or(&factory_ty)
+                                .callable_return_type(self.heap)
+                            {
+                                self.check_type(&ret, annot_ty, factory.value.range(), errors, tcc);
+                            }
+                        }
+                    }
+                    got
+                } else {
+                    let hint = annot_ty.as_ref().map(|t| (t, tcc));
+                    self.expr_check(expr, hint, errors)
+                };
                 let ty = if style == &AnnotationStyle::Direct {
-                    // For direct assignments, user-provided annotation takes
-                    // precedence over inferred expr type.
-                    annot_ty.unwrap_or(expr_ty)
+                    if attrs_field_specifier.is_some() {
+                        self.heap.mk_any_implicit()
+                    } else {
+                        // For direct assignments, user-provided annotation takes
+                        // precedence over inferred expr type.
+                        annot_ty.unwrap_or(expr_ty)
+                    }
                 } else if style == &AnnotationStyle::ForwardedInitial
                     && expr_ty.is_any()
                     && let Some(annot) = annot_ty
@@ -3338,7 +3455,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // `x = ...` in a stub file means that the type of `x` is unknown
                 (None, self.heap.mk_any_implicit())
             }
-            None => (None, self.expr(expr, None, errors)),
+            None => {
+                // Bare `x = attr.ib(type=T)`/`field(...)` (legacy, unannotated): same
+                // `_CountingAttr` reasoning as the annotated case.
+                let expr_ty = self.expr_check(expr, None, errors);
+                let ty = if attrs_field_specifier.is_some() {
+                    self.heap.mk_any_implicit()
+                } else {
+                    expr_ty
+                };
+                (None, ty)
+            }
         }
     }
 
@@ -3353,10 +3480,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         expr: &Expr,
         legacy_tparams: &Option<Box<[Idx<KeyLegacyTypeParam>]>>,
         is_in_function_scope: bool,
+        attrs_field_specifier: Option<AttrsFieldSpecifierKind>,
         errors: &ErrorCollector,
     ) -> Type {
-        let (annot, ty) =
-            self.name_assign_infer(name, annot_key.as_ref(), receiver_idx, expr, errors);
+        let (annot, ty) = self.name_assign_infer(
+            name,
+            annot_key.as_ref(),
+            receiver_idx,
+            expr,
+            attrs_field_specifier,
+            errors,
+        );
         if let Some(annot) = &annot
             && let Some((AnnotationStyle::Forwarded, _)) = annot_key
         {
@@ -3568,7 +3702,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .with_annotation(annot_range, "declared return type".to_owned())
             };
             if let Some(expr) = &x.expr {
-                self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
+                self.expr_check(expr, hint.as_ref().map(|t| (t, tcc)), errors)
             } else if let Some(hint) = hint {
                 let none = self.heap.mk_none();
                 self.check_type(&none, &hint, x.range, errors, tcc);
@@ -3581,7 +3715,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let tcc: &dyn Fn() -> TypeCheckContext =
                 &|| TypeCheckContext::of_kind(TypeCheckKind::TypeGuardReturn);
             if let Some(expr) = &x.expr {
-                self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
+                self.expr_check(expr, hint.as_ref().map(|t| (t, tcc)), errors)
             } else if let Some(hint) = hint {
                 let none = self.heap.mk_none();
                 self.check_type(&none, &hint, x.range, errors, tcc);
@@ -3596,7 +3730,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .with_annotation(annot_range, "declared return type".to_owned())
             };
             if let Some(expr) = &x.expr {
-                self.expr(expr, hint.as_ref().map(|t| (t, tcc)), errors)
+                self.expr_check(expr, hint.as_ref().map(|t| (t, tcc)), errors)
             } else if let Some(hint) = hint {
                 let none = self.heap.mk_none();
                 self.check_type(&none, &hint, x.range, errors, tcc);
@@ -3938,7 +4072,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(&annot.target))
                 };
                 self.check_final_reassignment(&annot, e.range(), errors);
-                self.expr(
+                self.expr_check(
                     e,
                     annot.ty(self.heap, self.stdlib).as_ref().map(|t| (t, tcc)),
                     errors,
@@ -3946,7 +4080,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             None => {
                 // TODO(stroxler): propagate attribute narrows here
-                self.expr(e, None, errors)
+                self.expr_check(e, None, errors)
             }
         }
     }
@@ -3967,19 +4101,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(ann_idx) = ann {
             let annot = self.get_idx(ann_idx);
             self.check_final_reassignment(&annot, range, errors);
-            if let Some(annot_ty) = annot.ty(self.heap, self.stdlib)
-                && !self.is_subset_eq(ty, &annot_ty)
-            {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadAssignment,
-                    format!(
-                        "Wrong type for assignment, expected `{}` and got `{}`",
-                        &annot_ty, ty
-                    ),
-                );
-                return annot_ty;
+            if let Some(annot_ty) = annot.ty(self.heap, self.stdlib) {
+                let tcc: &dyn Fn() -> TypeCheckContext = &|| {
+                    TypeCheckContext::of_kind(TypeCheckKind::AnnAssign)
+                        .with_annotation(self.annotation_range(ann_idx), "declared type".to_owned())
+                };
+                if !self.check_type(ty, &annot_ty, range, errors, tcc) {
+                    // Type check failed, fall back to the annotation type
+                    return annot_ty;
+                }
             }
         }
         if let Some(receiver) = receiver {
@@ -4169,7 +4299,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         special_export: Option<SpecialExport>,
         errors: &ErrorCollector,
     ) -> Type {
-        let result = self.expr(e, None, errors);
+        let result = self.expr_check(e, None, errors);
+        match special_export {
+            Some(SpecialExport::TypeVar) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidTypeVar,
+                    "TypeVar must be assigned to a variable".to_owned(),
+                );
+            }
+            Some(SpecialExport::ParamSpec) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidParamSpec,
+                    "ParamSpec must be assigned to a variable".to_owned(),
+                );
+            }
+            Some(SpecialExport::TypeVarTuple) => {
+                self.error(
+                    errors,
+                    e.range(),
+                    ErrorKind::InvalidTypeVarTuple,
+                    "TypeVarTuple must be assigned to a variable".to_owned(),
+                );
+            }
+            _ => {}
+        }
         if special_export != Some(SpecialExport::AssertType)
             && let Type::ClassType(cls) = &result
             && self.is_coroutine(&result)
@@ -4745,7 +4902,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ))
             };
             match value {
-                ExprOrBinding::Expr(e) => self.expr(e, Some((field_ty, context)), errors),
+                ExprOrBinding::Expr(e) => self.expr_check(e, Some((field_ty, context)), errors),
                 ExprOrBinding::Binding(b) => {
                     let binding_ty = self.solve_binding(b, assign_range, errors).arc_clone_ty();
                     self.check_and_return_type(binding_ty, field_ty, assign_range, errors, context)
@@ -5150,6 +5307,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &x.expr,
                 &x.legacy_tparams,
                 x.is_in_function_scope,
+                x.attrs_field_specifier,
                 errors,
             ),
             Binding::TypeVar(x) => {
@@ -5327,6 +5485,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_none()
             }
             Binding::Delete(x) => self.check_del_statement(x, errors),
+            Binding::Sentinel(x) => {
+                let (ann, name, nesting_context, call) = x.as_ref();
+                let ty = self
+                    .sentinel_from_call(name.clone(), nesting_context.dupe(), call, errors)
+                    .to_type(self.heap);
+                if let Some(k) = ann
+                    && let AnnotationWithTarget {
+                        target,
+                        annotation:
+                            Annotation {
+                                ty: Some(want),
+                                qualifiers: _,
+                            },
+                    } = &*self.get_idx(*k)
+                {
+                    // Validate the annotation already on assigned name
+                    self.check_type(&ty, want, call.range, errors, &|| {
+                        TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
+                    });
+                }
+                ty
+            }
         }
     }
 
@@ -5391,7 +5571,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(hints) = hints {
                     let (yield_hints, send_tys) = hints.into_iter().unzip();
                     let yield_ty = if let Some(expr) = x.value.as_ref() {
-                        self.expr(
+                        self.expr_check(
                             expr,
                             Some((&self.unions(yield_hints), &|| {
                                 TypeCheckContext::of_kind(TypeCheckKind::YieldValue)
@@ -5655,13 +5835,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     return Some(self.heap.mk_dim(cls.targs().as_slice()[0].clone()));
                 }
-                // Canonicalize bare Tensor to Type::Tensor(shapeless) for consistency.
-                // Subscripted Tensor[2, 3] is already converted to Type::Tensor in
-                // parse_tensor_type, so only the bare case reaches here.
+                // Canonicalize bare shaped-array types to Type::ShapedArray(shapeless)
+                // for consistency. Subscripted arrays are already converted to
+                // Type::ShapedArray during annotation parsing, so only the bare case reaches here.
                 if let Type::ClassType(cls) = t.as_ref()
-                    && cls.has_qname("torch", "Tensor")
+                    && self.shaped_array_shape_for_class_type(cls).is_some()
                 {
-                    return Some(TensorType::shapeless(cls.clone()).to_type());
+                    return Some(ShapedArrayType::shapeless(cls.clone()).to_type());
                 }
                 // Normalize type[NoneType] as None
                 if let Type::ClassType(cls) = t.as_ref()
@@ -5681,6 +5861,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(*t)
             }
+            Type::Sentinel(sentinel) => Some(self.heap.mk_sentinel(sentinel)),
             Type::None => Some(self.heap.mk_none()), // Both a value and a type
             Type::Ellipsis => Some(self.heap.mk_ellipsis()), // A bit weird because of tuples, so just promote it
             Type::Any(style) => Some(style.propagate()),
@@ -5724,7 +5905,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Dim, SizeExpr, and Tensor are already type forms
             ty @ Type::Dim(_) => Some(ty),
             ty @ Type::Size(_) => Some(ty),
-            ty @ Type::Tensor(_) => Some(ty),
+            ty @ Type::ShapedArray(_) => Some(ty),
             ty @ Type::NNModule(_) => Some(ty),
             // Handle bare class definitions (e.g., Dim, Module) by canonicalizing them to type forms
             Type::ClassDef(cls) => {
@@ -5859,7 +6040,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 | TypeFormContext::ParamSpecDefault
         ) && matches!(
             ty,
-            Type::Concatenate(_, _) | Type::ParamSpecValue(_) | Type::ParamSpec(_)
+            Type::Concatenate(_, _) | Type::ParamSpecValue(_) | Type::ParamSpec(_) | Type::Ellipsis
         ) {
             return self.error(
                 errors,
@@ -6080,6 +6261,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let result = match x {
+            Expr::Subscript(x)
+                if let Some(ty) =
+                    self.parse_jaxtyping_type_form(&x.value, &x.slice, x.range(), errors) =>
+            {
+                ty
+            }
             Expr::List(x)
                 if matches!(
                     type_form_context,
@@ -6095,33 +6282,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
-            }
-            // Special case: integer literals in type argument or TypeVar default context with
-            // native tensor shapes. These can be used for Dim-bounded parameters
-            // (e.g., LinearLayer[6, 9]) or TypeVar defaults (e.g., class Conv2d[..., S = 1]).
-            // We convert them directly to Type::Size to distinguish from Literal[6].
-            Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. })
-                if matches!(
-                    type_form_context,
-                    TypeFormContext::TypeArgument | TypeFormContext::TypeVarDefault
-                ) && self.solver().tensor_shapes =>
-            {
-                match value {
-                    ruff_python_ast::Number::Int(i) => {
-                        if let Some(n) = i.as_i64() {
-                            Type::Size(SizeExpr::Literal(n))
-                        } else {
-                            // Integer too large to fit in i64, fall back to error
-                            let inferred_ty = self.expr_infer(x, errors);
-                            self.untype(inferred_ty, x.range(), errors)
-                        }
-                    }
-                    _ => {
-                        // For non-integer numbers (float, complex), fall through to the generic path
-                        let inferred_ty = self.expr_infer(x, errors);
-                        self.untype(inferred_ty, x.range(), errors)
-                    }
-                }
             }
             _ => {
                 let inferred_ty = self.expr_infer(x, errors);
@@ -6186,7 +6346,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let silent = ErrorCollector::new(errors.module().dupe(), ErrorStyle::Never);
         let ty = self.untype_opt((*export_ty).clone(), x.range(), &silent)?;
         let typeform_ty = self.heap.mk_typeform(ty);
-        self.check_type_with_call_context(&typeform_ty, hint, range, errors, tcc, call_context);
+        self.check_type_with_options(
+            &typeform_ty,
+            hint,
+            range,
+            TypeCheckOptions::new(errors, tcc).with_call_context(call_context),
+        );
         Some(typeform_ty)
     }
 }

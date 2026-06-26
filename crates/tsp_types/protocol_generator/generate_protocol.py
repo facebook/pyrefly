@@ -24,7 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 # Import the lsprotocol generator modules
 

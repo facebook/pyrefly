@@ -22,6 +22,7 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
@@ -29,8 +30,10 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::type_var::Variance;
 use pyrefly_types::types::Type;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::lined_buffer::LineNumber;
@@ -45,6 +48,7 @@ use ruff_text_size::TextSize;
 use vec1::Vec1;
 
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::Key;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::module_helpers::to_real_path;
@@ -57,6 +61,7 @@ use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::IdentifierWithContext;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 
@@ -472,6 +477,67 @@ fn expand_callable_kwargs_for_hover<'a>(
     }
 }
 
+/// Given the position, if it corresponds to a class-scoped PEP695 type var declaration
+/// return the class. This only applies to the declaration of the type var, not to
+/// any usages.
+fn get_owner_class_of_pep695_type_parameter_at(
+    id: &IdentifierWithContext,
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Class> {
+    if !matches!(id.context, IdentifierContext::TypeParameter) {
+        return None;
+    }
+    let module = transaction.get_ast(handle)?;
+    let owner = Ast::locate_node(&module, position)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(class_def)
+                if class_def
+                    .type_params
+                    .as_ref()
+                    .is_some_and(|type_params| type_params.range().contains(position)) =>
+            {
+                Some(class_def.name.clone())
+            }
+            _ => None,
+        });
+    let key = Key::Definition(ShortIdentifier::new(&owner?));
+    match transaction.get_type_for_display(handle, &key)? {
+        Type::ClassDef(class) => Some(class),
+        _ => None,
+    }
+}
+
+fn display_variance_for_hover(variance: Variance) -> &'static str {
+    match variance {
+        Variance::Covariant => "covariant",
+        Variance::Contravariant => "contravariant",
+        // Bivariant is an internal result, it's treated as invariant.
+        Variance::Invariant | Variance::Bivariant => "invariant",
+    }
+}
+
+fn type_parameter_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    owner: &Class,
+) -> Option<String> {
+    let quantified = match type_ {
+        Type::Quantified(q) | Type::QuantifiedValue(q) => q,
+        _ => return None,
+    };
+    let variance = solver.type_order().get_variance_from_class(owner);
+    Some(format!(
+        "{}@{} ({})",
+        quantified.name(),
+        owner.name(),
+        display_variance_for_hover(variance.get(quantified.name()))
+    ))
+}
+
 fn parameter_documentation_for_callee(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -632,8 +698,9 @@ pub fn get_hover(
         });
     }
 
-    // Otherwise, fall through to the existing type hover logic
-    let mut type_ = transaction.get_type_at_for_display(handle, position)?;
+    let mut type_ = transaction
+        .subscript_operator_type_at(handle, position)
+        .or_else(|| transaction.get_type_at_for_display(handle, position))?;
 
     // Helper function to check if we're hovering over a callee and get its range
     let find_callee_range_at_position = || -> Option<TextRange> {
@@ -708,13 +775,22 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
+    let hover_identifier = transaction.identifier_at(handle, position);
+    let type_parameter_owner_class = hover_identifier.as_ref().and_then(|id| {
+        get_owner_class_of_pep695_type_parameter_at(id, transaction, handle, position)
+    });
     let show_constructor = kind == Some(SymbolKind::Class)
-        && !transaction
-            .identifier_at(handle, position)
-            .is_some_and(|id| matches!(id.context, IdentifierContext::ClassDef { .. }));
+        && hover_identifier
+            .as_ref()
+            .is_some_and(|id| !matches!(id.context, IdentifierContext::ClassDef { .. }));
     let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
         let mut cloned = type_.clone();
         move |solver| {
+            if let Some(owner) = &type_parameter_owner_class
+                && let Some(display) = type_parameter_hover_display(&solver, &cloned, owner)
+            {
+                return display;
+            }
             if show_constructor {
                 let constructor = match cloned {
                     Type::ClassDef(ref cls)

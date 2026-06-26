@@ -35,6 +35,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
+use thin_vec::ThinVec;
 
 use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
@@ -159,7 +160,7 @@ impl<'a> SelfAttrNames<'a> {
     fn find(
         func_name: &Identifier,
         parameters: &mut Box<Parameters>,
-        body: Vec<Stmt>,
+        body: ThinVec<Stmt>,
     ) -> Option<SelfAssignments> {
         let self_name = if let Some(p) = parameters.iter_non_variadic_params().next() {
             &p.parameter.name.id
@@ -180,7 +181,7 @@ impl<'a> SelfAttrNames<'a> {
                 (
                     n,
                     InstanceAttribute(
-                        ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                        vec![ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))],
                         None,
                         r,
                         MethodSelfKind::Instance,
@@ -306,7 +307,7 @@ impl<'a> BindingsBuilder<'a> {
     fn function_body_scope(
         &mut self,
         parameters: &mut Box<Parameters>,
-        body: Vec<Stmt>,
+        body: ThinVec<Stmt>,
         range: TextRange,
         func_name: &Identifier,
         parent: &NestingContext,
@@ -364,7 +365,7 @@ impl<'a> BindingsBuilder<'a> {
     fn unchecked_function_body_scope(
         &mut self,
         parameters: &mut Box<Parameters>,
-        body: Vec<Stmt>,
+        body: ThinVec<Stmt>,
         range: TextRange,
         func_name: &Identifier,
         undecorated_idx: Idx<KeyUndecoratedFunction>,
@@ -561,7 +562,7 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
-    fn decorators(&mut self, decorator_list: Vec<Decorator>, usage: &mut Usage) -> Decorators {
+    fn decorators(&mut self, decorator_list: ThinVec<Decorator>, usage: &mut Usage) -> Decorators {
         let mut is_overload = false;
         let mut is_override = false;
         let mut has_no_type_check = false;
@@ -600,7 +601,7 @@ impl<'a> BindingsBuilder<'a> {
     fn function_body(
         &mut self,
         parameters: &mut Box<Parameters>,
-        body: Vec<Stmt>,
+        body: ThinVec<Stmt>,
         decorators: &Decorators,
         range: TextRange,
         is_async: bool,
@@ -653,6 +654,13 @@ impl<'a> BindingsBuilder<'a> {
             }
             _ => None,
         };
+        if decorators.is_overload && !body_is_trivial && placeholder_body_kind.is_none() {
+            self.error(
+                func_name.range(),
+                ErrorKind::UselessOverloadBody,
+                "`@overload` bodies should not contain executable logic".to_owned(),
+            );
+        }
         // A `...` body is always interpreted as a stub function.
         // Functions with other trivial bodies are interpreted as stubs in some contexts.
         let stub_or_impl = if body_is_ellipse
@@ -879,11 +887,13 @@ impl<'a> BindingsBuilder<'a> {
             None
         };
 
+        self.maybe_record_pytest_fixture_definition(&x, class_key);
+
+        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
+
         self.scopes.push(Scope::annotation(x.range));
         let (return_ann_with_range, legacy_tparams) =
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
-
-        let decorators = self.decorators(mem::take(&mut x.decorator_list), def_idx.usage());
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
         let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self

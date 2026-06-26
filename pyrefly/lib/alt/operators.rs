@@ -13,11 +13,11 @@ use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::Quantified;
-use pyrefly_types::quantified::QuantifiedKind;
-use pyrefly_types::tensor::TensorType;
-use pyrefly_types::tensor::broadcast_shapes;
+use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::shaped_array::broadcast_shapes;
+use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_var::Restriction;
-use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
@@ -64,7 +64,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         opname: &Name,
         call_arg_type: &Type,
     ) -> Type {
-        self.record_resolved_trace(range, method_type.clone());
+        self.record_resolved_trace(range, &method_type);
         let callable = self.as_call_target_or_error(
             method_type,
             CallStyle::Method(opname),
@@ -84,7 +84,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Try to handle binary operations on symbolic integer types (Dim, SizeExpr, TypeVar Quantified).
+    /// Try to handle binary operations on symbolic integer types (Dim and SizeExpr).
     /// Returns Some(result_type) if the operation was handled, None otherwise.
     fn try_symint_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
         // Only handle if tensor shapes feature is enabled
@@ -100,20 +100,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
 
-        // Check if at least one operand is a symbolic dimension type or literal int
-        let is_dim_operand = |ty: &Type| match ty {
+        // Literal integers are allowed as the non-shape side of dimension arithmetic, but
+        // ordinary literal arithmetic should keep the normal integer operator behavior.
+        let is_shape_operand = |ty: &Type| match ty {
             Type::Dim(_) | Type::Size(_) => true,
-            Type::Literal(f) if matches!(f.value, Lit::Int(_)) => true,
-            Type::QuantifiedValue(q) => {
-                matches!(q.kind, QuantifiedKind::TypeVar)
-            }
             _ => false,
         };
-        if !is_dim_operand(lhs) && !is_dim_operand(rhs) {
+        if !is_shape_operand(lhs) && !is_shape_operand(rhs) {
             return None;
         }
 
-        // Extract the dimension type from Dim, Literal, or Quantified
+        // Extract the dimension type from Dim, Size, or an integer literal paired with one.
         let to_dim_type = |ty: &Type| -> Option<Type> {
             match ty {
                 Type::Dim(inner_ty) => {
@@ -124,12 +121,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Convert literal to SizeExpr
                     n.as_i64()
                         .map(|val| self.heap.mk_size(SizeExpr::Literal(val)))
-                }
-                Type::QuantifiedValue(q)
-                    if matches!(q.kind, pyrefly_types::quantified::QuantifiedKind::TypeVar) =>
-                {
-                    // TypeVar Quantified can be used in dimension arithmetic
-                    Some(Type::Quantified(q.clone()))
                 }
                 Type::Size(_) => {
                     // SizeExpr is already a dimension type - pass through
@@ -152,20 +143,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => unreachable!(),
         };
 
-        // If either operand is Dim, return Dim-wrapped result.
-        // If both operands are Literal[int], convert result back to Literal[int].
-        // Otherwise (e.g., Dim-bounded type parameters), return unwrapped dimension type.
+        // If either operand is Dim, return Dim-wrapped result. Otherwise
+        // (e.g., Dim-bounded type parameters), return the dimension expression.
         if matches!(lhs, Type::Dim(_)) || matches!(rhs, Type::Dim(_)) {
             Some(self.heap.mk_dim(result_ty))
-        } else if matches!(lhs, Type::Literal(f) if matches!(f.value, Lit::Int(_)))
-            && matches!(rhs, Type::Literal(f) if matches!(f.value, Lit::Int(_)))
-        {
-            // Both operands are Literal[int], so convert SizeExpr::Literal back to Literal[int]
-            if let Type::Size(SizeExpr::Literal(n)) = &result_ty {
-                Some(Lit::Int(LitInt::new(*n)).to_implicit_type())
-            } else {
-                Some(result_ty)
-            }
         } else {
             Some(result_ty)
         }
@@ -407,6 +388,85 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         matches!(ty, Type::Literal(f) if f.value == Lit::Int(LitInt::new(0)))
     }
 
+    /// Performs an operation `f` on a quantified `q`, which may be narrowed to a concrete type.
+    fn on_quantified(
+        &self,
+        q: &Quantified,
+        narrowed_type: Option<&Type>,
+        f: &dyn Fn(&Type) -> Type,
+    ) -> Type {
+        if let Restriction::Constraints(constraints) = &q.restriction {
+            let cur_constraints = if let Some(narrowed_type) = narrowed_type {
+                vec![narrowed_type]
+            } else {
+                constraints.iter().collect()
+            };
+            self.unions(cur_constraints.into_map(|constraint| {
+                let res = f(constraint);
+                if res == *constraint {
+                    // If f returned the constraint unchanged, preserve the quantified.
+                    intersect(
+                        vec![q.clone().to_type(self.heap), res.clone()],
+                        res,
+                        self.heap,
+                    )
+                } else {
+                    res
+                }
+            }))
+        } else if let Some(narrowed_type) = narrowed_type {
+            f(narrowed_type)
+        } else {
+            f(&q.upper_bound(self.stdlib, self.heap))
+        }
+    }
+
+    fn on_quantifieds(
+        &self,
+        left: &Type,
+        right: &Type,
+        f: &dyn Fn(&Type, &Type) -> Type,
+    ) -> Option<Type> {
+        match (left.as_quantified(), right.as_quantified()) {
+            (Some((left_q, left_narrow)), Some((right_q, right_narrow)))
+                if matches!(left_q.restriction(), Restriction::Constraints(_))
+                    && left_q == right_q =>
+            {
+                Some(
+                    self.on_quantified(left_q, left_narrow.or(right_narrow), &|constraint| {
+                        f(constraint, constraint)
+                    }),
+                )
+            }
+            // We skip non-union bounds to avoid accidentally erasing `Self` typevars.
+            (Some((left_q, left_narrow)), _)
+                if matches!(
+                    left_q.restriction(),
+                    Restriction::Constraints(_) | Restriction::Bound(Type::Union(_))
+                ) =>
+            {
+                Some(
+                    self.on_quantified(left_q, left_narrow, &|left_restriction| {
+                        f(left_restriction, right)
+                    }),
+                )
+            }
+            (_, Some((right_q, right_narrow)))
+                if matches!(
+                    right_q.restriction(),
+                    Restriction::Constraints(_) | Restriction::Bound(Type::Union(_))
+                ) =>
+            {
+                Some(
+                    self.on_quantified(right_q, right_narrow, &|right_restriction| {
+                        f(left, right_restriction)
+                    }),
+                )
+            }
+            _ => None,
+        }
+    }
+
     fn binop_types(&self, x: &ExprBinOp, lhs: &Type, rhs: &Type, errors: &ErrorCollector) -> Type {
         let left_range = x.left.range();
         let right_range = x.right.range();
@@ -442,8 +502,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // regardless of the other operand's type. Without this, e.g.
                 // Tensor[B, 1] / (2**n - 1.0) loses shape because 2**n is Any.
                 if (lhs.is_any() || rhs.is_any())
-                    && !matches!(lhs, Type::Tensor(_))
-                    && !matches!(rhs, Type::Tensor(_))
+                    && !matches!(lhs, Type::ShapedArray(_))
+                    && !matches!(rhs, Type::ShapedArray(_))
                 {
                     if let Type::Any(style) = &rhs {
                         return style.propagate();
@@ -482,11 +542,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         | Operator::Mod
                         | Operator::Pow
                         | Operator::FloorDiv
-                ) && let Type::Tensor(l_tensor) = lhs
-                    && let Type::Tensor(r_tensor) = rhs
+                ) && let Type::ShapedArray(l_shaped_array) = lhs
+                    && let Type::ShapedArray(r_shaped_array) = rhs
                 {
                     // Tensor element-wise operations with broadcasting
-                    self.broadcast_tensor_binop(l_tensor, r_tensor, x.range, errors)
+                    self.broadcast_shaped_array_binop(
+                        l_shaped_array,
+                        r_shaped_array,
+                        x.range,
+                        errors,
+                    )
                 } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
                     result
                 } else if x.op == Operator::Pow
@@ -526,29 +591,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 } else {
-                    match (lhs, rhs) {
-                        (Type::Quantified(left_q), Type::Quantified(right_q))
-                            if left_q == right_q
-                                && let Restriction::Constraints(constraints) =
-                                    &left_q.restriction =>
-                        {
-                            self.unions(constraints.map(|constraint| {
-                                self.binop_types(x, constraint, constraint, errors)
-                            }))
-                        }
-                        // We skip non-union bounds to avoid accidentally erasing `Self` typevars.
-                        (Type::Quantified(left_q), _)
-                            if let Some(left_restriction) = self.as_union_restriction(left_q) =>
-                        {
-                            self.binop_types(x, &left_restriction, rhs, errors)
-                        }
-                        (_, Type::Quantified(right_q))
-                            if let Some(right_restriction) = self.as_union_restriction(right_q) =>
-                        {
-                            self.binop_types(x, lhs, &right_restriction, errors)
-                        }
-                        _ => binop_call(x.op, lhs, rhs, x.range),
-                    }
+                    self.on_quantifieds(lhs, rhs, &|left, right| {
+                        self.binop_types(x, left, right, errors)
+                    })
+                    .unwrap_or_else(|| binop_call(x.op, lhs, rhs, x.range))
                 }
             })
         })
@@ -681,16 +727,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(results)
     }
 
-    /// Returns the restriction on the given Quantified if the restriction is a union
-    fn as_union_restriction(&self, q: &Quantified) -> Option<Type> {
-        let restriction = q.bound_type(self.stdlib, self.heap);
-        if matches!(restriction, Type::Union(_)) {
-            Some(restriction)
-        } else {
-            None
-        }
-    }
-
     fn compare_types(
         &self,
         x: &ExprCompare,
@@ -708,48 +744,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // This mirrors the same check in binop_infer.
                     (Type::Any(style), _) => style.propagate(),
                     (_, Type::Any(style)) => style.propagate(),
-                    (Type::Quantified(left_q), Type::Quantified(right_q))
-                        if left_q == right_q
-                            && let Restriction::Constraints(constraints) = &left_q.restriction =>
+                    // If the RHS of a containment check isn't a quantified, it may contain a
+                    // nested quantified that on_quantifieds would fail to detect.
+                    _ if (!matches!(op, CmpOp::In | CmpOp::NotIn)
+                        || right.as_quantified().is_some())
+                        && let Some(ret_if_quantified) =
+                            self.on_quantifieds(left, right, &|left, right| {
+                                self.compare_types(
+                                    x,
+                                    op,
+                                    left,
+                                    right,
+                                    current_left_range,
+                                    current_right_range,
+                                    errors,
+                                )
+                            }) =>
                     {
-                        self.unions(constraints.map(|constraint| {
-                            self.compare_types(
-                                x,
-                                op,
-                                constraint,
-                                constraint,
-                                current_left_range,
-                                current_right_range,
-                                errors,
-                            )
-                        }))
-                    }
-                    // We skip non-union bounds to avoid accidentally erasing `Self` typevars.
-                    (Type::Quantified(left_q), _)
-                        if let Some(left_restriction) = self.as_union_restriction(left_q) =>
-                    {
-                        self.compare_types(
-                            x,
-                            op,
-                            &left_restriction,
-                            right,
-                            current_left_range,
-                            current_right_range,
-                            errors,
-                        )
-                    }
-                    (_, Type::Quantified(right_q))
-                        if let Some(right_restriction) = self.as_union_restriction(right_q) =>
-                    {
-                        self.compare_types(
-                            x,
-                            op,
-                            left,
-                            &right_restriction,
-                            current_left_range,
-                            current_right_range,
-                            errors,
-                        )
+                        ret_if_quantified
                     }
                     _ => {
                         let context = || {
@@ -845,7 +857,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassType(_)
                 | Type::SelfType(_)
                 | Type::Quantified(_)
-                | Type::Tensor(_)
+                | Type::ShapedArray(_)
                 | Type::NNModule(_) => {
                     self.call_method_or_error(t, method, x.range, &[], &[], errors, Some(&context))
                 }
@@ -1009,15 +1021,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// broadcast_shapes handles all shape variants: Concrete shapes are broadcast
     /// precisely, Unpacked shapes match suffix then middles then prefixes, and
     /// mixed Concrete+Unpacked aligns against the suffix.
-    fn broadcast_tensor_binop(
+    fn broadcast_shaped_array_binop(
         &self,
-        left: &TensorType,
-        right: &TensorType,
+        left: &ShapedArrayType,
+        right: &ShapedArrayType,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
         match broadcast_shapes(&left.shape, &right.shape) {
-            Ok(result_shape) => TensorType::new(left.base_class.clone(), result_shape).to_type(),
+            Ok(result_shape) => self.shaped_array_with_shape(left, result_shape).to_type(),
             Err(err) => {
                 self.error(
                     errors,

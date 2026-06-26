@@ -1421,6 +1421,57 @@ assert_type(r8([""], [""]), Class8[str])  # E: assert_type(Class8[Unknown], Clas
 );
 
 testcase!(
+    test_generic_classmethod_to_callable_preserves_class_tparams,
+    r#"
+from typing import Callable, Generic, ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+R = TypeVar("R")
+T = TypeVar("T")
+
+def accepts_callable(cb: Callable[P, R]) -> Callable[P, R]:
+    return cb
+
+class Box(Generic[T]):
+    pass
+
+class Factory(Generic[T]):
+    @classmethod
+    def make(cls, x: list[T], y: list[T]) -> Box[T]: ...
+
+r = accepts_callable(Factory.make)
+assert_type(r([""], [""]), Box[str])
+"#,
+);
+
+testcase!(
+    test_generic_classmethod_to_callable_within_classmethod_preserves_class_tparams,
+    r#"
+from typing import Callable, Generic, ParamSpec, TypeVar, assert_type
+
+P = ParamSpec("P")
+R = TypeVar("R")
+T = TypeVar("T")
+U = TypeVar("U")
+
+def accepts_callable(cb: Callable[P, R]) -> Callable[P, R]:
+    return cb
+
+class Box(Generic[T]):
+    pass
+
+class Factory(Generic[T]):
+    @classmethod
+    def make(cls, x: list[U], y: list[U]) -> Box[U]: ...
+
+    @classmethod
+    def test(cls):
+        r = accepts_callable(cls.make)
+        assert_type(r([""], [""]), Box[str])
+"#,
+);
+
+testcase!(
     test_callable_instance_with_unknown_base,
     r#"
 class MyModel(BaseClass):  # E: Could not find name `BaseClass`
@@ -1457,5 +1508,15 @@ def schedule(delay: int, func: Callable[..., object]) -> None: ...
 def after_func() -> None: ...
 
 schedule(1000, after_func)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3912
+testcase!(
+    test_callable_ellipsis_return,
+    r#"
+from typing import Callable, reveal_type
+def f(x: Callable[..., ...]):  # E: `...` is not a valid return type
+    reveal_type(x)  # E: revealed type: (...) -> Unknown
 "#,
 );

@@ -406,6 +406,7 @@ class ContributorAnalyzer:
                         "type": contributor_type,
                         "commit_count": 0,
                     }
+                # pyrefly: ignore [unsupported-operation]
                 contributors[contributor_id]["commit_count"] += 1
 
         return contributors

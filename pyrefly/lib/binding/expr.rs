@@ -33,6 +33,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use thin_vec::ThinVec;
 use vec1::Vec1;
 
 use crate::binding::binding::Binding;
@@ -285,12 +286,23 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: &mut Option<LegacyTParamCollector>,
     ) -> Idx<Key> {
+        self.ensure_name_in_type(name, usage, tparams_builder, false)
+    }
+
+    fn ensure_name_in_type(
+        &mut self,
+        name: &Identifier,
+        usage: &mut Usage,
+        tparams_builder: &mut Option<LegacyTParamCollector>,
+        is_runtime_evaluated_annotation: bool,
+    ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
             usage,
             tparams_builder
                 .as_mut()
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
+            is_runtime_evaluated_annotation,
         )
     }
 
@@ -307,6 +319,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder.as_mut().map(|tparams_builder| {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
+            false,
         )
     }
 
@@ -336,6 +349,7 @@ impl<'a> BindingsBuilder<'a> {
         name: &Identifier,
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
+        is_runtime_evaluated_annotation: bool,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -386,6 +400,20 @@ impl<'a> BindingsBuilder<'a> {
                         self.error(name.range, ErrorKind::UnboundName, error_message);
                     }
                 }
+                if is_runtime_evaluated_annotation
+                    && matches!(
+                        usage,
+                        Usage::StaticTypeInformation {
+                            is_annotation: true
+                        }
+                    )
+                    && self.module_info.path().style() == ModuleStyle::Executable
+                    && !self.sys_info.version().at_least(3, 14)
+                    && !self.scopes.has_future_annotations()
+                    && let Some(error_message) = is_initialized.as_error_message(&name.id)
+                {
+                    self.error(name.range, ErrorKind::UnboundName, error_message);
+                }
 
                 // TODO: `global x` reads bypass this (they use Flow, not Anywhere).
 
@@ -399,9 +427,10 @@ impl<'a> BindingsBuilder<'a> {
                 self.defer_bound_name(key, lookup_result_idx, usage, promote)
             }
             NameLookupResult::NotFound => {
-                let suggestion = self
-                    .scopes
-                    .suggest_similar_name(&name.id, name.range.start());
+                if self.scopes.is_definitely_unreachable() {
+                    return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
+                }
+                let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -700,7 +729,13 @@ impl<'a> BindingsBuilder<'a> {
                         && !tup.is_empty()
                     {
                         // Only the first argument to Annotated[...] is a type; the rest are metadata.
-                        self.ensure_type_impl(&mut tup.elts[0], &mut None, false, &mut type_usage);
+                        self.ensure_type_impl(
+                            &mut tup.elts[0],
+                            &mut None,
+                            false,
+                            false,
+                            &mut type_usage,
+                        );
                         for elt in tup.elts[1..].iter_mut() {
                             self.ensure_expr(
                                 elt,
@@ -710,8 +745,36 @@ impl<'a> BindingsBuilder<'a> {
                             );
                         }
                     } else {
-                        self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
+                        self.ensure_type_impl(
+                            &mut *slice,
+                            &mut None,
+                            false,
+                            false,
+                            &mut type_usage,
+                        );
                     }
+                } else if self.scopes.has_future_annotations()
+                    && let Expr::Name(name) = &**value
+                    && let Some((class_object_idx, FlowStyle::ClassDef { .. })) =
+                        self.scopes.binding_idx_for_name(&name.id)
+                    && self.class_object_is_generic(class_object_idx)
+                    && !matches!(
+                        &**slice,
+                        // String-keyed class subscripts, such as Enum member lookup, are runtime
+                        // expressions even when future annotations are active.
+                        Expr::StringLiteral(_)
+                    )
+                {
+                    self.ensure_expr(&mut *value, usage);
+                    self.ensure_type_impl(
+                        &mut *slice,
+                        &mut None,
+                        false,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
                 } else {
                     self.ensure_expr(&mut *value, usage);
                     self.ensure_expr(&mut *slice, usage);
@@ -764,6 +827,14 @@ impl<'a> BindingsBuilder<'a> {
                     self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                     self.start_fork_and_branch(*range);
                     let mut narrow_ops = get_narrow_ops(self, value, *op);
+
+                    let short_circuit_trigger: Option<bool> = match op {
+                        BoolOp::And => Some(false),
+                        BoolOp::Or => Some(true),
+                    };
+                    if self.sys_info.evaluate_bool(value) == short_circuit_trigger {
+                        self.scopes.set_definitely_unreachable(true);
+                    }
                     for value in values {
                         self.bind_narrow_ops(
                             &narrow_ops,
@@ -773,6 +844,9 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr(value, &mut Usage::narrowing_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
+                        if self.sys_info.evaluate_bool(value) == short_circuit_trigger {
+                            self.scopes.set_definitely_unreachable(true);
+                        }
                     }
                     // Negate the narrow ops in the base flow and merge.
                     // TODO(stroxler): We eventually want to drop all narrows but merge values.
@@ -981,7 +1055,9 @@ impl<'a> BindingsBuilder<'a> {
             Expr::DictComp(x) => {
                 self.with_await_context(AwaitContext::General, |this| {
                     this.bind_comprehensions(x.range, &mut x.generators, usage, false);
-                    this.ensure_expr(&mut x.key, usage);
+                    if let Some(key) = &mut x.key {
+                        this.ensure_expr(key, usage);
+                    }
                     this.ensure_expr(&mut x.value, usage);
                     this.scopes.pop();
                 });
@@ -1069,7 +1145,7 @@ impl<'a> BindingsBuilder<'a> {
         tparams_builder: &mut Option<LegacyTParamCollector>,
         usage: &mut Usage,
     ) {
-        self.ensure_type_impl(x, tparams_builder, false, usage);
+        self.ensure_type_impl(x, tparams_builder, false, false, usage);
     }
 
     fn ensure_type_impl(
@@ -1077,6 +1153,7 @@ impl<'a> BindingsBuilder<'a> {
         x: &mut Expr,
         tparams_builder: &mut Option<LegacyTParamCollector>,
         in_string_literal: bool,
+        check_runtime_name: bool,
         usage: &mut Usage,
     ) {
         fn as_forward_ref<'b>(
@@ -1092,7 +1169,12 @@ impl<'a> BindingsBuilder<'a> {
         match x {
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
-                self.ensure_name(&name, usage, tparams_builder);
+                self.ensure_name_in_type(
+                    &name,
+                    usage,
+                    tparams_builder,
+                    check_runtime_name && !in_string_literal,
+                );
             }
             Expr::Subscript(ExprSubscript { value, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
@@ -1110,10 +1192,22 @@ impl<'a> BindingsBuilder<'a> {
                     && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
             {
                 // Only go inside the first argument to Annotated, the rest are non-type metadata.
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder,
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                );
                 // We can't destructure a mutable Box in the guard, so force unwrapping it here
                 let tup = slice.as_tuple_expr_mut().unwrap();
-                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(
+                    &mut tup.elts[0],
+                    tparams_builder,
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                );
                 for e in tup.elts[1..].iter_mut() {
                     self.ensure_expr(
                         e,
@@ -1123,34 +1217,24 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
             }
-            // Jaxtyping annotations: Float[Tensor, "batch channels"].
-            // The second argument is a shape string, not a forward reference.
-            Expr::Subscript(ExprSubscript { value, slice, .. })
-                if self.tensor_shapes()
-                    && matches!(&**value, Expr::Name(n) if self.scopes.is_imported_from_module(&n.id, "jaxtyping"))
-                    && matches!(&**slice, Expr::Tuple(tup) if tup.elts.len() == 2) =>
-            {
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
-                let tup = slice.as_tuple_expr_mut().unwrap();
-                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
-                self.ensure_expr(
-                    &mut tup.elts[1],
-                    &mut Usage::StaticTypeInformation {
-                        is_annotation: false,
-                    },
-                );
-            }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
-                self.ensure_type_impl(&mut *slice, tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, true, usage);
+                self.ensure_type_impl(&mut *slice, tparams_builder, in_string_literal, true, usage);
             }
             Expr::StringLiteral(literal)
                 if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
             {
+                if literal.flags.prefix().is_raw() {
+                    self.error(
+                        literal.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "Raw string literals are not allowed in type expressions".to_owned(),
+                    );
+                }
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
                         *x = expr;
-                        self.ensure_type_impl(x, tparams_builder, true, usage);
+                        self.ensure_type_impl(x, tparams_builder, true, check_runtime_name, usage);
                     }
                     Err(_) => {
                         // We don't need to emit errors here, because the solving logic expects the expression to resolve to a type, and it will fail.
@@ -1274,8 +1358,20 @@ impl<'a> BindingsBuilder<'a> {
                 let right_is_forward_ref = matches!(&**right, Expr::StringLiteral(s) if as_forward_ref(s, in_string_literal).is_some());
 
                 // Recurse into children to handle string literal parsing
-                self.ensure_type_impl(left, tparams_builder, in_string_literal, usage);
-                self.ensure_type_impl(right, tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(
+                    left,
+                    tparams_builder,
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                );
+                self.ensure_type_impl(
+                    right,
+                    tparams_builder,
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                );
 
                 // Only create the check if we're in an executable file, at least one side
                 // is a forward ref, and we're not in Python 3.14+ or with future annotations
@@ -1298,7 +1394,13 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             _ => x.recurse_mut(&mut |x| {
-                self.ensure_type_impl(x, tparams_builder, in_string_literal, usage)
+                self.ensure_type_impl(
+                    x,
+                    tparams_builder,
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                )
             }),
         }
     }
@@ -1316,15 +1418,19 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn ensure_and_bind_decorators(
         &mut self,
-        decorators: Vec<Decorator>,
+        decorators: ThinVec<Decorator>,
         usage: &mut Usage,
     ) -> Vec<Idx<KeyDecorator>> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
             self.ensure_expr(&mut x.expression, usage);
+            let trailing_name = Ast::decorator_trailing_name(&x.expression).map(Name::new);
             let k = self.insert_binding(
                 KeyDecorator(x.range),
-                BindingDecorator { expr: x.expression },
+                BindingDecorator {
+                    expr: x.expression,
+                    trailing_name,
+                },
             );
             decorator_keys.push(k);
         }

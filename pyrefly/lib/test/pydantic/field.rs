@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 class Model(BaseModel):
    x: int = Field(gt=0, lt=10)
 
-Model(x=5) 
+Model(x=5)
 Model(x=0)  # E: Argument value `Literal[0]` violates Pydantic `gt` constraint `Literal[0]` for field `x`
 Model(x=15)  # E: Argument value `Literal[15]` violates Pydantic `lt` constraint `Literal[10]` for field `x`
 "#,
@@ -172,8 +172,8 @@ class Wrapper(BaseModel):
 valid1 = Wrapper(item=A(kind="a", val=123))
 valid2 = Wrapper(item=B(kind="b", msg="Bob"))
 
-invalid1 = Wrapper(item=A(kind="a")) # E: Missing argument `val` in function `A.__init__` 
-invalid2 = Wrapper(item=B(kind="b", val=123)) # E: Missing argument `msg` in function `B.__init__` 
+invalid1 = Wrapper(item=A(kind="a")) # E: Missing argument `val` in function `A.__init__`
+invalid2 = Wrapper(item=B(kind="b", val=123)) # E: Missing argument `msg` in function `B.__init__`
 
 valid3 = Wrapper.model_validate({"item": A(kind="a", val=123)})
 valid4 = Wrapper.model_validate({"item": B(kind="b", msg="Bob")})
@@ -184,8 +184,8 @@ invalid4 =  Wrapper.model_validate({"item": B(kind="b", val=123)}) # E: Missing 
 valid5 = Wrapper.model_validate({"item": {"kind": "a", "val": 123}})
 valid6 = Wrapper.model_validate({"item": {"kind": "b", "msg": "Bob"}})
 
-invalid5 = Wrapper.model_validate({"item": {"kind": "a"}})  
-invalid6 = Wrapper.model_validate({"item": {"kind": "b", "name": 123}})  
+invalid5 = Wrapper.model_validate({"item": {"kind": "a"}})
+invalid6 = Wrapper.model_validate({"item": {"kind": "b", "name": 123}})
 
     "#,
 );
@@ -196,7 +196,7 @@ pydantic_testcase!(
 from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 
-class A(BaseModel): 
+class A(BaseModel):
     input_type: Literal["A"] = "A"
 class B(BaseModel):
     input_type: Literal["B"] = "B"
@@ -429,4 +429,47 @@ class P(BaseModel):
 P(x="99")
 P(x=42)
     "#,
+);
+
+pydantic_testcase!(
+    test_field_without_annotation,
+    r#"
+from pydantic import BaseModel, Field
+class Model(BaseModel):
+    x = Field(default=1)  # E: `x` is a dataclass field but has no type annotation
+"#,
+);
+
+// Pydantic `_`-prefixed private fields are not storage; the inherited
+// `BaseModel` representative wins — a regression to `Left` would name it
+// in the diagnostic.
+pydantic_testcase!(
+    test_pydantic_dataclass_slots_private_fields_do_not_promote,
+    r#"
+from pydantic import BaseModel
+
+class Left(BaseModel, slots=True):
+    _x: int
+
+class Right:
+    __slots__ = ("y",)
+
+class Conflict(Left, Right): ...  # E: inherits from incompatible disjoint bases `BaseModel`, `Right`
+"#,
+);
+
+// pydantic field named 'self' must not collide with the synthesized '__init__''s implicit 'self' param.
+// same as the stdlib dataclass fix.
+pydantic_testcase!(
+    test_pydantic_field_named_self,
+    r#"
+from pydantic import BaseModel
+from typing import assert_type
+
+class Model(BaseModel):
+    self: str
+
+m = Model(self="test")
+assert_type(m.self, str)
+"#,
 );

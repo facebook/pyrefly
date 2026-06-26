@@ -67,6 +67,10 @@ impl SourceDatabase for MapDatabase {
             .collect()
     }
 
+    fn may_contain_module(&self, module: ModuleName) -> bool {
+        self.0.contains_key(&module)
+    }
+
     fn lookup(
         &self,
         module: ModuleName,
@@ -111,5 +115,22 @@ impl SourceDatabase for MapDatabase {
 
     fn get_generated_files(&self) -> SmallSet<InternedPath> {
         SmallSet::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_may_contain_module() {
+        let mut db = MapDatabase::new(SysInfo::default());
+        db.insert(
+            ModuleName::from_str("present"),
+            ModulePath::filesystem(Path::new("/present.py").to_path_buf()),
+        );
+
+        assert!(db.may_contain_module(ModuleName::from_str("present")));
+        assert!(!db.may_contain_module(ModuleName::from_str("missing")));
     }
 }

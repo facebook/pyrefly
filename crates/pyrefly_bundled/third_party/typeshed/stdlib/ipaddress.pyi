@@ -1,7 +1,7 @@
 import sys
 from collections.abc import Iterable, Iterator
-from typing import Any, Final, Generic, Literal, TypeVar, overload
-from typing_extensions import Self, TypeAlias
+from typing import Any, Final, Generic, Literal, TypeAlias, TypeVar, overload
+from typing_extensions import Self
 
 # Undocumented length constants
 IPV4LENGTH: Final = 32
@@ -190,22 +190,7 @@ class IPv4Address(_BaseV4, _BaseAddress):
     __slots__ = ("_ip", "__weakref__")
     def __init__(self, address: object) -> None: ...
     @property
-    def is_global(self) -> bool:
-        """
-        ``True`` if the address is defined as globally reachable by
-        iana-ipv4-special-registry_ (for IPv4) or iana-ipv6-special-registry_
-        (for IPv6) with the following exception:
-
-        For IPv4-mapped IPv6-addresses the ``is_private`` value is determined by the
-        semantics of the underlying IPv4 addresses and the following condition holds
-        (see :attr:`IPv6Address.ipv4_mapped`)::
-
-            address.is_global == address.ipv4_mapped.is_global
-
-        ``is_global`` has value opposite to :attr:`is_private`, except for the ``100.64.0.0/10``
-        IPv4 range where they are both ``False``.
-        """
-        ...
+    def is_global(self) -> bool: ...
     @property
     def is_link_local(self) -> bool:
         """
@@ -237,19 +222,11 @@ class IPv4Address(_BaseV4, _BaseAddress):
     @property
     def is_private(self) -> bool:
         """
-        ``True`` if the address is defined as not globally reachable by
-        iana-ipv4-special-registry_ (for IPv4) or iana-ipv6-special-registry_
-        (for IPv6) with the following exceptions:
+        Test if this address is allocated for private networks.
 
-        * ``is_private`` is ``False`` for ``100.64.0.0/10``
-        * For IPv4-mapped IPv6-addresses the ``is_private`` value is determined by the
-            semantics of the underlying IPv4 addresses and the following condition holds
-            (see :attr:`IPv6Address.ipv4_mapped`)::
-
-                address.is_private == address.ipv4_mapped.is_private
-
-        ``is_private`` has value opposite to :attr:`is_global`, except for the ``100.64.0.0/10``
-        IPv4 range where they are both ``False``.
+        Returns:
+            A boolean, True if the address is reserved per
+            iana-ipv4-special-registry.
         """
         ...
     @property
@@ -316,18 +293,11 @@ class IPv6Address(_BaseV6, _BaseAddress):
     @property
     def is_global(self) -> bool:
         """
-        ``True`` if the address is defined as globally reachable by
-        iana-ipv4-special-registry_ (for IPv4) or iana-ipv6-special-registry_
-        (for IPv6) with the following exception:
+        Test if this address is allocated for public networks.
 
-        For IPv4-mapped IPv6-addresses the ``is_private`` value is determined by the
-        semantics of the underlying IPv4 addresses and the following condition holds
-        (see :attr:`IPv6Address.ipv4_mapped`)::
-
-            address.is_global == address.ipv4_mapped.is_global
-
-        ``is_global`` has value opposite to :attr:`is_private`, except for the ``100.64.0.0/10``
-        IPv4 range where they are both ``False``.
+        Returns:
+            A boolean, true if the address is not reserved per
+            iana-ipv6-special-registry.
         """
         ...
     @property
@@ -362,19 +332,12 @@ class IPv6Address(_BaseV6, _BaseAddress):
     @property
     def is_private(self) -> bool:
         """
-        ``True`` if the address is defined as not globally reachable by
-        iana-ipv4-special-registry_ (for IPv4) or iana-ipv6-special-registry_
-        (for IPv6) with the following exceptions:
+        Test if this address is allocated for private networks.
 
-        * ``is_private`` is ``False`` for ``100.64.0.0/10``
-        * For IPv4-mapped IPv6-addresses the ``is_private`` value is determined by the
-            semantics of the underlying IPv4 addresses and the following condition holds
-            (see :attr:`IPv6Address.ipv4_mapped`)::
-
-                address.is_private == address.ipv4_mapped.is_private
-
-        ``is_private`` has value opposite to :attr:`is_global`, except for the ``100.64.0.0/10``
-        IPv4 range where they are both ``False``.
+        Returns:
+            A boolean, True if the address is reserved per
+            iana-ipv6-special-registry, or is ipv4_mapped and is
+            reserved in the iana-ipv4-special-registry.
         """
         ...
     @property
@@ -503,7 +466,9 @@ def summarize_address_range(first: IPv6Address, last: IPv6Address) -> Iterator[I
 def summarize_address_range(
     first: IPv4Address | IPv6Address, last: IPv4Address | IPv6Address
 ) -> Iterator[IPv4Network] | Iterator[IPv6Network]: ...
+
 def collapse_addresses(addresses: Iterable[_N]) -> Iterator[_N]: ...
+
 @overload
 def get_mixed_type_key(obj: _A) -> tuple[int, _A]: ...
 @overload

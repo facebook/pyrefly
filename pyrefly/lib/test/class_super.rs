@@ -383,3 +383,60 @@ class Bar(bob):
         return super().__new__(cls, 1)
     "#,
 );
+
+// Verify super().__init__() correctly handles kwargs forwarding with default params.
+testcase!(
+    test_super_init_kwargs_forwarding,
+    r#"
+class Parent:
+    def __init__(self, x: int, y: int = 0) -> None: ...
+
+class Child(Parent):
+    def __init__(self, x: int, **kwargs) -> None:
+        super().__init__(x, **kwargs)
+
+class OnlyKwargs(Parent):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+
+class NoArgsOptionalParent:
+    def __init__(self, x: int = 0, y: int = 0) -> None: ...
+
+class NoArgsChild(NoArgsOptionalParent):
+    def __init__(self) -> None:
+        super().__init__()
+    "#,
+);
+
+// Verify super().__init__() works with explicit kwargs alongside **kwargs.
+testcase!(
+    test_super_init_explicit_and_kwargs,
+    r#"
+class Parent:
+    def __init__(self, size: dict, **kwargs) -> None: ...
+
+class Child(Parent):
+    def __init__(self, size: dict = {}, **kwargs) -> None:
+        super().__init__(size=size, **kwargs)
+    "#,
+);
+
+// Verify super().__init__() works with all positional args, including unannotated.
+testcase!(
+    test_super_init_all_positional,
+    r#"
+class AnnotatedParent:
+    def __init__(self, config: int, layer_idx: int) -> None: ...
+
+class AnnotatedChild(AnnotatedParent):
+    def __init__(self, config: int, layer_idx: int) -> None:
+        super().__init__(config, layer_idx)
+
+class UnannotatedParent:
+    def __init__(self, config, layer_idx): ...
+
+class UnannotatedChild(UnannotatedParent):
+    def __init__(self, config, layer_idx):
+        super().__init__(config, layer_idx)
+    "#,
+);

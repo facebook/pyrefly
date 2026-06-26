@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import TypeVar as _TypeVar
+from typing import Any, TypeVar as _TypeVar
 
 class Dim[T]:
     def __init__(self, value: int) -> None: ...
@@ -15,3 +15,5 @@ class Dim[T]:
     def __int__(self) -> int: ...
 
 def TypeVar(name: str) -> _TypeVar: ...
+
+shaped_array: Any

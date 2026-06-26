@@ -33,6 +33,12 @@ impl TypeMap {
         self.0.get(name).and_then(|t| t.as_bool())
     }
 
+    /// Whether a keyword was passed with a value other than `None`. attrs treats an explicit
+    /// `None` like an omitted argument, so mere key presence is not enough.
+    pub fn is_set(&self, name: &Name) -> bool {
+        self.0.get(name).is_some_and(|t| !t.is_none())
+    }
+
     pub fn get_string(&self, name: &Name) -> Option<&str> {
         self.0.get(name).and_then(|t| match t {
             Type::Literal(lit) if let Lit::Str(s) = &lit.value => Some(&**s),
@@ -207,18 +213,24 @@ pub struct DataclassKeywords {
     /// coercion (e.g., allowing `'0'` for an int field and coercing it to `0`) is allowed. `strict` is always true
     /// for non-Pydantic dataclasses.
     pub strict: bool,
+    /// attrs-only `auto_attribs`. `None` = not explicitly set (different attrs decorators have different defaults).
+    /// `Some(false)` = only `attr.ib()`/`field()` names are fields.
+    pub auto_attribs: Option<bool>,
 }
 
 impl DataclassKeywords {
     const INIT: Name = Name::new_static("init");
-    const ORDER: Name = Name::new_static("order");
+    pub const ORDER: Name = Name::new_static("order");
     const FROZEN: Name = Name::new_static("frozen");
     const MATCH_ARGS: Name = Name::new_static("match_args");
     const KW_ONLY: Name = Name::new_static("kw_only");
-    const EQ: Name = Name::new_static("eq");
+    pub const EQ: Name = Name::new_static("eq");
+    pub const CMP: Name = Name::new_static("cmp");
     const UNSAFE_HASH: Name = Name::new_static("unsafe_hash");
+    const HASH: Name = Name::new_static("hash");
     const SLOTS: Name = Name::new_static("slots");
     const STRICT: Name = Name::new_static("strict");
+    const AUTO_ATTRIBS: Name = Name::new_static("auto_attribs");
 
     /// Creates dataclass keywords from a type map (decorator arguments) and defaults.
     ///
@@ -230,9 +242,17 @@ impl DataclassKeywords {
         defaults: &DataclassTransformMetadata,
         strict_default: bool,
     ) -> Self {
+        // Legacy `cmp` aliases both `eq` and `order`; `cmp=None` means omitted.
+        let cmp = if map.is_set(&Self::CMP) {
+            map.get_bool(&Self::CMP)
+        } else {
+            None
+        };
         Self {
             init: map.get_bool(&Self::INIT).unwrap_or(true),
-            order: map.get_bool(&Self::ORDER).unwrap_or(defaults.order_default),
+            order: cmp
+                .or(map.get_bool(&Self::ORDER))
+                .unwrap_or(defaults.order_default),
             frozen: map
                 .get_bool(&Self::FROZEN)
                 .unwrap_or(defaults.frozen_default),
@@ -240,12 +260,23 @@ impl DataclassKeywords {
             kw_only: map
                 .get_bool(&Self::KW_ONLY)
                 .unwrap_or(defaults.kw_only_default),
-            eq: map.get_bool(&Self::EQ).unwrap_or(defaults.eq_default),
+            eq: cmp
+                .or(map.get_bool(&Self::EQ))
+                .unwrap_or(defaults.eq_default),
             unsafe_hash: map.get_bool(&Self::UNSAFE_HASH).unwrap_or(false),
             slots: map.get_bool(&Self::SLOTS).unwrap_or(false),
             extra: false,
             strict: map.get_bool(&Self::STRICT).unwrap_or(strict_default),
+            // Explicit value only; the per-decorator default is resolved in
+            // `dataclass_from_dataclass_transform` where `order_default` is known.
+            auto_attribs: map.get_bool(&Self::AUTO_ATTRIBS),
         }
+    }
+
+    /// Reads attrs' `hash=`/`unsafe_hash=` argument; `unsafe_hash` wins over the deprecated `hash`.
+    pub fn attrs_hash_from_map(map: &TypeMap) -> Option<bool> {
+        map.get_bool(&Self::UNSAFE_HASH)
+            .or_else(|| map.get_bool(&Self::HASH))
     }
 
     pub fn new() -> Self {

@@ -3751,6 +3751,51 @@ def foo(log: LogRecord):
 );
 
 call_graph_testcase!(
+    test_dict_subscript_ann_assign_without_value,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int]):
+  d["key"]: int
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:3-3:11|artificial-call|subscript-get-item",
+                regular_call_callees(vec![
+                    create_call_target("builtins.dict.__getitem__", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.dict", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dict_subscript_ann_assign_with_value,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int]):
+  d["key"]: int = 0
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:3-3:20|artificial-call|subscript-set-item",
+                regular_call_callees(vec![
+                    create_call_target("builtins.dict.__setitem__", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.dict", context),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_method_call_in_f_string,
     TEST_MODULE_NAME,
     r#"

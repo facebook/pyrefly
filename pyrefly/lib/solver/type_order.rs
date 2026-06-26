@@ -31,6 +31,7 @@ use crate::solver::solver::SubsetError;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::quantified::Quantified;
 use crate::types::stdlib::Stdlib;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
@@ -71,6 +72,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn as_class_type_unchecked(self, class: &Class) -> ClassType {
         self.0.as_class_type_unchecked(class)
+    }
+
+    pub fn shaped_array_shape_for_class_type(self, cls: &ClassType) -> Option<Quantified> {
+        self.0.shaped_array_shape_for_class_type(cls)
     }
 
     pub fn has_metaclass(self, cls: &Class, metaclass: &ClassType) -> bool {

@@ -26,6 +26,7 @@ use vec1::vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
+use crate::alt::expr::ExprOptions;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -103,26 +104,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                         }
                         Some(field) => {
-                            self.expr_with_separate_check_errors(
+                            self.expr_with_options(
                                 &x.value,
-                                Some((&field.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
-                                        Some(key_name.clone()),
-                                        false,
-                                    ))
-                                })),
-                                item_errors,
+                                ExprOptions::check(
+                                    &field.ty,
+                                    item_errors,
+                                    check_errors,
+                                    &|| {
+                                        TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                            Some(key_name.clone()),
+                                            false,
+                                        ))
+                                    },
+                                    None,
+                                ),
                             );
                         }
                         None if let ExtraItems::Extra(extra) = &extra_items => {
-                            self.expr_with_separate_check_errors(
+                            self.expr_with_options(
                                 &x.value,
-                                Some((&extra.ty, check_errors, &|| {
-                                    TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
-                                        None, false,
-                                    ))
-                                })),
-                                item_errors,
+                                ExprOptions::check(
+                                    &extra.ty,
+                                    item_errors,
+                                    check_errors,
+                                    &|| {
+                                        TypeCheckContext::of_kind(TypeCheckKind::TypedDictKey(
+                                            None, false,
+                                        ))
+                                    },
+                                    None,
+                                ),
                             );
                         }
                         None => {
@@ -455,6 +466,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Get a (key, default: ValueType) -> ValueType overload.
+    fn get_overload_with_value_default(
+        &self,
+        metadata: &FuncMetadata,
+        self_param: &Param,
+        name: Option<&Name>,
+        ty: Type,
+    ) -> OverloadType {
+        OverloadType::Function(Function {
+            signature: Callable::list(
+                ParamList::new(vec![
+                    self_param.clone(),
+                    self.key_param(name),
+                    Param::PosOnly(Some(DEFAULT_PARAM.clone()), ty.clone(), Required::Required),
+                ]),
+                ty,
+            ),
+            metadata: metadata.clone(),
+        })
+    }
+
     /// Get a (key, default: T) -> ValueType | T overload.
     fn get_overload_with_default(
         &self,
@@ -541,6 +573,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                     metadata: metadata.clone(),
                 }));
+                // (self, key: Literal["key"], default: ValueType) -> ValueType
+                literal_signatures.push(self.get_overload_with_value_default(
+                    &metadata,
+                    &self_param,
+                    Some(name),
+                    field.ty.clone(),
+                ));
                 // (self, key: Literal["key"], default: T) -> ValueType | T
                 literal_signatures.push(self.get_overload_with_default(
                     cls,
@@ -623,7 +662,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             metadata: metadata.clone(),
         }));
 
-        // 2) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
+        // 2) default: (self, key: Literal["field_name"], default: FieldType) -> FieldType
+        overloads.push(self.get_overload_with_value_default(
+            metadata,
+            self_param,
+            name,
+            ty.clone(),
+        ));
+
+        // 3) default: (self, key: Literal["field_name"], default: _T) -> FieldType | _T
         overloads.push(self.get_overload_with_default(cls, metadata, self_param, name, ty));
     }
 

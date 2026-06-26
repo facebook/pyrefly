@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Function;
+use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
@@ -44,6 +45,19 @@ use crate::types::types::TArgs;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
+/// Format a generic entity for implicit-any error messages, e.g.
+/// `` class `Foo[T, *Ts]` `` (or `` class `Foo` `` when there are no tparams).
+fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
+    if tparams.is_empty() {
+        format!("{noun} `{name}`")
+    } else {
+        format!(
+            "{noun} `{name}[{}]`",
+            commas_iter(|| tparams.iter().map(|t| t.display_name_with_prefix()))
+        )
+    }
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
     /// caller to ensure they are not calling this method on a TypedDict class, which should be
@@ -52,6 +66,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ClassType::new(
             cls.dupe(),
             self.create_default_targs(self.get_class_tparams(cls), None),
+        )
+    }
+
+    /// Specialize a non-TypedDict class and return the underlying `ClassType`.
+    ///
+    /// This is for callers that wrap the class in another type form but still need
+    /// ordinary class type-argument validation and substitution.
+    pub(crate) fn specialize_nontypeddict_to_classtype(
+        &self,
+        cls: &Class,
+        targs: Vec<Type>,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> ClassType {
+        ClassType::new(
+            cls.dupe(),
+            self.create_targs(
+                cls.name(),
+                self.get_class_tparams(cls),
+                targs,
+                range,
+                true,
+                errors,
+            ),
         )
     }
 
@@ -169,13 +207,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let tparams = self.get_class_tparams(cls);
+        let tparams_for_error = tparams.dupe();
         let targs = self.create_default_targs(
-            self.get_class_tparams(cls),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("class `{}`", cls.name()),
+                    format_generic_entity("class", cls.name(), &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -189,13 +229,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        let tparams = forall.tparams.dupe();
+        let tparams_for_error = tparams.dupe();
+        let alias_name = forall.body.name();
         let targs = self.create_default_targs(
-            forall.tparams.dupe(),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("type alias `{}`", forall.body.name()),
+                    format_generic_entity("type alias", &alias_name, &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -587,6 +630,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ErrorKind::InvalidTypeVarTuple,
                         "`TypeVarTuple` must be unpacked".to_owned(),
                     )
+                } else if matches!(arg, Type::Ellipsis) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        "`...` cannot be used for type parameter".to_owned(),
+                    )
                 } else if arg.is_kind_param_spec() {
                     self.error(
                         errors,
@@ -608,13 +658,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             let arg = arg.clone();
                             arg.transform(&mut |x| {
                                 if let Type::TypeVar(tv) = x {
-                                    *x = tv.bound_type(self.stdlib, self.heap);
+                                    *x = tv.upper_bound(self.stdlib, self.heap);
                                 }
                             })
                         };
                         self.check_type(
                             &arg_for_check,
-                            &param.bound_type(self.stdlib, self.heap),
+                            &param.upper_bound(self.stdlib, self.heap),
                             range,
                             errors,
                             tcc,

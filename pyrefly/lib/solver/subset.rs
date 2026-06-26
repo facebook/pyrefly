@@ -8,6 +8,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::iter;
+use std::sync::Arc;
 
 use itertools::EitherOrBoth;
 use itertools::Itertools;
@@ -19,9 +20,12 @@ use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::dimension::contains_var_in_type;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::read_only::ReadOnlyReason;
+use pyrefly_types::shaped_array::ShapedArrayShape;
+use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::shaped_array::is_tuple_carrier_shape_middle;
+use pyrefly_types::shaped_array::shape_to_tuple_carrier;
+use pyrefly_types::shaped_array::tuple_carrier_to_shape;
 use pyrefly_types::special_form::SpecialForm;
-use pyrefly_types::tensor::TensorShape;
-use pyrefly_types::tensor::TensorType;
 use pyrefly_types::typed_dict::ANONYMOUS_TYPED_DICT;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItem;
@@ -55,6 +59,7 @@ use crate::types::callable::Params;
 use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::class::ClassType;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::simplify::unions;
 use crate::types::tuple::Tuple;
@@ -62,6 +67,7 @@ use crate::types::type_alias::TypeAliasData;
 use crate::types::type_var::Restriction;
 use crate::types::type_var::Variance;
 use crate::types::types::Forallable;
+use crate::types::types::TArgs;
 use crate::types::types::Type;
 
 /// Extract a `TypeAliasData` reference from a `Type` that wraps one,
@@ -97,6 +103,20 @@ impl TypedDictFieldId {
 
 fn ok_or(b: bool, e: SubsetError) -> Result<(), SubsetError> {
     b.then_some(()).ok_or(e)
+}
+
+/// Return whether `type[ty]` is broad enough to accept an arbitrary class object.
+fn accepts_all_class_objects(ty: &Type) -> bool {
+    match ty {
+        Type::Any(_) => true,
+        Type::ClassType(cls) if cls.is_builtin("object") => true,
+        Type::Union(union) => union.members.iter().any(accepts_all_class_objects),
+        _ => false,
+    }
+}
+
+fn is_dim_class_type(cls: &ClassType) -> bool {
+    cls.has_qname("shape_extensions", "Dim")
 }
 
 /// Check if a param list has both `*args: Any` and `**kwargs: Any`
@@ -432,12 +452,22 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
                 Some(object_type)
             }
-            (l_kwargs @ Some(_), Some(Type::Unpack(u_inner)))
-                if matches!(*u_inner, Type::TypedDict(_)) =>
-            {
+            (l_kwargs, Some(Type::Unpack(u_inner))) if matches!(*u_inner, Type::TypedDict(_)) => {
                 let Type::TypedDict(u_typed_dict) = *u_inner else {
                     unreachable!("guarded by matches! above")
                 };
+                // Allow expanding Unpack[TypedDict] kwargs against explicit keyword params
+                // only when the other side also has **kwargs or the TypedDict is closed.
+                if l_kwargs.is_none()
+                    && !matches!(
+                        self.type_order.typed_dict_extra_items(&u_typed_dict),
+                        ExtraItems::Closed
+                    )
+                {
+                    return Err(SubsetError::OpenTypedDictKwargs(
+                        u_typed_dict.name().clone(),
+                    ));
+                }
                 for (name, ty, required) in self.type_order.typed_dict_kw_param_info(&u_typed_dict)
                 {
                     u_keywords.insert(name, (ty, required == Required::Required));
@@ -602,7 +632,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             && let Type::ClassType(got_cls) = &got
             && (got_cls.is_builtin("list") || got_cls.is_builtin("tuple"))
         {
-            return Ok(());
+            // Check that the element type of the list/tuple is a subtype of
+            // `SequenceNotStr`'s element type. If either type does not have exactly
+            // one type argument, fall back to accepting the assignment.
+            return match (protocol.targs().as_slice(), got_cls.targs().as_slice()) {
+                ([want_elem], [got_elem]) => {
+                    self.is_subset_eq(&got_elem.clone(), &want_elem.clone())
+                }
+                _ => Ok(()),
+            };
         }
         let protocol_members = self
             .type_order
@@ -827,7 +865,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         }
         // Preserve Pos vs PosOnly so that the subset checker can reject name mismatches
         // (e.g. Pos("a", int) vs Pos("self", K) fails, but PosOnly matches any name).
-        let args: Vec<Param> = want_ts.iter().map(|p| p.to_subset_param()).collect();
+        let args: Vec<Param> = want_ts.iter().map(|p| p.to_param_preserve_name()).collect();
         let (pre, post) = got.items().split_at(args.len());
         self.is_subset_param_list(pre, &args)?;
         self.is_subset_eq(
@@ -848,7 +886,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if want.len() < got_ts.len() {
             return Err(SubsetError::Other);
         }
-        let args: Vec<Param> = got_ts.iter().map(|p| p.to_subset_param()).collect();
+        let args: Vec<Param> = got_ts.iter().map(|p| p.to_param_preserve_name()).collect();
         let (pre, post) = want.items().split_at(args.len());
         self.is_subset_param_list(&args, pre)?;
         self.is_subset_eq(
@@ -1272,62 +1310,57 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         } else {
             let argument_side = self.active_call_context.argument_side();
             let can_synthesize_witness = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
-            if can_synthesize_witness {
-                let eligible_vars: Vec<Var> = want
+            if can_synthesize_witness
+                && let eligible_vars = want
                     .collect_maybe_placeholder_vars()
                     .into_iter()
                     .filter(|v| self.solver.var_is_quantified(*v))
-                    .collect();
-                if eligible_vars.is_empty() {
-                    any(overload.signatures.iter(), |l| match l {
-                        OverloadType::Function(_) => self.is_subset_eq(&l.as_type(), want),
-                        OverloadType::Forall(forall) => {
-                            let fresh_forall = self.instantiate_fresh_forall(
-                                Forall {
-                                    tparams: forall.tparams.clone(),
-                                    body: Forallable::Function(forall.body.clone()),
-                                },
-                                want,
-                            );
-                            let vars = fresh_forall.handle.vars().to_vec();
-                            match self
-                                .solver
-                                .with_snapshot(&vars, || self.is_subset_forall(fresh_forall, want))
-                            {
-                                SubsetWithSnapshotResult::Ok => Ok(()),
-                                SubsetWithSnapshotResult::Err(e) => Err(e),
-                            }
-                        }
-                    })
-                    .is_ok()
-                } else {
-                    let overload_type = Type::Overload(overload.clone());
-                    let synthesized = ResidualWitnessContext::for_overload(
-                        &overload_type,
-                        &eligible_vars,
-                        argument_side,
-                    );
-                    self.with_active_call_context(
-                        self.active_call_context
-                            .clone()
-                            .with_residual_witness(synthesized),
-                        |me| {
-                            let (witness, captured_vars) =
+                    .collect::<Vec<_>>()
+                && !eligible_vars.is_empty()
+            {
+                let overload_type = Type::Overload(overload.clone());
+                let synthesized = ResidualWitnessContext::for_overload(
+                    &overload_type,
+                    &eligible_vars,
+                    argument_side,
+                );
+                self.with_active_call_context(
+                    self.active_call_context
+                        .clone()
+                        .with_residual_witness(synthesized),
+                    |me| {
+                        let (witness, captured_vars) =
                             me.witness_and_captured_vars_for_overload().expect(
                                 "synthesized overload witness must be active for capture probing",
                             );
-                            me.is_subset_overload_with_active_witness(
-                                &witness,
-                                &captured_vars,
-                                overload,
-                                want,
-                            )
-                        },
-                    )
-                }
+                        me.is_subset_overload_with_active_witness(
+                            &witness,
+                            &captured_vars,
+                            overload,
+                            want,
+                        )
+                    },
+                )
             } else {
-                any(overload.signatures.iter(), |l| {
-                    self.is_subset_eq(&l.as_type(), want)
+                any(overload.signatures.iter(), |l| match l {
+                    OverloadType::Function(_) => self.is_subset_eq(&l.as_type(), want),
+                    OverloadType::Forall(forall) => {
+                        let fresh_forall = self.instantiate_fresh_forall(
+                            Forall {
+                                tparams: forall.tparams.clone(),
+                                body: Forallable::Function(forall.body.clone()),
+                            },
+                            want,
+                        );
+                        let vars = fresh_forall.handle.vars().to_vec();
+                        match self
+                            .solver
+                            .with_snapshot(&vars, || self.is_subset_forall(fresh_forall, want))
+                        {
+                            SubsetWithSnapshotResult::Ok => Ok(()),
+                            SubsetWithSnapshotResult::Err(e) => Err(e),
+                        }
+                    }
                 })
                 .is_ok()
             }
@@ -1655,7 +1688,7 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
                 // Check if the expanded "want" side contains unbound Vars in nested positions
                 if contains_var_in_type(&want_expanded) {
-                    return Err(SubsetError::TensorShape(
+                    return Err(SubsetError::ShapedArrayShape(
                         ShapeError::nested_type_var_not_inferred(),
                     ));
                 }
@@ -1668,12 +1701,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 if got_canonical == want_canonical {
                     Ok(())
                 } else {
-                    Err(SubsetError::TensorShape(ShapeError::structural_mismatch(
-                        got_str,
-                        got_canonical.to_string(),
-                        want_str,
-                        want_canonical.to_string(),
-                    )))
+                    Err(SubsetError::ShapedArrayShape(
+                        ShapeError::structural_mismatch(
+                            got_str,
+                            got_canonical.to_string(),
+                            want_str,
+                            want_canonical.to_string(),
+                        ),
+                    ))
                 }
             }
             // Size <: Quantified - expand, canonicalize Size, and compare
@@ -1686,12 +1721,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 if got_canonical == want_canonical {
                     Ok(())
                 } else {
-                    Err(SubsetError::TensorShape(ShapeError::structural_mismatch(
-                        Type::Size(s.clone()).to_string(),
-                        got_canonical.to_string(),
-                        Type::Quantified(q.clone()).to_string(),
-                        want_canonical.to_string(),
-                    )))
+                    Err(SubsetError::ShapedArrayShape(
+                        ShapeError::structural_mismatch(
+                            Type::Size(s.clone()).to_string(),
+                            got_canonical.to_string(),
+                            Type::Quantified(q.clone()).to_string(),
+                            want_canonical.to_string(),
+                        ),
+                    ))
                 }
             }
             // Quantified <: Size - expand Size, canonicalize, and compare
@@ -1703,21 +1740,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 if got_canonical == want_canonical {
                     Ok(())
                 } else {
-                    Err(SubsetError::TensorShape(ShapeError::structural_mismatch(
-                        Type::Quantified(q.clone()).to_string(),
-                        got_canonical.to_string(),
-                        Type::Size(s.clone()).to_string(),
-                        want_canonical.to_string(),
-                    )))
+                    Err(SubsetError::ShapedArrayShape(
+                        ShapeError::structural_mismatch(
+                            Type::Quantified(q.clone()).to_string(),
+                            got_canonical.to_string(),
+                            Type::Size(s.clone()).to_string(),
+                            want_canonical.to_string(),
+                        ),
+                    ))
                 }
             }
-            (t1, Type::Quantified(q)) => match q.restriction() {
-                // This only works for constraints and not bounds, because a TypeVar must resolve to exactly one of its constraints.
-                Restriction::Constraints(constraints) => any(constraints.iter(), |constraint| {
-                    self.is_subset_eq(t1, constraint)
-                }),
-                _ => Err(SubsetError::Other),
-            },
+            (_, Type::Quantified(_)) => Err(SubsetError::Other),
             (l, Type::Intersect(u)) => all(u.0.iter(), |u| self.is_subset_eq(l, u)),
             (l, Type::Union(u_union)) => {
                 let ordered_us = self.solver.partial_sort_by_vars(&u_union.members);
@@ -1916,11 +1949,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
             }
             // Tensor type checking
-            (Type::Tensor(got_tensor), Type::Tensor(want_tensor)) => {
-                self.is_subset_tensor(got_tensor, want_tensor)
+            (Type::ShapedArray(got_shaped_array), Type::ShapedArray(want_shaped_array)) => {
+                self.is_subset_shaped_array(got_shaped_array, want_shaped_array)
             }
             // Tensor is subtype of its base class
-            (Type::Tensor(tensor), Type::ClassType(cls)) => self.is_subset_eq(
+            (Type::ShapedArray(tensor), Type::ClassType(cls)) => self.is_subset_eq(
                 &tensor.base_class.clone().to_type(),
                 &Type::ClassType(cls.clone()),
             ),
@@ -2213,6 +2246,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             // This relies on top-level rules for Size <: Size, Size <: Quantified, Quantified <: Size,
             // Size <: Var, Var <: Size, etc.
             (Type::Dim(l_inner), Type::Dim(u_inner)) => self.is_subset_eq(l_inner, u_inner),
+            // Size expressions and symbolic shape parameters are the valid arguments to Dim.
+            (Type::Size(_), Type::Dim(dim_inner)) | (Type::Quantified(_), Type::Dim(dim_inner)) => {
+                self.is_subset_eq(got, dim_inner)
+            }
+            (Type::QuantifiedValue(q), Type::Dim(dim_inner)) => {
+                self.is_subset_eq(&Type::Quantified(q.clone()), dim_inner)
+            }
             // Literal[n] <: Dim[X] - convert literal to Size and check Size(n) <: X
             (Type::Literal(lit), Type::Dim(dim_inner)) if let Lit::Int(n) = &lit.value => {
                 let size_type = Type::Size(SizeExpr::Literal(n.as_i64().unwrap_or(0)));
@@ -2228,6 +2268,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             (Type::ClassType(cls), want @ Type::Dim(_)) if cls.is_builtin("int") => {
                 self.is_subset_eq_impl(&self.solver.heap.mk_dim(Type::any_implicit()), want)
             }
+            (Type::Size(_) | Type::Quantified(_), Type::ClassType(cls))
+                if is_dim_class_type(cls) =>
+            {
+                Ok(())
+            }
+            (Type::QuantifiedValue(_), Type::ClassType(cls)) if is_dim_class_type(cls) => Ok(()),
             // ========== End Dim Subtyping Rules ==========
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
                 ok_or(l_lit.value == u_lit.value, SubsetError::Other)
@@ -2292,11 +2338,11 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             ),
             (
                 Type::ClassType(class),
-                Type::Type(_)
+                want @ (Type::Type(_)
                 | Type::ClassDef(_)
                 | Type::BoundMethod(_)
                 | Type::Callable(_)
-                | Type::Function(_),
+                | Type::Function(_)),
             ) => {
                 let type_type = self.type_order.stdlib().builtins_type();
                 if class == type_type {
@@ -2307,8 +2353,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     .as_superclass(class, type_type.class_object())
                     && got_as_type.targs().is_empty()
                 {
-                    // The class extends unparameterized `type`
-                    Ok(())
+                    match want {
+                        Type::Type(type_want) if accepts_all_class_objects(type_want) => Ok(()),
+                        // A bare metaclass value proves that it is some class object, but not
+                        // which class object.
+                        Type::Type(_) | Type::ClassDef(_) => Err(SubsetError::Other),
+                        // A class extending unparameterized `type` satisfies callable-like wants.
+                        Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_) => Ok(()),
+                        _ => unreachable!("guarded by outer match on class-object-like wants"),
+                    }
                 } else {
                     Err(SubsetError::Other)
                 }
@@ -2485,31 +2538,160 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         Ok(())
     }
 
-    fn is_subset_tensor(&mut self, got: &TensorType, want: &TensorType) -> Result<(), SubsetError> {
-        // Check base class compatibility
-        self.is_subset_eq(
-            &got.base_class.clone().to_type(),
-            &want.base_class.clone().to_type(),
-        )?;
+    fn is_subset_shaped_array(
+        &mut self,
+        got: &ShapedArrayType,
+        want: &ShapedArrayType,
+    ) -> Result<(), SubsetError> {
+        let (shape_param, got_arg) = self.shape_param_and_arg(got)?;
+        let (want_param, want_arg) = self.shape_param_and_arg(want)?;
 
-        // Check shape compatibility
-        self.bind_tensor_dimensions(&got.shape, &want.shape)?;
+        // Check base class compatibility, but ignore the registered shape
+        // parameter: the shape is tracked and checked separately in
+        // `ShapedArrayType::shape`.
+        let got_base = self.shape_erased_base_class(got, shape_param)?;
+        let want_base = self.shape_erased_base_class(want, want_param)?;
+        let same_class = got_base.class_object() == want_base.class_object();
+        self.is_subset_eq(&got_base.to_type(), &want_base.to_type())?;
 
-        Ok(())
+        // We do not (yet) support subtyping for shaped arrays given that
+        // there's no known need and it would complicate the shape param
+        // analysis. We need to catch this explicitly since the ClassType would
+        // be assignable.
+        if !same_class {
+            return Err(SubsetError::ShapedArraySubtyping(
+                got.base_class.class_object().qname().clone(),
+                want.base_class.class_object().qname().clone(),
+            ));
+        }
+        if want_param != shape_param {
+            // Unreachable since class objects match, except maybe during incremental updates.
+            return Err(SubsetError::InternalError(
+                "ShapedArrayTypes from the same class have different registered shape parameters"
+                    .to_owned(),
+            ));
+        }
+
+        // Check the shape compatibility
+        if shape_param.kind() == QuantifiedKind::TypeVar
+            && (tuple_carrier_to_shape(got_arg).is_none()
+                || tuple_carrier_to_shape(want_arg).is_none())
+        {
+            // Closed tuple carriers that cannot project to a valid shape should
+            // not become compatible just because their projected shape is
+            // gradual - do an ordinary subset check in that case.
+            self.is_subset_eq(got_arg, want_arg)
+        } else {
+            // Check dimensions' compatibility.
+            self.bind_tensor_dimensions(&got.shape, &want.shape, shape_param.kind())
+        }
+    }
+
+    fn shape_param_and_arg<'b>(
+        &self,
+        shaped_array: &'b ShapedArrayType,
+    ) -> Result<(&'b Quantified, &'b Type), SubsetError> {
+        let base_class = &shaped_array.base_class;
+        let shape_param = self
+            .type_order
+            .shaped_array_shape_for_class_type(base_class)
+            .ok_or_else(|| {
+                // TODO(stroxler): Consider adding a dedicated SubsetError for
+                // inconsistent incremental state. InternalError is the closest
+                // existing non-panicking fit, but it is broader than this case.
+                SubsetError::InternalError(
+                    "ShapedArrayType has no registered shaped-array metadata".to_owned(),
+                )
+            })?;
+        base_class
+            .targs()
+            .iter_paired()
+            .find(|(param, _)| *param == &shape_param)
+            .ok_or_else(|| {
+                SubsetError::InternalError(
+                    "ShapedArrayType class args do not contain the registered shape parameter"
+                        .to_owned(),
+                )
+            })
+    }
+
+    fn shape_erased_base_class(
+        &self,
+        shaped_array: &ShapedArrayType,
+        shape_param: &Quantified,
+    ) -> Result<ClassType, SubsetError> {
+        let base_class = &shaped_array.base_class;
+        let erased_shape_arg = match shape_param.kind() {
+            QuantifiedKind::TypeVarTuple => Type::any_tuple(),
+            QuantifiedKind::TypeVar => Type::any_implicit(),
+            QuantifiedKind::ParamSpec => {
+                return Err(SubsetError::InternalError(
+                    "ShapedArrayType registered a ParamSpec as its shape parameter".to_owned(),
+                ));
+            }
+        };
+        let targs = base_class
+            .targs()
+            .iter_paired()
+            .map(|(param, arg)| {
+                if param == shape_param {
+                    erased_shape_arg.clone()
+                } else {
+                    arg.clone()
+                }
+            })
+            .collect();
+        Ok(ClassType::new(
+            base_class.class_object().clone(),
+            TArgs::new(Arc::new(base_class.tparams().clone()), targs),
+        ))
     }
 
     /// Check tensor dimensions for compatibility and create Var bindings.
     /// Delegates to is_subset_eq for each dimension pair.
     fn bind_tensor_dimensions(
         &mut self,
-        got_shape: &TensorShape,
-        want_shape: &TensorShape,
+        got_shape: &ShapedArrayShape,
+        want_shape: &ShapedArrayShape,
+        shape_kind: QuantifiedKind,
     ) -> Result<(), SubsetError> {
-        match (got_shape, want_shape) {
+        // The subset logic only has two real cases: a fixed-rank shape or a shape
+        // with a variadic middle. Normalize direct `tuple[T, ...]` shapes to the
+        // variadic form locally so the case analysis below does not need a third
+        // `Unbounded` axis that behaves the same as `Unpacked([], tuple[T, ...], [])`.
+        enum ShapeView<'a> {
+            Concrete(&'a [Type]),
+            Unpacked(Vec<Type>, Type, Vec<Type>),
+        }
+
+        fn shape_view(shape: &ShapedArrayShape) -> ShapeView<'_> {
+            match shape.as_tuple() {
+                Tuple::Concrete(dims) => ShapeView::Concrete(dims),
+                Tuple::Unbounded(middle) => ShapeView::Unpacked(
+                    Vec::new(),
+                    Type::Tuple(Tuple::Unbounded(middle.clone())),
+                    Vec::new(),
+                ),
+                Tuple::Unpacked(unpacked) => {
+                    let (prefix, middle, suffix) = &**unpacked;
+                    ShapeView::Unpacked(prefix.clone(), middle.clone(), suffix.clone())
+                }
+            }
+        }
+
+        fn pack_middle_slice(dims: &[Type], shape_kind: QuantifiedKind) -> Type {
+            if shape_kind == QuantifiedKind::TypeVar {
+                shape_to_tuple_carrier(&ShapedArrayShape::from_types(dims.to_vec()))
+            } else {
+                Type::concrete_tuple(dims.to_vec())
+            }
+        }
+
+        match (shape_view(got_shape), shape_view(want_shape)) {
             // Both concrete: check rank equality and iterate through dimension pairs
-            (TensorShape::Concrete(got_dims), TensorShape::Concrete(want_dims)) => {
+            (ShapeView::Concrete(got_dims), ShapeView::Concrete(want_dims)) => {
                 if got_dims.len() != want_dims.len() {
-                    return Err(SubsetError::TensorShape(ShapeError::rank_mismatch(
+                    return Err(SubsetError::ShapedArrayShape(ShapeError::rank_mismatch(
                         got_dims.len(),
                         want_dims.len(),
                     )));
@@ -2519,15 +2701,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 }
             }
             // Concrete got, Unpacked want: bind the TypeVarTuple to the corresponding slice
-            (TensorShape::Concrete(got_dims), TensorShape::Unpacked(want_unpacked)) => {
-                let (want_prefix, want_middle, want_suffix) = &**want_unpacked;
+            (
+                ShapeView::Concrete(got_dims),
+                ShapeView::Unpacked(want_prefix, want_middle, want_suffix),
+            ) => {
                 // Example: got = Tensor[2, 3, 5, 4], want = Tensor[2, *Ts, 4]
                 // Should bind Ts to (3, 5)
 
                 // Check bounds: got must have at least as many dims as prefix + suffix
                 let min_required = want_prefix.len() + want_suffix.len();
                 if got_dims.len() < min_required {
-                    return Err(SubsetError::TensorShape(ShapeError::rank_mismatch(
+                    return Err(SubsetError::ShapedArrayShape(ShapeError::rank_mismatch(
                         got_dims.len(),
                         min_required,
                     )));
@@ -2549,8 +2733,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let middle_end = got_dims.len().saturating_sub(want_suffix.len());
                 if middle_start <= middle_end {
                     let middle_slice = &got_dims[middle_start..middle_end];
-                    let tuple_ty = Type::concrete_tuple(middle_slice.to_vec());
-                    self.is_subset_eq(&tuple_ty, want_middle)?;
+                    let tuple_ty = pack_middle_slice(middle_slice, shape_kind);
+                    self.is_subset_eq(&tuple_ty, &want_middle)?;
+                    if shape_kind == QuantifiedKind::TypeVar
+                        && is_tuple_carrier_shape_middle(&want_middle)
+                    {
+                        self.is_subset_eq(&want_middle, &tuple_ty)?;
+                    }
                 }
             }
             // Both Unpacked: symmetric matching of prefix and suffix dims.
@@ -2569,9 +2758,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             //   got extras: prefix=[B], suffix=[D] → tuple[B, *Cs, D]
             //   want extras: none → *Qs directly
             //   check: tuple[B, *Cs, D] <: *Qs
-            (TensorShape::Unpacked(got_unpacked), TensorShape::Unpacked(want_unpacked)) => {
-                let (got_prefix, got_middle, got_suffix) = &**got_unpacked;
-                let (want_prefix, want_middle, want_suffix) = &**want_unpacked;
+            (
+                ShapeView::Unpacked(got_prefix, got_middle, got_suffix),
+                ShapeView::Unpacked(want_prefix, want_middle, want_suffix),
+            ) => {
                 let matched_prefix = got_prefix.len().min(want_prefix.len());
                 let matched_suffix = got_suffix.len().min(want_suffix.len());
 
@@ -2599,12 +2789,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
                 // Reject cross-structural cases: extras must all be on one side.
                 if has_got_extras && has_want_extras {
-                    return Err(SubsetError::TensorShape(ShapeError::StructuralMismatch {
-                        got: format!("{}", got_shape),
-                        got_canonical: format!("{}", got_shape),
-                        want: format!("{}", want_shape),
-                        want_canonical: format!("{}", want_shape),
-                    }));
+                    return Err(SubsetError::ShapedArrayShape(
+                        ShapeError::StructuralMismatch {
+                            got: format!("{}", got_shape),
+                            got_canonical: format!("{}", got_shape),
+                            want: format!("{}", want_shape),
+                            want_canonical: format!("{}", want_shape),
+                        },
+                    ));
                 }
 
                 // Fold extras into the middle on whichever side has them.
@@ -2612,6 +2804,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                 let fold = |prefix: &[Type], middle: &Type, suffix: &[Type]| -> Type {
                     if prefix.is_empty() && suffix.is_empty() {
                         middle.clone()
+                    } else if shape_kind == QuantifiedKind::TypeVar {
+                        shape_to_tuple_carrier(&ShapedArrayShape::unpacked(
+                            prefix.to_vec(),
+                            middle.clone(),
+                            suffix.to_vec(),
+                        ))
                     } else {
                         Type::Tuple(Tuple::Unpacked(Box::new((
                             prefix.to_vec(),
@@ -2621,22 +2819,30 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     }
                 };
 
-                let got_folded = fold(got_extra_prefix, got_middle, got_extra_suffix);
-                let want_folded = fold(want_extra_prefix, want_middle, want_extra_suffix);
+                let got_folded = fold(got_extra_prefix, &got_middle, got_extra_suffix);
+                let want_folded = fold(want_extra_prefix, &want_middle, want_extra_suffix);
 
                 self.is_subset_eq(&got_folded, &want_folded)?;
+                if shape_kind == QuantifiedKind::TypeVar
+                    && (is_tuple_carrier_shape_middle(&got_middle)
+                        || is_tuple_carrier_shape_middle(&want_middle))
+                {
+                    self.is_subset_eq(&want_folded, &got_folded)?;
+                }
             }
             // Unpacked got, Concrete want: bind prefix, suffix, and middle TypeVarTuple
             // Example: Tensor[A, B, *Ts, C, D] <: Tensor[1, 2, 3, 4, 5, 6]
             //   - Bind prefix: A <: 1, B <: 2
             //   - Bind suffix: C <: 5, D <: 6
             //   - Bind middle: Ts := (3, 4)
-            (TensorShape::Unpacked(got_unpacked), TensorShape::Concrete(want_dims)) => {
-                let (got_prefix, got_middle, got_suffix) = &**got_unpacked;
+            (
+                ShapeView::Unpacked(got_prefix, got_middle, got_suffix),
+                ShapeView::Concrete(want_dims),
+            ) => {
                 // Check bounds: want must have at least as many dims as prefix + suffix
                 let min_required = got_prefix.len() + got_suffix.len();
                 if want_dims.len() < min_required {
-                    return Err(SubsetError::TensorShape(ShapeError::rank_mismatch(
+                    return Err(SubsetError::ShapedArrayShape(ShapeError::rank_mismatch(
                         min_required,
                         want_dims.len(),
                     )));
@@ -2659,8 +2865,13 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
 
                 if middle_start <= middle_end {
                     let middle_slice = &want_dims[middle_start..middle_end];
-                    let tuple_ty = Type::concrete_tuple(middle_slice.to_vec());
-                    self.is_subset_eq(got_middle, &tuple_ty)?;
+                    let tuple_ty = pack_middle_slice(middle_slice, shape_kind);
+                    self.is_subset_eq(&got_middle, &tuple_ty)?;
+                    if shape_kind == QuantifiedKind::TypeVar
+                        && is_tuple_carrier_shape_middle(&got_middle)
+                    {
+                        self.is_subset_eq(&tuple_ty, &got_middle)?;
+                    }
                 }
             }
         }

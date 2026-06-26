@@ -324,6 +324,44 @@ impl FindResult {
     }
 }
 
+/// Returns `true` if the top-level package directory for the resolved module
+/// contains a `py.typed` marker file (PEP 561).
+fn package_has_py_typed(
+    module: ModuleName,
+    result: &FindResult,
+    dir_cache: &DirEntryCache,
+) -> bool {
+    let depth = module.components().len().saturating_sub(1);
+    let mut package_root = match result {
+        FindResult::RegularPackage(_, dir) => dir.as_path(),
+        FindResult::LegacyNamespacePackage(init_path, _) => {
+            let Some(dir) = init_path.parent() else {
+                return false;
+            };
+            dir
+        }
+        FindResult::SingleFilePyModule(path)
+        | FindResult::SingleFilePyiModule(path)
+        | FindResult::CompiledModule(path) => {
+            // A top-level module cannot carry a `py.typed` marker.
+            if depth == 0 {
+                return false;
+            }
+            path.as_path()
+        }
+        _ => return false,
+    };
+
+    for _ in 0..depth {
+        let Some(parent) = package_root.parent() else {
+            return false;
+        };
+        package_root = parent;
+    }
+
+    dir_cache.file_exists(&package_root.join("py.typed"))
+}
+
 /// In the given root, attempt to find a match for the given [`Name`].
 ///
 /// If `style_filter` is provided, only results matching that style will be returned.
@@ -767,13 +805,15 @@ fn resolve_third_party_stub(
     normal_result: Option<&FindResult>,
     bundled_stub: Option<FindingOrError<ModulePath>>,
     from_real_config_file: bool,
+    dir_cache: &DirEntryCache,
 ) -> Option<FindingOrError<ModulePath>> {
     // This is the case where we do have a config file, the package is installed, but there are no stubs
     // available besides the bundled stubs. In this case
     // return the stub but with the error attached telling the user to install stubs.
     if let Some(ref bundled) = bundled_stub
         && from_real_config_file
-        && normal_result.is_some()
+        && let Some(normal_result) = normal_result
+        && !package_has_py_typed(module, normal_result, dir_cache)
         && stub_result.is_none()
     {
         if let Some(pip_package) = recommended_stubs_package(module) {
@@ -822,6 +862,7 @@ fn combine_normal_and_stub_results(
     stub_result: Option<FindResult>,
     normal_result: Option<FindResult>,
     namespaces_found: &mut Vec<PathBuf>,
+    dir_cache: &DirEntryCache,
 ) -> Option<FindingOrError<ModulePath>> {
     match (normal_result, stub_result) {
         (None, Some(stub_result)) => Some(
@@ -835,7 +876,9 @@ fn combine_normal_and_stub_results(
             None
         }
         (Some(normal_result), None) => {
-            if let Some(missing_stub_result) = recommended_stubs_package(module) {
+            if let Some(missing_stub_result) = recommended_stubs_package(module)
+                && !package_has_py_typed(module, &normal_result, dir_cache)
+            {
                 Some(
                     normal_result
                         .module_path()
@@ -916,11 +959,18 @@ where
                 normal_result.as_ref(),
                 typeshed_third_party_stub,
                 from_real_config_file,
+                dir_cache,
             ) {
                 return Some(result);
             }
 
-            combine_normal_and_stub_results(module, stub_result, normal_result, namespaces_found)
+            combine_normal_and_stub_results(
+                module,
+                stub_result,
+                normal_result,
+                namespaces_found,
+                dir_cache,
+            )
         }
     }
 }
@@ -991,6 +1041,29 @@ fn find_module_prefixes<'a>(
     results.iter().map(|(_, name)| *name).collect::<Vec<_>>()
 }
 
+/// Configerator file extensions that use the keyword-escaping convention.
+/// When a path component matches a Python keyword (e.g. `if`), module names
+/// escape it with a trailing underscore (`if_`). This convention is specific
+/// to configerator repos and should not apply to other extra file extensions.
+///
+/// Kept consistent with `CONFIGERATOR_FILE_SUFFIX_EXCLUDE_THRIFT` in Pyright's
+/// `configerator-file-system.ts`.
+const CONFIGERATOR_EXTENSIONS: &[&str] = &["cinc", "cconf", "thrift-cvalidator", "ctest", "mcconf"];
+
+/// If `component` has a trailing underscore and the base is a Python keyword
+/// (e.g. `if_` → `if`), return the keyword. Otherwise return the component
+/// unchanged. This handles configerator paths where directories or filename
+/// segments are named with Python keywords, and the module path uses `if_`
+/// because Python syntax forbids bare keywords as identifiers.
+fn unescape_keyword(component: &str) -> &str {
+    if let Some(base) = component.strip_suffix('_')
+        && pyrefly_python::keywords::is_keyword(base)
+    {
+        return base;
+    }
+    component
+}
+
 /// Attempt to find a module that uses an extra file extension where dots in
 /// filenames act as module separators.
 ///
@@ -1003,6 +1076,12 @@ fn find_module_prefixes<'a>(
 ///
 /// Files "closer" to the source directory (more directory components) take
 /// precedence over files further away.
+///
+/// For configerator extensions (`cinc`, `cconf`, etc.), module components
+/// matching Python keywords with a trailing underscore (e.g. `if_`) are
+/// unescaped to their real names (e.g. `if`). This handles configerator repos
+/// where path segments can be named with Python keywords. Non-configerator
+/// extra extensions are not affected.
 fn find_extra_extension_module<'a>(
     module: ModuleName,
     roots: impl Iterator<Item = &'a PathBuf>,
@@ -1022,12 +1101,21 @@ fn find_extra_extension_module<'a>(
         return None;
     }
 
+    // Keyword unescaping (e.g. `if_` → `if`) only applies to configerator
+    // extensions. Other extra file extensions don't use this convention.
+    let should_unescape = CONFIGERATOR_EXTENSIONS.contains(&last.as_str());
+
     for root in roots {
         let mut dir = root.clone();
         // Push directory components for the first (most-directories) candidate.
         // The max dir_count is len-2 since the last component is the extension.
         for part in &components[..components.len() - 2] {
-            dir.push(part.as_str());
+            let part_str = part.as_str();
+            dir.push(if should_unescape {
+                unescape_keyword(part_str)
+            } else {
+                part_str
+            });
         }
         // Try splitting at each point: dir_count components form the directory
         // path and the remaining components form a dot-joined filename.
@@ -1039,12 +1127,30 @@ fn find_extra_extension_module<'a>(
         //   dir_count=0: dir=root,     filename=a.b.c.cinc
         for dir_count in (0..components.len() - 1).rev() {
             // Form the dotted filename from the remaining components.
+            // Unescape Python keywords only for configerator extensions.
             let filename: String = components[dir_count..]
                 .iter()
-                .map(|p| p.as_str())
+                .map(|p| {
+                    if should_unescape {
+                        unescape_keyword(p.as_str())
+                    } else {
+                        p.as_str()
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(".");
             let candidate = dir.join(&filename);
+            // Prefer .pyi stub files (e.g., foo.thrift.pyi) over raw files
+            // (e.g., foo.thrift). This allows generated type stubs to provide
+            // Python type information for non-Python file extensions.
+            let pyi_candidate = dir.join(format!("{}.pyi", &filename));
+            if pyi_candidate.is_file() {
+                return Some(FindingOrError::new_finding(ModulePath::filesystem(
+                    pyi_candidate,
+                )));
+            } else if let Some(v) = phantom_paths.as_deref_mut() {
+                v.push(pyi_candidate);
+            }
             if candidate.is_file() {
                 return Some(FindingOrError::new_finding(ModulePath::filesystem(
                     candidate,
@@ -4084,6 +4190,137 @@ mod tests {
     }
 
     #[test]
+    fn test_typeshed_third_party_with_real_config_and_py_typed_no_recommendation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with typed 'requests' installed but no stubs
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![TestPath::file("py.typed"), TestPath::file("__init__.py")],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::File("".into()));
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests"),
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        );
+
+        if let FindingOrError::Finding(finding) = &result {
+            assert!(
+                finding.error.is_none(),
+                "Expected no UntypedImport error for typed package, got: {:?}",
+                finding.error
+            );
+        } else {
+            panic!("Expected Finding, got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_typeshed_third_party_with_real_config_and_py_typed_submodule_no_recommendation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with typed 'requests' package and submodule
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![
+                        TestPath::file("py.typed"),
+                        TestPath::file("__init__.py"),
+                        TestPath::dir("api", vec![TestPath::file("__init__.py")]),
+                    ],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::File("".into()));
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests.api"),
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        );
+
+        if let FindingOrError::Finding(finding) = &result {
+            assert!(
+                finding.error.is_none(),
+                "Expected no UntypedImport error for typed package submodule, got: {:?}",
+                finding.error
+            );
+        } else {
+            panic!("Expected Finding, got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_typeshed_third_party_with_real_config_and_py_typed_submodule_file_no_recommendation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+
+        // Set up site package directory with typed 'requests' package and submodule file
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![
+                        TestPath::file("py.typed"),
+                        TestPath::file("__init__.py"),
+                        TestPath::file("api.py"),
+                    ],
+                )],
+            )],
+        );
+
+        let mut config = get_config(ConfigSource::File("".into()));
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.configure();
+
+        let result = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests.api"),
+            None,
+            None,
+            &DirEntryCache::new(true),
+            None,
+        );
+
+        if let FindingOrError::Finding(finding) = &result {
+            assert!(
+                finding.error.is_none(),
+                "Expected no UntypedImport error for typed package submodule file, got: {:?}",
+                finding.error
+            );
+        } else {
+            panic!("Expected Finding, got: {:?}", result);
+        }
+    }
+
+    #[test]
     fn test_typeshed_third_party_recommends_correct_package_for_dateutil() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
@@ -4941,12 +5178,104 @@ mod tests {
             &mut Some(&mut phantom_paths),
         );
         assert!(result.is_none());
-        // For module `a.b.cinc` with one root, the finder checks two candidates:
-        //   dir_count=1: root/a/b.cinc
-        //   dir_count=0: root/a.b.cinc
+        // For module `a.b.cinc` with one root, the finder checks two candidates
+        // plus their .pyi stubs:
+        //   dir_count=1: root/a/b.cinc.pyi, root/a/b.cinc
+        //   dir_count=0: root/a.b.cinc.pyi, root/a.b.cinc
         assert_eq!(
             phantom_paths,
-            vec![root.join("a/b.cinc"), root.join("a.b.cinc")]
+            vec![
+                root.join("a/b.cinc.pyi"),
+                root.join("a/b.cinc"),
+                root.join("a.b.cinc.pyi"),
+                root.join("a.b.cinc"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_pyi_stub_preferred() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // When both `a/b.thrift` and `a/b.thrift.pyi` exist, prefer the .pyi stub.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "a",
+                vec![TestPath::file("b.thrift"), TestPath::file("b.thrift.pyi")],
+            )],
+        );
+        let extra = vec!["thrift".to_owned()];
+
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("a.b.thrift"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("a/b.thrift.pyi")))
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_pyi_stub_only() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // When only `a/b.thrift.pyi` exists (no raw .thrift file), it should
+        // still be found. This is the typical case for python_type_stubs/.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir("a", vec![TestPath::file("b.thrift.pyi")])],
+        );
+        let extra = vec!["thrift".to_owned()];
+
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("a.b.thrift"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("a/b.thrift.pyi")))
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_pyi_stub_across_roots() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root1 = tempdir.path().join("source");
+        let root2 = tempdir.path().join("source/python_type_stubs");
+        // Root 1 has the raw .thrift file, root 2 has the .pyi stub.
+        // The stub in root 2 should be found because root 2 is searched first
+        // (when listed first in the search path).
+        TestPath::setup_test_directory(
+            tempdir.path(),
+            vec![TestPath::dir(
+                "source",
+                vec![
+                    TestPath::dir("a", vec![TestPath::file("b.thrift")]),
+                    TestPath::dir(
+                        "python_type_stubs",
+                        vec![TestPath::dir("a", vec![TestPath::file("b.thrift.pyi")])],
+                    ),
+                ],
+            )],
+        );
+        let extra = vec!["thrift".to_owned()];
+
+        // When python_type_stubs root is listed first, the .pyi stub is found.
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("a.b.thrift"),
+                [root2.clone(), root1.clone()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root2.join("a/b.thrift.pyi")))
         );
     }
 
@@ -4993,5 +5322,60 @@ mod tests {
         assert!(cache.file_exists(&pkg.join("a.py")));
         assert!(cache.file_exists(&pkg.join("b.py")));
         assert!(!cache.file_exists(&pkg.join("c.py")));
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_keyword_escaping() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // Configerator directories can be named with Python keywords (e.g. `if`).
+        // Since `if` is a Python keyword, the module name uses `if_` (with trailing
+        // underscore). The finder should strip the underscore to find the real directory.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "some",
+                vec![TestPath::dir("if", vec![TestPath::file("config.cconf")])],
+            )],
+        );
+        let extra = vec!["cconf".to_owned()];
+
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("some.if_.config.cconf"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("some/if/config.cconf")))
+        );
+    }
+
+    #[test]
+    fn test_find_extra_extension_module_keyword_in_filename() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // When a Python keyword appears as part of the dotted filename portion
+        // (not just directory), the trailing underscore should also be stripped.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "rules",
+                vec![TestPath::file("if.config.cconf")],
+            )],
+        );
+        let extra = vec!["cconf".to_owned()];
+
+        assert_eq!(
+            find_extra_extension_module(
+                ModuleName::from_str("rules.if_.config.cconf"),
+                [root.to_path_buf()].iter(),
+                &extra,
+                &mut None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
+        );
     }
 }

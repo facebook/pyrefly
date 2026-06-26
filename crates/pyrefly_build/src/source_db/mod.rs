@@ -108,6 +108,13 @@ pub trait SourceDatabase: Send + Sync + fmt::Debug {
     /// Get the Handles for modules that should be checked. Used when targets are
     /// specified with the sourcedb.
     fn modules_to_check(&self) -> Vec<Handle>;
+    /// Return whether this source database may contain `module`.
+    ///
+    /// Implementations should return `true` unless they can cheaply and exactly
+    /// prove the module is absent.
+    fn may_contain_module(&self, _module: ModuleName) -> bool {
+        true
+    }
     /// Find the given module in the sourcedb, given the module it's originating from.
     fn lookup(
         &self,

@@ -25,6 +25,20 @@ def baz(c: Coord) -> Mapping[str, str]:
 );
 
 testcase!(
+    test_fields_named_like_builtins,
+    r#"
+from typing import TypedDict
+
+class D(TypedDict):
+    str: str
+    object: object
+    any: object
+
+D(str="", object=object(), any=object())
+"#,
+);
+
+testcase!(
     bug = "Our handling of ClassVar and methods is fishy, and our error messages are not clear",
     test_typed_dict_with_illegal_members,
     r#"
@@ -720,6 +734,36 @@ f1(1, **x)  # E: Multiple values for argument `x`
 );
 
 testcase!(
+    test_typed_dict_kwargs_expansion_not_required_no_duplicate,
+    r#"
+from typing import TypedDict, NotRequired
+
+class Options(TypedDict, total=False):
+    name: str
+    debug: bool
+
+class AllRequired(TypedDict):
+    name: str
+    debug: bool
+
+def f(name: str, **kwargs) -> None: ...
+
+# NotRequired field "name" may be absent at runtime, so the conflict is only
+# potential, not guaranteed. We report PotentialBadKeywordArgument instead of
+# BadKeywordArgument to allow users to opt-in to this stricter check.
+nr: Options = {"debug": True}
+f(name="test", **nr)  # E: Multiple values for argument `name`
+f(**nr, name="test")  # E: Multiple values for argument `name`
+
+# Required field "name" is always present, so this IS a definite conflict
+# regardless of argument order.
+req: AllRequired = {"name": "test", "debug": True}
+f(name="test", **req)  # E: Multiple values for argument `name`
+f(**req, name="test")  # E: Multiple values for argument `name`
+    "#,
+);
+
+testcase!(
     test_typed_dict_kwargs_unpack,
     r#"
 from typing import TypedDict, NotRequired, Unpack, assert_type
@@ -898,6 +942,17 @@ class C(TypedDict):
     x: NotRequired[int]
 def f(c: C):
     assert_type(c.get("x"), int | None)
+    "#,
+);
+
+testcase!(
+    test_get_not_required_literal_default,
+    r#"
+from typing import assert_type, Literal, NotRequired, TypedDict
+class C(TypedDict):
+    x: NotRequired[Literal["a", "b"]]
+def f(c: C):
+    assert_type(c.get("x", "b"), Literal["a", "b"])
     "#,
 );
 
@@ -2122,6 +2177,92 @@ assert_type(x["bar"], int | None)
 );
 
 testcase!(
+    test_anonymous_typed_dict_get_literal_key,
+    r#"
+from typing import assert_type
+d = { "x": 1, "y": "2" }
+d = { "x": 2, "y": "3" }  # reassignment makes `d` an anonymous TypedDict
+assert_type(d.get("x"), int | None)
+assert_type(d.get("y"), str | None)
+assert_type(d.get("x", "default"), int | str)
+# unknown keys fall back to dict.get
+assert_type(d.get("missing"), int | str | None)
+assert_type(d.get("missing", b"d"), int | str | bytes)
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_get_literal_key_presence_narrowed,
+    r#"
+from typing import assert_type
+d = { "x": 1, "y": "2" }
+d = { "x": 2, "y": "3" }  # reassignment makes `d` an anonymous TypedDict
+if "x" in d:
+    # the key is known to be present, so the result excludes `None`
+    assert_type(d.get("x"), int)
+    assert_type(d.get("x", "default"), int)
+assert_type(d.get("y"), str | None)
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_pop_literal_key,
+    r#"
+from typing import assert_type
+d = { "x": 1, "y": "2" }
+d = { "x": 2, "y": "3" }  # reassignment makes `d` an anonymous TypedDict
+# unlike `.get`, `.pop` raises on a missing key, so the result excludes `None`
+assert_type(d.pop("x"), int)
+assert_type(d.pop("y"), str)
+assert_type(d.pop("x", "default"), int | str)
+# unknown keys fall back to dict.pop
+assert_type(d.pop("missing"), int | str)
+assert_type(d.pop("missing", b"d"), int | str | bytes)
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_pop_literal_key_presence_narrowed,
+    r#"
+from typing import assert_type
+d = { "x": 1, "y": "2" }
+d = { "x": 2, "y": "3" }  # reassignment makes `d` an anonymous TypedDict
+if "x" in d:
+    # the key is known to be present, so any default is unreachable
+    assert_type(d.pop("x"), int)
+    assert_type(d.pop("x", "default"), int)
+assert_type(d.pop("y"), str)
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_setdefault_literal_key,
+    r#"
+from typing import assert_type
+d = { "x": 1, "y": "2" }
+d = { "x": 2, "y": "3" }  # reassignment makes `d` an anonymous TypedDict
+# like `.get`, `.setdefault` returns `None` (or the default) when the key is absent
+assert_type(d.setdefault("x"), int | None)
+assert_type(d.setdefault("y"), str | None)
+assert_type(d.setdefault("x", 5), int)
+"#,
+);
+
+testcase!(
+    test_anonymous_typed_dict_setdefault_literal_key_presence_narrowed,
+    r#"
+from typing import assert_type
+d = { "x": 1, "y": "2" }
+d = { "x": 2, "y": "3" }  # reassignment makes `d` an anonymous TypedDict
+if "x" in d:
+    # the key is known to be present, so the result excludes `None`
+    assert_type(d.setdefault("x"), int)
+    assert_type(d.setdefault("x", 5), int)
+assert_type(d.setdefault("y"), str | None)
+"#,
+);
+
+testcase!(
     test_typed_dict_empty_container_no_implicit_any,
     TestEnv::new().enable_implicit_any_error(),
     r#"
@@ -2274,6 +2415,118 @@ def test_empty_not_in(e: Empty, k: str):
         reveal_type(k)  # E: revealed type: str
     else:
         reveal_type(k)  # E: revealed type: Never
+"#,
+);
+
+testcase!(
+    test_typed_dict_union_subject_contains_narrowing,
+    r#"
+from typing import TypedDict, assert_type
+
+class Foo(TypedDict, closed=True):
+    a: int
+
+class Bar(TypedDict, closed=True):
+    b: int
+
+def test(foo: Foo | Bar) -> None:
+    if "a" in foo:
+        assert_type(foo, Foo)
+        assert_type(foo["a"], int)
+    else:
+        assert_type(foo, Bar)
+        assert_type(foo["b"], int)
+"#,
+);
+
+testcase!(
+    test_typed_dict_open_contains_narrowing,
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict):
+    x: int
+
+class TD2(TypedDict):
+    x: int
+    y: int
+
+def test(td: TD) -> None:
+    if "y" in td:
+        assert_type(td["y"], object)
+
+def test_union(td: TD | TD2) -> None:
+    if "y" in td:
+        assert_type(td, TD | TD2)
+        assert_type(td["y"], object)
+    else:
+        assert_type(td, TD)
+"#,
+);
+
+testcase!(
+    test_typed_dict_not_required_key_contains_narrowing,
+    r#"
+from typing import NotRequired, TypedDict, assert_type
+
+class TD(TypedDict):
+    y: NotRequired[str]
+
+def test(td: TD) -> None:
+    if "y" in td:
+        assert_type(td["y"], str)
+"#,
+);
+
+testcase!(
+    test_typed_dict_nested_contains_narrowing,
+    r#"
+from typing import NotRequired, TypedDict, assert_type
+
+class Inner(TypedDict):
+    pass
+
+class Outer(TypedDict):
+    inner: NotRequired[Inner]
+
+def f(o: Outer) -> None:
+    if "inner" in o:
+        if "deep" in o["inner"]:
+            assert_type(o["inner"], Inner)
+            assert_type(o["inner"]["deep"], object)
+"#,
+);
+
+testcase!(
+    test_typed_dict_contains_chain_subject_open_key_narrowing,
+    r#"
+from typing import TypedDict, assert_type
+
+class TD(TypedDict):
+    pass
+
+def f(o: TD) -> None:
+    if "k" in o:
+        if o["k"]:
+            assert_type(o["k"], object)
+"#,
+);
+
+testcase!(
+    test_typed_dict_non_dict_union_member_contains_narrowing,
+    r#"
+from typing import TypedDict
+
+class TD(TypedDict):
+    x: int
+
+def f(v: TD | list[str]) -> None:
+    if "x" in v:
+        v["x"]  # E: No matching overload found for function `list.__getitem__`
+
+def g(v: TD | list[str]) -> None:
+    if "y" in v:
+        v["y"]  # E: No matching overload found for function `list.__getitem__`
 "#,
 );
 
@@ -2550,5 +2803,71 @@ class TD(TypedDict, Generic[T]):
 
 def f(x: str) -> TD[int] | TD[str]:
     return TD(value=x)
+    "#,
+);
+
+testcase!(
+    test_constrained_type_var_typed_dict_index,
+    r#"
+from typing import Generic, TypedDict, TypeVar, assert_type
+
+class DeviceInfo(TypedDict):
+    name: str
+    address: str
+    rssi: int
+
+class ExtendedDeviceInfo(TypedDict):
+    name: str
+    address: str
+    rssi: int
+    manufacturer: str
+
+NAME = "name"
+ADDRESS = "address"
+
+T = TypeVar("T", DeviceInfo, ExtendedDeviceInfo)
+
+class DeviceIndex(Generic[T]):
+    def __init__(self) -> None:
+        self.by_name: dict[str, list[T]] = {}
+
+    def add(self, device: T) -> None:
+        name = device[NAME]
+        assert_type(name, str)
+        self.by_name.setdefault(name, []).append(device)
+
+    def lookup(self, device: T) -> str:
+        return device[ADDRESS]
+
+T2 = TypeVar("T2", bound=DeviceInfo)
+
+class DeviceIndex2(Generic[T2]):
+    def __init__(self) -> None:
+        self.by_name: dict[str, list[T2]] = {}
+
+    def add(self, device: T2) -> None:
+        name = device[NAME]
+        assert_type(name, str)
+        self.by_name.setdefault(name, []).append(device)
+
+    def lookup(self, device: T2) -> str:
+        return device[ADDRESS]
+"#,
+);
+
+testcase!(
+    test_constrained_type_var_typed_dict_method_call,
+    r#"
+from typing import Generic, TypedDict, TypeVar, assert_type
+
+class DeviceInfo(TypedDict):
+    name: str
+    address: str
+
+T = TypeVar("T", bound=DeviceInfo)
+
+def test(x: T) -> object:
+    # type vars bounded by typed dict get treated as dict[str, T]
+    return x.get("name")
     "#,
 );

@@ -135,6 +135,38 @@ def f(c: C):
 );
 
 testcase!(
+    test_deprecated_overloaded_property_setter,
+    r#"
+from typing import overload
+from warnings import deprecated
+
+class C:
+    @property
+    def x(self) -> int:
+        ...
+
+    @x.setter
+    @overload
+    @deprecated("Setting x to None is deprecated")
+    def x(self, value: None) -> None:
+        ...
+
+    @x.setter
+    @overload
+    def x(self, value: int) -> None:
+        ...
+
+    @x.setter
+    def x(self, value: int | None) -> None:
+        ...
+
+c = C()
+c.x = None  # E: Call to deprecated overload `C.x`
+c.x = 1
+    "#,
+);
+
+testcase!(
     test_property_with_setter_and_deleter,
     r#"
 from typing import assert_type, reveal_type
@@ -910,5 +942,40 @@ class C:
     x = property(_get_x)
 def f(c: C):
     assert_type(c.x, str | None)
+    "#,
+);
+
+testcase!(
+    // A `__get__` whose type is itself a descriptor must not recurse forever; the
+    // read falls back to the descriptor's instance type, so the call below is reported
+    // as not callable rather than overflowing the stack.
+    test_self_referential_descriptor_get_no_crash,
+    r#"
+class C:
+    def d() -> C: ...
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+C.__get__()  # E: Expected a callable, got `C`
+    "#,
+);
+
+testcase!(
+    // Assignment resolves a descriptor through its getter too, so the same guard keeps
+    // the write path from overflowing the stack.
+    test_self_referential_descriptor_set_no_crash,
+    r#"
+class C:
+    def d() -> C: ...
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __get__():
+        pass
+    @d  # E: Expected 0 positional arguments, got 1 in function `C.d`
+    def __set__():
+        pass
+class Host:
+    x: C = C()
+def f(h: Host) -> None:
+    h.x = 5  # E: Expected a callable, got `C`
     "#,
 );

@@ -1,10 +1,9 @@
-"""Importing this module enables command line editing using GNU readline."""
+"""Importing this module enables command line editing using libedit readline."""
 
 import sys
 from _typeshed import StrOrBytesPath
 from collections.abc import Callable, Sequence
-from typing import Literal
-from typing_extensions import TypeAlias
+from typing import Literal, TypeAlias
 
 if sys.platform != "win32":
     _Completer: TypeAlias = Callable[[str, int], str | None]
@@ -43,13 +42,7 @@ if sys.platform != "win32":
         The default filename is ~/.history.
         """
         ...
-    def append_history_file(nelements: int, filename: StrOrBytesPath | None = None, /) -> None:
-        """
-        Append the last nelements items of the history list to file.
-
-        The default filename is ~/.history.
-        """
-        ...
+    def append_history_file(nelements: int, filename: StrOrBytesPath | None = None, /) -> None: ...
     def get_history_length() -> int:
         """Return the maximum number of lines that will be written to the history file."""
         ...

@@ -30,8 +30,11 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::TokenKind;
+use ruff_python_ast::token::Tokens;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
 
@@ -123,39 +126,41 @@ impl SemanticTokensLegends {
         &self,
         tokens: &[SemanticTokenWithFullRange],
         module_info: Module,
+        limit_range: Option<TextRange>,
         limit_cell_idx: Option<usize>,
     ) -> Vec<SemanticToken> {
         let mut previous_line = 0;
         let mut previous_col = 0;
         let mut lsp_semantic_tokens = Vec::new();
+        let source = module_info.contents().as_str();
         for token in tokens {
-            let cell_idx = module_info.to_cell_for_lsp(token.range.start());
-            // Skip tokens in different cells if we're filtering for a particular cell
-            if cell_idx != limit_cell_idx {
-                continue;
-            }
-            let start_pos = module_info.to_lsp_position(token.range.start());
-            let end_pos = module_info.to_lsp_position(token.range.end());
-            let length = if start_pos.line == end_pos.line {
-                end_pos.character.saturating_sub(start_pos.character)
-            } else {
-                // LSP semantic tokens must be expressed within a single line; we currently
-                // generate only single-line ranges, so treat any multi-line span as invalid
-                // and skip it. (Today this effectively never happens, but the guard keeps us
-                // from emitting malformed data if it does.)
-                debug_assert!(
-                    false,
-                    "Unexpected multi-line semantic token range (from line {} to line {}, with token type {:?})",
-                    start_pos.line, end_pos.line, token.token_type,
+            let mut push_segment = |segment_range: TextRange| {
+                if segment_range.is_empty() {
+                    return;
+                }
+                if !range_overlaps(limit_range, segment_range) {
+                    return;
+                }
+                let cell_idx = module_info.to_cell_for_lsp(segment_range.start());
+                // Skip tokens in different cells if we're filtering for a particular cell
+                if cell_idx != limit_cell_idx {
+                    return;
+                }
+                let start_pos = module_info.to_lsp_position(segment_range.start());
+                let end_pos = module_info.to_lsp_position(segment_range.end());
+                debug_assert_eq!(
+                    start_pos.line, end_pos.line,
+                    "Semantic token segment should be on a single line"
                 );
-                0
-            };
-            if length == 0 {
-                continue;
-            }
-            let current_line = start_pos.line;
-            let current_col = start_pos.character;
-            let (delta_line, delta_start) = {
+                if start_pos.line != end_pos.line {
+                    return;
+                }
+                let length = end_pos.character.saturating_sub(start_pos.character);
+                if length == 0 {
+                    return;
+                }
+                let current_line = start_pos.line;
+                let current_col = start_pos.character;
                 let delta_line = current_line - previous_line;
                 let delta_start = if previous_line == current_line {
                     current_col - previous_col
@@ -164,21 +169,37 @@ impl SemanticTokensLegends {
                 };
                 previous_line = current_line;
                 previous_col = current_col;
-                (delta_line, delta_start)
+                let token_type = *self.token_types_index.get(&token.token_type).unwrap();
+                let mut token_modifiers_bitset = 0;
+                for modifier in &token.token_modifiers {
+                    let index = *self.token_modifiers_index.get(modifier).unwrap();
+                    token_modifiers_bitset |= 1 << index;
+                }
+                lsp_semantic_tokens.push(SemanticToken {
+                    delta_line,
+                    delta_start,
+                    length,
+                    token_type,
+                    token_modifiers_bitset,
+                });
             };
-            let token_type = *self.token_types_index.get(&token.token_type).unwrap();
-            let mut token_modifiers_bitset = 0;
-            for modifier in &token.token_modifiers {
-                let index = *self.token_modifiers_index.get(modifier).unwrap();
-                token_modifiers_bitset |= 1 << index;
+            let mut segment_start = token.range.start();
+            let start = token.range.start().to_usize();
+            let end = token.range.end().to_usize();
+            let token_source = &source[start..end];
+            for line in token_source.split_inclusive('\n') {
+                let line_without_lf = line.strip_suffix('\n').unwrap_or(line);
+                let line_without_ending = line_without_lf
+                    .strip_suffix('\r')
+                    .unwrap_or(line_without_lf);
+                let segment_end = segment_start
+                    + TextSize::try_from(line_without_ending.len())
+                        .expect("semantic token segment length must fit in TextSize");
+                let segment_range = TextRange::new(segment_start, segment_end);
+                segment_start += TextSize::try_from(line.len())
+                    .expect("semantic token line length must fit in TextSize");
+                push_segment(segment_range);
             }
-            lsp_semantic_tokens.push(SemanticToken {
-                delta_line,
-                delta_start,
-                length,
-                token_type,
-                token_modifiers_bitset,
-            });
         }
         lsp_semantic_tokens.dedup_by(|current, previous| {
             current.delta_line == 0 && current.delta_start == 0 && current.length == previous.length
@@ -199,6 +220,37 @@ impl SemanticTokensLegends {
         modifiers.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         modifiers
     }
+}
+
+fn syntax_token_type(kind: TokenKind) -> Option<SemanticTokenType> {
+    if kind.is_keyword() {
+        Some(SemanticTokenType::KEYWORD)
+    } else if kind.is_operator() {
+        Some(SemanticTokenType::OPERATOR)
+    } else {
+        match kind {
+            TokenKind::Comment => Some(SemanticTokenType::COMMENT),
+            TokenKind::String
+            | TokenKind::FStringStart
+            | TokenKind::FStringMiddle
+            | TokenKind::FStringEnd
+            | TokenKind::TStringStart
+            | TokenKind::TStringMiddle
+            | TokenKind::TStringEnd => Some(SemanticTokenType::STRING),
+            TokenKind::Int | TokenKind::Float | TokenKind::Complex => {
+                Some(SemanticTokenType::NUMBER)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn range_overlaps(limit_range: Option<TextRange>, range: TextRange) -> bool {
+    limit_range.is_none_or(|limit| {
+        limit
+            .intersect(range)
+            .is_some_and(|intersection| !intersection.is_empty())
+    })
 }
 
 pub struct SemanticTokenWithFullRange {
@@ -233,7 +285,7 @@ impl SemanticTokenBuilder {
         token_type: SemanticTokenType,
         token_modifiers: Vec<SemanticTokenModifier>,
     ) {
-        if self.limit_range.is_none_or(|x| x.contains_range(range)) {
+        if range_overlaps(self.limit_range, range) {
             self.tokens.push(SemanticTokenWithFullRange {
                 range,
                 token_type,
@@ -246,6 +298,14 @@ impl SemanticTokenBuilder {
         self.disabled_ranges
             .iter()
             .any(|disabled| disabled.contains_range(range))
+    }
+
+    pub fn process_syntax_tokens(&mut self, tokens: &Tokens) {
+        for token in tokens.iter() {
+            if let Some(token_type) = syntax_token_type(token.kind()) {
+                self.push_if_in_range(token.range(), token_type, Vec::new());
+            }
+        }
     }
 
     fn process_arguments(&mut self, args: &Arguments) {

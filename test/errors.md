@@ -4,7 +4,7 @@
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check $TMPDIR/does_not_exist --python-version 3.13.0
-No Python files matched pattern `*/does_not_exist` (glob)
+Path `*/does_not_exist` does not exist (glob)
 [1]
 ```
 
@@ -23,17 +23,12 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=warn
- WARN ast.pyi:1113:10-11: `Constant.n` is deprecated [deprecated]
- WARN ast.pyi:1113:10-18: `Constant.n` is deprecated [deprecated]
- WARN ast.pyi:1123:10-11: `Constant.s` is deprecated [deprecated]
- WARN ast.pyi:1123:10-18: `Constant.s` is deprecated [deprecated]
- WARN importlib/abc.pyi:184:9-41: `ResourceReader` is deprecated [deprecated]
- WARN importlib/resources/__init__.pyi:51:9-29: `contents` is deprecated [deprecated]
- WARN importlib/resources/__init__.pyi:84:41-73: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/abc.pyi:147:9-41: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/__init__.pyi:49:9-29: `contents` is deprecated [deprecated]
+ WARN importlib/resources/__init__.pyi:79:41-73: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
 */shown*.py:1:* (glob)
 */shown*.py:1:* (glob)
- WARN typing_extensions.pyi:65:5-55: `no_type_check_decorator` is deprecated [deprecated]
 [1]
 ```
 
@@ -125,5 +120,56 @@ $ touch $TMPDIR/pyrefly.toml && \
 $ echo "x: str = 0" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --warn=bad-assignment --min-severity=warn --output-format=min-text
  WARN */test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
+[1]
+```
+
+## `--output-format junit-xml` emits well-formed XML
+
+```scrut {output_stream: stdout}
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/bad.py && \
+> $PYREFLY check --output-format junit-xml $TMPDIR/bad.py 2>/dev/null
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="pyrefly" tests="1" failures="1" errors="0" time="0">
+    <testcase classname="*/bad.py" name="bad-assignment:L1" file="*/bad.py" line="1" time="0"> (glob)
+      <failure type="bad-assignment" message="`Literal[0]` is not assignable to `str`"><![CDATA[`Literal[0]` is not assignable to `str`]]></failure>
+    </testcase>
+  </testsuite>
+</testsuites>
+[1]
+```
+
+## `--output-format junit-xml` omits warnings unless `--min-severity=warn`
+
+Severity filtering happens before formatting, so by default a warning-level
+finding produces an empty suite:
+
+```scrut {output_stream: stdout}
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/warn.py && \
+> $PYREFLY check --warn=bad-assignment --output-format junit-xml $TMPDIR/warn.py 2>/dev/null
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="pyrefly" tests="0" failures="0" errors="0" time="0">
+  </testsuite>
+</testsuites>
+```
+
+Lowering the threshold with `--min-severity=warn` includes it, rendered like any
+other failure with `type` set to the error kind:
+
+```scrut {output_stream: stdout}
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/warn.py && \
+> $PYREFLY check --warn=bad-assignment --min-severity=warn --output-format junit-xml $TMPDIR/warn.py 2>/dev/null
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="pyrefly" tests="1" failures="1" errors="0" time="0">
+    <testcase classname="*/warn.py" name="bad-assignment:L1" file="*/warn.py" line="1" time="0"> (glob)
+      <failure type="bad-assignment" message="`Literal[0]` is not assignable to `str`"><![CDATA[`Literal[0]` is not assignable to `str`]]></failure>
+    </testcase>
+  </testsuite>
+</testsuites>
 [1]
 ```

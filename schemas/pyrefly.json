@@ -84,10 +84,6 @@
           },
           "default": ["type", "pyrefly"]
         },
-        "tensor-shapes": {
-          "description": "Whether to enable tensor shape checking.",
-          "type": "boolean"
-        },
         "recursion-depth-limit": {
           "description": "Maximum recursion depth for type evaluation. Set to 0 to disable the limit.",
           "type": "integer",

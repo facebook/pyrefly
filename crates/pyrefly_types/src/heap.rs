@@ -37,8 +37,9 @@ use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
+use crate::shaped_array::ShapedArrayType;
 use crate::special_form::SpecialForm;
-use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
@@ -135,6 +136,11 @@ impl TypeHeap {
     /// Create a `Type::None`.
     pub fn mk_none(&self) -> Type {
         Type::None
+    }
+
+    /// Create a `Type::Sentinel`.
+    pub fn mk_sentinel(&self, sentinel: Sentinel) -> Type {
+        Type::Sentinel(sentinel)
     }
 
     /// Create a `Type::Union` from members.
@@ -444,9 +450,9 @@ impl TypeHeap {
         Type::Size(size_expr)
     }
 
-    /// Create a `Type::Tensor` from a TensorType.
-    pub fn mk_tensor(&self, tensor: TensorType) -> Type {
-        Type::Tensor(Box::new(tensor))
+    /// Create a `Type::ShapedArray` from a ShapedArrayType.
+    pub fn mk_shaped_array(&self, shaped_array: ShapedArrayType) -> Type {
+        Type::ShapedArray(Box::new(shaped_array))
     }
 
     /// Create a `Type::NNModule` from an NNModuleType.

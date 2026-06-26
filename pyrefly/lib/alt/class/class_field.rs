@@ -25,8 +25,8 @@ use pyrefly_types::callable::PlaceholderBodyKind;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::read_only::IsFinalVariableInitialized;
+use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::simplify::unions;
-use pyrefly_types::tensor::TensorType;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDictInner;
@@ -54,6 +54,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassMetadata;
+use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::instance::Instance;
 use crate::alt::types::instance::InstanceKind;
@@ -86,6 +87,7 @@ use crate::types::class::ClassType;
 use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
 use crate::types::keywords::DataclassFieldKeywords;
+use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
@@ -220,6 +222,10 @@ pub struct Descriptor {
     /// descriptors (which have an actual object on the class) from annotation-only
     /// descriptors (which rely on metaclass or other runtime machinery).
     initialization: ClassFieldInitialization,
+    /// Whether the defining `def` was decorated with `@override`. Descriptors created by
+    /// decorators (e.g. `@classproperty`) become a `ClassType`, which can't carry the
+    /// function metadata flag, so we record it here from the undecorated function.
+    is_override: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -295,6 +301,12 @@ impl ClassFieldInitialization {
 /// both visibility rules and whether method binding should be performed.
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
 pub struct ClassField(ClassFieldInner, IsInherited);
+
+pub enum ClassFieldVariance<'a> {
+    Method(&'a Type),
+    Property(&'a Type),
+    Field { ty: &'a Type, read_only: bool },
+}
 
 #[derive(Debug, Clone, TypeEq, PartialEq, Eq, VisitMut)]
 enum ClassFieldInner {
@@ -450,6 +462,20 @@ impl ClassField {
             ClassFieldInner::InstanceAttribute { ty, annotation, .. } => {
                 (ty, annotation.as_ref(), self.is_read_only())
             }
+        }
+    }
+
+    pub fn variance_inference(&self) -> ClassFieldVariance<'_> {
+        match &self.0 {
+            ClassFieldInner::Method { ty, .. } => ClassFieldVariance::Method(ty),
+            ClassFieldInner::Property { ty, .. } => ClassFieldVariance::Property(ty),
+            ClassFieldInner::Descriptor { ty, .. }
+            | ClassFieldInner::NestedClass { ty, .. }
+            | ClassFieldInner::ClassAttribute { ty, .. }
+            | ClassFieldInner::InstanceAttribute { ty, .. } => ClassFieldVariance::Field {
+                ty,
+                read_only: self.is_read_only(),
+            },
         }
     }
 
@@ -769,7 +795,7 @@ impl ClassField {
 
     fn as_special_method_type(&self, heap: &TypeHeap, instance: &Instance) -> Option<Type> {
         self.as_raw_special_method_type(heap, instance)
-            .and_then(|ty| make_bound_method(heap, instance.to_type(heap), ty).ok())
+            .and_then(|ty| make_bound_method(heap, instance, ty).ok())
     }
 
     pub fn is_property(&self) -> bool {
@@ -1024,7 +1050,7 @@ impl ClassField {
     fn is_override(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { ty, .. } => ty.is_override(),
-            ClassFieldInner::Descriptor { ty, .. } => ty.is_override(),
+            ClassFieldInner::Descriptor { descriptor, .. } => descriptor.is_override,
             ClassFieldInner::Method { ty, .. } => ty.is_override(),
             ClassFieldInner::NestedClass { .. } => false,
             ClassFieldInner::ClassAttribute { ty, .. } => ty.is_override(),
@@ -1235,10 +1261,21 @@ fn make_bound_classmethod(heap: &TypeHeap, cls: &ClassBase, attr: Type) -> Resul
     make_bound_method_helper(heap, cls.clone().to_type(heap), attr, &should_bind)
 }
 
-fn make_bound_method(heap: &TypeHeap, obj: Type, attr: Type) -> Result<Type, Type> {
+fn make_bound_method(heap: &TypeHeap, instance: &Instance, attr: Type) -> Result<Type, Type> {
     let should_bind =
         |meta: &FuncMetadata| !meta.flags.is_staticmethod && !meta.flags.is_classmethod;
-    make_bound_method_helper(heap, obj, attr, &should_bind)
+    make_bound_method_helper(heap, instance.to_type(heap), attr, &should_bind).map(|mut method| {
+        method.transform_toplevel_callable(|callable| {
+            if let InstanceKind::TypeVar(q) = &instance.kind &&
+            matches!(q.restriction(), Restriction::Constraints(_)) &&
+            matches!(&callable.ret, Type::ClassType(cls) if cls.class_object() == instance.class && cls.targs() == instance.targs) {
+                // We're binding this method to a constrained TypeVar, and its return type matches
+                // the currently active constraint. Treat this method as returning the TypeVar.
+                callable.ret = instance.to_type(heap);
+            }
+        });
+        method
+    })
 }
 
 /// Result of looking up a member of a class in the MRO, including a handle to the defining
@@ -1360,6 +1397,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // which requires us having a place to store synthesized dummy values until we've refactored more.
         let value_storage = Owner::new();
 
+        // For descriptors created by a decorated `def` (e.g. `@classproperty`), the `@override`
+        // decorator's flag lives in the undecorated function metadata but is lost once the
+        // decorator turns the function into a `ClassType`. Recover it here so the override
+        // consistency check can see it.
+        let mut descriptor_is_override = false;
+
         let (
             initialization,
             is_function_without_return_annotation,
@@ -1468,7 +1511,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 annotation: annot,
                 ..
             } => {
-                let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
+                let mut direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
                 if metadata.is_protocol()
                     && direct_annotation.is_none()
                     && !is_dunder(name.as_str())
@@ -1487,7 +1530,119 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
-                    let flags = self.compute_dataclass_field_initialization(call, dm);
+                    // `type=` only has meaning on a real attrs specifier (`attr.ib`/`field`). attrs
+                    // raises `ValueError` if such a field also has an annotation. Otherwise
+                    // `attr.ib(type=T)` supplies the field's type; `field(type=T)` is metadata only
+                    // (type checkers ignore it).
+                    if matches!(&dm.kind, DataclassKind::Attrs { .. })
+                        && let Some(type_expr) = call.arguments.find_keyword("type")
+                        && let Some(fields) = self.get_class_fields(class)
+                        && fields.is_attrs_field_specifier(name)
+                    {
+                        if direct_annotation.is_some() {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::BadClassDefinition,
+                                format!(
+                                    "`{name}` cannot have both a type annotation and a `type` argument"
+                                ),
+                            );
+                        } else if fields.attrs_specifier_honors_type(name) {
+                            let ty = self.untype(
+                                self.expr_infer(&type_expr.value, errors),
+                                type_expr.value.range(),
+                                errors,
+                            );
+                            direct_annotation = Some(Annotation {
+                                qualifiers: Vec::new(),
+                                ty: Some(ty),
+                            });
+                        }
+                    }
+                    let mut flags = self.compute_dataclass_field_initialization(call, dm);
+                    if flags.is_some() {
+                        // A field specifier with no type annotation is a definition-time error,
+                        // except under classic attrs (`auto_attribs=False`), where an unannotated
+                        // `attr.ib()` is a valid field. Unresolved `auto_attribs` (`None`) is
+                        // treated as classic to avoid false positives.
+                        if direct_annotation.is_none() {
+                            let missing_annotation = match &dm.kind {
+                                DataclassKind::Dataclass { .. } => Some(format!(
+                                    "`{name}` is a dataclass field but has no type annotation"
+                                )),
+                                DataclassKind::Attrs { auto_attribs, .. }
+                                    if *auto_attribs == Some(true) =>
+                                {
+                                    Some(format!(
+                                        "`{name}` needs a type annotation because the class uses `auto_attribs=True`"
+                                    ))
+                                }
+                                DataclassKind::Attrs { .. } => None,
+                            };
+                            if let Some(message) = missing_annotation {
+                                self.error(errors, range, ErrorKind::BadClassDefinition, message);
+                            }
+                        }
+                        // `attr.ib` accepts `default` positionally, so a positional arg
+                        // counts as a default here too.
+                        if matches!(&dm.kind, DataclassKind::Attrs { .. })
+                            && (call.arguments.find_keyword("default").is_some()
+                                || !call.arguments.args.is_empty())
+                            && call.arguments.find_keyword("factory").is_some()
+                        {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::BadClassDefinition,
+                                format!("`{name}` cannot specify both `default` and `factory`"),
+                            );
+                        }
+                        // attrs validates eq/order/cmp legality on the field specifier, mirroring
+                        // the decorator-site check.
+                        if matches!(&dm.kind, DataclassKind::Attrs { .. }) {
+                            let ignore = self.error_swallower();
+                            let mut kws = TypeMap::new();
+                            for kw in call.arguments.keywords.iter() {
+                                if let Some(arg) = &kw.arg {
+                                    kws.0.insert(
+                                        arg.id.clone(),
+                                        self.expr_infer(&kw.value, &ignore),
+                                    );
+                                }
+                            }
+                            self.validate_attrs_eq_order_cmp(&kws, range, errors);
+                        }
+                    }
+                    // Drop a NOTHING default so the field stays required.
+                    if let Some(f) = &mut flags
+                        && self
+                            .get_class_fields(class)
+                            .is_some_and(|cf| cf.default_is_attrs_nothing(name))
+                    {
+                        f.default = None;
+                    }
+                    // A `@<field>.default` method supplies the default, making the field optional.
+                    // It is mutually exclusive with an explicit `default=`/`factory=`, mirroring
+                    // attrs' `DefaultAlreadySetError`.
+                    if let Some(f) = &mut flags
+                        && self
+                            .get_class_fields(class)
+                            .is_some_and(|cf| cf.default_is_attrs_decorator(name))
+                    {
+                        if f.default.is_some() {
+                            self.error(
+                                errors,
+                                range,
+                                ErrorKind::BadClassDefinition,
+                                format!(
+                                    "`{name}` cannot specify both an explicit default and a `@{name}.default` method"
+                                ),
+                            );
+                        } else {
+                            f.default = Some(self.heap.mk_any_implicit());
+                        }
+                    }
                     ClassFieldInitialization::ClassBody(flags.map(Box::new))
                 } else {
                     ClassFieldInitialization::ClassBody(None)
@@ -1511,10 +1666,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 )
             }
             ClassFieldDefinition::DefinedInMethod {
-                value,
-                method,
+                values,
+                method: _,
                 annotation: annot,
-                ..
+                receiver_kind,
             } => {
                 let direct_annotation = annot.map(|a| self.get_idx(a).annotation.clone());
                 // Check if there's an inherited property or descriptor field from a parent class.
@@ -1546,20 +1701,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
 
-                let initialization = match method.instance_or_class {
+                let initialization = match receiver_kind {
                     MethodSelfKind::Class => ClassFieldInitialization::ClassMethod,
                     MethodSelfKind::Instance => ClassFieldInitialization::Method,
                 };
-                let (mut value_ty, annotation, is_inherited) = self.analyze_class_field_value(
-                    value,
-                    class,
-                    name,
-                    direct_annotation.as_ref(),
-                    true,
-                    range,
-                    errors,
-                );
-                if matches!(method.instance_or_class, MethodSelfKind::Instance) {
+
+                // Solve the type of each collected assignment and union them.
+                let mut union_types = Vec::new();
+                let mut overall_annotation = None;
+                let mut overall_is_inherited = IsInherited::No;
+                for value in values {
+                    let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(
+                        value,
+                        class,
+                        name,
+                        direct_annotation.as_ref(),
+                        true,
+                        range,
+                        errors,
+                    );
+                    union_types.push(value_ty);
+                    if overall_annotation.is_none() {
+                        overall_annotation = annotation;
+                    }
+                    if matches!(is_inherited, IsInherited::Maybe) {
+                        overall_is_inherited = IsInherited::Maybe;
+                    }
+                }
+                let mut value_ty = unions(union_types, self.heap);
+                if matches!(receiver_kind, MethodSelfKind::Instance) {
                     value_ty = self
                         .check_and_sanitize_type_parameters(class, value_ty, name, range, errors);
                 }
@@ -1567,8 +1737,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     initialization,
                     false,
                     value_ty,
-                    annotation,
-                    is_inherited,
+                    overall_annotation,
+                    overall_is_inherited,
                     direct_annotation,
                 )
             }
@@ -1581,6 +1751,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let binding = Binding::Forward(*definition);
                 let value_ty =
                     Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
+                if let Binding::Function(decorated_idx, _, _) = self.bindings().get(*definition) {
+                    descriptor_is_override = self
+                        .get_decorated_function(*decorated_idx)
+                        .undecorated
+                        .metadata
+                        .flags
+                        .is_override;
+                }
                 (
                     initialization,
                     !has_return_annotation,
@@ -1728,6 +1906,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             getter,
                             setter,
                             initialization: initialization.clone(),
+                            is_override: descriptor_is_override,
                         })
                     }
                 }
@@ -1953,7 +2132,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let ctx: &dyn Fn() -> TypeCheckContext =
                     &|| TypeCheckContext::of_kind(TypeCheckKind::Attribute(name.clone()));
                 let hint = Some((annotation.get_type(), ctx));
-                self.expr(x, hint, errors)
+                self.expr_check(x, hint, errors)
             }
             // We interpret `self.foo = None` to mean the type of foo is None or some unknown type.
             (None, Expr::NoneLiteral(_)) => {
@@ -2287,8 +2466,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )
                             .into_inner()
                         } else {
-                            make_bound_method(self.heap, self.promote_silently(class), inherited_ty)
-                                .into_inner()
+                            make_bound_method(
+                                self.heap,
+                                &Instance::of_class(
+                                    &self.promote_nontypeddict_silently_to_classtype(class),
+                                ),
+                                inherited_ty,
+                            )
+                            .into_inner()
                         }
                     }
                     Some(inherited_ty)
@@ -2372,7 +2557,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let func_ty = self.expr_infer(func, &ignore_errors);
         let func_kind = func_ty.callee_kind();
         if let Some(func_kind) = func_kind
-            && dm.field_specifiers.contains(&func_kind)
+            && dm.kind.field_specifiers().contains(&func_kind)
         {
             let flags = self.dataclass_field_keywords(&func_ty, arguments, dm, &ignore_errors);
             Some(flags)
@@ -2627,6 +2812,64 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty.finalize_callable_residuals_at_boundary(self.heap, false)
     }
 
+    /// Filter out overload signatures whose explicit `self:` annotation is not
+    /// compatible with the receiver `self_type`.
+    ///
+    /// If filtering would remove every signature, the original overload is returned unchanged.
+    pub(crate) fn filter_overloads_by_self_type(
+        &self,
+        overload: &Overload,
+        self_type: &Type,
+    ) -> Option<Overload> {
+        let filtered: Vec<_> = overload
+            .signatures
+            .iter()
+            .filter(|sig| {
+                let func = match sig {
+                    OverloadType::Function(f) => f,
+                    OverloadType::Forall(forall) => &forall.body,
+                };
+                // Only instance methods have a `self` first parameter; static and
+                // class methods' first parameter is a regular argument.
+                if func.metadata.flags.is_staticmethod || func.metadata.flags.is_classmethod {
+                    return true;
+                }
+                func.signature.get_first_param().is_none_or(|p| {
+                    // A non-protocol `self:` can't re-enter protocol conformance, so check
+                    // it directly. A protocol-typed `self:`, however, makes
+                    // `is_subset_eq(self_type, p)` re-enter this same filtering on the same
+                    // `(self_type, p)` pair — unbounded recursion for a self-referential
+                    // protocol. Guard only that case coinductively: on re-entry
+                    // of the same pair, assume the overload applies (keep it).
+                    let p_is_protocol = matches!(
+                        &p,
+                        Type::ClassType(cls) if self.type_order().is_protocol(cls.class_object())
+                    );
+                    if !p_is_protocol {
+                        return self.is_subset_eq(self_type, &p);
+                    }
+                    let key = (self_type.clone(), p.clone());
+                    if self.enter_overload_self_filter(key.clone()) {
+                        return true;
+                    }
+                    let applies = self.is_subset_eq(self_type, &p);
+                    self.exit_overload_self_filter(&key);
+                    applies
+                })
+            })
+            .cloned()
+            .collect();
+        if let Ok(filtered_sigs) = vec1::Vec1::try_from_vec(filtered)
+            && filtered_sigs.len() < overload.signatures.len()
+        {
+            return Some(Overload {
+                signatures: filtered_sigs,
+                metadata: overload.metadata.clone(),
+            });
+        }
+        None
+    }
+
     fn as_instance_attribute(
         &self,
         field_name: &Name,
@@ -2657,19 +2900,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(getter) = ty.is_property_setter_with_getter() {
                     // Property with a setter: bind both getter and setter
                     ClassAttribute::property(
-                        make_bound_method(self.heap, instance.to_type(self.heap), getter)
-                            .into_inner(),
-                        Some(
-                            make_bound_method(self.heap, instance.to_type(self.heap), ty.clone())
-                                .into_inner(),
-                        ),
+                        make_bound_method(self.heap, instance, getter).into_inner(),
+                        Some(make_bound_method(self.heap, instance, ty.clone()).into_inner()),
                         instance.class.dupe(),
                     )
                 } else {
                     // Property getter only (no setter)
                     ClassAttribute::property(
-                        make_bound_method(self.heap, instance.to_type(self.heap), ty.clone())
-                            .into_inner(),
+                        make_bound_method(self.heap, instance, ty.clone()).into_inner(),
                         None,
                         instance.class.dupe(),
                     )
@@ -2701,14 +2939,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
-                let mut obj = instance.to_type(self.heap);
-                self.expand_mut(&mut obj);
-                ClassAttribute::read_write(make_bound_method(self.heap, obj, ty).unwrap_or_else(
-                    |ty| {
+                ClassAttribute::read_write(
+                    make_bound_method(self.heap, instance, ty).unwrap_or_else(|ty| {
                         make_bound_classmethod(self.heap, &instance.to_class_base(), ty)
                             .into_inner()
-                    },
-                ))
+                    }),
+                )
             }
             ClassFieldInner::NestedClass { ty, .. } => {
                 // Nested classes are always read-only (ClassObjectInitializedOnBody)
@@ -2789,39 +3025,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // on str methods). These overloads only apply when the instance is known to be the
                 // narrower type; for unbound access from the class, the self parameter is the
                 // general class type, so the narrowing overloads should not participate.
-                if let Type::Overload(overload) = &ty {
-                    let class_self_type = cls.clone().to_self_type(self.heap);
-                    let filtered: Vec<_> = overload
-                        .signatures
-                        .iter()
-                        .filter(|sig| {
-                            let func = match sig {
-                                OverloadType::Function(f) => f,
-                                OverloadType::Forall(forall) => &forall.body,
-                            };
-                            // Only check instance methods — static methods and class methods
-                            // don't have a self parameter, so their first parameter is a
-                            // regular argument unrelated to the class type.
-                            if func.metadata.flags.is_staticmethod
-                                || func.metadata.flags.is_classmethod
-                            {
-                                return true;
-                            }
-                            func.signature
-                                .get_first_param()
-                                .is_none_or(|p| self.is_subset_eq(&class_self_type, &p))
-                        })
-                        .cloned()
-                        .collect();
-                    if let Ok(filtered_sigs) = vec1::Vec1::try_from_vec(filtered)
-                        && filtered_sigs.len() < overload.signatures.len()
-                    {
-                        ty = self.heap.mk_overload(Overload {
-                            signatures: filtered_sigs,
-                            metadata: overload.metadata.clone(),
-                        });
-                    }
-                }
+                if let Type::Overload(overload) = &ty
+                    && let Some(filtered_overload) = self.filter_overloads_by_self_type(
+                        overload,
+                        &cls.clone().to_self_type(self.heap),
+                    )
+                {
+                    ty = self.heap.mk_overload(filtered_overload);
+                };
                 if let Some(quantified) = self_quantified {
                     ty = self.wrap_with_quantified(ty, quantified);
                 }
@@ -3573,11 +3784,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .map(|info| info.ty.clone())
                     .collect();
                 let intersect = self.intersects(&types);
-                // Before intersecting `types`, `intersects` attempts to simplify to a single
-                // element of `types` that is a common base type for all elements. If an
-                // intersection is produced (or `Never` if the types are disjoint), then there was
-                // no common base type, so the inheritance is inconsistent.
-                if matches!(intersect, Type::Intersect(_) | Type::Never(_)) {
+                if intersect.is_never() {
                     let mut builder = errors
                         .error_builder(
                             cls.range(),
@@ -3795,11 +4002,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 field.initialization(),
                 ClassFieldInitialization::Method | ClassFieldInitialization::ClassMethod
             ) {
-                // This parent happens to assign to the field in a method but doesn't define it.
-                None
-            } else {
-                Some(field)
+                return None;
             }
+            let recognized = field.has_explicit_annotation()
+                || (matches!(
+                    self.get_metadata_for_class(cls)
+                        .dataclass_metadata()
+                        .map(|dm| &dm.kind),
+                    Some(DataclassKind::Attrs {
+                        auto_attribs: Some(false),
+                        ..
+                    })
+                ) && self
+                    .get_class_fields(cls)
+                    .is_some_and(|f| f.is_attrs_field_specifier(name)));
+            recognized.then_some(field)
         })
     }
 
@@ -3832,10 +4049,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(|field| self.as_instance_attribute(name, &field, &Instance::of_self_type(cls)))
     }
 
-    /// Look up an attribute on a tensor instance, substituting Self with the full tensor type.
-    pub fn get_tensor_attribute(&self, tensor: &TensorType, name: &Name) -> Option<ClassAttribute> {
-        self.get_class_member(tensor.base_class.class_object(), name)
-            .map(|field| self.as_instance_attribute(name, &field, &Instance::of_tensor(tensor)))
+    /// Look up an attribute on a shaped-array instance, substituting Self with the full type.
+    pub fn get_shaped_array_attribute(
+        &self,
+        shaped_array: &ShapedArrayType,
+        name: &Name,
+    ) -> Option<ClassAttribute> {
+        self.get_class_member(shaped_array.base_class.class_object(), name)
+            .map(|field| {
+                self.as_instance_attribute(name, &field, &Instance::of_shaped_array(shaped_array))
+            })
     }
 
     pub fn get_protocol_attribute(
@@ -3911,23 +4134,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         upper_bound: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
-        let quantified_with_specific_upper_bound = match quantified.restriction() {
-            Restriction::Constraints(_) => {
-                quantified.with_restriction(Restriction::Constraints(vec![
-                    self.heap.mk_class_type(upper_bound.clone()),
-                ]))
-            }
-            Restriction::Bound(_) => quantified.with_restriction(Restriction::Bound(
-                self.heap.mk_class_type(upper_bound.clone()),
-            )),
-            Restriction::Unrestricted => quantified,
-        };
         self.get_class_member(upper_bound.class_object(), name)
             .map(|field| {
                 self.as_instance_attribute(
                     name,
                     &field,
-                    &Instance::of_type_var(quantified_with_specific_upper_bound, upper_bound),
+                    &Instance::of_type_var(quantified, upper_bound),
                 )
             })
     }
@@ -4196,19 +4408,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // https://typing.python.org/en/latest/spec/constructors.html#converting-a-constructor-to-callable
             None
         } else {
+            let instance = Instance::of_metaclass(ClassBase::ClassType(cls.clone()), metaclass);
             Arc::unwrap_or_clone(attr.value)
-                .as_raw_special_method_type(
-                    self.heap,
-                    &Instance::of_metaclass(ClassBase::ClassType(cls.clone()), metaclass),
-                )
-                .and_then(|ty| {
-                    make_bound_method(
-                        self.heap,
-                        self.heap.mk_type_of(self.heap.mk_class_type(cls.clone())),
-                        ty,
-                    )
-                    .ok()
-                })
+                .as_raw_special_method_type(self.heap, &instance)
+                .and_then(|ty| make_bound_method(self.heap, &instance, ty).ok())
         }
     }
 
@@ -4640,9 +4843,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // Property setters are always a single function (never an
                     // overload), so callable_signatures() returns exactly one.
                     let setter_sigs = want_setter.callable_signatures();
-                    let mut owner = Owner::new();
                     if let Some(setter_sig) = setter_sigs.first()
-                        && let Some((_, rest)) = setter_sig.split_first_param(&mut owner)
+                        && let Some(rest) = setter_sig.strip_first_param()
                         && let Some(setter_value_type) = rest.get_first_param()
                     {
                         is_subset(&setter_value_type, got).map_err(|subset_error| {
@@ -4757,6 +4959,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             let attr =
                 self.as_instance_attribute(&dunder::GET, &getter, &Instance::of_class(&x.cls));
+            // `__get__` is bound and called like a method, never re-fed through the
+            // descriptor protocol. If it is itself a descriptor, recursing here would
+            // loop forever, so report no usable getter.
+            if matches!(attr, ClassAttribute::Descriptor(..)) {
+                return None;
+            }
             Some(
                 self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
                     .unwrap_or_else(|e| {

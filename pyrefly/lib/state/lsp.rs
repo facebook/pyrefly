@@ -70,10 +70,13 @@ use crate::alt::attr::AttrDefinition;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
+use crate::error::suppress::detect_line_ending;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
+use crate::lsp::wasm::signature_help::CallInfo;
+use crate::state::ide::ImportEdit;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::common_alias_target_module;
 use crate::state::ide::import_regular_import_edit;
@@ -90,8 +93,11 @@ use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 
 mod dict_completions;
+mod extra_extensions;
+mod pytest;
 mod quick_fixes;
 
+pub(crate) use self::quick_fixes::move_module::MoveModuleMemberContext;
 pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
 
 #[derive(Debug)]
@@ -239,7 +245,8 @@ pub enum ImportBehavior {
     StopAtEverything,
     /// Stop at renamed imports (e.g., `from foo import bar as baz`), but jump through non-renamed imports
     StopAtRenamedImports,
-    /// Jump through all imports
+    /// Jump through all imports. For non-Python files, this means selecting the definition file,
+    /// even if we can't parse/process that definition file.
     JumpThroughEverything,
 }
 
@@ -307,6 +314,29 @@ where
         }
     }
     false
+}
+
+/// For relative imports (dots > 0), resolve the module name using
+/// the current file's module name as context.
+pub(crate) fn resolve_relative_module_name(
+    handle: &Handle,
+    module_name: ModuleName,
+    dots: u32,
+) -> ModuleName {
+    if dots > 0 {
+        let is_init = handle.path().is_init();
+        let suffix = if module_name.as_str().is_empty() {
+            None
+        } else {
+            Some(&Name::new(module_name.as_str()))
+        };
+        handle
+            .module()
+            .new_maybe_relative(is_init, dots, suffix)
+            .unwrap_or(module_name)
+    } else {
+        module_name
+    }
 }
 
 #[derive(Debug)]
@@ -719,12 +749,12 @@ impl<'a> Transaction<'a> {
         ast: &ModModule,
         module_name: ModuleName,
         import_format: ImportFormat,
-    ) -> Option<(String, TextSize, String, String)> {
+    ) -> Option<(String, ImportEdit)> {
         let (parent_module_str, submodule_name) = module_name.as_str().rsplit_once('.')?;
         let parent_handle = self
             .import_handle(handle, ModuleName::from_str(parent_module_str), None)
             .finding()?;
-        let (position, insert_text, imported_module) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             self.config_finder(),
             handle.dupe(),
@@ -732,12 +762,10 @@ impl<'a> Transaction<'a> {
             submodule_name,
             import_format,
         );
-        Some((
-            submodule_name.to_owned(),
-            position,
-            insert_text,
-            imported_module,
-        ))
+        // Return the whole edit so callers can use `display_text` for human-facing
+        // strings (which stays "from parent import submodule" even when the actual
+        // edit merges into an existing line and `new_text` is just ", submodule").
+        Some((submodule_name.to_owned(), import_edit))
     }
 
     fn type_from_expression_at_impl(
@@ -983,6 +1011,16 @@ impl<'a> Transaction<'a> {
         position: TextSize,
         for_display: bool,
     ) -> Option<Type> {
+        self.get_type_at_impl_with_options(handle, position, for_display, true)
+    }
+
+    fn get_type_at_impl_with_options(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        for_display: bool,
+        coerce_callees: bool,
+    ) -> Option<Type> {
         match self.identifier_at(handle, position) {
             Some(IdentifierWithContext {
                 identifier: id,
@@ -1000,20 +1038,24 @@ impl<'a> Transaction<'a> {
                     return None;
                 }
                 let mut ty = self.get_type_for_surface(handle, &key, for_display)?;
-                let call_args_range = self.callee_at(handle, position).and_then(
-                    |ExprCall {
-                         func, arguments, ..
-                     }| (func.range() == id.range).then_some(arguments.range),
-                );
-                if let Some(arguments_range) = call_args_range {
-                    if let Some(ret) = self.get_chosen_overload_trace_for_surface(
-                        handle,
-                        arguments_range,
-                        for_display,
-                    ) {
-                        return Some(ret);
+                if coerce_callees {
+                    let call_args_range = self.callee_at(handle, position).and_then(
+                        |ExprCall {
+                             func, arguments, ..
+                         }| {
+                            (func.range() == id.range).then_some(arguments.range)
+                        },
+                    );
+                    if let Some(arguments_range) = call_args_range {
+                        if let Some(ret) = self.get_chosen_overload_trace_for_surface(
+                            handle,
+                            arguments_range,
+                            for_display,
+                        ) {
+                            return Some(ret);
+                        }
+                        ty = self.coerce_type_to_callable(handle, ty);
                     }
-                    ty = self.coerce_type_to_callable(handle, ty);
                 }
                 Some(ty)
             }
@@ -1184,6 +1226,60 @@ impl<'a> Transaction<'a> {
         self.get_type_at_impl(handle, position, true)
     }
 
+    /// Like `get_type_at`, but returns the raw bound type of an identifier
+    /// without coercing-to-callable or substituting in the chosen-overload
+    /// trace when the identifier appears in a call position.
+    ///
+    /// This preserves the declaration link (e.g. for `print` in `print(...)`,
+    /// returns the underlying `Function`/`Overload` referencing `builtins.pyi`
+    /// rather than a synthesized `Callable` for the matched overload). It is
+    /// intended for clients (such as the TSP `getComputedType` endpoint) that
+    /// re-resolve declarations on their side and need the wire type to carry
+    /// the original source declaration.
+    pub fn get_type_at_preserving_declaration(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<Type> {
+        self.get_type_at_impl_with_options(handle, position, false, false)
+    }
+
+    /// Computed type for the TSP `getComputedType` endpoint, resolved from the
+    /// full requested node range rather than a single position.
+    ///
+    /// TSP clients send the source range of the node they care about, but the
+    /// position-based lookup ([`get_type_at_preserving_declaration`]) resolves
+    /// the identifier sitting at the range's start. For a call expression
+    /// (`Foo()`), that start offset lands on the callee, so the
+    /// declaration-preserving lookup returns the callee (e.g. the constructor)
+    /// instead of the call's result. When the requested range exactly covers a
+    /// call expression, return the recorded result type of that expression so
+    /// the client sees the call's value type (e.g. the constructed instance).
+    ///
+    /// All other ranges keep the declaration-preserving behavior, which clients
+    /// rely on to re-resolve signatures/overloads from a callee's declaration.
+    pub fn get_computed_type_at_range(&self, handle: &Handle, range: TextRange) -> Option<Type> {
+        if self.range_is_call_expr(handle, range)
+            && let Some(ty) = self.get_type_trace(handle, range)
+        {
+            return Some(ty);
+        }
+        self.get_type_at_preserving_declaration(handle, range.start())
+    }
+
+    /// Whether `range` exactly covers a call expression node (`Foo()`).
+    fn range_is_call_expr(&self, handle: &Handle, range: TextRange) -> bool {
+        if range.is_empty() {
+            return false;
+        }
+        let Some(module) = self.get_ast(handle) else {
+            return false;
+        };
+        Ast::locate_node(&module, range.start())
+            .into_iter()
+            .any(|node| node.range() == range && matches!(node, AnyNodeRef::ExprCall(_)))
+    }
+
     fn get_result_type_at_impl(
         &self,
         handle: &Handle,
@@ -1210,6 +1306,53 @@ impl<'a> Transaction<'a> {
         position: TextSize,
     ) -> Option<Type> {
         self.get_result_type_at_impl(handle, position, true)
+    }
+
+    /// The type that the context at `position` expects a value to have.
+    ///
+    /// Two complementary sources, behind one API:
+    ///
+    /// 1. **Call arguments** — derived live from the enclosing call's signature
+    ///    (`get_callables_from_call`). This works even when the argument hasn't
+    ///    been written yet (the empty slot in `foo(|)`), which completion relies
+    ///    on, and it selects the resolved (or first) overload. The solver records
+    ///    no trace for these, so they must be computed at query time.
+    /// 2. **Everything else** — the solver-recorded expected type at
+    ///    `check_and_return_type` sites (annotated assignments, returns,
+    ///    attribute/subscript targets, TypedDict values, yields).
+    ///
+    /// Returns `None` where neither applies.
+    pub fn get_expected_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        // Call-argument position: predict the active parameter's type from the
+        // call signature. Works for not-yet-typed arguments and selects an overload.
+        if let Some(CallInfo {
+            callables,
+            chosen_overload_index,
+            active_argument,
+            ..
+        }) = self.get_callables_from_call(handle, position)
+            && let Some(callable) = callables.get(chosen_overload_index.unwrap_or(0)).cloned()
+            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
+            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
+            && let Some(param) = params.get(arg_index)
+        {
+            return Some(param.as_type().clone());
+        }
+
+        let module = self.get_ast(handle)?;
+        let covering_nodes = Ast::locate_node(&module, position);
+        // Walk from innermost to outermost to find a node with a recorded expected
+        // type. The solver records these at check sites during type checking.
+        for node in covering_nodes {
+            if let Some(expr) = node.as_expr_ref() {
+                let answers = self.get_answers(handle)?;
+                let expected = answers.get_expected_type_trace(expr.range());
+                if expected.is_some() {
+                    return expected;
+                }
+            }
+        }
+        None
     }
 
     /// If `ty` represents a callable instance (e.g., a class with `__call__`), return the
@@ -1417,10 +1560,17 @@ impl<'a> Transaction<'a> {
                 original_name_range,
             ) => {
                 let Some((def_handle, export)) =
-                    self.resolve_named_import(handle, module_name, name, preference)
+                    self.resolve_named_import(handle, module_name, name.clone(), preference)
                 else {
-                    // The import target is unresolvable through any
-                    // chase path (export, submodule, `__getattr__`).
+                    let non_module_result = self.resolve_intermediate_non_python_module_definition(
+                        handle,
+                        module_name,
+                        name.as_str(),
+                        preference,
+                    );
+                    if non_module_result.is_some() {
+                        return non_module_result;
+                    }
                     // Fall back to the import statement itself so the
                     // user lands somewhere meaningful instead of
                     // getting no result at all.
@@ -1747,6 +1897,10 @@ impl<'a> Transaction<'a> {
                 );
                 defs
             }
+            // Workaround so functions decorated with `functools.lru_cache` go to definition on the source, not the decorator.
+            Type::ClassType(class) if class.has_qname("functools", "_lru_cache_wrapper") => {
+                vec![]
+            }
             Type::ClassType(_) => self
                 .find_attribute_definition_for_base_type(handle, preference, ty, &dunder::CALL)
                 .map(Vec1::into_vec)
@@ -1930,6 +2084,34 @@ impl<'a> Transaction<'a> {
             .transpose()
     }
 
+    /// For a cursor inside a subscript's brackets (e.g. `c[0]`) that isn't on a
+    /// named identifier, return the subscript dunder method type so hover matches
+    /// the spaced form `c [0]`.
+    pub(crate) fn subscript_operator_type_at(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<Type> {
+        // A named identifier (the base, or a named index like `c[idx]`) has its
+        // own meaningful hover; don't override it.
+        if self.identifier_at(handle, position).is_some() {
+            return None;
+        }
+        let module = self.get_ast(handle)?;
+        let subscript =
+            Ast::locate_node(&module, position)
+                .into_iter()
+                .find_map(|node| match node {
+                    AnyNodeRef::ExprSubscript(subscript) => Some(subscript),
+                    _ => None,
+                })?;
+        // Only fire inside the bracket region, never on the base expression.
+        if position < subscript.value.range().end() {
+            return None;
+        }
+        self.get_chosen_overload_trace_for_surface(handle, subscript.range(), true)
+    }
+
     /// Try operator-based go-to-definition. Returns `Ok(None)` when there is
     /// no operator at the cursor, `Ok(Some(...))` on success, or
     /// `Err(...)` when an operator was found but couldn't be resolved.
@@ -1966,7 +2148,28 @@ impl<'a> Transaction<'a> {
         let base_type = answers
             .get_type_trace(base_range)
             .ok_or(EmptyResponseReason::TypeTraceNotFound)?;
-        self.find_attribute_definition_for_base_type(handle, preference, base_type, name)
+        if let Ok(defs) = self.find_attribute_definition_for_base_type(
+            handle,
+            preference,
+            base_type.clone(),
+            name,
+        ) {
+            return Ok(defs);
+        }
+        if let Some(non_python_result) = self.find_definition_for_attribute_in_non_python_module(
+            handle,
+            name.as_str(),
+            preference,
+            &answers,
+            base_type,
+            base_range,
+        ) {
+            return Ok(non_python_result);
+        }
+        Err(EmptyResponseReason::DefinitionNotFound {
+            name: name.to_string(),
+            context: DefinitionContext::Attribute,
+        })
     }
 
     pub(crate) fn find_definition_for_imported_module(
@@ -2187,63 +2390,70 @@ impl<'a> Transaction<'a> {
                         dots,
                     },
             }) => {
-                // For relative imports (dots > 0), resolve the module name using
-                // the current file's module name as context.
-                let resolved_module_name = if dots > 0 {
-                    let is_init = handle.path().is_init();
-                    let suffix = if module_name.as_str().is_empty() {
-                        None
-                    } else {
-                        Some(&Name::new(module_name.as_str()))
-                    };
-                    handle
-                        .module()
-                        .new_maybe_relative(is_init, dots, suffix)
-                        .unwrap_or(module_name)
-                } else {
-                    module_name
-                };
+                let resolved_module_name = resolve_relative_module_name(handle, module_name, dots);
 
                 // Build the module name for lookup based on identifier position.
                 let components = resolved_module_name.components();
 
-                let target_module_name =
+                let target_idx =
                     if let Some(idx) = components.iter().position(|c| c == &identifier.id) {
-                        // Identifier matches a module component.
-                        ModuleName::from_parts(&components[..=idx])
+                        idx
                     } else if identifier.as_str() == resolved_module_name.as_str() {
                         // Identifier matches full module name; decide which component based on position offset.
                         let module_str = resolved_module_name.as_str();
                         let offset = (position - identifier.range.start())
                             .to_usize()
                             .min(module_str.len());
-                        let idx = module_str[..offset].matches('.').count();
-                        ModuleName::from_parts(&components[..=idx])
+                        module_str[..offset].matches('.').count()
                     } else {
-                        // Fallback: use the whole module name.
-                        resolved_module_name
+                        components.len() - 1
                     };
-                match self.find_definition_for_imported_module(
+                let target_module_name = ModuleName::from_parts(&components[..=target_idx]);
+                if let Ok(Some(item)) =
+                    self.find_definition_for_imported_module(handle, target_module_name, preference)
+                {
+                    return Ok(vec1![item]);
+                }
+
+                if let Some(item) = self.fallback_find_definition_module_name_with_suffix(
                     handle,
-                    target_module_name,
+                    preference,
+                    &components,
+                    target_idx,
+                ) {
+                    return Ok(vec1![item]);
+                }
+
+                if let Some(item) = self.find_definition_directory_import(
+                    handle,
+                    resolved_module_name.as_str(),
                     preference,
                 )? {
-                    Some(item) => Ok(vec1![item]),
-                    None => Err(EmptyResponseReason::DefinitionNotFound {
-                        name: identifier.id.to_string(),
-                        context: DefinitionContext::ImportedModule,
-                    }),
+                    return Ok(item);
                 }
+                Err(EmptyResponseReason::DefinitionNotFound {
+                    name: identifier.id.to_string(),
+                    context: DefinitionContext::ImportedModule,
+                })
             }
             Some(IdentifierWithContext {
                 identifier,
                 context:
                     IdentifierContext::ImportedName {
-                        name_after_import, ..
+                        module_name,
+                        dots,
+                        name_after_import,
                     },
             }) => {
                 match self.find_definition_for_name_def(handle, &name_after_import, preference)? {
-                    Some(item) => Ok(vec1![item]),
+                    Some(item) => self.remap_find_definition_non_python_import_file(
+                        item,
+                        handle,
+                        preference,
+                        module_name,
+                        dots,
+                        name_after_import,
+                    ),
                     None => Err(EmptyResponseReason::DefinitionNotFound {
                         name: identifier.id.to_string(),
                         context: DefinitionContext::ImportedName,
@@ -2297,18 +2507,26 @@ impl<'a> Transaction<'a> {
                 identifier,
                 context: IdentifierContext::Parameter,
             }) => {
-                let item = self.find_definition_for_simple_def(
+                if let Some(pytest_definitions) = self.pytest_fixture_definitions_for_parameter(
                     handle,
                     &identifier,
-                    SymbolKind::Parameter,
-                )?;
-                Ok(vec1![FindDefinitionItemWithDocstring {
-                    metadata: item.metadata,
-                    definition_range: item.definition_range,
-                    module: item.module,
-                    docstring_range: None,
-                    display_name: Some(identifier.id.to_string()),
-                }])
+                    &covering_nodes,
+                ) {
+                    Ok(pytest_definitions)
+                } else {
+                    let item = self.find_definition_for_simple_def(
+                        handle,
+                        &identifier,
+                        SymbolKind::Parameter,
+                    )?;
+                    Ok(vec1![FindDefinitionItemWithDocstring {
+                        metadata: item.metadata,
+                        definition_range: item.definition_range,
+                        module: item.module,
+                        docstring_range: None,
+                        display_name: Some(identifier.id.to_string()),
+                    }])
+                }
             }
             Some(IdentifierWithContext {
                 identifier,
@@ -2593,13 +2811,16 @@ impl<'a> Transaction<'a> {
         range: TextRange,
         import_format: ImportFormat,
         custom_thread_pool: Option<&ThreadPool>,
-    ) -> Option<Vec<(String, Module, TextRange, String)>> {
+    ) -> Option<Vec<(String, Vec<(Module, TextRange, String)>)>> {
         let module_info = self.get_module_info(handle)?;
         let ast = self.get_ast(handle)?;
         let errors = self.get_errors(vec![handle]).collect_errors().ordinary;
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
+        // Actions that carry more than one edit (e.g. the missing-`@override` fix,
+        // which inserts both the decorator and an import).
+        let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         for error in errors {
             let error_range = error.range();
@@ -2659,11 +2880,13 @@ impl<'a> Transaction<'a> {
                         if aliased_module.is_some_and(|m| m == module_name) {
                             continue;
                         }
-                        if let Some((_submodule_name, position, insert_text, _)) =
+                        if let Some((_submodule_name, import_edit)) =
                             self.submodule_autoimport_edit(handle, &ast, module_name, import_format)
                         {
-                            let range = TextRange::at(position, TextSize::new(0));
-                            let title = format!("Insert import: `{}`", insert_text.trim());
+                            // Use `display_text` for the human-facing title so a merge
+                            // edit shows "from parent import submodule" rather than the
+                            // raw ", submodule" insertion text.
+                            let title = format!("Insert import: `{}`", import_edit.display_text);
                             let is_private_import = module_name
                                 .components()
                                 .last()
@@ -2671,8 +2894,8 @@ impl<'a> Transaction<'a> {
                             import_actions.push(QuickfixAction {
                                 title,
                                 module_info: module_info.dupe(),
-                                range,
-                                insert_text,
+                                range: import_edit.range,
+                                insert_text: import_edit.insert_text,
                                 is_deprecated: false,
                                 is_private_import,
                             });
@@ -2723,6 +2946,30 @@ impl<'a> Transaction<'a> {
                         }
                     }
                 }
+                ErrorKind::MissingOverrideDecorator if error_range.contains_range(range) => {
+                    if let Some((title, module, decorator_range, insert_text)) =
+                        quick_fixes::add_override::add_override_code_action(
+                            &module_info,
+                            &ast,
+                            error_range,
+                        )
+                    {
+                        let mut edits = vec![(module, decorator_range, insert_text)];
+                        // Import `typing.override` if necessary.
+                        if !quick_fixes::add_override::override_in_scope(ast.as_ref())
+                            && let Some(import_edit) = self.override_import_edit(
+                                handle,
+                                &module_info,
+                                &ast,
+                                import_format,
+                                custom_thread_pool,
+                            )
+                        {
+                            edits.push(import_edit);
+                        }
+                        multi_actions.push((title, edits));
+                    }
+                }
                 _ => {}
             }
         }
@@ -2733,12 +2980,64 @@ impl<'a> Transaction<'a> {
         // this will be the public/non-deprecated version)
         import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
 
-        // Drop the deprecated flag and return
-        let mut actions: Vec<(String, Module, TextRange, String)> =
-            import_actions.into_iter().map(|a| a.to_tuple()).collect();
-        actions.extend(generate_actions);
-        actions.extend(other_actions);
+        // Every quick-fix producer except the missing-`@override` fix yields a single
+        // edit; wrap those in a one-element edit list so they share the multi-edit shape
+        // that `multi_actions` and the LSP layer expect.
+        fn wrap_single(
+            (title, module, range, insert_text): (String, Module, TextRange, String),
+        ) -> (String, Vec<(Module, TextRange, String)>) {
+            (title, vec![(module, range, insert_text)])
+        }
+
+        let mut actions: Vec<(String, Vec<(Module, TextRange, String)>)> = import_actions
+            .into_iter()
+            .map(|a| wrap_single(a.to_tuple()))
+            .collect();
+        actions.extend(generate_actions.into_iter().map(wrap_single));
+        actions.extend(other_actions.into_iter().map(wrap_single));
+        actions.extend(multi_actions);
+
+        // The edit builders above emit `\n`-terminated text. Normalize each edit's
+        // inserted text to the line ending used by the file it targets, so the edits
+        // are correct on CRLF files instead of mixing line endings.
+        for (_, edits) in &mut actions {
+            for (module, _, insert_text) in edits {
+                let line_ending = detect_line_ending(module.contents().as_str());
+                if line_ending != "\n" {
+                    *insert_text = insert_text.replace('\n', line_ending);
+                }
+            }
+        }
+
         (!actions.is_empty()).then_some(actions)
+    }
+
+    /// Builds an edit inserting `from typing import override` (preferring `typing`
+    /// over `typing_extensions`) at the top of the file. Returns `None` when no
+    /// module in scope exports `override`.
+    fn override_import_edit(
+        &self,
+        handle: &Handle,
+        module_info: &Module,
+        ast: &ModModule,
+        import_format: ImportFormat,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Option<(Module, TextRange, String)> {
+        let handle_to_import_from = self
+            .search_exports_exact("override", custom_thread_pool)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(handle_to_import_from, _)| handle_to_import_from)
+            .min_by_key(|candidate| usize::from(candidate.module().as_str() != "typing"))?;
+        let edit = insert_import_edit(
+            ast,
+            self.config_finder(),
+            handle.dupe(),
+            handle_to_import_from,
+            "override",
+            import_format,
+        );
+        Some((module_info.dupe(), edit.range, edit.insert_text))
     }
 
     fn create_quickfix_action_for_common_alias_import(
@@ -2812,7 +3111,7 @@ impl<'a> Transaction<'a> {
         handle_to_import_from: Handle,
         export: Export,
     ) {
-        let (position, insert_text, _) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             self.config_finder(),
             handle.dupe(),
@@ -2820,11 +3119,11 @@ impl<'a> Transaction<'a> {
             unknown_name,
             import_format,
         );
-        let range = TextRange::at(position, TextSize::new(0));
+        let range = import_edit.range;
         let is_deprecated = export.deprecation.is_some();
         let title = format!(
             "Insert import: `{}`{}",
-            insert_text.trim(),
+            import_edit.display_text,
             if is_deprecated { " (deprecated)" } else { "" }
         );
 
@@ -2838,7 +3137,7 @@ impl<'a> Transaction<'a> {
             title,
             module_info: module_info.dupe(),
             range,
-            insert_text,
+            insert_text: import_edit.insert_text,
             is_deprecated,
             is_private_import,
         });
@@ -2954,6 +3253,30 @@ impl<'a> Transaction<'a> {
             self,
             handle,
             selection,
+            import_format,
+        )
+    }
+
+    pub(crate) fn module_member_move_context(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<MoveModuleMemberContext> {
+        quick_fixes::move_module::module_member_move_context(self, handle, selection)
+    }
+
+    pub(crate) fn module_member_move_edits(
+        &self,
+        handle: &Handle,
+        context: &MoveModuleMemberContext,
+        target_handle: &Handle,
+        import_format: ImportFormat,
+    ) -> Option<Vec1<(ModuleInfo, TextRange, String)>> {
+        quick_fixes::move_module::build_module_member_move_edits(
+            self,
+            handle,
+            context,
+            target_handle,
             import_format,
         )
     }
@@ -3301,6 +3624,13 @@ impl<'a> Transaction<'a> {
             ]
             .concat(),
         };
+        if let Some(pytest_references) = self.local_pytest_fixture_parameter_references(
+            handle,
+            definition_range,
+            definition_name,
+        ) {
+            references.extend(pytest_references);
+        }
         if include_declaration {
             references.push(definition_range);
         }

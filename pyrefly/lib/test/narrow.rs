@@ -734,6 +734,84 @@ def f(x: str | int):
 );
 
 testcase!(
+    test_isinstance_any_union_consumed,
+    r#"
+from typing import Any, assert_type
+
+def test_any_union_consumed(x: int | Any) -> None:
+    if isinstance(x, str):
+        assert_type(x, str)
+
+def test_any_union_multiple_targets_consumed(x: int | Any) -> None:
+    if isinstance(x, (int, str)):
+        assert_type(x, int | str)
+    "#,
+);
+
+testcase!(
+    test_isinstance_any_union_tuple_target_consumed,
+    r#"
+from typing import Any, assert_type
+
+def test_any_union_tuple_target_consumed(x: tuple[int, str] | Any) -> None:
+    if isinstance(x, tuple):
+        assert_type(x, tuple[int, str] | tuple[Any, ...])
+    "#,
+);
+
+testcase!(
+    test_isinstance_alias_hiding_any_consumed,
+    r#"
+from typing import Any, assert_type
+
+type Alias = int | Any
+
+def test_alias_hiding_any_consumed(x: Alias) -> None:
+    if isinstance(x, str):
+        assert_type(x, str)
+    "#,
+);
+
+testcase!(
+    test_isinstance_dynamic_classinfo_narrows_to_any,
+    r#"
+from typing import Any, assert_type, reveal_type
+
+class A: ...
+class B: ...
+
+def test_dynamic_classinfo_narrows_to_any(x: A, cls: Any) -> None:
+    if isinstance(x, cls):
+        assert_type(x, Any)
+        if isinstance(x, B):
+            reveal_type(x)  # E: revealed type: B
+
+def test_type_any_classinfo_narrows_to_any(x: A, cls: type[Any]) -> None:
+    if isinstance(x, cls):
+        assert_type(x, Any)
+        if isinstance(x, B):
+            reveal_type(x)  # E: revealed type: B
+    "#,
+);
+
+testcase!(
+    test_isinstance_any_union_entry_points,
+    r#"
+from typing import Any, assert_type
+
+def test_type_eq_and_class_pattern_any_union_consumed(x: int | Any) -> None:
+    if type(x) is str:
+        assert_type(x, str)
+    if type(x) == str:
+        assert_type(x, str)
+
+    match x:
+        case str():
+            assert_type(x, str)
+    "#,
+);
+
+testcase!(
     test_dunder_bool_truthy_narrow,
     r#"
 from typing import assert_type, Literal
@@ -1207,6 +1285,38 @@ def f(x: type[A | B | C]):
 );
 
 testcase!(
+    test_isinstance_type_and_issubclass_alignment,
+    r#"
+from typing import assert_type, final
+
+class A: ...
+class B: ...
+class C: ...
+def f(obj: A | B | C, cls_obj: type[A | B | C], cls: type[A] | type[B]) -> None:
+    if isinstance(obj, cls):
+        assert_type(obj, A | B)
+    if issubclass(cls_obj, cls):
+        assert_type(cls_obj, type[A] | type[B])
+
+class Base: ...
+class Child(Base): ...
+@final
+class Other: ...
+def g(obj: Child | Other, cls_obj: type[Child] | type[Other], cls: type[Base]) -> None:
+    if isinstance(obj, cls):
+        assert_type(obj, Child)
+    if issubclass(cls_obj, cls):
+        assert_type(cls_obj, type[Child])
+
+def h(obj: tuple[int, str] | int, cls_obj: type[tuple[int, str]] | type[int]) -> None:
+    if isinstance(obj, tuple):
+        assert_type(obj, tuple[int, str])
+    if issubclass(cls_obj, tuple):
+        assert_type(cls_obj, type[tuple[int, str]])
+    "#,
+);
+
+testcase!(
     test_isinstance_alias,
     r#"
 from typing import assert_type
@@ -1380,6 +1490,40 @@ def f(x:  A | B | C, y: A | C):
         assert_type(y, A)
     else:
         assert_type(y, C)
+    "#,
+);
+
+testcase!(
+    test_typeis_type_intersection,
+    r#"
+from typing import TypeIs, assert_type, final
+class Struct: ...
+class Point(Struct): ...
+@final
+class Other: ...
+def is_struct_type(tp: object) -> TypeIs[type[Struct]]: ...
+def f(tp: type[Point] | type[Other]) -> None:
+    if is_struct_type(tp):
+        assert_type(tp, type[Point])
+    else:
+        assert_type(tp, type[Other])
+    "#,
+);
+
+testcase!(
+    test_typeis_any_keeps_definite_members,
+    r#"
+from typing import Any, TypeIs, reveal_type
+
+class A: ...
+class B: ...
+
+def is_any(x: object) -> TypeIs[Any]: ...
+
+def f(x: A) -> None:
+    if is_any(x):
+        if isinstance(x, B):
+            reveal_type(x)  # E: revealed type: A & B
     "#,
 );
 
@@ -2310,6 +2454,100 @@ def g(x, y: tuple[type[int], type[str]]):
 );
 
 testcase!(
+    test_isinstance_dict_narrows_typed_dict,
+    r#"
+from typing import TypedDict
+class Config[T](TypedDict): pass
+def initialize[T](spec: T | type[T] | Config[T], /) -> T:
+    if isinstance(spec, type):
+        raise NotImplementedError
+    if isinstance(spec, dict):
+        raise NotImplementedError
+    return spec
+"#,
+);
+
+testcase!(
+    test_isinstance_dict_narrows_typed_dict_branches,
+    r#"
+from typing import TypedDict, assert_type
+class Config(TypedDict): pass
+def f(spec: int | Config) -> None:
+    if isinstance(spec, dict):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+"#,
+);
+
+testcase!(
+    test_isinstance_typed_dict_mutablemapping_and_mapping,
+    r#"
+from typing import TypedDict, Mapping, MutableMapping, assert_type
+class Config(TypedDict): pass
+def f(spec: int | Config) -> None:
+    if isinstance(spec, MutableMapping):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+def g(spec: int | Config) -> None:
+    # Mapping already worked (a TypedDict is assignable to read-only Mapping);
+    # this is the no-regression check.
+    if isinstance(spec, Mapping):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+"#,
+);
+
+testcase!(
+    test_isinstance_typed_dict_unrelated_class_does_not_narrow,
+    r#"
+from typing import TypedDict, assert_type, Never
+class Config(TypedDict): pass
+def f(spec: Config) -> None:
+    # A TypedDict is not an int at runtime, so the positive branch is Never
+    # and the negative branch keeps the full TypedDict.
+    if isinstance(spec, int):
+        assert_type(spec, Never)
+    else:
+        assert_type(spec, Config)
+"#,
+);
+
+testcase!(
+    test_isinstance_dict_non_typeddict_unchanged,
+    r#"
+from typing import assert_type, Never
+def f(x: int | str) -> None:
+    # Guards against an over-broad change: non-TypedDict narrowing is untouched.
+    if isinstance(x, dict):
+        assert_type(x, Never)
+    else:
+        assert_type(x, int | str)
+"#,
+);
+
+testcase!(
+    test_isinstance_typed_dict_runtime_checkable_protocol,
+    r#"
+from typing import TypedDict, Protocol, runtime_checkable, Iterable, assert_type
+@runtime_checkable
+class HasKeys(Protocol):
+    def keys(self) -> Iterable[str]: ...
+class Config(TypedDict): pass
+def f(spec: int | Config) -> None:
+    # A TypedDict structurally satisfies a method protocol it implements (dict has
+    # `keys()`), so the `dict`-runtime-class shortcut must NOT fire for protocol
+    # targets: it defers to structural narrowing, which keeps Config positive.
+    if isinstance(spec, HasKeys):
+        assert_type(spec, Config)
+    else:
+        assert_type(spec, int)
+"#,
+);
+
+testcase!(
     test_typeguard_argument_number,
     r#"
 from typing import TypeGuard
@@ -2514,6 +2752,170 @@ def test(x: UserDict | AdminDict):
 );
 
 testcase!(
+    test_discriminated_union_key_in_tuple_1,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+class InstantEvent(TypedDict):
+    name: str
+    ph: Literal["I"]
+    s: Literal["p"]
+
+class PauseEvent(TypedDict):
+    name: str
+    cat: str
+    ph: Literal["X"]
+    ts: int
+
+class CounterEvent(TypedDict):
+    name: str
+    ph: Literal["C"]
+    ts: int
+
+class ProcessMeta(TypedDict):
+    name: Literal["process_name"]
+    ph: Literal["M"]
+
+TraceEvent = PauseEvent | CounterEvent | ProcessMeta | InstantEvent
+TimedEvent = PauseEvent | CounterEvent | InstantEvent
+
+def test_in(events: list[TraceEvent]) -> None:
+    timed: list[TimedEvent] = []
+    for event in events:
+        if event["ph"] in ("X", "C", "I"):
+            assert_type(event, TimedEvent)
+            timed.append(event)
+        else:
+            assert_type(event, ProcessMeta)
+
+def test_not_in(event: TraceEvent) -> None:
+    if event["ph"] not in ("M",):
+        assert_type(event, TimedEvent)
+    else:
+        assert_type(event, ProcessMeta)
+    "#,
+);
+
+testcase!(
+    test_discriminated_union_key_in_non_literal_container,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+class XEvent(TypedDict):
+    ph: Literal["X"]
+
+class MEvent(TypedDict):
+    ph: Literal["M"]
+
+Event = XEvent | MEvent
+
+def test(event: Event, keys: list[str]) -> None:
+    # `keys` is not a statically-enumerable container, so membership cannot
+    # eliminate any union member: both branches keep the full union.
+    if event["ph"] in keys:
+        assert_type(event, Event)
+    else:
+        assert_type(event, Event)
+    "#,
+);
+
+testcase!(
+    test_non_discriminated_union_key_in_tuple,
+    r#"
+from typing import Literal, TypedDict, assert_type
+
+class XEvent(TypedDict):
+    ph: Literal["X"]
+
+class AnyPhEvent(TypedDict):
+    ph: str
+
+Event = XEvent | AnyPhEvent
+
+def test(event: Event) -> None:
+    if event["ph"] in ("X",):
+        # AnyPhEvent's `str` discriminant might be "X", so it cannot be dropped.
+        assert_type(event, Event)
+    else:
+        # XEvent's "X" is excluded; AnyPhEvent survives (its `str` might not be "X").
+        assert_type(event, AnyPhEvent)
+    "#,
+);
+
+testcase!(
+    test_discriminated_union_key_in_tuple_2,
+    r#"
+from typing import Literal, Never, TypedDict, assert_type
+
+class XEvent(TypedDict):
+    ph: Literal["X"]
+
+class MEvent(TypedDict):
+    ph: Literal["M"]
+
+Event = XEvent | MEvent
+
+def test(event: Event) -> None:
+    if event["ph"] in ("X", "M"):
+        # Every member's discriminant is covered, so nothing is eliminated.
+        assert_type(event, Event)
+    else:
+        # The complement is empty: this branch is unreachable.
+        assert_type(event, Never)
+
+    if event["ph"] in ("X",):
+        assert_type(event, XEvent)
+    else:
+        assert_type(event, MEvent)
+    "#,
+);
+
+testcase!(
+    test_discriminated_union_key_in_tuple_enum,
+    r#"
+from typing import Literal, TypedDict, assert_type
+from enum import Enum
+
+class Phase(Enum):
+    X = "x"
+    C = "c"
+    M = "m"
+
+class PauseEvent(TypedDict):
+    ph: Literal[Phase.X]
+
+class CounterEvent(TypedDict):
+    ph: Literal[Phase.C]
+
+class ProcessMeta(TypedDict):
+    ph: Literal[Phase.M]
+
+Event = PauseEvent | CounterEvent | ProcessMeta
+
+def test(event: Event) -> None:
+    if event["ph"] in (Phase.X, Phase.C):
+        assert_type(event, PauseEvent | CounterEvent)
+    else:
+        assert_type(event, ProcessMeta)
+    "#,
+);
+
+testcase!(
+    test_field_in_mapping_disjoint,
+    r#"
+from typing import assert_type, Never
+
+class C:
+    key: bytes
+
+def test(c: C, d: dict[str, int]) -> None:
+    if c.key in d:
+        assert_type(c, C)
+        assert_type(c.key, Never)
+    "#,
+);
+
+testcase!(
     test_discriminated_union_attr,
     r#"
 from typing import assert_type, Literal
@@ -2667,6 +3069,109 @@ class B(int):
 def f(a: A):
     if isinstance(a, B):
         assert_never(a)
+"#,
+);
+
+testcase!(
+    test_disjoint_bases_custom_propagation,
+    r#"
+from typing import assert_never
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Left: ...
+
+class LeftChild(Left): ...
+
+@disjoint_base
+class Right: ...
+
+def f(x: LeftChild) -> None:
+    if isinstance(x, Right):
+        assert_never(x)
+"#,
+);
+
+testcase!(
+    test_disjoint_bases_self_type,
+    r#"
+from typing import Self, assert_never
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Left:
+    def f(self, x: Self) -> None:
+        if isinstance(x, Right):
+            assert_never(x)
+
+@disjoint_base
+class Right: ...
+"#,
+);
+
+testcase!(
+    test_disjoint_bases_bounded_typevar,
+    r#"
+from typing import assert_never
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Left: ...
+
+@disjoint_base
+class Right: ...
+
+def f[T: Left](x: T) -> None:
+    if isinstance(x, Right):
+        assert_never(x)
+"#,
+);
+
+// Slotted analogue of `test_disjoint_bases_custom_propagation`.
+testcase!(
+    test_disjoint_bases_slots_propagation,
+    r#"
+from typing import assert_never
+
+class Left:
+    __slots__ = ("x",)
+
+class LeftChild(Left):
+    pass
+
+class LeftGrandchild(LeftChild):
+    pass
+
+class Right:
+    __slots__ = ("y",)
+
+def f(x: LeftGrandchild) -> None:
+    if isinstance(x, Right):
+        assert_never(x)
+"#,
+);
+
+// Dataclass-slotted analogue of `test_disjoint_bases_slots_propagation`.
+testcase!(
+    test_disjoint_bases_dataclass_slots_propagation,
+    r#"
+from dataclasses import dataclass
+from typing import assert_never
+
+@dataclass(slots=True)
+class Left:
+    x: int
+
+class LeftChild(Left):
+    pass
+
+@dataclass(slots=True)
+class Right:
+    y: int
+
+def f(x: LeftChild) -> None:
+    if isinstance(x, Right):
+        assert_never(x)
 "#,
 );
 
@@ -3113,10 +3618,10 @@ T = TypeVar("T", int, str, float)
 
 def test(x: T) -> T:
     if isinstance(x, (int, float)):
-        reveal_type(x)  # E: revealed type: float | int
+        reveal_type(x)  # E: revealed type: (float & T) | (int & T)
         return x
     else:
-        reveal_type(x)  # E: revealed type: str
+        reveal_type(x)  # E: revealed type: str & T
         return x
 
 # Single constraint subtraction
@@ -3124,10 +3629,10 @@ U = TypeVar("U", int, str)
 
 def test2(x: U) -> U:
     if isinstance(x, int):
-        assert_type(x, int)
+        reveal_type(x)  # E: revealed type: int & U
         return x
     else:
-        assert_type(x, str)
+        reveal_type(x)  # E: revealed type: str & U
         return x
 
 # All constraints matched - else branch is Never
@@ -3136,7 +3641,7 @@ V = TypeVar("V", int, str)
 
 def test3(x: V) -> V:
     if isinstance(x, (int, str)):
-        assert_type(x, int | str)
+        assert_type(x, V)
         return x
     else:
         assert_type(x, Never)
@@ -3213,6 +3718,27 @@ from typing import reveal_type
 def f(value: type[int] | str):
     if isinstance(value, type):
         reveal_type(value)  # E: revealed type: type[int]
+    test_narrow_preserved_in_nested_def_after_branch_merge,
+    r#"
+from typing import assert_type
+
+def f() -> int | None:
+    return 1
+
+def a():
+    val = f()
+    if val is not None:
+        if val:
+            assert_type(val, int)
+        assert_type(val, int)
+        def inner() -> None:
+            assert_type(val, int)
+
+def b():
+    val = f()
+    if val is not None:
+        def inner() -> None:
+            assert_type(val, int)
 "#,
 );
 
@@ -3304,6 +3830,163 @@ def from_type_any(value: type[Any]) -> None:
     if isinstance(value, type):
         reveal_type(value)  # E: revealed type: type[Any]
         value(1, 2, 3)
+    test_isinstance_on_bounded_typevar,
+    r#"
+from typing import reveal_type
+def f[T: int | str](x: T) -> T:
+    if isinstance(x, int):
+        reveal_type(x)  # E: revealed type: int & T
+        return x
+    else:
+        reveal_type(x)  # E: revealed type: str & T
+        return x
+    "#,
+);
+
+testcase!(
+    test_isinstance_on_unrestricted_typevar,
+    r#"
+from typing import reveal_type
+def f[T](x: T) -> T:
+    if isinstance(x, int):
+        reveal_type(x)  # E: revealed type: int & T
+        return x
+    else:
+        reveal_type(x)  # E: revealed type: T
+        return x
+    "#,
+);
+
+testcase!(
+    test_narrow_after_method_call_on_typevar,
+    r#"
+from typing import reveal_type, Self
+class A:
+    def lower(self) -> Self: ...
+class B:
+    def lower(self) -> Self: ...
+def f[T: A | B](x: T):
+    x = x.lower()
+    if isinstance(x, A):
+        reveal_type(x)  # E: revealed type: A & T
+    else:
+        reveal_type(x)  # E: revealed type: B & T
+    "#,
+);
+
+testcase!(
+    bug = "We can't handle a quantified intersected with multiple concrete types",
+    test_narrow_typevar_multiple_times,
+    r#"
+class A:
+    def __add__(self, other) -> "A": ...
+    def f(self) -> "A": ...
+
+class B:
+    def __add__(self, other) -> "B": ...
+    def f(self) -> "B": ...
+
+def f[T: (A, B)](x: T, y: T) -> T | None:
+    if isinstance(x, A):
+        if isinstance(x, B):
+            return x + y  # E: `B` is not assignable to declared return type `T | None`
+
+def g[T: (A, B)](x: T) -> T | None:
+    if isinstance(x, A):
+        if isinstance(x, B):
+            return x.f()  # E: `B` is not assignable to declared return type `T | None`
+    "#,
+);
+
+testcase!(
+    test_sentinel_type_narrow_to_boolean,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: bool | MISSING):
+    if x is MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, bool)
+    if x is not MISSING:
+        assert_type(x, bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    test_sentinel_type_narrow_to_boolean_eq,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: bool | MISSING):
+    if x == MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, bool)
+    if x != MISSING:
+        assert_type(x, bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    sentinel_narrow_from_union,
+    r#"
+from typing_extensions import Sentinel
+from typing import Literal, assert_type
+
+MISSING = Sentinel("MISSING")
+def f(x: int | bool | MISSING):
+    if x is MISSING:
+        assert_type(x, MISSING)
+    else:
+        assert_type(x, int | bool)
+    if x is not MISSING:
+        assert_type(x, int | bool)
+    else:
+        assert_type(x, MISSING)
+    "#,
+);
+
+testcase!(
+    sentinel_narrow_with_type_param,
+    r#"
+from typing_extensions import Sentinel
+
+MIS = Sentinel("MIS", repr="MISSING")
+
+def a[T](x: T | MIS) -> T:
+    if x is not MIS:
+        return x
+    else:
+        raise ValueError("a")
+    "#,
+);
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var_module_level,
+    r#"
+from typing import assert_type
+def go() -> object: ...
+def gv() -> int | str: ...
+cond: bool = True
+other = go()
+value = gv()
+if cond:
+    pass
+elif isinstance(other, int):  # isinstance first materialized while the module scope is mid-fork
+    raise Exception()
+else:
+    raise Exception()
+if isinstance(value, int):
+    assert_type(value, int)
 "#,
 );
 
@@ -3335,4 +4018,35 @@ def initialize[F: Foo](cls: type[F]) -> F:
     assert_type(cls, type[F])
     return cls()
 "#,
+    narrow_after_sibling_branch_narrows_other_var,
+    r#"
+from typing import assert_type
+def f(cond: bool, other: object, value: int | str) -> None:
+    if cond:
+        pass
+    elif isinstance(other, int):
+        return
+    else:
+        return
+    assert_type(value, int | str)
+    if isinstance(value, int):
+        assert_type(value, int)
+    "#,
+);
+
+testcase!(
+    narrow_after_sibling_branch_narrows_other_var_user_class,
+    r#"
+from typing import assert_type
+class C: pass
+def f(cond: bool, other: object, value: int | str) -> None:
+    if cond:
+        pass
+    elif isinstance(other, C):  # narrows `other` via a builtin (isinstance) first used here
+        return
+    else:
+        return
+    if isinstance(value, int):
+        assert_type(value, int)
+    "#,
 );

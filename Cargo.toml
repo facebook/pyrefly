@@ -1,6 +1,5 @@
 [patch.crates-io]
 backtrace = { git = "https://github.com/rust-lang/backtrace-rs", rev = "df979dcf80027eb047d7bb9e0874710c15009f31" }
-quickcheck = { git = "https://github.com/jakoschiko/quickcheck", rev = "6ecdf5bb4b0132ce66670b4d46453aa022ea892c" }
 rustversion = { git = "https://github.com/fbsource/rustversion", rev = "3f072e049635b7463275fc4edebbbed3840d9297" }
 
 [profile.release]
@@ -8,6 +7,13 @@ debug = 1
 lto = true
 codegen-units = 1
 strip = "debuginfo"
+
+[profile.dev]
+debug = 1
+
+[profile.dbg]
+debug = true
+inherits = "dev"
 
 [workspace]
 members = [

@@ -118,7 +118,7 @@ impl PyProject {
                         && let Some(pyrefly_table_mut) = pyrefly_item.as_table_mut()
                     {
                         pyrefly_table_mut.decor_mut().set_prefix("\n");
-                        pyrefly_table_mut.set_position(max_tool_pos + 1);
+                        pyrefly_table_mut.set_position(Some(max_tool_pos + 1));
                     }
                 }
             }

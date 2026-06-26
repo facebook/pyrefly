@@ -86,6 +86,7 @@ use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::Exported;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
@@ -131,6 +132,7 @@ use crate::state::module::ModuleStateReader;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::steps::Context;
+use crate::state::steps::ParsedModule;
 use crate::state::steps::PysaContext;
 use crate::state::steps::Step;
 use crate::state::steps::StepsMut;
@@ -310,6 +312,7 @@ impl ModuleDeps {
             | AnyExportedKey::KeyVariance(KeyVariance(c))
             | AnyExportedKey::KeyClassMetadata(KeyClassMetadata(c))
             | AnyExportedKey::KeyClassMro(KeyClassMro(c))
+            | AnyExportedKey::KeyClassDisjointBase(KeyClassDisjointBase(c))
             | AnyExportedKey::KeyAbstractClassCheck(KeyAbstractClassCheck(c))
             | AnyExportedKey::KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry(c)) => {
                 self.classes.insert(c);
@@ -446,6 +449,13 @@ struct ModuleData {
     imports: HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>,
     deps: HashMap<Handle, ModuleDeps>,
     rdeps: HashSet<Handle>,
+    /// Last-computed value of `tensor_shapes_available` for this module.
+    /// This is a find-only dependency on whether `shape_extensions` is resolvable
+    /// from this module's origin — NOT a dependency on its contents. Deliberately
+    /// not stored in `imports`/`deps`, because the contents of `shape_extensions`
+    /// are not a dependency of every module; only its resolvability affects the
+    /// `tensor_shapes` bit. `None` means "not yet computed".
+    tensor_shapes: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -464,6 +474,13 @@ struct ModuleDataMut {
     /// Note that if we are only running once, e.g. on the command line, this isn't valuable.
     /// But we create it anyway for simplicity, since it doesn't seem to add much overhead.
     rdeps: Mutex<HashSet<Handle>>,
+    /// Last-computed value of `tensor_shapes_available` for this module.
+    /// This is a find-only dependency on whether `shape_extensions` is resolvable
+    /// from this module's origin — NOT a dependency on its contents. Deliberately
+    /// not stored in `imports`/`deps`, because the contents of `shape_extensions`
+    /// are not a dependency of every module; only its resolvability affects the
+    /// `tensor_shapes` bit. `None` means "not yet computed".
+    tensor_shapes: RwLock<Option<bool>>,
 }
 
 impl ModuleData {
@@ -476,6 +493,7 @@ impl ModuleData {
             imports: RwLock::new(self.imports.clone()),
             deps: RwLock::new(self.deps.clone()),
             rdeps: Mutex::new(self.rdeps.clone()),
+            tensor_shapes: RwLock::new(self.tensor_shapes),
         }
     }
 }
@@ -489,6 +507,7 @@ impl ModuleDataMut {
             imports: Default::default(),
             deps: Default::default(),
             rdeps: Default::default(),
+            tensor_shapes: RwLock::new(None),
         }
     }
 
@@ -501,6 +520,7 @@ impl ModuleDataMut {
             imports,
             deps,
             rdeps,
+            tensor_shapes,
         } = self;
         ModuleData {
             handle,
@@ -509,6 +529,7 @@ impl ModuleDataMut {
             imports: imports.into_inner(),
             deps: deps.into_inner(),
             rdeps: rdeps.into_inner(),
+            tensor_shapes: tensor_shapes.into_inner(),
         }
     }
 
@@ -859,6 +880,10 @@ impl<'a> Transaction<'a> {
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
         self.with_module_inner(handle, |x| x.get_ast())
+    }
+
+    pub(crate) fn get_parsed_module(&self, handle: &Handle) -> Option<Arc<ParsedModule>> {
+        self.with_module_inner(handle, |x| x.get_parsed_module())
     }
 
     pub fn get_config(&self, handle: &Handle) -> Option<ArcId<ConfigFile>> {
@@ -1251,6 +1276,26 @@ impl<'a> Transaction<'a> {
                 }
             }
 
+            // Re-check the find-only `tensor_shapes` dependency: whether
+            // `shape_extensions` is resolvable from this module's origin. This is NOT a
+            // dependency on `shape_extensions`'s contents, so it is deliberately not in
+            // `imports`/`deps`. It can flip on file create/remove/rename (which is exactly
+            // when `dirty.find()` is set), so a module that does not itself import
+            // `shape_extensions` must still rebuild to pick up the new bit. Copy the stored
+            // value into a local first (dropping the lock) so no `tensor_shapes` lock is
+            // held across the `find_import` inside `tensor_shapes_available`.
+            let prev_tensor_shapes = *module_data.tensor_shapes.read();
+            if !is_dirty && let Some(prev) = prev_tensor_shapes {
+                let fresh = self.tensor_shapes_available(
+                    &module_data.config.read(),
+                    &module_data.handle,
+                    Some(&self.timing),
+                );
+                if prev != fresh {
+                    is_dirty = true;
+                }
+            }
+
             if is_dirty {
                 // Create new ErrorCollector to clear old errors from the previous config
                 if let Some(old_load) = guard.get_load() {
@@ -1344,6 +1389,15 @@ impl<'a> Transaction<'a> {
             let require = guard.require();
             let stdlib = self.get_stdlib(&module_data.handle);
             let config = module_data.config.read();
+
+            // Compute and record the `tensor_shapes` bit. Storing it here makes it a
+            // find-only dependency: the `dirty.find()` clean-check re-derives this value
+            // and rebuilds if it flipped (e.g. `shape_extensions` became resolvable), even
+            // though no import statement of this module changed.
+            let tensor_shapes =
+                self.tensor_shapes_available(&config, &module_data.handle, Some(&self.timing));
+            *module_data.tensor_shapes.write() = Some(tensor_shapes);
+
             let pysa_context = self
                 .data
                 .pysa_reporter
@@ -1367,7 +1421,7 @@ impl<'a> Transaction<'a> {
                 infer_return_types: config.infer_return_types(module_data.handle.path().as_path()),
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
-                tensor_shapes: config.tensor_shapes(module_data.handle.path().as_path()),
+                tensor_shapes,
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
                 spec_compliant_overloads: config
@@ -1707,7 +1761,11 @@ impl<'a> Transaction<'a> {
     /// Look up the location of an exported name in a module.
     /// Follows re-exports (ExportLocation::OtherModule) to find the original definition.
     /// Returns the module and text range where the name is defined.
-    fn lookup_export_location(&self, handle: &Handle, name: &Name) -> Option<(Module, TextRange)> {
+    pub(crate) fn lookup_export_location(
+        &self,
+        handle: &Handle,
+        name: &Name,
+    ) -> Option<(Module, TextRange)> {
         let module_data = self.get_module(handle);
         let exports = self.lookup_export(module_data);
         let export_map = exports.exports(&self.lookup(module_data));
@@ -1798,6 +1856,21 @@ impl<'a> Transaction<'a> {
             })
             .0
             .dupe()
+    }
+
+    pub(crate) fn tensor_shapes_available(
+        &self,
+        config: &ArcId<ConfigFile>,
+        handle: &Handle,
+        timing: Option<&TransactionTimingCounters>,
+    ) -> bool {
+        self.get_cached_loader(config)
+            .find_import_for_tensor_shapes(Some(handle.path()), timing)
+            .finding()
+            // This is Pyrefly resolvability, not runtime importability: a
+            // found module with a nonfatal import error is enough to mark
+            // shape support as reachable for type-checking.
+            .is_some()
     }
 
     pub fn get_stdlib(&self, handle: &Handle) -> Arc<Stdlib> {
@@ -2354,7 +2427,9 @@ impl<'a> Transaction<'a> {
                 check_unannotated_defs: config.check_unannotated_defs(m.handle.path().as_path()),
                 infer_return_types: config.infer_return_types(m.handle.path().as_path()),
                 infer_with_first_use: config.infer_with_first_use(m.handle.path().as_path()),
-                tensor_shapes: config.tensor_shapes(m.handle.path().as_path()),
+                // This is a one-shot timing/diagnostic dump, so we intentionally do not
+                // store the bit on `module_data` (no later dirty.find() re-check applies).
+                tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
                 spec_compliant_overloads: config
@@ -3177,6 +3252,15 @@ impl State {
 
     pub fn dir_cache_enabled(&self) -> bool {
         self.dir_cache_enabled
+    }
+
+    /// Run `op` on the state's thread pool, which has an increased stack size.
+    pub fn install<OP, R>(&self, op: OP) -> R
+    where
+        OP: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.threads.install(op)
     }
 
     fn get_config(&self, handle: &Handle) -> ArcId<ConfigFile> {

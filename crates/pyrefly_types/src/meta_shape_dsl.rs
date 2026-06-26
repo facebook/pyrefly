@@ -48,8 +48,10 @@ use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
-use crate::tensor::TensorShape;
-use crate::tensor::TensorType;
+use crate::shaped_array::ShapedArrayShape;
+use crate::shaped_array::ShapedArrayShapeArgStyle;
+use crate::shaped_array::ShapedArrayType;
+use crate::shaped_array::shape_to_tuple_carrier_arg;
 use crate::tuple::Tuple;
 use crate::types::Type;
 
@@ -69,7 +71,7 @@ enum Val {
     /// Single tensor dimension — a symbolic `Type` (SizeExpr, Quantified, etc.).
     Dim(Type),
     /// Full tensor shape with concrete rank.
-    Shape(TensorShape),
+    Shape(ShapedArrayShape),
     /// Homogeneous list. Elements are all the same variant (Int, Dim, Shape, …).
     List(Vec<Val>),
     /// Variadic shape: prefix dims + variadic middle + suffix dims.
@@ -125,9 +127,9 @@ impl Val {
         }
     }
 
-    /// Extract as `&TensorShape`. Panics if not `Shape` — the DSL type checker
+    /// Extract as `&ShapedArrayShape`. Panics if not `Shape` — the DSL type checker
     /// guarantees this won't happen for well-typed DSL code.
-    pub fn as_shape(&self) -> &TensorShape {
+    pub fn as_shape(&self) -> &ShapedArrayShape {
         match self {
             Val::Shape(s) => s,
             _ => panic!("IR bug: expected Shape, got {}", self.variant_name()),
@@ -172,43 +174,31 @@ impl Val {
 mod extract {
     use crate::dimension::SizeExpr;
     use crate::literal::Lit;
-    use crate::tensor::TensorShape;
+    use crate::shaped_array::ShapedArrayShape;
     use crate::tuple::Tuple;
     use crate::types::Type;
 
-    /// Extract a TensorShape from a Type.
-    /// Returns None for non-tensors and shapeless tensors.
+    /// Extract a ShapedArrayShape from a Type.
+    /// Returns None for non-shaped-arrays and shapeless arrays.
     /// Allows both Concrete and Unpacked shapes through so DSL ops that
     /// support variadic shapes (e.g., slicing) can operate on them.
-    pub fn concrete_tensor_shape(ty: &Type) -> Option<TensorShape> {
+    pub fn shaped_array_shape(ty: &Type) -> Option<ShapedArrayShape> {
         match ty {
-            Type::Tensor(tensor) => match &tensor.shape {
-                TensorShape::Concrete(_) => Some(tensor.shape.clone()),
-                TensorShape::Unpacked(_) => {
-                    // Allow unpacked shapes through — the DSL evaluator handles
-                    // them via Val::Unpacked. Shapeless tensors (Unpacked with
-                    // any_tuple middle and empty prefix/suffix) still return None.
-                    if tensor.is_shapeless() {
-                        None
-                    } else {
-                        Some(tensor.shape.clone())
-                    }
+            Type::ShapedArray(shaped_array) => {
+                if shaped_array.is_shapeless() {
+                    None
+                } else {
+                    Some(shaped_array.shape.clone())
                 }
-            },
-            Type::ClassType(cls) if cls.has_qname("torch", "Tensor") => {
-                // Extract shape from ClassType targs
-                let targs = cls.targs();
-                if targs.is_empty() {
-                    return None;
+            }
+            Type::Union(union) => {
+                let mut shapes = union.members.iter().map(shaped_array_shape);
+                let first = shapes.next()??;
+                if shapes.all(|shape| shape.as_ref() == Some(&first)) {
+                    Some(first)
+                } else {
+                    None
                 }
-                // First targ should be the shape tuple
-                if let Type::Tuple(Tuple::Concrete(elems)) = &targs.as_slice()[0] {
-                    let dims: Vec<Type> = elems.iter().filter_map(dimension).collect();
-                    if dims.len() == elems.len() && !dims.is_empty() {
-                        return Some(TensorShape::from_types(dims));
-                    }
-                }
-                None
             }
             _ => None,
         }
@@ -298,37 +288,25 @@ mod extract {
         }
     }
 
-    /// Extract list or tuple of tensor shapes.
-    /// Handles both list[Tensor[...]] and tuple[Tensor[...], ...].
+    /// Extract list or tuple of shaped-array shapes.
+    /// Handles tuple[Array[...], ...].
     /// Returns None for list types (can't determine element count) or unbounded tuples.
-    pub fn tensor_list(ty: &Type) -> Option<Vec<TensorShape>> {
+    pub fn shaped_array_list(ty: &Type) -> Option<Vec<ShapedArrayShape>> {
         use crate::tuple::Tuple;
 
         match ty {
-            // list[Tensor[...]] - can't determine element count, return None
+            // list[Array[...]] - can't determine element count, return None
             Type::ClassType(class_type) if class_type.has_qname("builtins", "list") => {
                 // Lists don't preserve element count in the type system
                 // Fall back to fixture for now
                 None
             }
-            // tuple[Tensor[...], ...] - unbounded, can't determine count
+            // tuple[Array[...], ...] - unbounded, can't determine count
             Type::Tuple(Tuple::Unbounded(_)) => None,
-            // tuple[Tensor[...], Tensor[...], ...] - concrete, extract all
+            // tuple[Array[...], Array[...], ...] - concrete, extract all
             Type::Tuple(Tuple::Concrete(elems)) => {
-                // Check if first element is a tensor
-                if let Some(first) = elems.first() {
-                    let is_tensor = match first {
-                        Type::Tensor(_) => true,
-                        Type::ClassType(ct) => ct.has_qname("torch", "Tensor"),
-                        _ => false,
-                    };
-
-                    if is_tensor {
-                        // Tuple of tensors - extract all
-                        let shapes: Option<Vec<TensorShape>> =
-                            elems.iter().map(concrete_tensor_shape).collect();
-                        return shapes;
-                    }
+                if matches!(elems.first(), Some(Type::ShapedArray(_))) {
+                    return elems.iter().map(shaped_array_shape).collect();
                 }
                 None
             }
@@ -447,7 +425,7 @@ enum DslTypeCon {
     Bool,
     SymInt,
     List,
-    Tensor,
+    ShapedArray,
 }
 
 /// Types in the DSL. Corresponds to `<type>` in the grammar,
@@ -458,7 +436,7 @@ enum DslType {
     SymInt,
     Bool,
     Str,
-    Tensor,
+    ShapedArray,
     None,
     /// `list[T]`
     List(Box<DslType>),
@@ -560,8 +538,8 @@ enum DslExpr {
     },
     /// `expr.shape` (extract tensor dimensions).
     Shape(Box<DslExpr>),
-    /// `Tensor(shape=expr)` (construct result tensor).
-    TensorNew(Box<DslExpr>),
+    /// `ShapedArray(shape=expr)` (construct result shaped array).
+    ShapedArrayNew(Box<DslExpr>),
     /// Ternary `body if test else orelse`.
     IfExpr {
         body: Box<DslExpr>,
@@ -651,7 +629,7 @@ impl fmt::Display for DslTypeCon {
             DslTypeCon::Bool => write!(f, "bool"),
             DslTypeCon::SymInt => write!(f, "symint"),
             DslTypeCon::List => write!(f, "list"),
-            DslTypeCon::Tensor => write!(f, "Tensor"),
+            DslTypeCon::ShapedArray => write!(f, "ShapedArray"),
         }
     }
 }
@@ -663,7 +641,7 @@ impl fmt::Display for DslType {
             DslType::SymInt => write!(f, "symint"),
             DslType::Bool => write!(f, "bool"),
             DslType::Str => write!(f, "str"),
-            DslType::Tensor => write!(f, "Tensor"),
+            DslType::ShapedArray => write!(f, "ShapedArray"),
             DslType::None => write!(f, "None"),
             DslType::List(inner) => write!(f, "list[{}]", inner),
             DslType::Union(types) => {
@@ -762,7 +740,7 @@ impl fmt::Display for DslExpr {
             DslExpr::IsInstance { expr, ty } => write!(f, "isinstance({}, {})", expr, ty),
             DslExpr::In { left, right } => write!(f, "{} in {}", left, right),
             DslExpr::Shape(expr) => write!(f, "{}.shape", expr),
-            DslExpr::TensorNew(expr) => write!(f, "Tensor(shape={})", expr),
+            DslExpr::ShapedArrayNew(expr) => write!(f, "ShapedArray(shape={})", expr),
             DslExpr::IfExpr { body, test, orelse } => {
                 write!(f, "{} if {} else {}", body, test, orelse)
             }
@@ -793,10 +771,10 @@ fn convert_type_constructor(expr: &Expr) -> Result<DslTypeCon, String> {
             "bool" => Ok(DslTypeCon::Bool),
             "symint" => Ok(DslTypeCon::SymInt),
             "list" => Ok(DslTypeCon::List),
-            "Tensor" => Ok(DslTypeCon::Tensor),
+            "ShapedArray" => Ok(DslTypeCon::ShapedArray),
             other => Err(format!(
                 "unknown type constructor '{}' in isinstance. \
-                 Expected one of: int, str, bool, symint, list, Tensor",
+                 Expected one of: int, str, bool, symint, list, ShapedArray",
                 other
             )),
         },
@@ -815,11 +793,11 @@ fn convert_type_annotation(expr: &Expr) -> Result<DslType, String> {
             "symint" => Ok(DslType::SymInt),
             "bool" => Ok(DslType::Bool),
             "str" => Ok(DslType::Str),
-            "Tensor" => Ok(DslType::Tensor),
+            "ShapedArray" => Ok(DslType::ShapedArray),
             "None" => Ok(DslType::None),
             other => Err(format!(
                 "unknown type '{}' in annotation. \
-                 Expected one of: int, symint, bool, str, Tensor, None",
+                 Expected one of: int, symint, bool, str, ShapedArray, None",
                 other
             )),
         },
@@ -1351,19 +1329,23 @@ fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, DslCompileE
                 })?,
             })
         }
-        "Tensor" => {
-            // Tensor(shape=expr) — keyword argument
+        "ShapedArray" => {
+            // ShapedArray(shape=expr) - keyword argument.
             if !call.arguments.args.is_empty() {
                 return Err(DslCompileError {
                     range,
-                    message: "Tensor() uses keyword arg shape=, not positional args".to_owned(),
+                    message: format!(
+                        "{}() uses keyword arg shape=, not positional args",
+                        func_name
+                    ),
                 });
             }
             if call.arguments.keywords.len() != 1 {
                 return Err(DslCompileError {
                     range,
                     message: format!(
-                        "Tensor() takes exactly one keyword arg, got {}",
+                        "{}() takes exactly one keyword arg, got {}",
+                        func_name,
                         call.arguments.keywords.len()
                     ),
                 });
@@ -1374,16 +1356,16 @@ fn convert_call(call: &ruff_python_ast::ExprCall) -> Result<DslExpr, DslCompileE
                 .as_ref()
                 .ok_or_else(|| DslCompileError {
                     range,
-                    message: "Tensor keyword must be named".to_owned(),
+                    message: format!("{} keyword must be named", func_name),
                 })?
                 .as_str();
             if kw_name != "shape" {
                 return Err(DslCompileError {
                     range,
-                    message: format!("Tensor() keyword must be 'shape', got '{}'", kw_name),
+                    message: format!("{}() keyword must be 'shape', got '{}'", func_name, kw_name),
                 });
             }
-            Ok(DslExpr::TensorNew(Box::new(convert_expr(&kw.value)?)))
+            Ok(DslExpr::ShapedArrayNew(Box::new(convert_expr(&kw.value)?)))
         }
 
         // Builtins validated at parse time
@@ -1584,7 +1566,7 @@ fn matches_constructor(ty: &DslType, con: DslTypeCon) -> bool {
             | (DslType::SymInt, DslTypeCon::SymInt)
             | (DslType::Bool, DslTypeCon::Bool)
             | (DslType::Str, DslTypeCon::Str)
-            | (DslType::Tensor, DslTypeCon::Tensor)
+            | (DslType::ShapedArray, DslTypeCon::ShapedArray)
             | (DslType::List(_), DslTypeCon::List)
     )
 }
@@ -1717,9 +1699,12 @@ fn return_type_compatible(inferred: &DslType, declared: &DslType) -> bool {
         (DslType::List(inferred_inner), DslType::List(declared_inner)) => {
             return_type_compatible(inferred_inner, declared_inner)
         }
-        // list[Tensor] → Tensor: existing dynamic multi-tensor return behaviour
-        // where some ops return [t1, t2] despite declaring `-> Tensor`.
-        (DslType::List(inner), DslType::Tensor) if matches!(inner.as_ref(), DslType::Tensor) => {
+        // list[ShapedArray] -> ShapedArray: existing dynamic multi-array return
+        // behaviour where some ops return [t1, t2] despite declaring a single
+        // shaped-array return.
+        (DslType::List(inner), DslType::ShapedArray)
+            if matches!(inner.as_ref(), DslType::ShapedArray) =>
+        {
             true
         }
         // List expressions are backed by Val::List, same as Tuple at runtime.
@@ -2175,9 +2160,9 @@ fn infer_expr(
             infer_expr(inner, env, sigs, errors);
             DslType::List(Box::new(dim_type()))
         }
-        DslExpr::TensorNew(inner) => {
+        DslExpr::ShapedArrayNew(inner) => {
             infer_expr(inner, env, sigs, errors);
-            DslType::Tensor
+            DslType::ShapedArray
         }
         DslExpr::IfExpr { body, test, orelse } => {
             let (then_env, else_env) = narrow(test, env, errors);
@@ -2293,7 +2278,7 @@ fn extract_dsl_val(actual_arg_type: &Type, expected_param_type: &DslType) -> Opt
         }
         DslType::Bool => Some(Val::Bool(extract::bool_arg(actual_arg_type)?)),
         DslType::Str => Some(Val::Str(extract::string_arg(actual_arg_type)?)),
-        DslType::Tensor => Some(Val::Shape(extract::concrete_tensor_shape(actual_arg_type)?)),
+        DslType::ShapedArray => Some(Val::Shape(extract::shaped_array_shape(actual_arg_type)?)),
         DslType::None => actual_arg_type.is_none().then_some(Val::None),
         DslType::List(inner) => match inner.as_ref() {
             DslType::Int => Some(Val::List(
@@ -2302,8 +2287,8 @@ fn extract_dsl_val(actual_arg_type: &Type, expected_param_type: &DslType) -> Opt
                     .map(|&i| Val::Int(i))
                     .collect(),
             )),
-            DslType::Tensor => Some(Val::List(
-                extract::tensor_list(actual_arg_type)?
+            DslType::ShapedArray => Some(Val::List(
+                extract::shaped_array_list(actual_arg_type)?
                     .into_iter()
                     .map(Val::Shape)
                     .collect(),
@@ -2591,7 +2576,7 @@ fn eval_dsl_expr(
                 (DslTypeCon::SymInt, Val::Dim(_)) => true,
                 (DslTypeCon::List, Val::List(_)) => true,
                 (DslTypeCon::List, Val::Unpacked { .. }) => true,
-                (DslTypeCon::Tensor, Val::Shape(_)) => true,
+                (DslTypeCon::ShapedArray, Val::Shape(_)) => true,
                 _ => false,
             };
             Ok(Val::Bool(matches))
@@ -2613,15 +2598,20 @@ fn eval_dsl_expr(
         DslExpr::Shape(inner) => {
             let val = eval_dsl_expr(inner, env, fns, op_name)?;
             let shape = val.as_shape();
-            match shape {
-                TensorShape::Concrete(dims) => {
+            match shape.as_tuple() {
+                Tuple::Concrete(dims) => {
                     // Use dim_val to convert concrete Size(Literal(n)) to Val::Int(n)
                     // so comparisons against literal ints (e.g., `d != 1` in squeeze)
                     // work naturally.
                     let vals: Vec<Val> = dims.iter().map(|d| dim_val(d.clone())).collect();
                     Ok(Val::List(vals))
                 }
-                TensorShape::Unpacked(unpacked) => {
+                Tuple::Unbounded(_) => Ok(Val::Unpacked {
+                    prefix: Vec::new(),
+                    middle: Type::any_tuple(),
+                    suffix: Vec::new(),
+                }),
+                Tuple::Unpacked(unpacked) => {
                     let (prefix, middle, suffix) = &**unpacked;
                     Ok(Val::Unpacked {
                         prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
@@ -2632,7 +2622,7 @@ fn eval_dsl_expr(
             }
         }
 
-        DslExpr::TensorNew(shape_expr) => {
+        DslExpr::ShapedArrayNew(shape_expr) => {
             let val = eval_dsl_expr(shape_expr, env, fns, op_name)?;
             match val {
                 Val::Unpacked {
@@ -2642,7 +2632,7 @@ fn eval_dsl_expr(
                 } => {
                     let prefix_types = prefix.iter().map(|v| v.as_size()).collect();
                     let suffix_types = suffix.iter().map(|v| v.as_size()).collect();
-                    Ok(Val::Shape(TensorShape::unpacked(
+                    Ok(Val::Shape(ShapedArrayShape::unpacked(
                         prefix_types,
                         middle,
                         suffix_types,
@@ -2650,7 +2640,7 @@ fn eval_dsl_expr(
                 }
                 _ => {
                     let dims = val.as_size_list();
-                    Ok(Val::Shape(TensorShape::from_types(dims)))
+                    Ok(Val::Shape(ShapedArrayShape::from_types(dims)))
                 }
             }
         }
@@ -3233,15 +3223,24 @@ fn eval_dsl_body(
     }
 }
 
-/// Inject a computed `TensorShape` into a fixture `Type`, preserving the base class.
-///
-/// Handles both `Type::Tensor(t)` and `Type::ClassType("torch.Tensor")` fixture types.
-/// Falls back to `ret_type` unchanged if it isn't a tensor type.
-fn inject_shape(shape: TensorShape, ret_type: &Type) -> Type {
+/// Inject a computed `ShapedArrayShape` into a fixture `Type`, preserving the base class.
+/// Falls back to `ret_type` unchanged if it isn't a shaped-array type.
+fn inject_shape(shape: ShapedArrayShape, ret_type: &Type) -> Type {
     match ret_type {
-        Type::Tensor(t) => TensorType::new(t.base_class.clone(), shape).to_type(),
-        Type::ClassType(cls) if cls.has_qname("torch", "Tensor") => {
-            TensorType::new(cls.clone(), shape).to_type()
+        Type::ShapedArray(t) => {
+            let mut base_class = t.base_class.clone();
+            if let ShapedArrayShapeArgStyle::TupleCarrier { index } = t.shape_arg_style {
+                let carrier = base_class
+                    .targs_mut()
+                    .as_mut()
+                    .get_mut(index)
+                    .expect("shape argument index should point to a class type argument");
+                *carrier = shape_to_tuple_carrier_arg(&shape);
+            }
+            ShapedArrayType::new(base_class, shape)
+                .with_syntax(t.syntax)
+                .with_shape_arg_style(t.shape_arg_style)
+                .to_type()
         }
         _ => ret_type.clone(),
     }
@@ -3272,7 +3271,10 @@ fn val_to_scalar_type(val: &Val) -> Type {
 
 /// Inject a list of computed shapes into the fixture return type's tuple structure.
 /// Returns `None` if shapes is empty or the fixture type doesn't match.
-fn inject_shapes_into_tuple(shapes: Vec<TensorShape>, expected_return_type: &Type) -> Option<Type> {
+fn inject_shapes_into_tuple(
+    shapes: Vec<ShapedArrayShape>,
+    expected_return_type: &Type,
+) -> Option<Type> {
     if shapes.is_empty() {
         return None;
     }
@@ -3311,15 +3313,16 @@ fn val_to_type(
     op_name: &str,
 ) -> Type {
     match actual_result_type {
-        DslType::Tensor => match val {
+        DslType::ShapedArray => match val {
             Val::Shape(s) => inject_shape(s, expected_return_type),
             // Some ops conditionally return a tuple of tensors despite
-            // declaring `-> Tensor` (e.g. min_max_median_ir returns
+            // declaring `-> ShapedArray` (e.g. min_max_median_ir returns
             // [Tensor, Tensor] when dim is given).  return_type_compatible
-            // allows list[Tensor] for a declared Tensor return, so this path
-            // is guarded by check_body's static validation.
+            // allows list[ShapedArray] for a declared ShapedArray return, so
+            // this path is guarded by check_body's static validation.
             Val::List(items) => {
-                let shapes: Vec<TensorShape> = items.iter().map(|v| v.as_shape().clone()).collect();
+                let shapes: Vec<ShapedArrayShape> =
+                    items.iter().map(|v| v.as_shape().clone()).collect();
                 if shapes.len() == 1 {
                     return inject_shape(shapes.into_iter().next().unwrap(), expected_return_type);
                 }
@@ -3327,7 +3330,7 @@ fn val_to_type(
                     .unwrap_or_else(|| expected_return_type.clone())
             }
             _ => unreachable!(
-                "validated by check_body: Tensor return but got {:?} (op: {})",
+                "validated by check_body: ShapedArray return but got {:?} (op: {})",
                 val.variant_name(),
                 op_name,
             ),
@@ -3388,7 +3391,7 @@ fn val_to_type(
                     (DslType::Int, Val::Int(_))
                     | (DslType::SymInt, Val::Int(_))
                     | (DslType::SymInt, Val::Dim(_))
-                    | (DslType::Tensor, Val::Shape(_))
+                    | (DslType::ShapedArray, Val::Shape(_))
                     | (DslType::Bool, Val::Bool(_))
                     | (DslType::Str, Val::Str(_))
                     | (DslType::None, Val::None) => {
@@ -3406,9 +3409,10 @@ fn val_to_type(
         }
 
         DslType::List(inner) => match inner.as_ref() {
-            DslType::Tensor => {
+            DslType::ShapedArray => {
                 let items = val.as_list();
-                let shapes: Vec<TensorShape> = items.iter().map(|v| v.as_shape().clone()).collect();
+                let shapes: Vec<ShapedArrayShape> =
+                    items.iter().map(|v| v.as_shape().clone()).collect();
                 if is_unbounded {
                     // Unbounded: build Tuple::Unbounded with computed element shape
                     if let (Some(first), Type::Tuple(Tuple::Unbounded(elem))) =
@@ -3431,9 +3435,10 @@ fn val_to_type(
 
         DslType::Tuple(elems) => {
             let items = val.as_list();
-            let all_tensor = elems.iter().all(|e| matches!(e, DslType::Tensor));
-            if all_tensor {
-                let shapes: Vec<TensorShape> = items.iter().map(|v| v.as_shape().clone()).collect();
+            let all_shaped_array = elems.iter().all(|e| matches!(e, DslType::ShapedArray));
+            if all_shaped_array {
+                let shapes: Vec<ShapedArrayShape> =
+                    items.iter().map(|v| v.as_shape().clone()).collect();
                 inject_shapes_into_tuple(shapes, expected_return_type)
                     .unwrap_or_else(|| expected_return_type.clone())
             } else {
@@ -3690,7 +3695,7 @@ fn collect_call_targets_expr(expr: &DslExpr, targets: &mut HashSet<String>) {
             collect_call_targets_expr(left, targets);
             collect_call_targets_expr(right, targets);
         }
-        DslExpr::Shape(expr) | DslExpr::TensorNew(expr) => {
+        DslExpr::Shape(expr) | DslExpr::ShapedArrayNew(expr) => {
             collect_call_targets_expr(expr, targets);
         }
         DslExpr::IfExpr { body, test, orelse } => {
@@ -3884,11 +3889,28 @@ pub fn convert_shape_dsl_function(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
     use pyrefly_python::ast::Ast;
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::nesting_context::NestingContext;
+    use ruff_python_ast::Identifier;
     use ruff_python_ast::PySourceType;
     use ruff_python_ast::Stmt;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
 
     use super::*;
+    use crate::class::Class;
+    use crate::class::ClassDefIndex;
+    use crate::class::ClassType;
+    use crate::tuple::Tuple;
+    use crate::types::TArgs;
+    use crate::types::Union;
 
     fn parse_dsl_functions(source: &str) -> Vec<ShapeDslFunction> {
         let (module, _, _) = Ast::parse(source, PySourceType::Stub);
@@ -3903,6 +3925,131 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn fake_class(name: &str, module: &str) -> Class {
+        let module = Module::new(
+            ModuleName::from_str(module),
+            ModulePath::filesystem(PathBuf::from(module)),
+            Arc::new("1234567890".to_owned()),
+        );
+        Class::new(
+            ClassDefIndex(0),
+            Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
+            NestingContext::toplevel(),
+            module,
+            None,
+        )
+    }
+
+    #[test]
+    fn test_shape_dsl_extract_ignores_ordinary_torch_class_type() {
+        let torch_tensor = Type::ClassType(ClassType::new(
+            fake_class("Tensor", "torch"),
+            TArgs::default(),
+        ));
+        let shape = ShapedArrayShape::new(vec![SizeExpr::Literal(2)]);
+
+        assert!(extract::shaped_array_shape(&torch_tensor).is_none());
+        assert!(
+            extract::shaped_array_list(&Type::Tuple(Tuple::Concrete(vec![torch_tensor.clone()])))
+                .is_none()
+        );
+        assert_eq!(inject_shape(shape, &torch_tensor), torch_tensor);
+    }
+
+    #[test]
+    fn test_shape_dsl_extracts_registered_shaped_array_tuple() {
+        let array = ClassType::new(fake_class("Array", "arrays"), TArgs::default());
+        let first_shape = ShapedArrayShape::new(vec![SizeExpr::Literal(2)]);
+        let second_shape = ShapedArrayShape::new(vec![SizeExpr::Literal(3)]);
+        let first = ShapedArrayType::new(array.clone(), first_shape.clone()).to_type();
+        let second = ShapedArrayType::new(array.clone(), second_shape.clone()).to_type();
+
+        assert_eq!(
+            extract::shaped_array_shape(&first),
+            Some(first_shape.clone())
+        );
+        assert_eq!(
+            extract::shaped_array_list(&Type::Tuple(Tuple::Concrete(vec![first, second]))),
+            Some(vec![first_shape, second_shape.clone()])
+        );
+        assert_eq!(
+            inject_shape(
+                second_shape.clone(),
+                &ShapedArrayType::shapeless(array.clone()).to_type()
+            ),
+            ShapedArrayType::new(array, second_shape).to_type()
+        );
+    }
+
+    #[test]
+    fn test_shape_dsl_extracts_same_shape_union() {
+        let array = ClassType::new(fake_class("Array", "arrays"), TArgs::default());
+        let shape = ShapedArrayShape::new(vec![SizeExpr::Literal(2)]);
+        let other_shape = ShapedArrayShape::new(vec![SizeExpr::Literal(3)]);
+        let union = Type::Union(Box::new(Union {
+            members: vec![
+                ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
+                ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
+            ],
+            display_name: None,
+        }));
+        let mismatched_union = Type::Union(Box::new(Union {
+            members: vec![
+                ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
+                ShapedArrayType::new(array, other_shape).to_type(),
+            ],
+            display_name: None,
+        }));
+
+        assert_eq!(extract::shaped_array_shape(&union), Some(shape));
+        assert!(extract::shaped_array_shape(&mismatched_union).is_none());
+    }
+
+    #[test]
+    fn test_shaped_array_dsl_spelling_is_canonical() {
+        let fns = parse_dsl_functions(
+            r#"
+def new_spelling(x: ShapedArray) -> ShapedArray:
+    return ShapedArray(shape=x.shape)
+"#,
+        );
+
+        let f = fns.iter().find(|f| f.name() == "new_spelling").unwrap();
+        assert_eq!(f.inner.params[0].ty.to_string(), "ShapedArray");
+        assert_eq!(
+            f.inner.return_type.as_ref().unwrap().to_string(),
+            "ShapedArray"
+        );
+        let DslBody::Return(expr) = &f.inner.body else {
+            panic!("new_spelling should have a return body");
+        };
+        assert_eq!(expr.to_string(), "ShapedArray(shape=x.shape)");
+    }
+
+    #[test]
+    fn test_tensor_dsl_spelling_is_rejected() {
+        let (module, _, _) = Ast::parse(
+            r#"
+def legacy_spelling(x: Tensor) -> Tensor:
+    return Tensor(shape=x.shape)
+"#,
+            PySourceType::Stub,
+        );
+        let Stmt::FunctionDef(func) = &module.body[0] else {
+            panic!("expected a function");
+        };
+
+        let err = convert_shape_dsl_function(func).unwrap_err();
+        assert!(
+            err.message.contains("unknown type 'Tensor' in annotation")
+                || err
+                    .message
+                    .contains("unknown function or constructor 'Tensor'"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     #[test]

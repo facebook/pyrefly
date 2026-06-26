@@ -44,6 +44,7 @@ use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
+use crate::types::class::AttrsFieldSpecifierKind;
 
 impl<'a> BindingsBuilder<'a> {
     /// Bind one level of an unpacked LHS target, for example in `x, (y, [*z]), q = foo`
@@ -141,11 +142,14 @@ impl<'a> BindingsBuilder<'a> {
     /// as defined downstream.
     fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
         let name = Hashed::new(&identifier.id);
-        let name_is_defined = !matches!(
-            self.scopes
-                .look_up_name_for_read(name, &Usage::Narrowing(None)),
-            NameReadInfo::NotFound,
-        );
+        let name_is_defined = match self.look_up_name_for_read(name, &Usage::Narrowing(None)) {
+            NameReadInfo::Flow { .. } | NameReadInfo::Anywhere { .. } => true,
+            // This helper only runs after attribute/subscript assignment targets. If the base is an
+            // implicit builtin, binding the assigned expression has already materialized it. A still
+            // unmaterialized builtin here is indistinguishable from any other name that is absent
+            // from local flow, so leave it un-narrowed.
+            NameReadInfo::ImplicitBuiltin { .. } | NameReadInfo::NotFound => false,
+        };
         if name_is_defined {
             self.scopes.narrow_in_current_flow(name, narrowed_idx);
         }
@@ -633,6 +637,21 @@ impl<'a> BindingsBuilder<'a> {
         // Compute def_idx before building the binding, since the NameAssign needs
         // its own idx for partial type inference support.
         let def_idx = current.into_idx();
+        // Only an in-class-body `field()`/`attr.ib()` is an attrs field specifier whose value is a
+        // `_CountingAttr` (typed `Any` so `@<field>.default`/`.validator` resolve). Gating on the
+        // class body keeps this off the hot path for ordinary assignments. The kind distinguishes
+        // legacy `attr.ib` (positional `default`) from kw-only `field`.
+        let attrs_field_specifier = if self.scopes.in_class_body()
+            && let Expr::Call(call) = value.as_ref()
+        {
+            match self.as_special_export(&call.func) {
+                Some(SpecialExport::AttrsLegacyAttrib) => Some(AttrsFieldSpecifierKind::Attrib),
+                Some(SpecialExport::AttrsNextGenField) => Some(AttrsFieldSpecifierKind::Field),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let binding = if is_definitely_type_alias {
             let range = value.range();
             let key_type_alias = KeyTypeAlias(self.type_alias_index());
@@ -660,6 +679,7 @@ impl<'a> BindingsBuilder<'a> {
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,
+                attrs_field_specifier,
             }))
         };
         self.insert_binding_idx(def_idx, binding);

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::dunder;
+use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
@@ -667,7 +668,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             true,
         )?;
         // Record the method type for hover support
-        self.record_resolved_trace(range, callee_ty.clone());
+        self.record_resolved_trace(range, &callee_ty);
         Some(self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -693,7 +694,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let callee_ty =
             self.type_of_attr_get(ty, method_name, range, errors, context, "Expr::call_method");
-        self.record_resolved_trace(range, callee_ty.clone());
+        self.record_resolved_trace(range, &callee_ty);
         self.make_call_target_and_call(
             callee_ty,
             method_name,
@@ -874,7 +875,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         callee_range,
                     );
                 }
-                self.record_resolved_trace(arguments_range, metaclass_dunder_call);
+                self.record_resolved_trace(arguments_range, &metaclass_dunder_call);
                 recorded_trace = true;
             }
             // Enum construction is routed through EnumMeta.__call__, which performs
@@ -948,7 +949,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                 }
                 if !recorded_trace {
-                    self.record_resolved_trace(arguments_range, new_method);
+                    self.record_resolved_trace(arguments_range, &new_method);
                     recorded_trace = true;
                 }
                 if constructor_kind == ConstructorKind::TypeOfSelf {
@@ -1012,7 +1013,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
             }
             if !recorded_trace {
-                self.record_resolved_trace(arguments_range, init_method);
+                self.record_resolved_trace(arguments_range, &init_method);
             }
         }
         if class_metadata.is_pydantic_model()
@@ -1099,10 +1100,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         let infer_type_or_expr = |toe: TypeOrExpr, errors: &ErrorCollector| -> Type {
-            match toe {
+            let ty = match toe {
                 TypeOrExpr::Type(ty, _) => ty.clone(),
                 TypeOrExpr::Expr(e) => self.expr_infer(e, errors),
-            }
+            };
+            // NNModule fields carry captured constructor args (e.g., padding=Literal[1]) that DSL
+            // forward functions need as literals to compute output shapes.
+            ty.with_literal_style(LitStyle::Explicit)
         };
 
         let mut fields = SmallMap::new();
@@ -1535,6 +1539,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         // First try the call without the hint to see if it succeeds.
         let mut ctor_targs_no_hint = ctor_targs.as_ref().map(|x| (**x).clone());
+        let arg_errors_no_hint = self.error_collector();
         let call_errors_no_hint = self.error_collector();
         let res_no_hint = self.callable_infer(
             callable.clone(),
@@ -1545,16 +1550,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             args,
             keywords,
             arguments_range,
-            arg_errors,
+            &arg_errors_no_hint,
             &call_errors_no_hint,
             context,
             None,
             ctor_targs_no_hint.as_mut(),
         );
         // If the call succeeds, attempt contextual typing with the hint.
-        let (chosen_ctor_targs, chosen_call_errors, chosen_res) =
+        let (chosen_ctor_targs, chosen_call_errors, chosen_arg_errors, chosen_res) =
             if call_errors_no_hint.is_empty() && hint.is_some() {
                 let mut ctor_targs_with_hint = ctor_targs.as_ref().map(|x| (**x).clone());
+                let arg_errors_with_hint = self.error_collector();
                 let call_errors_with_hint = self.error_collector();
                 let res_with_hint = self.callable_infer(
                     callable,
@@ -1565,21 +1571,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     args,
                     keywords,
                     arguments_range,
-                    arg_errors,
+                    &arg_errors_with_hint,
                     &call_errors_with_hint,
                     context,
                     hint,
                     ctor_targs_with_hint.as_mut(),
                 );
-                if call_errors_with_hint.is_empty() {
-                    (ctor_targs_with_hint, call_errors_with_hint, res_with_hint)
+                if call_errors_with_hint.is_empty()
+                    && arg_errors_with_hint.len() <= arg_errors_no_hint.len()
+                {
+                    (
+                        ctor_targs_with_hint,
+                        call_errors_with_hint,
+                        arg_errors_with_hint,
+                        res_with_hint,
+                    )
                 } else {
-                    (ctor_targs_no_hint, call_errors_no_hint, res_no_hint)
+                    (
+                        ctor_targs_no_hint,
+                        call_errors_no_hint,
+                        arg_errors_no_hint,
+                        res_no_hint,
+                    )
                 }
             } else {
-                (ctor_targs_no_hint, call_errors_no_hint, res_no_hint)
+                (
+                    ctor_targs_no_hint,
+                    call_errors_no_hint,
+                    arg_errors_no_hint,
+                    res_no_hint,
+                )
             };
         call_errors.extend(chosen_call_errors);
+        arg_errors.extend(chosen_arg_errors);
         if let Some(targs) = ctor_targs
             && let Some(chosen_targs) = chosen_ctor_targs
         {
@@ -1912,6 +1936,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         hint,
                         errors,
                     ),
+                _ if ty.is_assert_shape() => self
+                    .call_assert_shape(
+                        &x.arguments.args,
+                        &x.arguments.keywords,
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    ),
                 Some(CalleeKind::Function(FunctionKind::RevealType)) => self
                     .call_reveal_type(
                         &x.arguments.args,
@@ -1932,6 +1964,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 Some(CalleeKind::Function(FunctionKind::DataclassReplace)) => {
                     self.call_dataclasses_replace(
+                        ty,
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    )
+                }
+                Some(CalleeKind::Function(FunctionKind::DataclassAsdict)) => {
+                    self.call_dataclasses_asdict(
+                        ty,
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range,
+                        hint,
+                        errors,
+                    )
+                }
+                Some(CalleeKind::Function(
+                    kind @ (FunctionKind::AttrsFields | FunctionKind::AttrsFieldsDict),
+                )) => {
+                    self.call_attrs_fields(
+                        &kind.function_name(),
                         ty,
                         &args,
                         &kws,

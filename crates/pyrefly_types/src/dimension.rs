@@ -30,7 +30,7 @@ use crate::types::Type;
 ///
 /// Type variables (`Type::Quantified`), solver variables (`Type::Var`), and
 /// unknown dimensions (`Type::Any`) are represented directly as `Type` in
-/// `TensorShape.dims`, not wrapped in `SizeExpr`.
+/// `ShapedArrayShape.dims`, not wrapped in `SizeExpr`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SizeExpr {
     /// Concrete dimension: Tensor[2, 3]
@@ -93,7 +93,7 @@ impl SizeExpr {
 
     /// Convert a Type to a SizeExpr (used for extracting literal dimensions).
     /// Returns None if the type is not a concrete literal or expression.
-    /// Type variables, Vars, and Any should remain as Type in TensorShape.dims.
+    /// Type variables, Vars, and Any should remain as Type in ShapedArrayShape.dims.
     pub fn from_type(ty: &Type) -> Option<SizeExpr> {
         match ty {
             // SizeExpr type -> unwrap and return the SizeExpr directly

@@ -169,6 +169,17 @@ impl Exports {
             for x in &self.definitions.dunder_all.entries {
                 match x {
                     DunderAllEntry::Name(_, x) => {
+                        // A name listed in `__all__` but only defined inside an
+                        // `if __name__ == "__main__":` guard is not importable, so it must be
+                        // excluded from the wildcard surface to match `exports()`.
+                        if self
+                            .definitions
+                            .definitions
+                            .get(x)
+                            .is_some_and(|def| def.main_guard_only)
+                        {
+                            continue;
+                        }
                         result.insert(x.clone());
                     }
                     DunderAllEntry::Module(_, x) => {
@@ -228,6 +239,7 @@ impl Exports {
                         || self_defs.deprecated.get(name) != other_defs.deprecated.get(name)
                         || self_defs.special_exports.get(name)
                             != other_defs.special_exports.get(name)
+                        || self_def.main_guard_only != other_def.main_guard_only
                     {
                         changed.0.names.entry(name.clone()).or_default().metadata = true;
                     }
@@ -348,6 +360,9 @@ impl Exports {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.definitions.definitions.iter_hashed() {
+                if definition.main_guard_only {
+                    continue;
+                }
                 let deprecation = self.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.definitions.special_exports.get_hashed(name).copied();
                 let is_final = self.definitions.final_names.contains_key_hashed(name);

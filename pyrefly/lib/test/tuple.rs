@@ -371,6 +371,79 @@ def test[*Ts](x1: tuple[int, *tuple[str, ...]], x2: tuple[*Ts]) -> None:
 );
 
 testcase!(
+    test_unpack_typevar_bound_to_tuple,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int]](x: Z):
+    u, v = x
+    reveal_type(u)  # E: revealed type: str
+    reveal_type(v)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_tuple_three_elements,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int, bytes]](x: Z):
+    a, b, c = x
+    reveal_type(a)  # E: revealed type: str
+    reveal_type(b)  # E: revealed type: int
+    reveal_type(c)  # E: revealed type: bytes
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_unbounded_tuple,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[int, ...]](x: Z):
+    a, b = x
+    reveal_type(a)  # E: revealed type: int
+    reveal_type(b)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_to_tuple_starred,
+    r#"
+from typing import reveal_type
+def f[Z: tuple[str, int, bytes]](x: Z):
+    a, *b = x
+    reveal_type(a)  # E: revealed type: str
+    reveal_type(b)  # E: revealed type: list[bytes | int]
+"#,
+);
+
+testcase!(
+    test_unpack_constrained_typevar_tuple,
+    r#"
+from typing import TypeVar, reveal_type
+Z = TypeVar("Z", tuple[str, int], tuple[bool, bytes])
+def f(x: Z):
+    a, b = x
+    reveal_type(a)  # E: revealed type: bool | str
+    reveal_type(b)  # E: revealed type: bytes | int
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_unbounded_not_iterable,
+    r#"
+def f[Z](x: Z):
+    a, b = x  # E: Type `object` is not iterable
+"#,
+);
+
+testcase!(
+    test_unpack_typevar_bound_not_iterable,
+    r#"
+def f[Z: int](x: Z):
+    a, b = x  # E: Type `int` is not iterable
+"#,
+);
+
+testcase!(
     test_tuple_slice_non_literal,
     r#"
 from typing import assert_type
@@ -701,4 +774,147 @@ def make_tuple[T](x: T) -> tuple[T, ...]:
     return (x,)
 f: Callable[[int], tuple[int, str]] = make_tuple  # E: `[T](x: T) -> tuple[T, ...]` is not assignable to `(int) -> tuple[int, str]`
     "#,
+);
+
+// Regression test: widening wide tuple unions keeps type complexity linear at control-flow joins.
+// Without it, conditionally appending to a tuple produces an exponential number of concrete tuple
+// variants and causes a OOM
+testcase!(
+    test_many_conditional_tuple_appends,
+    r#"
+class D0: pass
+class D1: pass
+class D2: pass
+class D3: pass
+class D4: pass
+class D5: pass
+class D6: pass
+class D7: pass
+class D8: pass
+class D9: pass
+class D10: pass
+class D11: pass
+class D12: pass
+class D13: pass
+class D14: pass
+class D15: pass
+class D16: pass
+class D17: pass
+class D18: pass
+class D19: pass
+class D20: pass
+class D21: pass
+class D22: pass
+class D23: pass
+class D24: pass
+class D25: pass
+class D26: pass
+class D27: pass
+class D28: pass
+class D29: pass
+class D30: pass
+class D31: pass
+class D32: pass
+class D33: pass
+class D34: pass
+class D35: pass
+class D36: pass
+class D37: pass
+class D38: pass
+class D39: pass
+class D40: pass
+class D41: pass
+class D42: pass
+class D43: pass
+class D44: pass
+class D45: pass
+class D46: pass
+class D47: pass
+class D48: pass
+class D49: pass
+class D50: pass
+class D51: pass
+class D52: pass
+class D53: pass
+class D54: pass
+class D55: pass
+class D56: pass
+class D57: pass
+class D58: pass
+class D59: pass
+class D60: pass
+class D61: pass
+class D62: pass
+class D63: pass
+class D64: pass
+
+def repro(conds: list[bool]):
+    z = ()
+    if conds[0]: z += (D0(),)
+    if conds[1]: z += (D1(),)
+    if conds[2]: z += (D2(),)
+    if conds[3]: z += (D3(),)
+    if conds[4]: z += (D4(),)
+    if conds[5]: z += (D5(),)
+    if conds[6]: z += (D6(),)
+    if conds[7]: z += (D7(),)
+    if conds[8]: z += (D8(),)
+    if conds[9]: z += (D9(),)
+    if conds[10]: z += (D10(),)
+    if conds[11]: z += (D11(),)
+    if conds[12]: z += (D12(),)
+    if conds[13]: z += (D13(),)
+    if conds[14]: z += (D14(),)
+    if conds[15]: z += (D15(),)
+    if conds[16]: z += (D16(),)
+    if conds[17]: z += (D17(),)
+    if conds[18]: z += (D18(),)
+    if conds[19]: z += (D19(),)
+    if conds[20]: z += (D20(),)
+    if conds[21]: z += (D21(),)
+    if conds[22]: z += (D22(),)
+    if conds[23]: z += (D23(),)
+    if conds[24]: z += (D24(),)
+    if conds[25]: z += (D25(),)
+    if conds[26]: z += (D26(),)
+    if conds[27]: z += (D27(),)
+    if conds[28]: z += (D28(),)
+    if conds[29]: z += (D29(),)
+    if conds[30]: z += (D30(),)
+    if conds[31]: z += (D31(),)
+    if conds[32]: z += (D32(),)
+    if conds[33]: z += (D33(),)
+    if conds[34]: z += (D34(),)
+    if conds[35]: z += (D35(),)
+    if conds[36]: z += (D36(),)
+    if conds[37]: z += (D37(),)
+    if conds[38]: z += (D38(),)
+    if conds[39]: z += (D39(),)
+    if conds[40]: z += (D40(),)
+    if conds[41]: z += (D41(),)
+    if conds[42]: z += (D42(),)
+    if conds[43]: z += (D43(),)
+    if conds[44]: z += (D44(),)
+    if conds[45]: z += (D45(),)
+    if conds[46]: z += (D46(),)
+    if conds[47]: z += (D47(),)
+    if conds[48]: z += (D48(),)
+    if conds[49]: z += (D49(),)
+    if conds[50]: z += (D50(),)
+    if conds[51]: z += (D51(),)
+    if conds[52]: z += (D52(),)
+    if conds[53]: z += (D53(),)
+    if conds[54]: z += (D54(),)
+    if conds[55]: z += (D55(),)
+    if conds[56]: z += (D56(),)
+    if conds[57]: z += (D57(),)
+    if conds[58]: z += (D58(),)
+    if conds[59]: z += (D59(),)
+    if conds[60]: z += (D60(),)
+    if conds[61]: z += (D61(),)
+    if conds[62]: z += (D62(),)
+    if conds[63]: z += (D63(),)
+    if conds[64]: z += (D64(),)
+    return z
+"#,
 );

@@ -3,13 +3,12 @@ from _typeshed import structseq
 from collections.abc import Callable, Iterable
 from enum import IntEnum
 from types import FrameType
-from typing import Any, Final, final
-from typing_extensions import Never, TypeAlias
+from typing import Any, Final, TypeAlias, final
+from typing_extensions import Never
 
 NSIG: int
 
 class Signals(IntEnum):
-    SIGABRT = 6
     SIGFPE = 8
     SIGILL = 4
     SIGINT = 2
@@ -17,10 +16,12 @@ class Signals(IntEnum):
     SIGTERM = 15
 
     if sys.platform == "win32":
+        SIGABRT = 22
         SIGBREAK = 21
         CTRL_C_EVENT = 0
         CTRL_BREAK_EVENT = 1
     else:
+        SIGABRT = 6
         SIGALRM = 14
         SIGBUS = 7
         SIGCHLD = 17
@@ -74,14 +75,8 @@ def default_int_handler(signalnum: int, frame: FrameType | None, /) -> Never:
     It raises KeyboardInterrupt.
     """
     ...
-
-if sys.version_info >= (3, 10):  # arguments changed in 3.10.2
-    def getsignal(signalnum: _SIGNUM) -> _HANDLER: ...
-    def signal(signalnum: _SIGNUM, handler: _HANDLER) -> _HANDLER: ...
-
-else:
-    def getsignal(signalnum: _SIGNUM, /) -> _HANDLER: ...
-    def signal(signalnum: _SIGNUM, handler: _HANDLER, /) -> _HANDLER: ...
+def getsignal(signalnum: _SIGNUM) -> _HANDLER: ...
+def signal(signalnum: _SIGNUM, handler: _HANDLER) -> _HANDLER: ...
 
 SIGABRT: Final = Signals.SIGABRT
 SIGFPE: Final = Signals.SIGFPE
@@ -148,11 +143,7 @@ else:
     def pthread_kill(thread_id: int, signalnum: int, /) -> None:
         """Send a signal to a thread."""
         ...
-    if sys.version_info >= (3, 10):  # arguments changed in 3.10.2
-        def pthread_sigmask(how: int, mask: Iterable[int]) -> set[_SIGNUM]: ...
-    else:
-        def pthread_sigmask(how: int, mask: Iterable[int], /) -> set[_SIGNUM]: ...
-
+    def pthread_sigmask(how: int, mask: Iterable[int]) -> set[_SIGNUM]: ...
     def setitimer(which: int, seconds: float, interval: float = 0.0, /) -> tuple[float, float]:
         """
         Sets given itimer (one of ITIMER_REAL, ITIMER_VIRTUAL or ITIMER_PROF).
@@ -172,10 +163,7 @@ else:
         """
         ...
     def sigpending() -> Any: ...
-    if sys.version_info >= (3, 10):  # argument changed in 3.10.2
-        def sigwait(sigset: Iterable[int]) -> _SIGNUM: ...
-    else:
-        def sigwait(sigset: Iterable[int], /) -> _SIGNUM: ...
+    def sigwait(sigset: Iterable[int]) -> _SIGNUM: ...
     if sys.platform != "darwin":
         SIGCLD: Final = Signals.SIGCHLD  # alias
         SIGPOLL: Final = Signals.SIGIO  # alias
@@ -187,52 +175,25 @@ else:
 
         @final
         class struct_siginfo(structseq[int], tuple[int, int, int, int, int, int, int]):
-            if sys.version_info >= (3, 10):
-                __match_args__: Final = ("si_signo", "si_code", "si_errno", "si_pid", "si_uid", "si_status", "si_band")
+            __match_args__: Final = ("si_signo", "si_code", "si_errno", "si_pid", "si_uid", "si_status", "si_band")
 
             @property
-            def si_signo(self) -> int:
-                """signal number"""
-                ...
+            def si_signo(self) -> int: ...
             @property
-            def si_code(self) -> int:
-                """signal code"""
-                ...
+            def si_code(self) -> int: ...
             @property
-            def si_errno(self) -> int:
-                """errno associated with this signal"""
-                ...
+            def si_errno(self) -> int: ...
             @property
-            def si_pid(self) -> int:
-                """sending process ID"""
-                ...
+            def si_pid(self) -> int: ...
             @property
-            def si_uid(self) -> int:
-                """real user ID of sending process"""
-                ...
+            def si_uid(self) -> int: ...
             @property
-            def si_status(self) -> int:
-                """exit value or signal"""
-                ...
+            def si_status(self) -> int: ...
             @property
-            def si_band(self) -> int:
-                """band event for SIGPOLL"""
-                ...
+            def si_band(self) -> int: ...
 
-        def sigtimedwait(sigset: Iterable[int], timeout: float, /) -> struct_siginfo | None:
-            """
-            Like sigwaitinfo(), but with a timeout.
-
-            The timeout is specified in seconds, with floating-point numbers allowed.
-            """
-            ...
-        def sigwaitinfo(sigset: Iterable[int], /) -> struct_siginfo:
-            """
-            Wait synchronously until one of the signals in *sigset* is delivered.
-
-            Returns a struct_siginfo containing information about the signal.
-            """
-            ...
+        def sigtimedwait(sigset: Iterable[int], timeout: float, /) -> struct_siginfo | None: ...
+        def sigwaitinfo(sigset: Iterable[int], /) -> struct_siginfo: ...
 
 def strsignal(signalnum: _SIGNUM, /) -> str | None:
     """

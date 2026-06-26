@@ -16,6 +16,7 @@ pub mod lsp_attributes;
 pub mod memory;
 pub mod module;
 pub mod notebook;
+pub mod pytest;
 pub mod require;
 pub mod semantic_tokens;
 pub mod state;
