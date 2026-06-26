@@ -88,6 +88,32 @@ xyz = [foo.meth]
 }
 
 #[test]
+fn hover_on_union_method_call_shows_method_signature() {
+    let code = r#"
+class A:
+    def foo(self) -> int:
+        return 0
+
+class B:
+    def foo(self) -> str:
+        return ""
+
+def f(x: A | B) -> None:
+    x.foo()
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) foo:"),
+        "Expected union method call hover, got: {report}"
+    );
+    assert!(
+        report.contains("-> int") && report.contains("-> str"),
+        "Expected hover to show both union method return types, got: {report}"
+    );
+}
+
+#[test]
 fn renamed_reexport_shows_original_name() {
     let lib2 = r#"
 def foo() -> None: ...
