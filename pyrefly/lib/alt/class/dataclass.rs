@@ -964,6 +964,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let le = map.0.get(&LE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
+        let frozen = map.get_bool(&DataclassFieldKeywords::FROZEN);
 
         // Read the converter from an explicit `converter=` argument only, not the specifier
         // signature (which always declares one) — else every plain field's param goes Unknown.
@@ -1002,6 +1003,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ge,
             le,
             strict,
+            frozen,
             converter_param,
         }
     }
