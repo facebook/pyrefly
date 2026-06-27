@@ -50,6 +50,7 @@ use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
 use crate::types::callable::Params;
 use crate::types::literal::Lit;
+use crate::types::type_var::Restriction;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -239,6 +240,13 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
                     Vec::new()
                 }
             }
+
+            // a constraind typevar argument is one of its constraints, so expand like a union ie try each constraint against overloads + union the matched returns
+            Type::Quantified(q) => match q.restriction() {
+                Restriction::Constraints(constraints) => constraints.clone(),
+                _ => Vec::new(),
+            },
+
             _ => Vec::new(),
         }
     }
