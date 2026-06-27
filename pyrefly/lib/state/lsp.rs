@@ -363,6 +363,8 @@ pub(crate) enum IdentifierContext {
     Attribute {
         /// The range of just the base expression.
         base_range: TextRange,
+        /// The root name of the base expression, when the base is an attribute chain rooted at a name.
+        base_identifier: Option<Identifier>,
         /// The range of the entire expression.
         range: TextRange,
         /// Whether the attribute is being loaded, assigned to, or deleted.
@@ -592,11 +594,20 @@ impl IdentifierWithContext {
     }
 
     fn from_expr_attr(id: &Identifier, attr: &ExprAttribute) -> Self {
+        fn base_identifier(expr: &Expr) -> Option<Identifier> {
+            match expr {
+                Expr::Name(name) => Some(Ast::expr_name_identifier(name.clone())),
+                Expr::Attribute(attr) => base_identifier(attr.value.as_ref()),
+                _ => None,
+            }
+        }
+
         let identifier = id.clone();
         Self {
             identifier,
             context: IdentifierContext::Attribute {
                 base_range: attr.value.range(),
+                base_identifier: base_identifier(attr.value.as_ref()),
                 range: attr.range(),
                 expr_context: attr.ctx,
             },

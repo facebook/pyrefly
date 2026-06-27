@@ -44,11 +44,8 @@ mod impl_ {
     use lsp_types::Url;
     use pyrefly_build::handle::Handle;
     use pyrefly_graph::index::Idx;
-    use pyrefly_python::ast::Ast;
     use pyrefly_python::module::Module;
     use pyrefly_python::short_identifier::ShortIdentifier;
-    use ruff_python_ast::AnyNodeRef;
-    use ruff_python_ast::Expr;
     use ruff_python_ast::ExprContext;
     use ruff_text_size::Ranged;
     use ruff_text_size::TextRange;
@@ -60,7 +57,6 @@ mod impl_ {
     use crate::binding::binding::FirstUse;
     use crate::binding::binding::Key;
     use crate::binding::bindings::Bindings;
-    use crate::binding::narrow::identifier_and_chain_for_expr;
     use crate::state::lsp::IdentifierContext;
     use crate::state::state::Transaction;
 
@@ -227,26 +223,10 @@ mod impl_ {
             // Attribute hover should surface narrowing attached to the containing facet expression
             // (`obj.field`) using the base variable's current flow binding.
             IdentifierContext::Attribute {
-                range,
+                base_identifier: Some(base_identifier),
                 expr_context: ExprContext::Load | ExprContext::Invalid,
                 ..
-            } => {
-                let Some(ast) = transaction.get_ast(handle) else {
-                    return Vec::new();
-                };
-                let Some(base) = Ast::locate_node(&ast, position)
-                    .into_iter()
-                    .find_map(|node| match node {
-                        AnyNodeRef::ExprAttribute(attr) if attr.range() == *range => {
-                            identifier_and_chain_for_expr(&Expr::Attribute(attr.clone()))
-                        }
-                        _ => None,
-                    })
-                else {
-                    return Vec::new();
-                };
-                Key::BoundName(ShortIdentifier::new(&base.0))
-            }
+            } => Key::BoundName(ShortIdentifier::new(base_identifier)),
             _ => return Vec::new(),
         };
         if !bindings.is_valid_key(&key) {
