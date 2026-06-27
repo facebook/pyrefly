@@ -154,3 +154,41 @@ class IncompleteFactory(DjangoModelFactory):
 obj = IncompleteFactory.create()
 "#,
 );
+
+factory_boy_testcase!(
+    test_bare_call_returns_model,
+    r#"
+from typing import assert_type
+
+from django.db import models
+from factory.django import DjangoModelFactory
+
+class User(models.Model):
+    username = models.CharField(max_length=150)
+
+class UserFactory(DjangoModelFactory):
+    class Meta:
+        model = User
+
+user = UserFactory()
+assert_type(user, User)
+"#,
+);
+
+factory_boy_testcase!(
+    test_bare_call_attribute_access,
+    r#"
+from django.db import models
+from factory.django import DjangoModelFactory
+
+class User(models.Model):
+    username = models.CharField(max_length=150)
+
+class UserFactory(DjangoModelFactory):
+    class Meta:
+        model = User
+
+user = UserFactory()
+name = user.username
+"#,
+);

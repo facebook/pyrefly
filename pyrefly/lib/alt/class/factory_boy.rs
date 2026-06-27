@@ -27,9 +27,10 @@ const CREATE: Name = Name::new_static("create");
 const BUILD: Name = Name::new_static("build");
 const CREATE_BATCH: Name = Name::new_static("create_batch");
 const BUILD_BATCH: Name = Name::new_static("build_batch");
+const NEW: Name = Name::new_static("__new__");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    /// Synthesize `create`, `build`, `create_batch`, and `build_batch` on
+    /// Synthesize `create`, `build`, `create_batch`, `new` and `build_batch` on
     /// factory-boy `DjangoModelFactory` subclasses, returning the model type
     /// from `class Meta: model = X`.
     pub fn get_factory_boy_synthesized_fields(
@@ -52,7 +53,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
         fields.insert(
             BUILD,
-            self.factory_classmethod(cls, &BUILD, vec![], model_type),
+            self.factory_classmethod(cls, &BUILD, vec![], model_type.clone()),
+        );
+        fields.insert(
+            NEW,
+            self.factory_classmethod(
+                cls,
+                &NEW,
+                vec![Param::PosOnly(
+                    None,
+                    self.heap.mk_any_implicit(),
+                    Required::Required,
+                )],
+                model_type,
+            ),
         );
         let size_param = Param::Pos(
             Name::new_static("size"),
@@ -72,6 +86,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             BUILD_BATCH,
             self.factory_classmethod(cls, &BUILD_BATCH, vec![size_param], list_model_type),
         );
+
         Some(ClassSynthesizedFields::new(fields))
     }
 
