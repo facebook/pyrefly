@@ -443,7 +443,7 @@ impl BoundMethodType {
             Self::Function(func) => func.signature.subst_self_type_mut(replacement),
             Self::Forall(forall) => forall.body.signature.subst_self_type_mut(replacement),
             Self::Overload(overload) => {
-                for sig in overload.signatures.iter_mut() {
+                for sig in Arc::make_mut(&mut overload.signatures).iter_mut() {
                     sig.subst_self_type_mut(replacement)
                 }
             }
@@ -478,8 +478,24 @@ impl BoundMethodType {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct Overload {
-    pub signatures: Vec1<OverloadType>,
+    // Shared behind an Arc so that cloning an Overload is a
+    // refcount bump instead of a deep copy of every signature.
+    pub signatures: Arc<Vec1<OverloadType>>,
     pub metadata: Box<FuncMetadata>,
+}
+
+// Arc<Vec1<OverloadType>> needs explicit Visit/VisitMut impls because there
+// is no blanket impl for Arc; VisitMut clones-on-write (matching TArgs).
+impl Visit<Type> for Arc<Vec1<OverloadType>> {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        self.as_ref().visit(f);
+    }
+}
+
+impl VisitMut<Type> for Arc<Vec1<OverloadType>> {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        Arc::make_mut(self).visit_mut(f);
+    }
 }
 
 impl Overload {
@@ -1699,7 +1715,7 @@ impl Type {
                 BoundMethodType::Function(func) => f(&mut func.signature),
                 BoundMethodType::Forall(forall) => f(&mut forall.body.signature),
                 BoundMethodType::Overload(overload) => {
-                    for x in overload.signatures.iter_mut() {
+                    for x in Arc::make_mut(&mut overload.signatures).iter_mut() {
                         match x {
                             OverloadType::Function(function) => f(&mut function.signature),
                             OverloadType::Forall(forall) => f(&mut forall.body.signature),
@@ -1708,7 +1724,7 @@ impl Type {
                 }
             },
             Type::Overload(overload) => {
-                for x in overload.signatures.iter_mut() {
+                for x in Arc::make_mut(&mut overload.signatures).iter_mut() {
                     match x {
                         OverloadType::Function(function) => f(&mut function.signature),
                         OverloadType::Forall(forall) => f(&mut forall.body.signature),

@@ -288,7 +288,7 @@ impl Type {
             .cloned()
             .map(|branch_ty| branch_ty.into_overload_signature(&metadata))
             .collect::<Option<Vec<_>>>()?;
-        let signatures = Vec1::try_from_vec(signatures).ok()?;
+        let signatures = Arc::new(Vec1::try_from_vec(signatures).ok()?);
         Some(Type::Overload(Overload {
             signatures,
             metadata: Box::new(metadata),

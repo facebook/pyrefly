@@ -231,7 +231,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TargetWithTParams(None, *func),
             ))),
             Type::Overload(overload) => {
-                let funcs = overload.signatures.mapped(|ty| match ty {
+                let funcs = Arc::unwrap_or_clone(overload.signatures).mapped(|ty| match ty {
                     OverloadType::Function(function) => TargetWithTParams(None, function),
                     OverloadType::Forall(forall) => {
                         TargetWithTParams(Some(forall.tparams), forall.body)
