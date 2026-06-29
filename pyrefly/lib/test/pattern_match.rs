@@ -396,6 +396,71 @@ def f(value: float | tuple[float, float]) -> float | tuple[float, float]:
 );
 
 testcase!(
+    // https://github.com/facebook/pyrefly/issues/3883: a sequence pattern whose
+    // element is a literal matching the member's element type exactly (e.g.
+    // `("b", _)` against `tuple[Literal["b"], int]`) is irrefutable for that
+    // member, so the member is subtracted from the subject union.
+    test_match_sequence_literal_element_narrows_out_of_union,
+    r#"
+from typing import Literal, assert_never
+
+def f(
+    value: Literal["a"] | tuple[Literal["b"], int] | tuple[Literal["c"], int],
+) -> None:
+    match value:
+        case "a":
+            pass
+        case ("b", _):
+            pass
+        case ("c", _):
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+"#,
+);
+
+testcase!(
+    // A capture after the literal element is irrefutable for that element, so the
+    // member is still subtracted (the maintainer's "treat bindings like wildcards"
+    // case). https://github.com/facebook/pyrefly/issues/3883
+    test_match_sequence_literal_element_with_capture_narrows,
+    r#"
+from typing import Literal, assert_never
+
+def f(
+    value: Literal["a"] | tuple[Literal["b"], int] | tuple[Literal["c"], int],
+) -> int:
+    match value:
+        case "a":
+            return 0
+        case ("b", v):
+            return v
+        case ("c", v):
+            return v
+        case _ as unreachable:
+            assert_never(unreachable)
+"#,
+);
+
+testcase!(
+    // The literal element only subtracts a member when the element type guarantees
+    // the match. Against a wider element type (`str`), `("b", _)` is refutable, so
+    // the type must be preserved.
+    test_match_sequence_literal_element_wider_type_no_strip,
+    r#"
+from typing import assert_type
+
+def f(value: tuple[str, int]) -> tuple[str, int]:
+    match value:
+        case ("b", _):
+            return value
+        case other:
+            assert_type(other, tuple[str, int])
+            return other
+"#,
+);
+
+testcase!(
     test_match_exhaustive_call_subject_assert_never,
     r#"
 from dataclasses import dataclass
@@ -1395,12 +1460,11 @@ def bar(b: bool) -> int:  # E: one or more paths are missing an explicit
 
 // https://github.com/facebook/pyrefly/issues/3883
 testcase!(
-    bug = "sequence pattern with a literal element does not subtract the tuple from the union, so the match is not seen as exhaustive",
     test_match_sequence_literal_element,
     r#"
 from typing import Literal, reveal_type
 type MyUnion = Literal["a"] | tuple[Literal["b"], int] | tuple[Literal["c"], int]
-def broken(value: MyUnion) -> str:  # E: one or more paths are missing an explicit
+def f(value: MyUnion) -> str:
     match value:
         case "a":
             return "a"
@@ -1408,7 +1472,7 @@ def broken(value: MyUnion) -> str:  # E: one or more paths are missing an explic
             return "b"
         case "c", v:
             return "c"
-    reveal_type(value)  # E: revealed type: tuple[Literal['b'], int] | tuple[Literal['c'], int]
+    reveal_type(value)  # E: revealed type: Never
 "#,
 );
 
