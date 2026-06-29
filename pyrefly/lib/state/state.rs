@@ -1343,7 +1343,7 @@ impl<'a> Transaction<'a> {
         // Clean the module if it hasn't been cleaned in this epoch.
         // If try_start_clean returns None, the module is already checked.
         // Once checked, it stays checked for the duration of the epoch.
-        // We check the the epoch optimistically before calling try_start_clean
+        // We check the epoch optimistically before calling try_start_clean
         // to avoid taking the computing mutex.
         if !module_data.state.is_checked(self.data.now)
             && let Some(guard) = module_data.state.try_start_clean(self.data.now)
