@@ -751,7 +751,7 @@ testcase!(
     env_pytest_parametrize(),
     r#"
 import pytest
-from typing import reveal_type
+from typing import assert_type
 
 @pytest.mark.parametrize(
     ("exception", "expected_error"),
@@ -762,10 +762,8 @@ from typing import reveal_type
     ],
 )
 def test_oauth_error(exception, expected_error) -> None:
-    reveal_type(exception)  # E: revealed type: Exception | KeyError | ValueError
-    reveal_type(expected_error)  # E: revealed type: str
-
-reveal_type(test_oauth_error)  # E: revealed type: (exception: Exception | KeyError | ValueError, expected_error: str) -> None
+    assert_type(exception, Exception | KeyError | ValueError)
+    assert_type(expected_error, str)
 "#,
 );
 
