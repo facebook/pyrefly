@@ -262,6 +262,15 @@ Ts = TypeVarTuple("Z")  # E: TypeVarTuple must be assigned to a variable named `
 );
 
 testcase!(
+    test_tvar_duplicate_definition,
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+T = TypeVar("T")  # E: Cannot redefine existing TypeVar `T`
+    "#,
+);
+
+testcase!(
     test_tvar_wrong_name_expr,
     r#"
 from typing import TypeVar, ParamSpec, TypeVarTuple
