@@ -4428,6 +4428,26 @@ def compute():
 }
 
 #[test]
+fn inline_variable_no_parens_for_float_literal_in_attribute() {
+    let code = r#"
+def compute():
+    value = 4.2
+    result = value.hex()
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 4.2.hex()
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
 fn inline_variable_parens_for_bool_op() {
     let code = r#"
 def compute(a, b, c):

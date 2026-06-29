@@ -15,6 +15,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Number::Int;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -107,10 +108,9 @@ pub(crate) fn inline_variable_code_actions(
         let covering_nodes = Ast::locate_node(ast.as_ref(), range.start());
         let parent = covering_nodes.get(1);
 
-        let needs_parens_for_attribute_access = matches!(
-            parent,
-            Some(AnyNodeRef::ExprAttribute(_))
-        ) && matches!(value_expr, Expr::NumberLiteral(n) if matches!(n.value, ruff_python_ast::Number::Int(_)));
+        let needs_parens_for_attribute_access =
+            matches!(parent, Some(AnyNodeRef::ExprAttribute(_)))
+                && matches!(value_expr, Expr::NumberLiteral(n) if matches!(n.value, Int(_)));
 
         let replacement = if needs_parens_for_attribute_access || always_needs_parens {
             format!("({value_text})")
