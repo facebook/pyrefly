@@ -198,7 +198,7 @@ greeter("hi")
         "Expected hover to refer to __call__, got: {report}"
     );
     assert!(
-        report.contains("name: str"),
+        report.contains("name  : str"),
         "Expected hover to show parameter 'name', got: {report}"
     );
     assert!(
@@ -1487,8 +1487,37 @@ f(y=1, x=1.0)
         "Expected hover to show float default value '3.14', got: {report}"
     );
     assert!(
-        report.contains("y: int = 2"),
+        report.contains("y: int   = 2"),
         "Expected hover to show int default value '2', got: {report}"
+    );
+}
+
+#[test]
+fn hover_aligns_multiline_signature_defaults() {
+    let code = r#"
+def f(a: int = 1, long_name: float = 2.0, *args: bool, flag: bool = False) -> None:
+    pass
+
+f()
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(
+            r#"
+```python
+(function) f: def f(
+    a        : int   = 1,
+    long_name: float = 2.0,
+    *args    : bool,
+    *,
+    flag     : bool  = False
+) -> None: ...
+```
+"#
+            .trim()
+        ),
+        "Expected aligned hover signature, got: {report}",
     );
 }
 
