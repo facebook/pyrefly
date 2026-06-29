@@ -102,6 +102,40 @@ Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
     "#,
 );
 
+testcase!(
+    test_named_tuple_replace,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+p = Point(1, "")
+assert_type(p._replace(x=2), Point)
+p._replace()
+p._replace(z=5)  # E: Unexpected keyword argument `z`
+p._replace(x="str")  # E: is not assignable to parameter `x`
+p._replace(1)  # E: Expected 0 positional arguments
+    "#,
+);
+
+testcase!(
+    test_named_tuple_functional_replace,
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+
+Point1 = namedtuple("Point1", ["x", "y"])
+Point2 = NamedTuple("Point2", [("x", int), ("y", str)])
+
+Point1(1, "")._replace(x="anything")
+Point1(1, "")._replace(z=5)  # E: Unexpected keyword argument `z`
+Point2(1, "")._replace(x="str")  # E: is not assignable to parameter `x`
+Point2(1, "")._replace(y="str")
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2811
 testcase!(
     test_inline_collections_namedtuple_constructor,
