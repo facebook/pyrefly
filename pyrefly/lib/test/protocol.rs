@@ -1126,3 +1126,64 @@ def f(x: HasCallNoExtra[int, str]) -> Lens[int, str]:
     return x  # E: not assignable to declared return type
 "#,
 );
+
+testcase!(
+    test_protocol_overload_typevar_self_kept,
+    r#"
+from typing import Protocol, overload
+
+class C:
+    @overload
+    def f[S](self: S, x: int) -> S: ...
+    @overload
+    def f(self, x: str) -> str: ...
+    def f(self, x: int | str) -> object: ...
+
+class P(Protocol):
+    def f(self, x: int) -> object: ...
+
+p: P = C()  # the `self: S` overload binds S=C, satisfying P
+"#,
+);
+
+testcase!(
+    test_protocol_overload_parameterized_self_kept,
+    r#"
+from typing import Protocol, overload
+
+class Arr[S, T]:
+    @overload
+    def astype[S2, T2](self: Arr[S2, T2], dtype: int) -> Arr[S2, T2]: ...
+    @overload
+    def astype(self, dtype: str) -> bytes: ...
+    def astype(self, dtype: object) -> object: ...
+
+class HasAstype(Protocol):
+    def astype(self, dtype: int) -> object: ...
+
+def g(a: Arr[int, float]) -> HasAstype:
+    return a  # the `self: Arr[S2, T2]` overload binds to the receiver, satisfying P
+"#,
+);
+
+testcase!(
+    test_protocol_overload_partially_concrete_self_filtered,
+    r#"
+from typing import Protocol, overload
+
+class Arr[S, T]:
+    @overload
+    def m[S2](self: Arr[S2, int], x: int) -> int: ...
+    @overload
+    def m(self, x: str) -> str: ...
+    def m(self, x: object) -> object: ...
+
+class HasM(Protocol):
+    def m(self, x: int) -> int: ...
+
+def g(a: Arr[float, str]) -> HasM:
+    # `self: Arr[S2, int]` pins T=int; receiver has T=str, so that overload does not
+    # apply and `Arr[float, str]` does not satisfy `HasM`.
+    return a  # E: not assignable to declared return type
+"#,
+);
