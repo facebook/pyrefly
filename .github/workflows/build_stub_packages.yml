@@ -1,0 +1,12 @@
+name: Build stub packages
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-shape-stubs:
+    uses: ./.github/workflows/build_shape_stubs.yml

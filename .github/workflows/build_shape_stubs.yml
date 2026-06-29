@@ -1,0 +1,105 @@
+name: Build shape stubs
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build-shape-stubs:
+    name: Build shape stubs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Get package version
+        run: |
+          set -euo pipefail
+          RAW_VERSION=$(sed -n -e 's/^VERSION = "\(.*\)"/\1/p' version.bzl)
+          PACKAGE_VERSION=$(python3 scripts/version_helpers.py to-pypi "$RAW_VERSION")
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+      - name: Build shape extension
+        run: |
+          set -euo pipefail
+          SHAPE_EXT_BUILD_DIR="$RUNNER_TEMP/pyrefly-shape-extensions-build"
+          rm -rf "$SHAPE_EXT_BUILD_DIR" shape-stubs-dist
+          cp -R tensor-shapes/pyrefly-shape-extensions "$SHAPE_EXT_BUILD_DIR"
+          PACKAGE_VERSION="$PACKAGE_VERSION" SHAPE_EXT_BUILD_DIR="$SHAPE_EXT_BUILD_DIR" python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path(os.environ["SHAPE_EXT_BUILD_DIR"]) / "pyproject.toml"
+          text = path.read_text()
+          placeholder = 'version = "0.0.0"'
+          if text.count(placeholder) != 1:
+              raise SystemExit(f"Expected exactly one {placeholder!r} in {path}")
+          path.write_text(
+              text.replace(
+                  placeholder,
+                  f'version = "{os.environ["PACKAGE_VERSION"]}"',
+              )
+          )
+          PY
+
+          python -m pip install --upgrade build
+          python -m build --outdir shape-stubs-dist "$SHAPE_EXT_BUILD_DIR"
+      - name: Smoke test shape extension wheel
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/shape-ext-wheel-venv"
+          "$RUNNER_TEMP/shape-ext-wheel-venv/bin/pip" install shape-stubs-dist/pyrefly_shape_extensions-*.whl
+          "$RUNNER_TEMP/shape-ext-wheel-venv/bin/python" -c "import shape_extensions"
+      - name: Smoke test shape extension sdist
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/shape-ext-sdist-venv"
+          "$RUNNER_TEMP/shape-ext-sdist-venv/bin/pip" install shape-stubs-dist/pyrefly_shape_extensions-*.tar.gz
+          "$RUNNER_TEMP/shape-ext-sdist-venv/bin/python" -c "import shape_extensions"
+      - name: Verify shape extension artifacts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import tarfile
+          import zipfile
+
+          dist = Path("shape-stubs-dist")
+          wheels = list(dist.glob("pyrefly_shape_extensions-*.whl"))
+          sdists = list(dist.glob("pyrefly_shape_extensions-*.tar.gz"))
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+
+          with zipfile.ZipFile(wheels[0]) as z:
+              names = set(z.namelist())
+              assert "shape_extensions/__init__.py" in names
+              assert "shape_extensions/dsl.py" in names
+              assert "shape_extensions/py.typed" in names
+              metadata_name = next(
+                  name
+                  for name in names
+                  if name.endswith(".dist-info/METADATA")
+              )
+              metadata = z.read(metadata_name).decode()
+              assert f"Version: {os.environ['PACKAGE_VERSION']}" in metadata
+
+          with tarfile.open(sdists[0]) as t:
+              names = set(t.getnames())
+              assert any(name.endswith("/shape_extensions/__init__.py") for name in names)
+              assert any(name.endswith("/shape_extensions/dsl.py") for name in names)
+              assert any(name.endswith("/shape_extensions/py.typed") for name in names)
+          PY
+      - name: Upload shape stubs dist
+        uses: actions/upload-artifact@v6
+        with:
+          name: shape-stubs-dist
+          path: shape-stubs-dist
