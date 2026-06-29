@@ -234,6 +234,20 @@ impl<'a> BindingsBuilder<'a> {
                     .patterns
                     .iter()
                     .all(|p| p.is_irrefutable() || p.is_wildcard());
+                // Strip the spurious Placeholders that `and_all` adds for sub-patterns with
+                // no narrow ops, so negative narrowing can subtract a matched member. Safe
+                // for a star-free pattern whose elements are all irrefutable (wildcards,
+                // captures) or value / singleton patterns: those emit `Eq`/`Is` facet
+                // narrows whose negation removes a union member only when the element type
+                // guarantees the match, so refutable members are preserved.
+                // https://github.com/facebook/pyrefly/issues/3883
+                let strip_placeholders = all_subpatterns_irrefutable
+                    || (num_patterns == num_non_star_patterns
+                        && x.patterns.iter().all(|p| {
+                            p.is_irrefutable()
+                                || p.is_wildcard()
+                                || matches!(p, Pattern::MatchValue(_) | Pattern::MatchSingleton(_))
+                        }));
                 let mut subject_idx = subject_idx;
                 let synthesized_len = Expr::NumberLiteral(ExprNumberLiteral {
                     node_index: AtomicNodeIndex::default(),
@@ -377,7 +391,7 @@ impl<'a> BindingsBuilder<'a> {
                     KeyExpect::UnpackedLength(x.range),
                     BindingExpect::UnpackedLength(subject_idx, x.range, expect),
                 );
-                if all_subpatterns_irrefutable
+                if strip_placeholders
                     && let Some(subject) = match_subject.as_single()
                     && let Some((op, _)) = narrow_ops.scope.0.get_mut(subject.name())
                 {
