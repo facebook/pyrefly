@@ -640,6 +640,38 @@ fn in_keyword_in_iteration_at(
     None
 }
 
+fn match_wildcard_type_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Type> {
+    let module = transaction.get_ast(handle)?;
+    let covering_nodes = Ast::locate_node(&module, position);
+    let is_wildcard = covering_nodes
+        .iter()
+        .any(|node| matches!(node, AnyNodeRef::PatternMatchAs(pattern) if pattern.name.is_none() && pattern.pattern.is_none()));
+    if !is_wildcard {
+        return None;
+    }
+    let case_range = covering_nodes.iter().find_map(|node| match node {
+        AnyNodeRef::MatchCase(case) => Some(case.range),
+        _ => None,
+    })?;
+    let subject_start = covering_nodes.iter().find_map(|node| match node {
+        AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match.subject.range().start()),
+        _ => None,
+    })?;
+    let key = Key::PatternNarrow(case_range);
+    if transaction
+        .get_bindings(handle)
+        .is_some_and(|bindings| bindings.is_valid_key(&key))
+    {
+        transaction.get_type_for_display(handle, &key)
+    } else {
+        transaction.get_type_at_for_display(handle, subject_start)
+    }
+}
+
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -698,8 +730,8 @@ pub fn get_hover(
         });
     }
 
-    let mut type_ = transaction
-        .subscript_operator_type_at(handle, position)
+    let mut type_ = match_wildcard_type_at(transaction, handle, position)
+        .or_else(|| transaction.subscript_operator_type_at(handle, position))
         .or_else(|| transaction.get_type_at_for_display(handle, position))?;
 
     // Helper function to check if we're hovering over a callee and get its range
