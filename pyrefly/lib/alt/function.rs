@@ -44,6 +44,7 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
@@ -67,6 +68,7 @@ use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
+use crate::binding::pytest::is_pytest_parametrize_decorator;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
@@ -206,6 +208,7 @@ impl ParentParamHints {
 #[derive(Clone, Debug)]
 struct DecoratorParamHints {
     positional: Vec<Type>,
+    by_name: SmallMap<Name, Type>,
     next_positional: usize,
 }
 
@@ -236,12 +239,46 @@ impl DecoratorParamHints {
                 } else {
                     Some(Self {
                         positional,
+                        by_name: SmallMap::new(),
                         next_positional: 0,
                     })
                 }
             }
             _ => None,
         }
+    }
+
+    fn from_named(by_name: SmallMap<Name, Type>) -> Option<Self> {
+        if by_name.is_empty() {
+            None
+        } else {
+            Some(Self {
+                positional: Vec::new(),
+                by_name,
+                next_positional: 0,
+            })
+        }
+    }
+
+    fn merge<Ans: LookupAnswer>(&mut self, other: Self, solver: &AnswersSolver<'_, Ans>) {
+        self.positional.extend(other.positional);
+        for (name, ty) in other.by_name {
+            match self.by_name.entry(name) {
+                Entry::Occupied(mut entry) => {
+                    let old = entry.get().clone();
+                    *entry.get_mut() = solver.union(old, ty);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(ty);
+                }
+            }
+        }
+    }
+
+    fn take(&mut self, name: &Identifier) -> Option<Type> {
+        self.by_name
+            .shift_remove(&name.id)
+            .or_else(|| self.next_positional())
     }
 
     fn next_positional(&mut self) -> Option<Type> {
@@ -266,6 +303,128 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .and_then(|param_ty| param_ty.callable_signatures().into_iter().next().cloned())
                 .and_then(DecoratorParamHints::from_callable)
         })
+    }
+
+    fn pytest_parametrize_param_hints(
+        &self,
+        decorators: &[Idx<KeyDecorator>],
+        errors: &ErrorCollector,
+    ) -> Option<DecoratorParamHints> {
+        let aliases = self.bindings().pytest_info()?.aliases();
+        let mut by_name: SmallMap<Name, Type> = SmallMap::new();
+        for key in decorators {
+            let binding = self.bindings().get::<KeyDecorator>(*key);
+            if !is_pytest_parametrize_decorator(&binding.expr, aliases) {
+                continue;
+            }
+            let Expr::Call(call) = &binding.expr else {
+                unreachable!("pytest parametrize decorator is a call")
+            };
+            let [argnames, argvalues, ..] = &*call.arguments.args else {
+                continue;
+            };
+            let Some(names) = Self::pytest_parametrize_names(argnames) else {
+                continue;
+            };
+            let Some(types) = self.pytest_parametrize_value_types(argvalues, names.len(), errors)
+            else {
+                continue;
+            };
+            for (name, ty) in names.into_iter().zip(types) {
+                match by_name.entry(name) {
+                    Entry::Occupied(mut entry) => {
+                        let old = entry.get().clone();
+                        *entry.get_mut() = self.union(old, ty);
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(ty);
+                    }
+                }
+            }
+        }
+        DecoratorParamHints::from_named(by_name)
+    }
+
+    fn pytest_parametrize_names(expr: &Expr) -> Option<Vec<Name>> {
+        match expr {
+            Expr::StringLiteral(lit) => {
+                let names = lit
+                    .value
+                    .to_str()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(Name::new)
+                    .collect::<Vec<_>>();
+                (!names.is_empty()).then_some(names)
+            }
+            Expr::Tuple(tuple) => Self::pytest_parametrize_names_from_elts(&tuple.elts),
+            Expr::List(list) => Self::pytest_parametrize_names_from_elts(&list.elts),
+            _ => None,
+        }
+    }
+
+    fn pytest_parametrize_names_from_elts(elts: &[Expr]) -> Option<Vec<Name>> {
+        let mut names = Vec::with_capacity(elts.len());
+        for elt in elts {
+            let Expr::StringLiteral(lit) = elt else {
+                return None;
+            };
+            let name = lit.value.to_str();
+            if name.is_empty() {
+                return None;
+            }
+            names.push(Name::new(name));
+        }
+        Some(names)
+    }
+
+    fn pytest_parametrize_value_types(
+        &self,
+        expr: &Expr,
+        arity: usize,
+        errors: &ErrorCollector,
+    ) -> Option<Vec<Type>> {
+        let rows = match expr {
+            Expr::List(list) => list.elts.as_slice(),
+            Expr::Tuple(tuple) => tuple.elts.as_slice(),
+            _ => return None,
+        };
+        let hint_errors = ErrorCollector::new(errors.module().dupe(), errors.style());
+        let mut columns = vec![Vec::new(); arity];
+        for row in rows {
+            if arity == 1 {
+                columns[0].push(
+                    self.expr_infer(row, &hint_errors)
+                        .promote_implicit_literals(self.stdlib),
+                );
+                continue;
+            }
+            let elts = match row {
+                Expr::Tuple(tuple) => tuple.elts.as_slice(),
+                Expr::List(list) => list.elts.as_slice(),
+                _ => return None,
+            };
+            if elts.len() != arity {
+                return None;
+            }
+            for (column, elt) in columns.iter_mut().zip(elts) {
+                column.push(
+                    self.expr_infer(elt, &hint_errors)
+                        .promote_implicit_literals(self.stdlib),
+                );
+            }
+        }
+        columns
+            .into_iter()
+            .map(|column| {
+                if column.is_empty() {
+                    None
+                } else {
+                    Some(self.unions(column))
+                }
+            })
+            .collect()
     }
 
     pub fn solve_function_binding(
@@ -467,6 +626,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             is_return_inferred,
             ..Default::default()
         };
+        let pytest_param_hints = self.pytest_parametrize_param_hints(decorators, errors);
         let mut found_class_property = false;
         let decorators = Box::from_iter(decorators.iter().filter_map(|k| {
             let decorator = self.get_idx(*k);
@@ -504,6 +664,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }));
 
         let mut decorator_param_hints = self.decorator_param_hints(&decorators);
+        if let Some(pytest_hints) = pytest_param_hints {
+            if let Some(hints) = &mut decorator_param_hints {
+                hints.merge(pytest_hints, self);
+            } else {
+                decorator_param_hints = Some(pytest_hints);
+            }
+        }
         let mut parent_param_hints = if flags.is_override {
             defining_cls.as_ref().and_then(|cls| {
                 self.inherited_method_signature(cls, &def.name.id).and_then(
@@ -1172,7 +1339,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         params.extend(def.parameters.posonlyargs.iter().map(|x| {
             let decorator_hint = decorator_param_hints
                 .as_mut()
-                .and_then(|hint| hint.next_positional());
+                .and_then(|hint| hint.take(&x.parameter.name));
             let parent_hint = if self_type.is_some() {
                 None
             } else {
@@ -1206,7 +1373,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         params.extend(def.parameters.args.iter().map(|x| {
             let decorator_hint = decorator_param_hints
                 .as_mut()
-                .and_then(|hint| hint.next_positional());
+                .and_then(|hint| hint.take(&x.parameter.name));
             let parent_hint = if self_type.is_some() {
                 None
             } else {
@@ -1292,6 +1459,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         params.extend(def.parameters.kwonlyargs.iter().map(|x| {
+            let decorator_hint = decorator_param_hints
+                .as_mut()
+                .and_then(|hint| hint.by_name.shift_remove(&x.parameter.name.id));
             let parent_hint = parent_param_hints
                 .as_mut()
                 .and_then(|hint| hint.take_kwonly(&x.parameter.name));
@@ -1304,7 +1474,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.default.as_deref(),
                 stub_or_impl,
                 self_type,
-                parent_hint,
+                decorator_hint.or(parent_hint),
                 errors,
             );
             if is_unannotated {
