@@ -1405,11 +1405,6 @@ def flatten(self: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
     """Flatten dimensions. Shape inference via meta-shape: torch.flatten"""
     ...
 
-@uses_shape_dsl(stack_ir)
-def stack(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
-    """Stack tensors. Shape inference via meta-shape: torch.stack"""
-    ...
-
 # ==== Tensor Creation Functions ====
 
 @uses_shape_dsl(randn_ir)
@@ -2409,15 +2404,6 @@ def cross[*B](
     dim: int = -1,
 ) -> Tensor[*B, 3]:
     """Cross product of two tensors along a dimension of size 3."""
-    ...
-
-@uses_shape_dsl(flatten_ir)
-def flatten(
-    self: Tensor,
-    start_dim: int = 0,
-    end_dim: int = -1,
-) -> Tensor:
-    """Flatten a contiguous range of dims. Shape computed by meta-shape DSL."""
     ...
 
 # Context managers
