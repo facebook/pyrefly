@@ -25,6 +25,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-build-binaries
+          shared-key: sdist
+          cache-targets: false
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -62,6 +68,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: ${{ matrix.platform.arch }}
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-build-binaries
+          shared-key: macos
+          cache-targets: false
       - name: Set jemalloc page size for macOS ARM64
         if: ${{ matrix.platform.target == 'aarch64' }}
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> $GITHUB_ENV
@@ -109,6 +121,12 @@ jobs:
         # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
         # by Cargo have long paths and will cause builds/tests to fail
         run: echo "CARGO_HOME=C:\\cargo" >> $env:GITHUB_ENV
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-build-binaries
+          shared-key: windows
+          cache-targets: false
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -148,6 +166,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-build-binaries
+          shared-key: linux
+          cache-targets: false
       - name: Build wheels
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'i686-unknown-linux-gnu' }}
         uses: PyO3/maturin-action@v1
@@ -217,6 +241,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-build-binaries
+          shared-key: musllinux
+          cache-targets: false
       - name: Build wheels
         if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
         uses: PyO3/maturin-action@v1
@@ -244,7 +274,18 @@ jobs:
             -v ${{ github.workspace }}:/io -w /io \
             --env PACKAGE_NAME --env BINARY_NAME \
             alpine:latest sh -c '
-              apk add --no-cache python3
+              attempt=1
+              delay=20
+              until apk add --no-cache python3; do
+                status=$?
+                if [ "$attempt" -eq 3 ]; then
+                  exit "$status"
+                fi
+                echo "apk add failed with exit code ${status}; retrying in ${delay}s"
+                sleep "$delay"
+                attempt=$((attempt + 1))
+                delay=$((delay * 2))
+              done
               python3 -m venv .venv
               .venv/bin/pip install "${PACKAGE_NAME}" --no-index --find-links pyrefly/dist/ --force-reinstall
               .venv/bin/"${BINARY_NAME}" --version

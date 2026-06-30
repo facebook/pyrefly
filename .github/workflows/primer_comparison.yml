@@ -37,8 +37,21 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-primer-comparison
+          cache-targets: false
+
       - name: Install type checkers
-        run: pip install pyright mypy
+        uses: ./.github/actions/retry-command
+        with:
+          command: pip install pyright mypy
+
+      - name: Fetch Cargo dependencies
+        uses: ./.github/actions/retry-command
+        with:
+          command: cargo fetch --locked --manifest-path pyrefly/Cargo.toml
 
       - name: Build pyrefly
         run: |
