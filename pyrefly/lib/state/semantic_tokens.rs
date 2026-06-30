@@ -17,7 +17,6 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
@@ -38,6 +37,7 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
 
@@ -254,9 +254,7 @@ fn range_overlaps(limit_range: Option<TextRange>, range: TextRange) -> bool {
     })
 }
 
-/// Classify an attribute's resolved type into a semantic token kind. For a union,
-/// every member must agree on the same kind; any disagreement (or a member that is
-/// a plain attribute) falls back to `PROPERTY`.
+/// Classify an attribute's resolved type into a semantic token kind.
 fn attribute_semantic_token_type(ty: Type) -> SemanticTokenType {
     match ty {
         Type::Union(union) => {
@@ -275,20 +273,11 @@ fn attribute_semantic_token_type(ty: Type) -> SemanticTokenType {
             }
         }
         Type::Literal(lit) if matches!(lit.value, Lit::Enum(_)) => SemanticTokenType::ENUM_MEMBER,
-        ty if ty.is_toplevel_callable() => {
-            let is_method = ty.visit_toplevel_func_metadata(
-                &|meta| matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some()),
-            );
-            if is_method {
-                SemanticTokenType::METHOD
-            } else {
-                SemanticTokenType::FUNCTION
-            }
+        _ => {
+            attribute_symbol_kind_from_type(&ty)
+                .to_lsp_semantic_token_type_with_modifiers()
+                .0
         }
-        Type::ClassDef(_) | Type::Type(_) => SemanticTokenType::CLASS,
-        Type::TypeAlias(_) | Type::UntypedAlias(_) => SemanticTokenType::INTERFACE,
-        Type::Module(_) => SemanticTokenType::NAMESPACE,
-        _ => SemanticTokenType::PROPERTY,
     }
 }
 

@@ -30,6 +30,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -298,6 +299,25 @@ impl DefinitionMetadata {
             DefinitionMetadata::Variable(symbol_kind) => symbol_kind.as_ref().copied(),
             DefinitionMetadata::VariableOrAttribute(symbol_kind) => symbol_kind.as_ref().copied(),
         }
+    }
+}
+
+pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
+    match ty {
+        ty if ty.is_toplevel_callable() => {
+            let is_method = ty.visit_toplevel_func_metadata(
+                &|meta| matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some()),
+            );
+            if is_method {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            }
+        }
+        Type::ClassDef(_) | Type::Type(_) => SymbolKind::Class,
+        Type::TypeAlias(_) | Type::UntypedAlias(_) => SymbolKind::TypeAlias,
+        Type::Module(_) => SymbolKind::Module,
+        _ => SymbolKind::Attribute,
     }
 }
 
