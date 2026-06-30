@@ -23,7 +23,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::callable::PropertyRole;
-use pyrefly_types::class::ClassDefIndex;
+use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
@@ -578,6 +578,50 @@ fn parse_variables(
     variables
 }
 
+/// The MRO of `class`, or `Cyclic` if unresolved.
+fn class_mro(bindings: &Bindings, answers: &Answers, class: &Class) -> Arc<ClassMro> {
+    answers
+        .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
+        .unwrap_or_else(|| Arc::new(ClassMro::Cyclic))
+}
+
+/// Slots for `field_name` from the nearest base class annotating it in `class_idx`'s MRO (gh-3997).
+fn inherited_annotation_slots(
+    bindings: &Bindings,
+    answers: &Answers,
+    transaction: &Transaction,
+    handle: &Handle,
+    class_idx: Idx<KeyClass>,
+    field_name: &Name,
+) -> Option<SlotCounts> {
+    let class = answers.get_idx(class_idx).and_then(|r| r.0.clone())?;
+    class_mro(bindings, answers, &class)
+        .ancestors_no_object()
+        .iter()
+        .find_map(|ancestor| {
+            let cls = ancestor.class_object();
+            let h = Handle::new(
+                cls.module_name(),
+                cls.module_path().dupe(),
+                handle.sys_info().dupe(),
+            );
+            let b = transaction.get_bindings(&h)?;
+            let idx = b.key_to_idx_hashed_opt(Hashed::new(&KeyClassField(
+                cls.index(),
+                field_name.clone(),
+            )))?;
+            let annot = match &b.get(idx).definition {
+                ClassFieldDefinition::DeclaredByAnnotation { annotation, .. } => Some(*annotation),
+                ClassFieldDefinition::DefinedInMethod { annotation, .. }
+                | ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
+                _ => None,
+            }?;
+            let m = transaction.get_module_info(&h)?;
+            let a = transaction.get_answers(&h)?;
+            Some(classify_annotation(&m, &b, &a, Some(annot)).1)
+        })
+}
+
 /// Extract instance attributes assigned in `__init__`/`__new__`/`__post_init__`,
 /// plus schema class body fields (dataclass, enum, TypedDict, NamedTuple).
 ///
@@ -594,6 +638,8 @@ fn parse_instance_attrs(
     module: &Module,
     bindings: &Bindings,
     answers: &Answers,
+    transaction: &Transaction,
+    handle: &Handle,
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<Variable> {
     let mut attrs = Vec::new();
@@ -634,7 +680,20 @@ fn parse_instance_attrs(
                 if !method.recognized_attribute_defining_method {
                     continue;
                 }
-                classify_annotation(module, bindings, answers, *annotation)
+                if annotation.is_none()
+                    && let Some(slots) = inherited_annotation_slots(
+                        bindings,
+                        answers,
+                        transaction,
+                        handle,
+                        field.class_idx,
+                        &field.name,
+                    )
+                {
+                    (None, slots)
+                } else {
+                    classify_annotation(module, bindings, answers, *annotation)
+                }
             }
             // Schema class fields are always IMPLICIT regardless of whether they're
             // also initialized in a recognized method — the class definition governs
@@ -1191,9 +1250,7 @@ fn parse_classes(
             None => continue,
         };
         let class_name = class_fqn(module, parent, name);
-        let mro = answers
-            .get_idx(bindings.key_to_idx(&KeyClassMro(ClassDefIndex(class_type.index().0))))
-            .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
+        let mro = class_mro(bindings, answers, &class_type);
         // Check methods defined directly on this class
         let mut incomplete_attributes = Vec::new();
         for &undecorated_idx in methods_by_class.get(&class_idx).into_iter().flatten() {
@@ -1286,9 +1343,7 @@ fn collect_class_members(
 
         let fqname = class_fqn(module, &binding.parent, &binding.def.name);
 
-        let mro = answers
-            .get_idx(bindings.key_to_idx(&KeyClassMro(cls.index())))
-            .unwrap_or_else(|| Arc::new(ClassMro::Cyclic));
+        let mro = class_mro(bindings, answers, &cls);
         let ancestors = mro.ancestors_no_object();
         for obj in std::iter::once(&cls).chain(ancestors.iter().map(ClassType::class_object)) {
             if obj.module_name().as_str() == "builtins" {
@@ -1377,6 +1432,8 @@ impl ModuleSymbols {
             &module,
             &bindings,
             &answers,
+            transaction,
+            handle,
             &tco_classes,
         ));
         let suppressions = parse_suppressions(&module);
