@@ -254,7 +254,9 @@ fn range_overlaps(limit_range: Option<TextRange>, range: TextRange) -> bool {
     })
 }
 
-/// Classify an attribute's resolved type into a semantic token kind.
+/// Classify an attribute's resolved type into a semantic token kind. For a union,
+/// every member must agree on the same kind; any disagreement (or a member that is
+/// a plain attribute) falls back to `PROPERTY`.
 fn attribute_semantic_token_type(ty: Type) -> SemanticTokenType {
     match ty {
         Type::Union(union) => {

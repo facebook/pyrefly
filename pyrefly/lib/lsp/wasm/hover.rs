@@ -62,6 +62,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 
@@ -113,14 +114,7 @@ impl HoverValue {
 
     fn resolve_symbol_kind(&self) -> Option<SymbolKind> {
         match self.kind {
-            Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
-                .type_
-                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
-                    FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
-                    _ => Some(SymbolKind::Function),
-                })
-                .unwrap_or(SymbolKind::Method)
-                .into(),
+            Some(SymbolKind::Attribute) => Some(attribute_symbol_kind_from_type(&self.type_)),
             Some(other) => Some(other),
             None => None,
         }

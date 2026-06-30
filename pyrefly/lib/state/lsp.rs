@@ -304,6 +304,18 @@ impl DefinitionMetadata {
 
 pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
     match ty {
+        Type::Union(union) => {
+            let mut members = union.members.iter();
+            let Some(first) = members.next() else {
+                return SymbolKind::Attribute;
+            };
+            let kind = attribute_symbol_kind_from_type(first);
+            if members.all(|member| attribute_symbol_kind_from_type(member) == kind) {
+                kind
+            } else {
+                SymbolKind::Attribute
+            }
+        }
         ty if ty.is_toplevel_callable() => {
             let is_method = ty.visit_toplevel_func_metadata(
                 &|meta| matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some()),

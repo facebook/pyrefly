@@ -114,6 +114,53 @@ def f(x: A | B) -> None:
 }
 
 #[test]
+fn hover_on_union_class_attribute_shows_class() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    foo = C
+
+class B:
+    foo = C
+
+def f(x: A | B) -> None:
+    x.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(class) foo:"),
+        "Expected union class attribute hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_mixed_union_attribute_falls_back_to_attribute() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    foo = C
+
+def f(x: A | B) -> None:
+    x.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(attribute) foo:"),
+        "Expected mixed union attribute hover, got: {report}"
+    );
+}
+
+#[test]
 fn renamed_reexport_shows_original_name() {
     let lib2 = r#"
 def foo() -> None: ...
