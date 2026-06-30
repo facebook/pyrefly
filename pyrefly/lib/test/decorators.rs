@@ -441,6 +441,23 @@ g(f)
 );
 
 testcase!(
+    test_decorator_missing_injected_parameter,
+    r#"
+from typing import Callable, Concatenate
+
+def with_current_tenant_id[T, **P, R](
+    view: Callable[Concatenate[T, str, P], R],
+) -> Callable[Concatenate[T, P], R]:
+    ...
+
+class Foo:
+    @with_current_tenant_id
+    def get(self) -> int:  # E: Function `get` is missing parameter of type `str` injected by decorator `with_current_tenant_id`
+        return 0
+    "#,
+);
+
+testcase!(
     bug = "This error message is confusing, I think we need to be clearer when we are printing the *type* of an argument",
     test_decorator_error_message,
     r#"
