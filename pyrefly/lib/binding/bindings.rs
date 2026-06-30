@@ -1868,6 +1868,21 @@ impl<'a> BindingsBuilder<'a> {
         write_info.annotation
     }
 
+    /// PEP 572: a walrus inside a comprehension binds its target in the enclosing
+    /// non-comprehension scope. Mirror `bind_name`'s `Anywhere` bookkeeping so a
+    /// read that resolves to the enclosing `Anywhere` static (e.g. a read before
+    /// the walrus write) finds a populated phi instead of a promised-but-empty key.
+    pub fn bind_walrus_target_in_enclosing_scope(&mut self, name: &Name, idx: Idx<Key>) {
+        if let Some(write_info) = self.scopes.define_in_enclosing_non_comprehension_scope(
+            Hashed::new(name),
+            idx,
+            FlowStyle::Other,
+        ) && let Some(range) = write_info.anywhere_range
+        {
+            self.table.record_bind_in_anywhere(name.clone(), range, idx);
+        }
+    }
+
     fn check_for_type_alias_redefinition(&self, name: &Name, idx: Idx<Key>) {
         let prev_idx = self.scopes.current_flow_idx(name);
         if let Some(prev_idx) = prev_idx {
