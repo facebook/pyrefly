@@ -3712,6 +3712,12 @@ def f(x: tuple[int, str] | int):
 );
 
 testcase!(
+    test_isinstance_type_preserves_type_arg,
+    r#"
+from typing import reveal_type
+def f(value: type[int] | str):
+    if isinstance(value, type):
+        reveal_type(value)  # E: revealed type: type[int]
     test_narrow_preserved_in_nested_def_after_branch_merge,
     r#"
 from typing import assert_type
@@ -3737,6 +3743,93 @@ def b():
 );
 
 testcase!(
+    test_isinstance_type_then_issubclass_typeform,
+    r#"
+from typing import reveal_type
+from typing_extensions import TypeForm
+def f(value: TypeForm[object]):
+    if isinstance(value, type) and issubclass(value, int):
+        reveal_type(value)  # E: revealed type: type[int]
+"#,
+);
+
+testcase!(
+    test_isinstance_custom_metaclass_preserved,
+    r#"
+from typing import reveal_type
+class Meta(type):
+    meta_attr: int
+def f(value: object):
+    if isinstance(value, Meta):
+        reveal_type(value)  # E: revealed type: Meta
+        reveal_type(value.meta_attr)  # E: revealed type: int
+"#,
+);
+
+testcase!(
+    test_isinstance_type_else_keeps_non_class,
+    r#"
+from typing import reveal_type
+def f(value: type[int] | str):
+    if isinstance(value, type):
+        reveal_type(value)  # E: revealed type: type[int]
+    else:
+        reveal_type(value)  # E: revealed type: str
+"#,
+);
+
+testcase!(
+    test_isinstance_type_union_of_type_forms,
+    r#"
+from typing import reveal_type
+def f(value: type[int] | type[str] | bytes):
+    if isinstance(value, type):
+        reveal_type(value)  # E: revealed type: type[int | str]
+"#,
+);
+
+testcase!(
+    test_isinstance_type_preserves_subclass_arg,
+    r#"
+from typing import reveal_type
+def f(value: type[bool] | str):
+    if isinstance(value, type):
+        reveal_type(value)  # E: revealed type: type[bool]
+"#,
+);
+
+testcase!(
+    test_isinstance_type_tuple_with_class,
+    r#"
+from typing import reveal_type
+def f(value: type[int] | str | int):
+    if isinstance(value, (type, int)):
+        reveal_type(value)  # E: revealed type: int | type[int]
+"#,
+);
+
+testcase!(
+    test_isinstance_bare_type_member,
+    r#"
+from typing import reveal_type
+def f(value: type | str):
+    if isinstance(value, type):
+        reveal_type(value)  # E: revealed type: type[Any]
+"#,
+);
+
+testcase!(
+    test_isinstance_type_keeps_gradual_inputs,
+    r#"
+from typing import Any, reveal_type
+def from_object(value: object) -> None:
+    if isinstance(value, type):
+        reveal_type(value)  # E: revealed type: type
+        value(1, 2, 3)
+def from_type_any(value: type[Any]) -> None:
+    if isinstance(value, type):
+        reveal_type(value)  # E: revealed type: type[Any]
+        value(1, 2, 3)
     test_isinstance_on_bounded_typevar,
     r#"
 from typing import reveal_type
@@ -3898,6 +3991,33 @@ if isinstance(value, int):
 );
 
 testcase!(
+    test_issubclass_type_keeps_subclass_semantics,
+    r#"
+from typing import assert_type
+def f(x: type[int] | type[type]) -> None:
+    # issubclass(x, type) asks whether x subclasses builtins.type (is a metaclass),
+    # so type[int] is excluded and only type[type] survives.
+    if issubclass(x, type):
+        assert_type(x, type[type])
+    else:
+        assert_type(x, type[int])
+"#,
+);
+
+testcase!(
+    test_isinstance_type_preserves_typevar,
+    r#"
+from typing import assert_type
+class Foo: ...
+def initialize[F: Foo](cls: type[F]) -> F:
+    # isinstance(_, type) must not erase the TypeVar: type[F] & type == type[F].
+    assert isinstance(cls, type)
+    assert_type(cls, type[F])
+    # issubclass(_, Foo) must not erase it either: every F is a Foo, so type[F] & type[Foo] == type[F].
+    assert issubclass(cls, Foo)
+    assert_type(cls, type[F])
+    return cls()
+"#,
     narrow_after_sibling_branch_narrows_other_var,
     r#"
 from typing import assert_type
