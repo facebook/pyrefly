@@ -10,6 +10,7 @@ use std::mem;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_python::ignore::IgnoreAll;
 use pyrefly_python::ignore::Tool;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
@@ -219,16 +220,23 @@ impl ErrorCollector {
     fn is_error_suppressed(
         err: &Error,
         fstring_ranges: &[(LineNumber, LineNumber)],
-        ignore_all: &SmallMap<Tool, LineNumber>,
+        ignore_all: &SmallMap<Tool, IgnoreAll>,
         error_config: &ErrorConfig,
     ) -> bool {
         // Check whole-file ignore-all directives first.
         // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
+        // An `IgnoreAll` with empty `kinds` suppresses everything; otherwise it
+        // suppresses only the listed kinds (or any parent kind they map to).
         if err.error_kind() != ErrorKind::UnusedIgnore
-            && error_config
-                .enabled_ignores
-                .iter()
-                .any(|tool| ignore_all.contains_key(tool))
+            && error_config.enabled_ignores.iter().any(|tool| {
+                ignore_all.get(tool).is_some_and(|ig| {
+                    ig.kinds.is_empty()
+                        || err
+                            .error_kind()
+                            .suppression_names()
+                            .any(|name| ig.kinds.iter().any(|k| k == name))
+                })
+            })
         {
             return true;
         }
@@ -258,7 +266,7 @@ impl ErrorCollector {
         &self,
         error_config: &ErrorConfig,
         fstring_ranges: &[(LineNumber, LineNumber)],
-        ignore_all: &SmallMap<Tool, LineNumber>,
+        ignore_all: &SmallMap<Tool, IgnoreAll>,
         result: &mut CollectedErrors,
     ) {
         let mut errors = self.errors.lock();

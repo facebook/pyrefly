@@ -68,6 +68,16 @@ def bar() -> int:
   />
 </pre>
 
+To suppress only specific error kinds for the whole file, list them in
+brackets. Multiple kinds can be comma-separated on one line, or split across
+several `ignore-errors` lines; the lists accumulate. This only applies to
+`pyrefly: ignore-errors` (other tools support only the bare, suppress-all form).
+
+```python
+# pyrefly: ignore-errors[implicit-any-parameter, implicit-any-type-argument]
+# pyrefly: ignore-errors[implicit-any-empty-container]
+```
+
 Pyrefly can automatically suppress all type errors in your project by running:
 
 ```
