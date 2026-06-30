@@ -39,6 +39,10 @@ pub struct SuppressArgs {
     #[arg(long)]
     remove_unused: bool,
 
+    /// Also remove unused `# type: ignore` comments when removing unused ignores.
+    #[arg(long)]
+    remove_unused_type_ignores: bool,
+
     /// Where to place suppression comments: on the line before the error
     /// (`line-before`, the default) or on the same line (`same-line`).
     #[arg(long, default_value = "line-before")]
@@ -57,9 +61,12 @@ impl SuppressArgs {
                 // Parse errors from JSON file, filtering for UnusedIgnore errors only
                 let json_content = std::fs::read_to_string(json_path)?;
                 let errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
+                let remove_type_ignores = self.remove_unused_type_ignores;
                 errors
                     .into_iter()
-                    .filter(|e| e.is_unused_ignore())
+                    .filter(|e| {
+                        e.is_unused_ignore() || (remove_type_ignores && e.is_unused_type_ignore())
+                    })
                     .collect()
             } else {
                 // Delegate to `check --remove-unused-ignores`, which calls
@@ -71,18 +78,25 @@ impl SuppressArgs {
                     .clone()
                     .resolve(self.config_override.clone(), wrapper.clone())?;
 
-                let check_args = CheckArgs::parse_from([
+                let mut check_argv = vec![
                     "check",
                     "--output-format",
                     "omit-errors",
                     "--remove-unused-ignores",
-                ]);
+                ];
+                if self.remove_unused_type_ignores {
+                    check_argv.push("--remove-unused-type-ignores");
+                }
+                let check_args = CheckArgs::parse_from(check_argv);
                 check_args.run_once(files_to_check, config_finder, upsell, thread_count)?;
                 return Ok(CommandExitStatus::Success);
             };
 
             // Remove unused ignores (JSON path only)
-            suppress::remove_unused_ignores_from_serialized(unused_errors);
+            suppress::remove_unused_ignores_from_serialized(
+                unused_errors,
+                self.remove_unused_type_ignores,
+            );
         } else {
             // Add suppressions mode (existing behavior)
             let serialized_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {

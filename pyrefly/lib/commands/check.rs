@@ -232,6 +232,7 @@ impl SnippetCheckArgs {
                 suppress_errors: false,
                 expectations: false,
                 remove_unused_ignores: false,
+                remove_unused_type_ignores: false,
             },
         };
         let (status, check_result) =
@@ -419,6 +420,10 @@ struct BehaviorArgs {
     /// Remove unused ignores from the input files.
     #[arg(long)]
     remove_unused_ignores: bool,
+    /// Also remove unused `# type: ignore` comments (off by default; shared with
+    /// other type checkers).
+    #[arg(long)]
+    remove_unused_type_ignores: bool,
 }
 
 fn write_errors_to_file(
@@ -1302,7 +1307,10 @@ impl CheckArgs {
             // TODO: Deprecate this in favor of `pyrefly suppress`
             let collected = loads.collect_errors();
             let unused_errors = loads.collect_unused_ignore_errors(&collected);
-            suppress::remove_unused_ignores(unused_errors);
+            suppress::remove_unused_ignores(
+                unused_errors,
+                self.behavior.remove_unused_type_ignores,
+            );
         }
 
         // We update the baseline file if requested, after reporting any new
