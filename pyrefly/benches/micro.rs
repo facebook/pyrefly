@@ -309,7 +309,7 @@ fn overload_resolution(overloads: usize, calls: usize) -> String {
     }
     src.push_str("def choose(x): return x\n");
     for i in 0..calls {
-        let _ = write!(src, "r{i} = choose({})\n", ARGS[i % ARGS.len()]);
+        let _ = writeln!(src, "r{i} = choose({})", ARGS[i % ARGS.len()]);
     }
     src
 }
