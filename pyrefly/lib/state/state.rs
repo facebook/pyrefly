@@ -868,14 +868,24 @@ impl<'a> Transaction<'a> {
     }
 
     /// Look up the `ClassFields` for a class, which may be defined in another module.
+    /// Falls back to `Solutions` metadata when bindings are evicted (e.g. during `coverage`).
     pub fn get_class_fields(&self, source_handle: &Handle, class: &Class) -> Option<ClassFields> {
         let handle = Handle::new(
             class.module_name(),
             class.module_path().dupe(),
             source_handle.sys_info().dupe(),
         );
-        let bindings = self.get_bindings(&handle)?;
-        bindings.get_class_fields(class.index()).cloned()
+        if let Some(bindings) = self.get_bindings(&handle) {
+            bindings.get_class_fields(class.index()).cloned()
+        } else {
+            Some(
+                self.get_solutions(&handle)?
+                    .metadata()
+                    .get_class_checked(class.index())?
+                    .fields
+                    .clone(),
+            )
+        }
     }
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
@@ -2142,6 +2152,14 @@ impl<'a> Transaction<'a> {
         custom_thread_pool: Option<&ThreadPool>,
     ) {
         let _ = self.run_internal(handles, require, custom_thread_pool);
+    }
+
+    /// Evict a module's AST and bindings/answers, keeping its solutions/exports (e.g. for
+    /// `coverage` to free memory as it goes). No-op if absent or not yet solved.
+    pub fn evict_module(&self, handle: &Handle) {
+        if let Some(module) = self.data.updated_modules.get(handle) {
+            module.state.evict_ast_and_answers();
+        }
     }
 
     pub(crate) fn ad_hoc_solve<R: Sized, F: FnOnce(AnswersSolver<TransactionHandle>) -> R>(

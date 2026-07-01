@@ -1657,8 +1657,6 @@ pub fn collect_module_reports(
 
     let mut module_reports: Vec<ModuleReport> = Vec::new();
     let mut errors: Vec<Error> = Vec::new();
-    transaction.run(handles.as_slice(), Require::Everything, None);
-    let public_fqns = public_only.then(|| compute_public_fqns(&handles, transaction));
 
     let shadowed = if prefer_stubs {
         py_paths_shadowed_by_pyi(&handles)
@@ -1685,7 +1683,6 @@ pub fn collect_module_reports(
             })
             .collect();
         // Fall back to site-package-path for stubs-only packages.
-        let mut external_handles = Vec::new();
         for h in handles.iter().filter(|h| h.path().is_interface()) {
             let pyi_path = h.path().as_path().to_path_buf();
             if map.contains_key(&pyi_path) {
@@ -1706,26 +1703,26 @@ pub fn collect_module_reports(
             .finding()
             {
                 let py_handle = config.handle_from_module_path(py_module_path);
-                external_handles.push(py_handle.clone());
                 map.insert(pyi_path, py_handle);
             }
-        }
-        if !external_handles.is_empty() {
-            transaction.run(&external_handles, Require::Everything, None);
         }
         map
     } else {
         HashMap::new()
     };
+
+    // `public_only` needs every handle's exports up front; cheap and retained across eviction.
+    let public_fqns = if public_only {
+        transaction.run(handles.as_slice(), Require::Exports, None);
+        Some(compute_public_fqns(&handles, transaction))
+    } else {
+        None
+    };
     let config_finder = holder.as_ref().config_finder();
     let dir_cache = DirEntryCache::new(true);
-    // Safe to parallelize: per-module collection is read-only and independent.
-    let transaction: &Transaction = transaction;
-    let collect_one = |handle: &Handle| -> Option<(ModuleReport, Vec<Error>)> {
-        if shadowed.contains(handle.path().as_path()) {
-            return None;
-        }
 
+    // `transaction` is passed, not captured, so the chunk loop can still borrow it mutably.
+    let collect_one = |handle: &Handle, transaction: &Transaction| {
         // gh-3632: skip files whose module name isn't importable (shadowed parent).
         let module = handle.module();
         if module != ModuleName::unknown() {
@@ -1785,12 +1782,39 @@ pub fn collect_module_reports(
             None
         }
     };
-    let collected: Vec<(ModuleReport, Vec<Error>)> = holder
-        .as_ref()
-        .install(|| handles.par_iter().filter_map(collect_one).collect());
-    for (report, module_errors) in collected {
-        module_reports.push(report);
-        errors.extend(module_errors);
+
+    // Run/collect/evict one chunk at a time, so peak memory holds one chunk's bindings/answers
+    // rather than every module's. Retained solutions keep cross-chunk lookups working post-evict.
+    const COLLECTION_CHUNK_SIZE: usize = 256;
+    // A shadowed `.py` runs/evicts only with its stub (below), never on its own.
+    let targets: Vec<Handle> = handles
+        .iter()
+        .filter(|h| !shadowed.contains(h.path().as_path()))
+        .cloned()
+        .collect();
+    for chunk in targets.chunks(COLLECTION_CHUNK_SIZE) {
+        // A stub's `.py` counterpart must be live to merge, so run/evict it in the stub's chunk.
+        let mut run_set: Vec<Handle> = chunk.to_vec();
+        run_set.extend(
+            chunk
+                .iter()
+                .filter_map(|h| pyi_to_py.get(&h.path().as_path().to_path_buf()).cloned()),
+        );
+        transaction.run(&run_set, Require::Everything, None);
+        let tx: &Transaction = transaction;
+        let collected: Vec<(ModuleReport, Vec<Error>)> = holder.as_ref().install(|| {
+            chunk
+                .par_iter()
+                .filter_map(|h| collect_one(h, tx))
+                .collect()
+        });
+        for (report, module_errors) in collected {
+            module_reports.push(report);
+            errors.extend(module_errors);
+        }
+        for handle in &run_set {
+            transaction.evict_module(handle);
+        }
     }
 
     if let Some(public_fqns) = &public_fqns {
@@ -1817,6 +1841,7 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 
     use super::*;
     use crate::state::require::Require;
@@ -2119,6 +2144,64 @@ mod tests {
         };
         assert!(find("lapack_lite"), "real module importable");
         assert!(!find("lapack_lite.fortran"), "shadowed file skipped");
+    }
+
+    /// A subclass whose base class module was evicted must still report inherited members,
+    /// resolved from the base's retained `Solutions` metadata rather than its evicted bindings.
+    #[test]
+    fn test_inherited_fields_survive_base_eviction() {
+        let mut env = TestEnv::new();
+        env.add_with_path("base", "base.py", "class Base:\n    x = 1\n");
+        env.add_with_path(
+            "derived",
+            "derived.py",
+            "from base import Base\n\nclass Derived(Base):\n    pass\n",
+        );
+
+        let sys_info = env.sys_info();
+        let base = Handle::new(
+            ModuleName::from_str("base"),
+            ModulePath::memory(PathBuf::from("base.py")),
+            sys_info.dupe(),
+        );
+        let derived = Handle::new(
+            ModuleName::from_str("derived"),
+            ModulePath::memory(PathBuf::from("derived.py")),
+            sys_info.dupe(),
+        );
+
+        // Uncommitted transaction so `evict_module` can drop modules held in `updated_modules`.
+        let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
+        let mut transaction = state.new_transaction(Require::Exports, None);
+        transaction.set_memory(env.get_memory());
+        transaction.run(&[base.dupe(), derived.dupe()], Require::Everything, None);
+
+        let before = ModuleSymbols::collect(&transaction, &derived).unwrap();
+        assert!(
+            transaction.get_bindings(&base).is_some(),
+            "base bindings should be live before eviction"
+        );
+        assert!(
+            before
+                .classes
+                .iter()
+                .any(|c| !c.incomplete_attributes.is_empty()),
+            "Derived should report an inherited incomplete attribute from Base: {:?}",
+            before.classes
+        );
+
+        transaction.evict_module(&base);
+        assert!(
+            transaction.get_bindings(&base).is_none(),
+            "base bindings should be evicted"
+        );
+
+        let after = ModuleSymbols::collect(&transaction, &derived).unwrap();
+        assert_eq!(
+            serde_json::to_string(&before.classes).unwrap(),
+            serde_json::to_string(&after.classes).unwrap(),
+            "evicting the base module must not change the derived class report"
+        );
     }
 
     /// When both test.py and test.pyi exist, the .py file is shadowed.

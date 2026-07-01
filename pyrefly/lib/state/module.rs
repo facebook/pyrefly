@@ -277,6 +277,16 @@ impl ModuleStateMut {
             steps: self.steps.take_and_freeze(),
         }
     }
+
+    // --- Eviction ---
+
+    /// Evict the AST and bindings/answers, keeping solutions/exports. No-op before `Solutions`.
+    pub fn evict_ast_and_answers(&self) {
+        if self.steps.current_step.load() >= Some(Step::Solutions) {
+            self.steps.ast.store(None);
+            self.steps.answers.store(None);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
