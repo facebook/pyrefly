@@ -742,6 +742,30 @@ lhs @ rhs
 }
 
 #[test]
+fn hover_over_augmented_assignment_operator_shows_in_place_dunder_name() {
+    let code = r#"
+class Counter:
+    def __iadd__(self, other: int) -> Counter:
+        return self
+
+c = Counter()
+c += 1
+# ^  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(
+            "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
+        ),
+        "Expected __iadd__ signature in hover, got: {report}"
+    );
+    assert!(
+        report.contains("```python\nLiteral[1]\n```"),
+        "Expected RHS literal hover to be preserved, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_tuple_element_literal_uses_element_type() {
     let code = r#"
 tup = (1, +2)
