@@ -1,0 +1,16 @@
+[package]
+name = "pyrefly_pyo3"
+version = "0.0.0"
+authors = ["Meta"]
+edition = "2024"
+repository = "https://github.com/facebook/pyrefly"
+license = "MIT"
+
+[lib]
+name = "pyrefly_api"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyrefly = { path = "../../pyrefly" }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
