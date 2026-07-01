@@ -2101,6 +2101,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
             }
         }
+        self.scopes.apply_conditional_flow_facts(narrow_ops);
     }
 
     pub fn bind_lambda_param(&mut self, name: &Identifier, owner: Option<Idx<Key>>) {
