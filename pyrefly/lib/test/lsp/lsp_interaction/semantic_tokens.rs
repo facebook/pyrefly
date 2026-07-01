@@ -93,3 +93,73 @@ fn semantic_tokens_import_submodule_alias() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn semantic_tokens_format_specifier() {
+    let interaction = LspInteraction::new();
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let uri = Url::parse("untitled:Untitled-1").unwrap();
+    let text = r#"import logging
+logger = logging.getLogger()
+logger.info("Hello %s %d", "world", 123)
+"#;
+    interaction.client.did_open_uri(&uri, "python", text);
+
+    let legend = SemanticTokensLegends::lsp_semantic_token_legends();
+    interaction
+        .client
+        .send_request::<SemanticTokensFullRequest>(json!({
+            "textDocument": { "uri": uri.to_string() }
+        }))
+        .expect_response_with(move |response| match response {
+            Some(SemanticTokensResult::Tokens(tokens)) => {
+                let mut line = 0u32;
+                let mut col = 0u32;
+                let mut format_specifiers = 0;
+                let lines: Vec<&str> = text.lines().collect();
+                for token in tokens.data {
+                    let delta_line = token.delta_line;
+                    let delta_start = token.delta_start;
+                    let length = token.length;
+                    let token_type_idx = token.token_type;
+
+                    line += delta_line;
+                    col = if delta_line == 0 {
+                        col + delta_start
+                    } else {
+                        delta_start
+                    };
+
+                    let line_text = match lines.get(line as usize) {
+                        Some(line_text) => *line_text,
+                        None => continue,
+                    };
+                    let start = col as usize;
+                    let end = start + length as usize;
+                    let token_text = match line_text.get(start..end) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+                    let token_type = legend
+                        .token_types
+                        .get(token_type_idx as usize)
+                        .map(|t| t.as_str())
+                        .unwrap_or_default();
+
+                    if token_type == "formatSpecifier" {
+                        if token_text == "%s" || token_text == "%d" {
+                            format_specifiers += 1;
+                        }
+                    }
+                }
+                format_specifiers == 2
+            }
+            _ => false,
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
