@@ -1429,6 +1429,7 @@ impl<'a> BindingsBuilder<'a> {
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut branch_suites = Vec::new();
+                let mut conditional_flow_facts = Vec::new();
                 let mut contains_environment_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
@@ -1507,7 +1508,18 @@ impl<'a> BindingsBuilder<'a> {
                         NarrowUseLocation::Span(range),
                         &Usage::NonPinningValue(None),
                     );
-                    negated_prev_ops.and_all(new_narrow_ops.negate());
+                    let mut active_narrow_ops = negated_prev_ops.clone();
+                    if active_narrow_ops.0.is_empty() {
+                        active_narrow_ops = new_narrow_ops.clone();
+                    } else if !new_narrow_ops.0.is_empty() {
+                        active_narrow_ops.and_all(new_narrow_ops.clone());
+                    }
+                    let negated_new_narrow_ops = new_narrow_ops.negate();
+                    if negated_prev_ops.0.is_empty() {
+                        negated_prev_ops = negated_new_narrow_ops;
+                    } else {
+                        negated_prev_ops.and_all(negated_new_narrow_ops);
+                    }
                     if is_type_checking_branch {
                         self.type_checking_depth += 1;
                         self.stmts(body, parent);
@@ -1521,6 +1533,10 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         contains_environment_test_with_no_else = true;
                     }
+                    conditional_flow_facts.extend(
+                        self.scopes
+                            .conditional_flow_facts_for_current_branch(&active_narrow_ops),
+                    );
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         // Choosing an environment-independent branch kills every later suite
@@ -1577,6 +1593,8 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.finish_non_exhaustive_fork(&negated_prev_ops, exhaustive_key);
                 }
+                self.scopes
+                    .add_conditional_flow_facts(conditional_flow_facts);
                 // Preserve the configured-environment termination without treating it as
                 // universally unreachable. This keeps later bindings out of a dead branch
                 // while suppressing diagnostics that only apply to code live in this config.
