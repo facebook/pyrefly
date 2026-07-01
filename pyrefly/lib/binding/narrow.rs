@@ -55,7 +55,7 @@ assert_words!(NarrowOp, 12);
 
 /// Indicates where an isinstance-style narrow operation originated from.
 /// This determines whether validation needs to happen during narrowing.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NarrowSource {
     /// From an isinstance() call - validation already happened in special_calls.rs.
     Call,
@@ -63,7 +63,7 @@ pub enum NarrowSource {
     Pattern,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AtomicNarrowOp {
     Is(Expr),
     IsNot(Expr),
@@ -130,7 +130,7 @@ pub enum AtomicNarrowOp {
     ClassCoverageGateNeg(Box<[Idx<Key>]>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum NarrowOp {
     Atomic(Option<FacetSubject>, AtomicNarrowOp),
     And(Vec<NarrowOp>),
@@ -423,6 +423,12 @@ pub struct FacetSubject {
     /// Set only for match-pattern subtraction (the negation of a fully-characterized
     /// arm), where subtracting a fully-matched member is sound.
     pub allow_never_collapse: bool,
+}
+
+impl PartialEq for FacetSubject {
+    fn eq(&self, other: &Self) -> bool {
+        self.origin == other.origin && self.chain.facets() == other.chain.facets()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -728,7 +734,7 @@ impl NarrowOp {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct NarrowOps(pub SmallMap<Name, (NarrowOp, TextRange)>);
 
 impl NarrowOps {
