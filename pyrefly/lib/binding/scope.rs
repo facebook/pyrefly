@@ -570,6 +570,7 @@ impl Static {
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
     info: SmallMap<Name, FlowInfo>,
+    conditional_facts: Vec<ConditionalFlowFact>,
     // Have we seen control flow terminate?
     //
     // We continue to analyze the rest of the code after a flow terminates, but
@@ -604,6 +605,12 @@ impl Flow {
 
     fn get_value_mut(&mut self, name: &Name) -> Option<&mut FlowValue> {
         self.info.get_mut(name)?.value_mut()
+    }
+
+    fn invalidate_conditional_facts_for_assignment(&mut self, name: Hashed<&Name>) {
+        self.conditional_facts.retain(|fact| {
+            fact.name != **name.key() && fact.conditions.0.get_hashed(name).is_none()
+        });
     }
 }
 
@@ -652,6 +659,36 @@ struct FlowInfo {
     /// - Always set to our current inferred type when a flow info is created
     /// - Updated whenever we update the inferred type outside of all loops, but not inside
     loop_prior: Idx<Key>,
+}
+
+/// A value known to hold when a previously-analyzed predicate is active again.
+///
+/// For `if b == "bar": x = 3`, the branch records that under `b == "bar"`,
+/// `x` has the branch-end flow info. The fact is discarded if `x` or `b` is
+/// rebound before the predicate is used again.
+#[derive(Debug, Clone)]
+pub(crate) struct ConditionalFlowFact {
+    conditions: NarrowOps,
+    name: Name,
+    info: FlowInfo,
+}
+
+impl ConditionalFlowFact {
+    fn matches_active_conditions(&self, active: &NarrowOps) -> bool {
+        !self.conditions.0.is_empty()
+            && self.conditions.0.iter().all(|(name, (op, _))| {
+                active
+                    .0
+                    .get(name)
+                    .is_some_and(|(active_op, _)| active_op == op)
+            })
+    }
+
+    fn same_fact(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.conditions == other.conditions
+            && self.info.idx() == other.info.idx()
+    }
 }
 
 /// The most recent value for a name. Used in several cases:
@@ -2164,6 +2201,9 @@ impl Scopes {
         style: FlowStyle,
     ) -> Option<NameWriteInfo> {
         let in_loop = self.loop_depth() != 0;
+        self.current_mut()
+            .flow
+            .invalidate_conditional_facts_for_assignment(name);
         match self.current_mut().flow.info.entry_hashed(name.cloned()) {
             Entry::Vacant(e) => {
                 e.insert(FlowInfo::new_value(idx, style));
@@ -2226,6 +2266,10 @@ impl Scopes {
         for i in (0..len - 1).rev() {
             if !matches!(self.scopes[i].scope.kind, ScopeKind::Comprehension { .. }) {
                 let in_loop = !self.scopes[i].scope.loops.is_empty();
+                self.scopes[i]
+                    .scope
+                    .flow
+                    .invalidate_conditional_facts_for_assignment(name);
                 match self.scopes[i].scope.flow.info.entry_hashed(name.cloned()) {
                     Entry::Vacant(e) => {
                         e.insert(FlowInfo::new_value(idx, style));
@@ -2245,6 +2289,9 @@ impl Scopes {
     /// uninitialized local errors but keep using our best guess for the type.
     pub fn mark_as_deleted(&mut self, name: &Name) {
         let scope = self.current_mut();
+        scope
+            .flow
+            .invalidate_conditional_facts_for_assignment(Hashed::new(name));
         if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
         }
@@ -2287,6 +2334,73 @@ impl Scopes {
     /// Returns `None` if there is no active fork or the name is not in the base flow.
     pub fn current_fork_base_idx(&self, name: &Name) -> Option<Idx<Key>> {
         Some(self.current().forks.last()?.base.get_info(name)?.idx())
+    }
+
+    pub(crate) fn conditional_flow_facts_for_current_branch(
+        &self,
+        conditions: &NarrowOps,
+    ) -> Vec<ConditionalFlowFact> {
+        if conditions.0.is_empty() {
+            return Vec::new();
+        }
+        let scope = self.current();
+        let fork = scope
+            .forks
+            .last()
+            .expect("conditional flow facts requested outside of a fork");
+
+        for name in conditions.0.keys() {
+            let base_value = fork.base.get_info(name).and_then(|info| info.value());
+            let current_value = scope.flow.get_info(name).and_then(|info| info.value());
+            if base_value.map(|value| value.idx) != current_value.map(|value| value.idx) {
+                return Vec::new();
+            }
+        }
+
+        scope
+            .flow
+            .info
+            .iter()
+            .filter_map(|(name, info)| {
+                let value = info.value()?;
+                let base_value = fork.base.get_info(name).and_then(|info| info.value());
+                if base_value.is_some_and(|base_value| base_value.idx == value.idx) {
+                    None
+                } else {
+                    Some(ConditionalFlowFact {
+                        conditions: conditions.clone(),
+                        name: name.clone(),
+                        info: info.clone(),
+                    })
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn add_conditional_flow_facts(&mut self, facts: Vec<ConditionalFlowFact>) {
+        let flow = &mut self.current_mut().flow;
+        for fact in facts {
+            if !flow
+                .conditional_facts
+                .iter()
+                .any(|existing| existing.same_fact(&fact))
+            {
+                flow.conditional_facts.push(fact);
+            }
+        }
+    }
+
+    pub(crate) fn apply_conditional_flow_facts(&mut self, active: &NarrowOps) {
+        let flow = &mut self.current_mut().flow;
+        let matching_facts = flow
+            .conditional_facts
+            .iter()
+            .filter(|fact| fact.matches_active_conditions(active))
+            .cloned()
+            .collect::<Vec<_>>();
+        for fact in matching_facts {
+            flow.info.insert(fact.name, fact.info);
+        }
     }
 
     /// Copy walrus-defined names from the current branch flow into the fork's
@@ -3438,6 +3552,24 @@ fn determine_definition_status(
     }
 }
 
+fn common_conditional_facts(flows: &[Flow]) -> Vec<ConditionalFlowFact> {
+    let Some((first, rest)) = flows.split_first() else {
+        return Vec::new();
+    };
+    first
+        .conditional_facts
+        .iter()
+        .filter(|fact| {
+            rest.iter().all(|flow| {
+                flow.conditional_facts
+                    .iter()
+                    .any(|other| fact.same_fact(other))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// Information about a single branch being merged, including both the flow info
 /// for a specific name (if present) and the termination key from the flow this branch came from.
 struct MergeBranchEntry {
@@ -3742,6 +3874,7 @@ impl<'a> BindingsBuilder<'a> {
         } else {
             live_branches
         };
+        let conditional_facts = common_conditional_facts(&flows);
         // Determine reachability of the merged flow.
         // For Loop style with empty flows (all branches terminated), the loop body might
         // never execute (empty iterable), so we use the base flow's reachability.
@@ -3825,6 +3958,7 @@ impl<'a> BindingsBuilder<'a> {
         // The resulting flow has terminated only if all branches had terminated.
         let flow = Flow {
             info: merged_flow_infos,
+            conditional_facts,
             has_terminated,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
