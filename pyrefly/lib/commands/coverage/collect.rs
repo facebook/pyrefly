@@ -28,8 +28,8 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::types::Type;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::includes::Includes;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::thread_pool::ThreadCount;
-use rayon::prelude::*;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::name::Name;
@@ -1326,21 +1326,28 @@ fn collect_reexport_fqns(
         .collect()
 }
 
+/// Stub-side inputs of `merge_uncovered_py_symbols`, captured while the stub's
+/// bindings/answers are still live.
+struct StubMergeData {
+    class_members: SmallSet<String>,
+    all_filter: Option<(String, HashSet<String>)>,
+    reexports: SmallSet<String>,
+}
+
 struct ModuleSymbols {
     module: Module,
-    bindings: Bindings,
-    answers: Arc<Answers>,
-    exports: Arc<SmallMap<Name, ExportLocation>>,
-    dunder_all: SmallSet<Name>,
-    tco_classes: SmallSet<Idx<KeyClass>>,
     functions: Vec<Function>,
     variables: Vec<Variable>,
     classes: Vec<ReportClass>,
     suppressions: Vec<ReportSuppression>,
+    /// `Some` only when collected with `for_stub_merge`.
+    stub_merge: Option<StubMergeData>,
 }
 
 impl ModuleSymbols {
-    fn collect(transaction: &Transaction, handle: &Handle) -> Option<Self> {
+    /// Parse a solved module's symbols into plain data; `for_stub_merge` also captures
+    /// `StubMergeData`.
+    fn collect(transaction: &Transaction, handle: &Handle, for_stub_merge: bool) -> Option<Self> {
         let bindings = transaction.get_bindings(handle)?;
         let module = transaction.get_module_info(handle)?;
         let answers = transaction.get_answers(handle)?;
@@ -1380,17 +1387,30 @@ impl ModuleSymbols {
             &tco_classes,
         ));
         let suppressions = parse_suppressions(&module);
+        let stub_merge = for_stub_merge.then(|| StubMergeData {
+            class_members: collect_class_members(
+                &module,
+                &bindings,
+                &answers,
+                transaction,
+                handle,
+                &tco_classes,
+            ),
+            all_filter: stub_merge_filter(transaction, handle),
+            reexports: collect_reexport_fqns(
+                &module,
+                &exports,
+                &transaction.get_exports_data(handle),
+                &dunder_all,
+            ),
+        });
         Some(ModuleSymbols {
             module,
-            bindings,
-            answers,
-            exports,
-            dunder_all,
-            tco_classes,
             functions,
             variables,
             classes,
             suppressions,
+            stub_merge,
         })
     }
 
@@ -1401,28 +1421,17 @@ impl ModuleSymbols {
     /// When this `.pyi` stub only covers a subset of its `.py` counterpart's public
     /// symbols, add the uncovered `py` symbols so that completeness metrics reflect
     /// the full module interface. Merged symbols count as fully untyped, since type
-    /// checkers ignore the `.py` when a stub exists. `transaction`/`handle` must be the stub's.
-    fn merge_uncovered_py_symbols(
-        &mut self,
-        transaction: &Transaction,
-        handle: &Handle,
-        py: ModuleSymbols,
-    ) {
-        let stub_class_members = collect_class_members(
-            &self.module,
-            &self.bindings,
-            &self.answers,
-            transaction,
-            handle,
-            &self.tco_classes,
-        );
-        let stub_filter = stub_merge_filter(transaction, handle);
-        let stub_reexports = collect_reexport_fqns(
-            &self.module,
-            &self.exports,
-            &transaction.get_exports_data(handle),
-            &self.dunder_all,
-        );
+    /// checkers ignore the `.py` when a stub exists.
+    fn merge_uncovered_py_symbols(&mut self, py: ModuleSymbols) {
+        let StubMergeData {
+            class_members,
+            all_filter,
+            reexports,
+        } = self
+            .stub_merge
+            .take()
+            .expect("stub must be collected with `for_stub_merge` to merge `.py` symbols");
+
         // Dedupe py-side symbols against all stub-side names regardless of kind, so a name defined
         // as a function or class in the stub isn't re-added as an untyped attr by a .py re-export.
         let stub_names: SmallSet<String> = self
@@ -1436,14 +1445,14 @@ impl ModuleSymbols {
         // Keep py-only names the stub neither defines nor omits from an explicit `__all__`.
         let keep = |name: &str| {
             !stub_names.contains(name)
-                && stub_filter
+                && all_filter
                     .as_ref()
                     .is_none_or(|(prefix, fqns)| is_public_fqn(name, prefix, fqns))
         };
         // A re-exported name owns its whole `Name.*` subtree: when the stub re-exports a class,
         // the .py class AND its attributes must drop together.
         let is_reexported = |name: &str| {
-            stub_reexports.iter().any(|reexport| {
+            reexports.iter().any(|reexport| {
                 name == reexport.as_str()
                     || name
                         .strip_prefix(reexport.as_str())
@@ -1452,7 +1461,7 @@ impl ModuleSymbols {
         };
         for mut py_func in py.functions {
             if keep(&py_func.name)
-                && !stub_class_members.contains(&py_func.name)
+                && !class_members.contains(&py_func.name)
                 && !is_reexported(&py_func.name)
             {
                 py_func.slots = py_func.slots.as_untyped();
@@ -1461,7 +1470,7 @@ impl ModuleSymbols {
         }
         for mut py_var in py.variables {
             if keep(&py_var.name)
-                && !stub_class_members.contains(&py_var.name)
+                && !class_members.contains(&py_var.name)
                 && !is_reexported(&py_var.name)
             {
                 py_var.slots = py_var.slots.as_untyped();
@@ -1640,12 +1649,6 @@ pub fn collect_module_reports(
     let state = State::new(config_finder, thread_count);
     let holder = Forgetter::new(state, false);
     let handles = Handles::new(expanded_file_list);
-    let mut forgetter = Forgetter::new(
-        holder.as_ref().new_transaction(Require::Exports, None),
-        true,
-    );
-
-    let transaction = forgetter.as_mut();
     let (handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
 
     if !sourcedb_errors.is_empty() {
@@ -1654,11 +1657,6 @@ pub fn collect_module_reports(
         }
         return Err(anyhow::anyhow!("Failed to query sourcedb."));
     }
-
-    let mut module_reports: Vec<ModuleReport> = Vec::new();
-    let mut errors: Vec<Error> = Vec::new();
-    transaction.run(handles.as_slice(), Require::Everything, None);
-    let public_fqns = public_only.then(|| compute_public_fqns(&handles, transaction));
 
     let shadowed = if prefer_stubs {
         py_paths_shadowed_by_pyi(&handles)
@@ -1685,7 +1683,6 @@ pub fn collect_module_reports(
             })
             .collect();
         // Fall back to site-package-path for stubs-only packages.
-        let mut external_handles = Vec::new();
         for h in handles.iter().filter(|h| h.path().is_interface()) {
             let pyi_path = h.path().as_path().to_path_buf();
             if map.contains_key(&pyi_path) {
@@ -1706,12 +1703,8 @@ pub fn collect_module_reports(
             .finding()
             {
                 let py_handle = config.handle_from_module_path(py_module_path);
-                external_handles.push(py_handle.clone());
                 map.insert(pyi_path, py_handle);
             }
-        }
-        if !external_handles.is_empty() {
-            transaction.run(&external_handles, Require::Everything, None);
         }
         map
     } else {
@@ -1719,78 +1712,105 @@ pub fn collect_module_reports(
     };
     let config_finder = holder.as_ref().config_finder();
     let dir_cache = DirEntryCache::new();
-    // Safe to parallelize: per-module collection is read-only and independent.
-    let transaction: &Transaction = transaction;
-    let collect_one = |handle: &Handle| -> Option<(ModuleReport, Vec<Error>)> {
-        if shadowed.contains(handle.path().as_path()) {
-            return None;
-        }
-
-        // gh-3632: skip files whose module name isn't importable (shadowed parent).
-        let module = handle.module();
-        if module != ModuleName::unknown() {
+    // gh-3632: skip files whose module name isn't importable (shadowed parent).
+    let importable = |handle: &Handle| {
+        handle.module() == ModuleName::unknown() || {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
-            find_import_filtered(&config, module, None, None, &dir_cache, None).finding()?;
+            find_import_filtered(&config, handle.module(), None, None, &dir_cache, None)
+                .finding()
+                .is_some()
+        }
+    };
+    let targets: Vec<Handle> = handles
+        .iter()
+        .filter(|h| !shadowed.contains(h.path().as_path()) && importable(h))
+        .cloned()
+        .collect();
+    // Targets plus each stub's `.py` counterpart; the flag marks stubs that merge one.
+    let to_collect: HashMap<Handle, bool> = targets
+        .iter()
+        .map(|h| {
+            let merges_py = pyi_to_py.contains_key(&h.path().as_path().to_path_buf());
+            (h.dupe(), merges_py)
+        })
+        .chain(pyi_to_py.values().map(|h| (h.dupe(), false)))
+        .collect();
+    let run_set: Vec<Handle> = to_collect.keys().cloned().collect();
+    let collected: Mutex<HashMap<Handle, ModuleSymbols>> = Mutex::new(HashMap::new());
+
+    let mut forgetter = Forgetter::new(
+        holder.as_ref().new_transaction(Require::Exports, None),
+        true,
+    );
+    let transaction = forgetter.as_mut();
+    // Collect each module the moment it solves, before the run evicts its bindings/answers,
+    // so peak memory holds only the solver's working set (gh-3989).
+    transaction.set_solutions_hook(Some(Box::new(|handle, transaction| {
+        let Some(&for_stub_merge) = to_collect.get(handle) else {
+            return;
+        };
+        if let Some(symbols) = ModuleSymbols::collect(transaction, handle, for_stub_merge) {
+            collected.lock().insert(handle.dupe(), symbols);
+        }
+    })));
+    transaction.run(&run_set, Require::Errors, None);
+    // Later lazy computation must not fire the hook.
+    transaction.set_solutions_hook(None);
+
+    let public_fqns = public_only.then(|| compute_public_fqns(&handles, transaction));
+
+    let mut module_reports: Vec<ModuleReport> = Vec::new();
+    let mut errors: Vec<Error> = Vec::new();
+    let mut collected = collected.lock();
+    for handle in &targets {
+        let Some(mut symbols) = collected.remove(handle) else {
+            continue;
+        };
+        // Per source module, so stub-merged `.py` symbols render against their own file.
+        if let Some(strict) = untyped_strict {
+            collect_untyped_errors(
+                &mut errors,
+                &symbols.module,
+                &symbols.functions,
+                &symbols.variables,
+                strict,
+                public_fqns.as_ref(),
+            );
         }
 
-        if let Some(mut symbols) = ModuleSymbols::collect(transaction, handle) {
-            let mut errors = Vec::new();
-            // Per source module, so stub-merged `.py` symbols render against their own file.
+        // When a .pyi stub shadows a .py file, include uncovered .py symbols.
+        if let Some(py_handle) = pyi_to_py.get(&handle.path().as_path().to_path_buf())
+            && let Some(py_symbols) = collected.remove(py_handle)
+        {
+            let py_module = py_symbols.module.dupe();
+            let own_functions = symbols.functions.len();
+            let own_variables = symbols.variables.len();
+            symbols.merge_uncovered_py_symbols(py_symbols);
             if let Some(strict) = untyped_strict {
                 collect_untyped_errors(
                     &mut errors,
-                    &symbols.module,
-                    &symbols.functions,
-                    &symbols.variables,
+                    &py_module,
+                    &symbols.functions[own_functions..],
+                    &symbols.variables[own_variables..],
                     strict,
                     public_fqns.as_ref(),
                 );
             }
-
-            // When a .pyi stub shadows a .py file, include uncovered .py symbols.
-            if let Some(py_handle) = pyi_to_py.get(&handle.path().as_path().to_path_buf())
-                && let Some(py_symbols) = ModuleSymbols::collect(transaction, py_handle)
-            {
-                let py_module = py_symbols.module.dupe();
-                let own_functions = symbols.functions.len();
-                let own_variables = symbols.variables.len();
-                symbols.merge_uncovered_py_symbols(transaction, handle, py_symbols);
-                if let Some(strict) = untyped_strict {
-                    collect_untyped_errors(
-                        &mut errors,
-                        &py_module,
-                        &symbols.functions[own_functions..],
-                        &symbols.variables[own_variables..],
-                        strict,
-                        public_fqns.as_ref(),
-                    );
-                }
-            }
-
-            let derived_name = handle.module().to_string();
-            let name = module_name_override.clone().unwrap_or(derived_name.clone());
-            let path = handle.path().as_path().display().to_string();
-            let module_report = build_module_report(
-                name,
-                path,
-                &derived_name,
-                symbols.line_count(),
-                &symbols.functions,
-                &symbols.variables,
-                &symbols.classes,
-                symbols.suppressions,
-            );
-            Some((module_report, errors))
-        } else {
-            None
         }
-    };
-    let collected: Vec<(ModuleReport, Vec<Error>)> = holder
-        .as_ref()
-        .install(|| handles.par_iter().filter_map(collect_one).collect());
-    for (report, module_errors) in collected {
-        module_reports.push(report);
-        errors.extend(module_errors);
+
+        let derived_name = handle.module().to_string();
+        let name = module_name_override.clone().unwrap_or(derived_name.clone());
+        let path = handle.path().as_path().display().to_string();
+        module_reports.push(build_module_report(
+            name,
+            path,
+            &derived_name,
+            symbols.line_count(),
+            &symbols.functions,
+            &symbols.variables,
+            &symbols.classes,
+            symbols.suppressions,
+        ));
     }
 
     if let Some(public_fqns) = &public_fqns {
@@ -1817,6 +1837,7 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 
     use super::*;
     use crate::state::require::Require;
@@ -1868,7 +1889,7 @@ mod tests {
             .with_default_require_level(Require::Everything)
             .to_state();
         let handle = handle_fn("test");
-        let symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
+        let symbols = ModuleSymbols::collect(&state.transaction(), &handle, false).unwrap();
         (symbols, module_path)
     }
 
@@ -1911,17 +1932,15 @@ mod tests {
     /// pipeline in `collect_module_reports` when `prefer_stubs` is true and both
     /// files exist for the same module.
     fn merged_stub_symbols(pyi_file: &str, py_file: &str) -> ModuleSymbols {
-        // Keep the state alive: the merge needs the stub's transaction.
         let pyi_code = load_test_file(pyi_file);
         let (pyi_state, pyi_handle_fn) = TestEnv::one_with_path("test", "test.pyi", &pyi_code)
             .with_default_require_level(Require::Everything)
             .to_state();
         let pyi_handle = pyi_handle_fn("test");
-        let pyi_txn = pyi_state.transaction();
-        let mut stub = ModuleSymbols::collect(&pyi_txn, &pyi_handle).unwrap();
+        let mut stub = ModuleSymbols::collect(&pyi_state.transaction(), &pyi_handle, true).unwrap();
 
         let (py, _) = parse_test_module(py_file, TestEnv::new());
-        stub.merge_uncovered_py_symbols(&pyi_txn, &pyi_handle, py);
+        stub.merge_uncovered_py_symbols(py);
         stub
     }
 
@@ -2665,7 +2684,7 @@ def g(x: int) -> int:
             .with_default_require_level(Require::Everything)
             .to_state();
         let handle = handle_fn("test");
-        let symbols = ModuleSymbols::collect(&state.transaction(), &handle).unwrap();
+        let symbols = ModuleSymbols::collect(&state.transaction(), &handle, false).unwrap();
 
         // Only g should be reported; f is excluded due to @no_type_check.
         assert_eq!(symbols.functions.len(), 1);
@@ -2917,5 +2936,96 @@ def g(x: int) -> int:
         let env = TestEnv::new_with_site_package_paths(&[&path]);
         let report = build_module_report_for_test_with_env("schema_classes_attrs.py", env);
         compare_snapshot("schema_classes_attrs.expected.json", &report);
+    }
+
+    /// Two-module env: `derived.Derived` inherits an un-annotated field from `base.Base`.
+    fn base_derived_env() -> (TestEnv, Handle, Handle) {
+        let mut env = TestEnv::new();
+        env.add_with_path("base", "base.py", "class Base:\n    x = 1\n");
+        env.add_with_path(
+            "derived",
+            "derived.py",
+            "from base import Base\n\nclass Derived(Base):\n    pass\n",
+        );
+        let sys_info = env.sys_info();
+        let base = Handle::new(
+            ModuleName::from_str("base"),
+            ModulePath::memory(PathBuf::from("base.py")),
+            sys_info.dupe(),
+        );
+        let derived = Handle::new(
+            ModuleName::from_str("derived"),
+            ModulePath::memory(PathBuf::from("derived.py")),
+            sys_info,
+        );
+        (env, base, derived)
+    }
+
+    /// Collect `derived` from a run that retains all bindings/answers, as ground truth.
+    fn base_derived_reference() -> ModuleSymbols {
+        let (env, _, derived) = base_derived_env();
+        let (state, _) = env.to_state();
+        let symbols = ModuleSymbols::collect(&state.transaction(), &derived, false).unwrap();
+        assert!(
+            symbols
+                .classes
+                .iter()
+                .any(|c| !c.incomplete_attributes.is_empty()),
+            "Derived should report an inherited incomplete attribute from Base: {:?}",
+            symbols.classes
+        );
+        symbols
+    }
+
+    /// Inherited members survive base-bindings eviction via retained `Solutions` metadata.
+    #[test]
+    fn test_inherited_fields_survive_base_eviction() {
+        let (env, base, derived) = base_derived_env();
+        let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
+        let mut transaction = state.new_transaction(Require::Exports, None);
+        transaction.set_memory(env.get_memory());
+
+        // `Require::Errors` evicts bindings/answers at each module's `Solutions` step.
+        transaction.run(&[base.dupe()], Require::Errors, None);
+        assert!(
+            transaction.get_bindings(&base).is_none(),
+            "base bindings should be evicted after solving at Require::Errors"
+        );
+
+        transaction.run(&[derived.dupe()], Require::Everything, None);
+        let symbols = ModuleSymbols::collect(&transaction, &derived, false).unwrap();
+        assert_eq!(
+            symbols.classes,
+            base_derived_reference().classes,
+            "evicting the base module's bindings must not change the derived class report"
+        );
+    }
+
+    /// Symbols collected by the hook during a `Require::Errors` run must match a retained run.
+    #[test]
+    fn test_solutions_hook_collection_matches_retained_run() {
+        let (env, base, derived) = base_derived_env();
+        let collected: Mutex<HashMap<Handle, ModuleSymbols>> = Mutex::new(HashMap::new());
+        let state = State::new(env.config_finder(), TEST_THREAD_COUNT);
+        let mut transaction = state.new_transaction(Require::Exports, None);
+        transaction.set_memory(env.get_memory());
+        transaction.set_solutions_hook(Some(Box::new(|handle, transaction| {
+            if let Some(symbols) = ModuleSymbols::collect(transaction, handle, false) {
+                collected.lock().insert(handle.dupe(), symbols);
+            }
+        })));
+
+        transaction.run(&[base.dupe(), derived.dupe()], Require::Errors, None);
+        assert!(
+            transaction.get_bindings(&derived).is_none(),
+            "bindings should be evicted after the run"
+        );
+
+        let symbols = collected.lock().remove(&derived).unwrap();
+        assert_eq!(
+            symbols.classes,
+            base_derived_reference().classes,
+            "hook-collected symbols must match symbols collected with bindings retained"
+        );
     }
 }

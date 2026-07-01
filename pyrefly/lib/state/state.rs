@@ -657,6 +657,8 @@ pub(crate) struct TransactionData<'a> {
     pysa_reporter: Option<Box<crate::report::pysa::PysaReporter>>,
     /// When set, CinderX reporting writes per-module output during answer solving.
     cinderx_reporter: Option<Box<crate::report::cinderx::CinderxReporter>>,
+    /// When set, called per solved module while its bindings/answers are still live (before eviction).
+    solutions_hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
 }
 
 impl<'a> TransactionData<'a> {
@@ -797,6 +799,15 @@ impl<'a> Transaction<'a> {
         self.data.pysa_reporter = reporter;
     }
 
+    /// Set a hook called per solved module while its bindings/answers are still live (before
+    /// eviction), letting per-module analyses (e.g. `coverage`) read them without retaining them.
+    pub fn set_solutions_hook(
+        &mut self,
+        hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
+    ) {
+        self.data.solutions_hook = hook;
+    }
+
     /// Take the pysa reporter out of the transaction, consuming ownership.
     pub fn take_pysa_reporter(&mut self) -> Option<Box<crate::report::pysa::PysaReporter>> {
         self.data.pysa_reporter.take()
@@ -868,14 +879,24 @@ impl<'a> Transaction<'a> {
     }
 
     /// Look up the `ClassFields` for a class, which may be defined in another module.
+    /// Falls back to `Solutions` metadata when bindings are evicted (e.g. during `coverage`).
     pub fn get_class_fields(&self, source_handle: &Handle, class: &Class) -> Option<ClassFields> {
         let handle = Handle::new(
             class.module_name(),
             class.module_path().dupe(),
             source_handle.sys_info().dupe(),
         );
-        let bindings = self.get_bindings(&handle)?;
-        bindings.get_class_fields(class.index()).cloned()
+        if let Some(bindings) = self.get_bindings(&handle) {
+            bindings.get_class_fields(class.index()).cloned()
+        } else {
+            Some(
+                self.get_solutions(&handle)?
+                    .metadata()
+                    .get_class_checked(class.index())?
+                    .fields
+                    .clone(),
+            )
+        }
     }
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
@@ -1524,6 +1545,9 @@ impl<'a> Transaction<'a> {
                 }
                 if self.data.pysa_reporter.is_some() || self.data.cinderx_reporter.is_some() {
                     post.evict_ast();
+                }
+                if let Some(hook) = &self.data.solutions_hook {
+                    hook(&module_data.handle, self);
                 }
                 if !require.keep_bindings() && !require.keep_answers() {
                     // From now on we can use the answers directly, so evict the bindings/answers.
@@ -3274,6 +3298,7 @@ impl State {
                 subscriber,
                 pysa_reporter: None,
                 cinderx_reporter: None,
+                solutions_hook: None,
             },
         }
     }
@@ -3347,6 +3372,7 @@ impl State {
                             subscriber: _,
                             pysa_reporter: _,
                             cinderx_reporter: _,
+                            solutions_hook: _,
                         },
                 },
             committing_transaction_guard,
