@@ -1341,6 +1341,28 @@ class OpenTypedDict(TypedDict, closed=True): ...
 Note: In Python versions before 3.15, import `TypedDict` from `typing_extensions` rather than
 `typing` to use the `closed` feature.
 
+## ordered-dataclass-inheritance
+
+Default severity: `warn`
+
+This warning is reported when a class inherits from a stdlib dataclass with `order=True`. The class
+definition is valid Python, but mixed comparisons between parent and subclass instances can raise
+`TypeError` at runtime because stdlib dataclass ordering methods only compare instances of the exact
+same class.
+
+```python
+from dataclasses import dataclass
+
+@dataclass(order=True)
+class Parent:
+    value: int
+
+class Child(Parent):  # ordered-dataclass-inheritance
+    pass
+
+Child(1) < Parent(2)  # TypeError
+```
+
 ## parse-error
 
 An error related to parsing or syntax. This covers a variety of cases, such as function calls with duplicate keyword args, some poorly defined functions, and so on.

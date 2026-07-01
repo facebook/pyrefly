@@ -607,6 +607,7 @@ impl Default for InitDefaults {
 pub enum DataclassKind {
     Dataclass {
         field_specifiers: Vec<CalleeKind>,
+        is_stdlib_dataclass: bool,
     },
     Attrs {
         auto_attribs: Option<bool>,
@@ -620,7 +621,9 @@ pub enum DataclassKind {
 impl DataclassKind {
     pub fn field_specifiers(&self) -> &[CalleeKind] {
         match self {
-            Self::Dataclass { field_specifiers }
+            Self::Dataclass {
+                field_specifiers, ..
+            }
             | Self::Attrs {
                 field_specifiers, ..
             } => field_specifiers,

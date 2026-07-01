@@ -1233,6 +1233,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             CalleeKind::Function(FunctionKind::DataclassField),
                             CalleeKind::Class(ClassKind::DataclassField),
                         ],
+                        is_stdlib_dataclass: true,
                     };
                     let fields = self.get_dataclass_fields(cls, bases_with_metadata, &kind);
                     let pseudo_field_names = self.get_dataclass_pseudo_field_names(
@@ -1264,6 +1265,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             CalleeKind::Function(FunctionKind::DataclassField),
                             CalleeKind::Class(ClassKind::DataclassField),
                         ],
+                        is_stdlib_dataclass: true,
                     };
                     let fields = self.get_dataclass_fields(cls, bases_with_metadata, &kind);
                     let pseudo_field_names = self.get_dataclass_pseudo_field_names(
@@ -1359,7 +1361,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     field_specifiers,
                 }
             } else {
-                DataclassKind::Dataclass { field_specifiers }
+                DataclassKind::Dataclass {
+                    field_specifiers,
+                    is_stdlib_dataclass: false,
+                }
             };
             let fields = self.get_dataclass_fields(cls, bases_with_metadata, &kind);
             let pseudo_field_names =
@@ -1672,6 +1677,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             range,
                             ErrorKind::InvalidInheritance,
                             format!("Cannot extend final class `{}`", class_object.name()),
+                        );
+                    }
+
+                    if !is_new_type
+                        && let Some(dm) = metadata.dataclass_metadata()
+                        && dm.kws.order
+                        && matches!(
+                            dm.kind,
+                            DataclassKind::Dataclass {
+                                is_stdlib_dataclass: true,
+                                ..
+                            }
+                        )
+                    {
+                        self.error(
+                            errors,
+                            range,
+                            ErrorKind::OrderedDataclassInheritance,
+                            format!(
+                                "Cannot extend dataclass `{}` with `order=True`",
+                                class_object.name()
+                            ),
                         );
                     }
                     if is_new_type {
