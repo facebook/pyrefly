@@ -671,6 +671,7 @@ fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
         "ignore" => None,
         "warn" => Some("warning"),
         "info" => Some("notice"),
+        "hint" => Some("notice"),
         "error" => Some("error"),
         _ => None,
     }
@@ -1244,6 +1245,9 @@ impl CheckArgs {
             self.output.baseline.as_deref(),
             relative_to.as_path(),
         );
+
+        let baseline_errors = errors.baseline;
+
         let (directives, ordinary_errors) = if let Some(only) = &self.output.only {
             let only = only.iter().collect::<SmallSet<_>>();
             (
@@ -1314,9 +1318,9 @@ impl CheckArgs {
         {
             let mut new_baseline = ordinary_errors.clone();
             new_baseline.extend(
-                errors
-                    .baseline
-                    .into_iter()
+                baseline_errors
+                    .iter()
+                    .cloned()
                     .filter(|e| e.severity() >= min_severity),
             );
             new_baseline.sort_by_cached_key(|error| {
@@ -1334,11 +1338,17 @@ impl CheckArgs {
         // (e.g. reveal_type) do not contribute to the error count.
         let ordinary_errors_count = config_errors_count + ordinary_errors.len();
 
-        // Merge directives into the display list, re-sorting by module
+        // Map over each error in baseline_errors to change the severity to "Hint", and use baseline_hints to display severity as "Hint" rather than "Error" for all the error present in baseline_errors.
+        let baseline_hints: Vec<_> = baseline_errors
+            .iter()
+            .map(|e| e.with_severity(Severity::Hint))
+            .collect();
+
+        // Merge directives and baseline_errors into the display list, re-sorting by module
         // name, path, and source range so output preserves file/line
         // interleaving across modules.
         let mut output_errors = ordinary_errors;
-        output_errors.extend(directives);
+        output_errors.extend(directives.into_iter().chain(baseline_hints));
         output_errors.sort_by_cached_key(|e| {
             (
                 e.module().name(),
@@ -1381,6 +1391,7 @@ impl CheckArgs {
                         Severity::Error => panic!("Error-level findings can never be hidden"),
                         Severity::Warn => hidden_warnings += 1,
                         Severity::Info => hidden_info += 1,
+                        Severity::Hint => {}
                         Severity::Ignore => {}
                     }
                 }

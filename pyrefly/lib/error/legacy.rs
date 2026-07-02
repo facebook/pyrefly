@@ -20,6 +20,7 @@ pub(crate) fn severity_to_str(severity: Severity) -> String {
         Severity::Ignore => "ignore".to_owned(),
         Severity::Info => "info".to_owned(),
         Severity::Warn => "warn".to_owned(),
+        Severity::Hint => "hint".to_owned(),
         Severity::Error => "error".to_owned(),
     }
 }
@@ -34,7 +35,7 @@ fn default_severity() -> String {
 /// Used to serialize errors in a Pyre1-compatible format.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct LegacyError {
-    line: usize,
+    pub line: usize,
     pub column: usize,
     stop_line: usize,
     stop_column: usize,

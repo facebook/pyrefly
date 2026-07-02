@@ -464,6 +464,7 @@ impl Playground {
                         Severity::Error => 8,
                         Severity::Warn => 4,
                         Severity::Info => 2,
+                        Severity::Hint => 1,
                         Severity::Ignore => 1,
                     },
                     filename: filename.clone(),
