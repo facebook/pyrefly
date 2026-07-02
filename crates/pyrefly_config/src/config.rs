@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::Display;
+use std::iter::once;
 use std::mem;
 use std::path::Path;
 use std::path::PathBuf;
@@ -46,6 +47,7 @@ use pyrefly_util::globs::HiddenDirFilter;
 use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::RwLock;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::suggest::best_suggestion_str;
 use pyrefly_util::telemetry::SubTaskTelemetry;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
@@ -741,6 +743,58 @@ impl ConfigFile {
         )
     }
 }
+
+/// `ConfigBase` keys, valid both at the top level and inside a `[[sub-config]]`
+/// block. Used only to suggest a "did you mean" for unrecognized keys, so a
+/// missing entry merely weakens a hint — it never silences the warning itself.
+/// Kept in sync with `ConfigBase` by `test_known_config_keys_cover_serialized_fields`.
+const CONFIG_BASE_KEYS: &[&str] = &[
+    "errors",
+    "permissive-ignores",
+    "enabled-ignores",
+    "replace-imports-with-any",
+    "ignore-missing-imports",
+    "untyped-def-behavior",
+    "check-unannotated-defs",
+    "infer-return-types",
+    "disable-type-errors-in-ide",
+    "ignore-errors-in-generated-code",
+    "infer-with-first-use",
+    "pytorch-efficiency-lints",
+    "recursion-depth-limit",
+    "recursion-overflow-handler",
+    "strict-callable-subtyping",
+    "spec-compliant-overloads",
+];
+
+/// Keys valid only at the top level of a config (not inside `[[sub-config]]`):
+/// project-wide settings plus the flattened interpreter and Python-environment
+/// options. The full top-level key set is this list plus `CONFIG_BASE_KEYS`.
+const TOP_LEVEL_ONLY_CONFIG_KEYS: &[&str] = &[
+    "project-includes",
+    "project-excludes",
+    "disable-project-excludes-heuristics",
+    "search-path",
+    "disable-search-path-heuristics",
+    "enable-fallback-search-path",
+    "typeshed-path",
+    "baseline",
+    "output-format",
+    "preset",
+    "sub-config",
+    "use-ignore-files",
+    "build-system",
+    "min-severity",
+    "skip-lsp-config-indexing",
+    "extra-file-extensions",
+    "python-interpreter-path",
+    "fallback-python-interpreter-name",
+    "conda-environment",
+    "skip-interpreter-query",
+    "python-platform",
+    "python-version",
+    "site-package-path",
+];
 
 impl ConfigFile {
     pub const PYREFLY_FILE_NAME: &str = "pyrefly.toml";
@@ -1580,27 +1634,64 @@ impl ConfigFile {
             };
             config.source = config_source;
 
-            if !config.root.extras.0.is_empty() {
-                let extra_keys = config.root.extras.0.keys().join(", ");
-                errors.push(ConfigError::warn(anyhow!(
-                    "Extra keys found in config: {extra_keys}"
-                )));
-            }
-            for sub_config in &config.sub_configs {
-                if !sub_config.settings.extras.0.is_empty() {
-                    let extra_keys = sub_config.settings.extras.0.keys().join(", ");
-                    errors.push(ConfigError::warn(anyhow!(
-                        "Extra keys found in sub config matching {}: {extra_keys}",
-                        sub_config.matches
-                    )));
-                }
-            }
+            errors.extend(
+                config
+                    .unknown_key_warnings()
+                    .into_iter()
+                    .map(ConfigError::warn),
+            );
             (config, errors)
         }
         let config_path = config_path.absolutize();
         let (config, errors) = f(&config_path);
         let errors = errors.into_map(|err| err.context(format!("{}", config_path.display())));
         (config, errors)
+    }
+
+    /// Warn about unrecognized config keys, suggesting the closest known key when
+    /// one is similar enough. Unknown keys are gathered into `extras` by serde's
+    /// `flatten` catch-all, so this never fires for keys Pyrefly understands
+    /// (including the snake_case migration aliases). Top-level and `[[sub-config]]`
+    /// keys are each checked against the options valid in their own scope.
+    fn unknown_key_warnings(&self) -> Vec<anyhow::Error> {
+        fn message(key: &str, candidates: &[&str], sub_match: Option<&Glob>) -> anyhow::Error {
+            let location = match sub_match {
+                Some(matches) => format!(" in sub config matching {matches}"),
+                None => String::new(),
+            };
+            let suggestion =
+                best_suggestion_str(key, candidates.iter().enumerate().map(|(i, k)| (*k, i)))
+                    .map(|s| format!(". Did you mean `{s}`?"))
+                    .unwrap_or_default();
+            anyhow!("Unknown config key `{key}`{location}{suggestion}")
+        }
+
+        let top_level: Vec<&str> = TOP_LEVEL_ONLY_CONFIG_KEYS
+            .iter()
+            .chain(CONFIG_BASE_KEYS)
+            .copied()
+            .collect();
+        let sub_config: Vec<&str> = once("matches")
+            .chain(CONFIG_BASE_KEYS.iter().copied())
+            .collect();
+
+        let mut warnings: Vec<anyhow::Error> = self
+            .root
+            .extras
+            .0
+            .keys()
+            .map(|key| message(key, &top_level, None))
+            .collect();
+        for sub in &self.sub_configs {
+            warnings.extend(
+                sub.settings
+                    .extras
+                    .0
+                    .keys()
+                    .map(|key| message(key, &sub_config, Some(&sub.matches))),
+            );
+        }
+        warnings
     }
 
     fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
@@ -3576,5 +3667,122 @@ output-format = "omit-errors"
             Severity::Ignore,
             "without pytorch-efficiency-lints flag, lints should default to Ignore"
         );
+    }
+
+    #[test]
+    fn test_unknown_config_key_suggests_closest() {
+        // `check-unannotated-def` is a typo of the real `check-unannotated-defs`.
+        let config = ConfigFile::parse_config("check-unannotated-def = true\n").unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(
+            warnings[0].contains("`check-unannotated-def`"),
+            "should name the unknown key: {}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("`check-unannotated-defs`"),
+            "should suggest the closest known key: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn test_unknown_config_key_without_close_match_has_no_suggestion() {
+        let config = ConfigFile::parse_config("made-up-key-xyz = 1\n").unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(warnings[0].contains("`made-up-key-xyz`"), "{}", warnings[0]);
+        assert!(
+            !warnings[0].contains("Did you mean"),
+            "no key is close enough to suggest: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn test_unknown_sub_config_key_suggests_closest() {
+        let config_str = r#"
+[[sub-config]]
+matches = "foo/**"
+check-unannotated-def = true
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(
+            warnings[0].contains("`check-unannotated-def`"),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("`check-unannotated-defs`"),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("sub config matching"),
+            "should mention the sub-config: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn test_known_config_keys_are_not_flagged() {
+        // Canonical kebab-case keys and a snake_case migration alias
+        // (`replace_imports_with_any`) are all recognized, so none is reported.
+        let config_str = r#"
+search-path = ["src"]
+project-includes = ["src"]
+python-version = "3.11"
+replace_imports_with_any = ["foo"]
+"#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        let warnings: Vec<String> = config
+            .unknown_key_warnings()
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn test_known_config_keys_cover_serialized_fields() {
+        // A configured `ConfigFile` serializes every populated option under its
+        // canonical key. Each such top-level key must be covered by our known-key
+        // lists so suggestions stay in sync as new fields are added.
+        let root = TempDir::new().unwrap();
+        let mut config = ConfigFile::init_at_root(root.path(), &ProjectLayout::default(), false);
+        config.configure();
+        let table: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        let known: std::collections::HashSet<&str> = TOP_LEVEL_ONLY_CONFIG_KEYS
+            .iter()
+            .chain(CONFIG_BASE_KEYS)
+            .copied()
+            .collect();
+        for key in table.keys() {
+            // `extras` is serde's `flatten` catch-all, not a real config key.
+            if key == "extras" {
+                continue;
+            }
+            assert!(
+                known.contains(key.as_str()),
+                "serialized config key `{key}` is missing from CONFIG_BASE_KEYS / \
+                 TOP_LEVEL_ONLY_CONFIG_KEYS; add it so suggestions stay in sync"
+            );
+        }
     }
 }
