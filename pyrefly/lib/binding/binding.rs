@@ -137,7 +137,7 @@ assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
 assert_words!(BindingDecorator, 13);
 assert_bytes!(BindingDecoratedFunction, 20);
-assert_words!(BindingUndecoratedFunction, 20);
+assert_words!(BindingUndecoratedFunction, 21);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AnyIdx {
@@ -1867,6 +1867,8 @@ pub struct BindingUndecoratedFunction {
     /// inferred from the body (i.e. the corresponding `ReturnType` binding will
     /// use `ReturnTypeKind::ShouldInferType`).
     pub is_return_inferred: bool,
+    /// `true` when the body directly calls `super(...).<this function>(...)`.
+    pub calls_super_method: bool,
     pub class_key: Option<Idx<KeyClass>>,
     pub legacy_tparams: Box<[Idx<KeyLegacyTypeParam>]>,
     pub decorators: Box<[Idx<KeyDecorator>]>,

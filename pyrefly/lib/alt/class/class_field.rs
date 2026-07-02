@@ -1058,6 +1058,19 @@ impl ClassField {
         }
     }
 
+    fn calls_super_method(&self) -> bool {
+        match &self.0 {
+            ClassFieldInner::Method { ty, .. } => {
+                ty.visit_toplevel_func_metadata(&|meta| meta.flags.calls_super_method)
+            }
+            _ => false,
+        }
+    }
+
+    fn requires_super_method_call(name: &Name) -> bool {
+        name == &dunder::INIT || name == &dunder::NEW || name == &dunder::INIT_SUBCLASS
+    }
+
     /// Check if this field is read-only for any reason.
     fn is_read_only(&self) -> bool {
         match &self.0 {
@@ -3320,6 +3333,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         true
     }
 
+    fn check_missing_super_call_for_field(
+        &self,
+        cls: &Class,
+        field_name: &Name,
+        class_field: &ClassField,
+        bases: &ClassBases,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if !(ClassField::requires_super_method_call(field_name)
+            && class_field.can_have_override_decorator()
+            && !class_field.calls_super_method())
+        {
+            return;
+        }
+        for parent in bases.iter() {
+            let parent_cls = parent.class_object();
+            if self.get_metadata_for_class(parent_cls).has_base_any() {
+                return;
+            }
+            let Some(want_field) =
+                self.get_class_member_with_defining_class(parent_cls, field_name)
+            else {
+                continue;
+            };
+            if want_field.defining_class.is_builtin("object") {
+                continue;
+            }
+            self.error(
+                errors,
+                range,
+                ErrorKind::MissingSuperCall,
+                format!(
+                    "Method `{}.{}` does not call the method of the same name in a parent class",
+                    cls.name(),
+                    field_name,
+                ),
+            );
+            return;
+        }
+    }
+
     pub fn check_consistent_override_for_field(
         &self,
         cls: &Class,
@@ -3329,18 +3384,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let is_explicit_override = class_field.is_override();
-        if matches!(class_field.1, IsInherited::No) && !is_explicit_override {
-            return;
-        }
         let metadata = self.get_metadata_for_class(cls);
-        if !self.should_check_field_for_override_consistency(
-            field_name,
-            &metadata,
-            is_explicit_override,
-        ) {
-            return;
-        }
-
         let Some(cls_fields) = self.get_class_fields(cls) else {
             return;
         };
@@ -3349,6 +3393,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             return;
         };
+
+        self.check_missing_super_call_for_field(cls, field_name, class_field, bases, range, errors);
+
+        if matches!(class_field.1, IsInherited::No) && !is_explicit_override {
+            return;
+        }
+        if !self.should_check_field_for_override_consistency(
+            field_name,
+            &metadata,
+            is_explicit_override,
+        ) {
+            return;
+        }
 
         let mut got_attribute = None;
         let mut parent_attr_found = false;
