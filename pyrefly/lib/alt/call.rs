@@ -8,7 +8,6 @@
 use std::iter;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -1692,7 +1691,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // and the class object as `objtype`.
         let (objtype, obj) = match base {
             DescriptorBase::Instance(classtype) => (
-                self.heap.mk_class_def(classtype.class_object().dupe()),
+                self.heap
+                    .mk_type_of(self.heap.mk_class_type(classtype.clone())),
                 self.heap.mk_class_type(classtype),
             ),
             DescriptorBase::SelfInstance(classtype) => (
