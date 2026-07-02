@@ -185,6 +185,8 @@ pub enum ErrorKind {
     /// An unqualified import that resolves only through the fallback search path heuristic, so it
     /// may fail at runtime.
     FallbackSearchPathRelativeImport,
+    /// Formatting a value whose default string representation is unlikely to be helpful.
+    HelpfulString,
     /// Raised when a class that inherits from an abstract class but is not itself explicitly
     /// abstract (for example, it does not directly inherit from abc.ABC or use abc.ABCMeta) has
     /// unimplemented abstract members.
@@ -612,6 +614,7 @@ impl ErrorKind {
             ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ExplicitAnyUse => Severity::Ignore,
             ErrorKind::FallbackSearchPathRelativeImport => Severity::Warn,
+            ErrorKind::HelpfulString => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAnyAttribute => Severity::Ignore,

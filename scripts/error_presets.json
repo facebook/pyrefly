@@ -44,6 +44,7 @@
     "explicit-any": ["all"],
     "explicit-any-use": ["all"],
     "fallback-search-path-relative-import": ["legacy", "default", "strict", "all"],
+    "helpful-string": ["all"],
     "implicit-abstract-class": ["all"],
     "implicit-any": ["strict", "all"],
     "implicit-any-attribute": ["strict", "all"],
