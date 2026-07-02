@@ -135,7 +135,7 @@ assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 13);
+assert_words!(BindingDecorator, 14);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 20);
 
@@ -1793,6 +1793,8 @@ pub enum FunctionStubOrImpl {
 pub struct BindingDecorator {
     pub expr: Expr,
     pub trailing_name: Option<Name>,
+    /// Metadata decorators are consumed during binding and must not replace the class object.
+    pub is_class_metadata: bool,
 }
 
 impl DisplayWith<Bindings> for BindingDecorator {
