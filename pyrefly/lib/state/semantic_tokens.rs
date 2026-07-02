@@ -90,6 +90,7 @@ impl SemanticTokensLegends {
                 SemanticTokenType::REGEXP,
                 SemanticTokenType::OPERATOR,
                 SemanticTokenType::DECORATOR,
+                SemanticTokenType::new("formatSpecifier"),
             ],
             token_modifiers: vec![
                 SemanticTokenModifier::DECLARATION,
@@ -221,6 +222,50 @@ impl SemanticTokensLegends {
         modifiers.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         modifiers
     }
+}
+
+fn get_expr_tail(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Attribute(attr) => Some(attr.attr.as_str()),
+        Expr::Call(call) => get_expr_tail(&call.func),
+        _ => None,
+    }
+}
+
+fn is_logger_candidate(func: &Expr) -> bool {
+    let Expr::Attribute(attr) = func else {
+        return false;
+    };
+
+    let method = attr.attr.as_str();
+    if ![
+        "debug",
+        "info",
+        "warning",
+        "warn",
+        "error",
+        "critical",
+        "exception",
+        "log",
+    ]
+    .contains(&method)
+    {
+        return false;
+    }
+
+    if let Some(tail) = get_expr_tail(attr.value.as_ref())
+        && (tail.starts_with("log")
+            || tail.ends_with("logger")
+            || tail.ends_with("logging")
+            || tail.starts_with("LOG")
+            || tail.ends_with("LOGGER")
+            || tail.ends_with("LOGGING"))
+        {
+            return true;
+        }
+
+    false
 }
 
 fn syntax_token_type(kind: TokenKind) -> Option<SemanticTokenType> {
@@ -360,13 +405,14 @@ impl SemanticTokenBuilder {
         attr: &ExprAttribute,
         get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
         get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
+        source: &str,
     ) {
         let kind = get_type_of_attribute(attr.range())
             .map(attribute_semantic_token_type)
             .unwrap_or(SemanticTokenType::PROPERTY);
         self.push_if_in_range(attr.attr.range(), kind, Vec::new());
         attr.value
-            .visit(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+            .visit(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind, source));
     }
 
     fn process_expr(
@@ -374,6 +420,7 @@ impl SemanticTokenBuilder {
         x: &Expr,
         get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
         get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
+        source: &str,
     ) {
         match x {
             Expr::Name(name) => {
@@ -400,46 +447,63 @@ impl SemanticTokenBuilder {
             }
             Expr::Call(call) => {
                 self.process_arguments(&call.arguments);
-                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+                if is_logger_candidate(&call.func)
+                    && let Some(first_arg) = call.arguments.args.first()
+                        && let Expr::StringLiteral(string_lit) = first_arg {
+                            self.process_format_specifiers(string_lit, source);
+                        }
+                x.recurse(&mut |x| {
+                    self.process_expr(x, get_type_of_attribute, get_symbol_kind, source)
+                });
             }
             Expr::Attribute(attr) => {
-                self.process_attribute_expr(attr, get_type_of_attribute, get_symbol_kind);
+                self.process_attribute_expr(attr, get_type_of_attribute, get_symbol_kind, source);
             }
             // Comprehensions need special handling because the Visit trait doesn't visit targets
             Expr::ListComp(list_comp) => {
                 for comp in &list_comp.generators {
                     comp.target.visit(&mut |e| {
-                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
                     });
                 }
-                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+                x.recurse(&mut |e| {
+                    self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
+                });
             }
             Expr::SetComp(set_comp) => {
                 for comp in &set_comp.generators {
                     comp.target.visit(&mut |e| {
-                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
                     });
                 }
-                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+                x.recurse(&mut |e| {
+                    self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
+                });
             }
             Expr::DictComp(dict_comp) => {
                 for comp in &dict_comp.generators {
                     comp.target.visit(&mut |e| {
-                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
                     });
                 }
-                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+                x.recurse(&mut |e| {
+                    self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
+                });
             }
             Expr::Generator(generator) => {
                 for comp in &generator.generators {
                     comp.target.visit(&mut |e| {
-                        self.process_expr(e, get_type_of_attribute, get_symbol_kind)
+                        self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
                     });
                 }
-                x.recurse(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+                x.recurse(&mut |e| {
+                    self.process_expr(e, get_type_of_attribute, get_symbol_kind, source)
+                });
             }
             _ => {
-                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+                x.recurse(&mut |x| {
+                    self.process_expr(x, get_type_of_attribute, get_symbol_kind, source)
+                });
             }
         }
     }
@@ -449,6 +513,7 @@ impl SemanticTokenBuilder {
         x: &Stmt,
         in_class: bool,
         get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
+        source: &str,
     ) {
         match x {
             Stmt::ClassDef(class_def) => {
@@ -462,7 +527,7 @@ impl SemanticTokenBuilder {
                         );
                     }
                 }
-                x.recurse(&mut |x| self.process_stmt(x, true, get_symbol_kind));
+                x.recurse(&mut |x| self.process_stmt(x, true, get_symbol_kind, source));
             }
             Stmt::FunctionDef(function_def) => {
                 let token_type = if in_class {
@@ -511,7 +576,7 @@ impl SemanticTokenBuilder {
                         modifiers,
                     );
                 }
-                x.recurse(&mut |x| self.process_stmt(x, false, get_symbol_kind));
+                x.recurse(&mut |x| self.process_stmt(x, false, get_symbol_kind, source));
             }
             Stmt::Assign(assign) => {
                 if self.is_disabled(assign.range()) {
@@ -525,7 +590,7 @@ impl SemanticTokenBuilder {
                         }
                     }
                 }
-                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind, source));
             }
             Stmt::Try(stmt_try) => {
                 for ExceptHandler::ExceptHandler(handler) in stmt_try.handlers.iter() {
@@ -533,7 +598,7 @@ impl SemanticTokenBuilder {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
-                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind, source));
             }
             Stmt::With(with) => {
                 for with_item in with.items.iter() {
@@ -541,7 +606,7 @@ impl SemanticTokenBuilder {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
-                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind, source));
             }
             Stmt::Import(StmtImport { names, .. }) => {
                 for alias in names {
@@ -613,9 +678,40 @@ impl SemanticTokenBuilder {
                 if let Expr::Name(name) = &*ann_assign.target {
                     self.push_if_in_range(name.range, SemanticTokenType::VARIABLE, vec![]);
                 }
-                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind, source));
             }
-            _ => x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind)),
+            _ => x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind, source)),
+        }
+    }
+
+    fn process_format_specifiers(
+        &mut self,
+        string_lit: &ruff_python_ast::ExprStringLiteral,
+        source: &str,
+    ) {
+        use std::sync::OnceLock;
+
+        use regex::Regex;
+        static RE: OnceLock<Regex> = OnceLock::new();
+        let re = RE.get_or_init(|| {
+            Regex::new(r"%[-+#0 ]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[diouxXeEfFgGcrsa]|%\(\w+\)[-+#0 ]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[diouxXeEfFgGcrsa]").unwrap()
+        });
+
+        let start_offset = string_lit.range().start();
+        let end_offset = string_lit.range().end();
+        if start_offset.to_usize() > source.len() || end_offset.to_usize() > source.len() {
+            return;
+        }
+        let text = &source[start_offset.to_usize()..end_offset.to_usize()];
+
+        for m in re.find_iter(text) {
+            let start = start_offset + TextSize::try_from(m.start()).unwrap();
+            let end = start_offset + TextSize::try_from(m.end()).unwrap();
+            self.push_if_in_range(
+                TextRange::new(start, end),
+                SemanticTokenType::new("formatSpecifier"),
+                Vec::new(),
+            );
         }
     }
 
@@ -624,11 +720,12 @@ impl SemanticTokenBuilder {
         ast: &ModModule,
         get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
         get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
+        source: &str,
     ) {
         for s in &ast.body {
-            self.process_stmt(s, false, get_symbol_kind);
+            self.process_stmt(s, false, get_symbol_kind, source);
         }
-        ast.visit(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind));
+        ast.visit(&mut |e| self.process_expr(e, get_type_of_attribute, get_symbol_kind, source));
     }
 
     pub fn all_tokens_sorted(self) -> Vec<SemanticTokenWithFullRange> {
