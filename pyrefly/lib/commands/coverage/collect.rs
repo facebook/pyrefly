@@ -740,11 +740,12 @@ fn parse_functions(
                     }
                 }
             } else {
-                // Keep only public, exported, non-deleted module-level functions.
+                // Keep only public, exported, non-deleted, non-excluded-dunder module-level functions.
                 if !exports.contains_key(&fun.def.name.id)
                     || (!is_public_name(fun.def.name.as_str())
                         && !dunder_all.contains(&fun.def.name.id))
                     || deleted.contains(&fun.def.name.id)
+                    || EXCLUDED_MODULE_DUNDERS.contains(&fun.def.name.as_str())
                 {
                     continue;
                 }
@@ -2552,6 +2553,13 @@ mod tests {
     fn test_report_private_in_all() {
         let report = build_module_report_for_test("private_in_all.py");
         compare_snapshot("private_in_all.expected.json", &report);
+    }
+
+    /// PEP 562 module hooks written as `def` are excluded from the report (issue #4020).
+    #[test]
+    fn test_report_module_dunder_hooks() {
+        let report = build_module_report_for_test("module_dunder_hooks.py");
+        compare_snapshot("module_dunder_hooks.expected.json", &report);
     }
 
     /// CPython-injected module globals are excluded even when control flow
