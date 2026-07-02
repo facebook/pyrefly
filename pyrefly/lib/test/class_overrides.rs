@@ -586,7 +586,7 @@ testcase!(
 import contextlib
 import abc
 
-class Parent:
+class Parent(abc.ABC):
     @contextlib.asynccontextmanager
     @abc.abstractmethod
     async def run(self):

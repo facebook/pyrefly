@@ -728,6 +728,20 @@ def f(x: bool = False) -> int | None:
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).
 
+## invalid-abstract-method
+
+Pyrefly emits this error when a class that is not abstract (does not inherit from `abc.ABC`, use `abc.ABCMeta`, or have any transitive abstract base) defines a method decorated with `@abstractmethod`. Such a class is directly instantiable at runtime, yet contains an unimplemented method — a likely programming mistake.
+
+```python
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod  # Error: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+    def fn(self) -> int: ...
+```
+
+To fix the issue, either inherit from `abc.ABC` to make the class abstract, or remove the `@abstractmethod` decorator and provide a concrete implementation.
+
 ## invalid-annotation
 
 There are several reasons why an annotation may be invalid. The most common case is misusing a typing special form, such as `typing.Final`, `typing.ClassVar`, `typing.ParamSpec`, and so on.
