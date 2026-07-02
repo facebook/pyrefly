@@ -354,6 +354,36 @@ def f(x: int | str | None) -> None:
 }
 
 #[test]
+fn hover_type_source_attribute_narrow() {
+    let code = r#"
+class C:
+    x: int | None
+
+def f(c: C) -> None:
+    if c.x is not None:
+        c.x
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("**Type source**"),
+        "Expected type source section in field hover, got: {report}"
+    );
+    assert!(
+        report.contains("c.x is not None"),
+        "Expected attribute narrow in field hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_type_source_no_source_at_first_use_site() {
     // When hovering at the first-use site itself, we should not show
     // "Inferred from first use" pointing back to the same location.
