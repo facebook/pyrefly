@@ -2840,9 +2840,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .signatures
             .iter()
             .filter(|sig| {
-                let func = match sig {
-                    OverloadType::Function(f) => f,
-                    OverloadType::Forall(forall) => &forall.body,
+                let (func, tparams) = match sig {
+                    OverloadType::Function(f) => (f, None),
+                    OverloadType::Forall(forall) => (&forall.body, Some(&forall.tparams)),
                 };
                 // Only instance methods have a `self` first parameter; static and
                 // class methods' first parameter is a regular argument.
@@ -2850,6 +2850,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return true;
                 }
                 func.signature.get_first_param().is_none_or(|p| {
+                    // Replace the overload's own type params in `self:` with `Any`
+                    // (e.g. `self: Array[S, T]` -> `Array[Any, Any]`), matching against a gradual
+                    // `self:` rather than a rigid, unsolvable variable.
+                    let p = match tparams {
+                        Some(tparams) => {
+                            let any = self.heap.mk_any_implicit();
+                            p.subst(&tparams.iter().map(|q| (q, &any)).collect())
+                        }
+                        None => p,
+                    };
                     // A non-protocol `self:` can't re-enter protocol conformance, so check
                     // it directly. A protocol-typed `self:`, however, makes
                     // `is_subset_eq(self_type, p)` re-enter this same filtering on the same
