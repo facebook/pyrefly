@@ -16,7 +16,6 @@ use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::finder::ConfigFinder;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
-use pyrefly_python::ignore::Ignore;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
@@ -35,6 +34,7 @@ use ruff_python_ast::Parameters;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -106,36 +106,20 @@ fn range_to_location(module: &Module, range: TextRange) -> Location {
     }
 }
 
-/// Parse type-ignore suppressions from source using the multi-tool parser from `ignore.rs`.
+/// Collect the module's type-ignore suppressions, each located at the `#` starting its comment.
 fn parse_suppressions(module: &Module) -> Vec<ReportSuppression> {
-    let source = module.lined_buffer().contents();
-    let ignore = Ignore::new(source);
     let mut suppressions = Vec::new();
-    let lines: Vec<&str> = source.lines().collect();
-
-    for (_line_number, supps) in ignore.iter() {
+    for (_, supps) in module.ignore().iter() {
         for supp in supps {
-            let comment_line_num = supp.comment_line().get() as usize;
-            let column = comment_line_num
-                .checked_sub(1)
-                .and_then(|idx| lines.get(idx))
-                .and_then(|line| line.find('#'))
-                .map(|c| c + 1);
-            let Some(column) = column else {
-                continue;
-            };
-
+            let offset = module.lined_buffer().line_start(supp.comment_line())
+                + TextSize::try_from(supp.comment_offset()).unwrap();
             suppressions.push(ReportSuppression {
                 kind: supp.tool(),
                 codes: supp.error_codes().to_vec(),
-                location: Location {
-                    line: comment_line_num,
-                    column,
-                },
+                location: range_to_location(module, TextRange::empty(offset)),
             });
         }
     }
-
     suppressions
 }
 

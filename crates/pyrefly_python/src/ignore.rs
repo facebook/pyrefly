@@ -250,21 +250,29 @@ pub struct Suppression {
     /// This may differ from the line the suppression applies to
     /// (e.g., when the comment is on the line above).
     comment_line: LineNumber,
+    /// Byte offset within `comment_line` of the `#` that starts the comment.
+    comment_offset: usize,
 }
 
 impl Suppression {
     /// A blanket suppression for `tool` that matches every error code.
-    fn blanket(tool: Tool, comment_line: LineNumber) -> Self {
+    fn blanket(tool: Tool, comment_line: LineNumber, comment_offset: usize) -> Self {
         Self {
             tool,
             kind: Vec::new(),
             comment_line,
+            comment_offset,
         }
     }
 
     /// Returns the line number where the suppression comment is located.
     pub fn comment_line(&self) -> LineNumber {
         self.comment_line
+    }
+
+    /// Returns the byte offset of the comment's `#` within `comment_line`.
+    pub fn comment_offset(&self) -> usize {
+        self.comment_offset
     }
 
     /// Returns the error codes that this suppression applies to.
@@ -304,20 +312,18 @@ impl Ignore {
         for (idx, line_str) in code.lines().enumerate() {
             let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
             in_triple_quote = new_state;
-            let comments = if let Some(comment_start) = comment_start {
-                &line_str[comment_start..]
-            } else {
-                ""
-            };
             let is_comment_only_line = comment_start
                 .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
             line = LineNumber::from_zero_indexed(idx as u32);
             if !pending.is_empty() && (line_str.is_empty() || !is_comment_only_line) {
                 ignores.entry(line).or_default().append(&mut pending);
             }
-            // We know `#` is at the beginning, so the first split is an empty string
-            for x in comments.split('#').skip(1) {
-                if let Some(supp) = Self::parse_ignore_comment(x, line) {
+            let Some(comment_start) = comment_start else {
+                continue;
+            };
+            // We know `#` is at `comment_start`, so the first split is an empty string
+            for x in line_str[comment_start..].split('#').skip(1) {
+                if let Some(supp) = Self::parse_ignore_comment(x, line, comment_start) {
                     if is_comment_only_line {
                         pending.push(supp);
                     } else {
@@ -336,8 +342,12 @@ impl Ignore {
     }
 
     /// Given the content of a comment, parse it as a suppression.
-    /// The comment_line parameter indicates which line the comment is on.
-    fn parse_ignore_comment(l: &str, comment_line: LineNumber) -> Option<Suppression> {
+    /// `comment_line` and `comment_offset` locate the `#` starting the comment.
+    fn parse_ignore_comment(
+        l: &str,
+        comment_line: LineNumber,
+        comment_offset: usize,
+    ) -> Option<Suppression> {
         let mut lex = Lexer(l);
         lex.trim_start();
 
@@ -361,9 +371,10 @@ impl Ignore {
                 tool,
                 kind: parse_error_codes(inside),
                 comment_line,
+                comment_offset,
             });
         } else if gap || lex.word_boundary() {
-            return Some(Suppression::blanket(tool, comment_line));
+            return Some(Suppression::blanket(tool, comment_line, comment_offset));
         }
         None
     }
@@ -509,10 +520,10 @@ pub fn parse_ignore_all(
             break;
         }
 
-        if let Some((tool, prev_line)) = prev_ignore {
+        if let Some((tool, prev_line, prev_offset)) = prev_ignore {
             // The previous `# type: ignore` was followed by another comment or
             // blank line, so it is a whole-file suppression.
-            res.push(Suppression::blanket(tool, prev_line));
+            res.push(Suppression::blanket(tool, prev_line, prev_offset));
             prev_ignore = None;
         }
 
@@ -520,9 +531,11 @@ pub fn parse_ignore_all(
         if !lex.starts_with("#") {
             continue;
         }
+        // `trimmed` starts with `#`, so its offset is the line's leading whitespace.
+        let comment_offset = raw_line.len() - raw_line.trim_start().len();
         lex.trim_start();
         if lex.starts_with("pyre-ignore-all-errors") {
-            res.push(Suppression::blanket(Tool::Pyre, line));
+            res.push(Suppression::blanket(Tool::Pyre, line, comment_offset));
         } else if let Some(tool) = lex.starts_with_tool() {
             lex.trim_start();
             if lex.starts_with("ignore-errors") {
@@ -554,12 +567,13 @@ pub fn parse_ignore_all(
                         tool,
                         kind,
                         comment_line: line,
+                        comment_offset,
                     });
                 }
             } else if !seen_docstring && lex.starts_with("ignore") && lex.blank() {
                 // After a docstring, bare `# type: ignore` is not recognized
                 // as an ignore-all directive.
-                prev_ignore = Some((tool, line));
+                prev_ignore = Some((tool, line, comment_offset));
             }
         }
     }
@@ -649,15 +663,38 @@ x = """
     }
 
     #[test]
+    fn test_suppression_comment_offset() {
+        fn f(x: &str, expect: &[(u32, usize)]) {
+            assert_eq!(
+                &Ignore::parse_ignores(x)
+                    .into_iter()
+                    .flat_map(|(_, xs)| xs.map(|x| (x.comment_line.get(), x.comment_offset)))
+                    .collect::<Vec<_>>(),
+                expect,
+                "{x:?}"
+            );
+        }
+
+        f("x = 1  # type: ignore", &[(1, 7)]);
+        // Not the `#` inside the string literal
+        f(r##"x: str = "#hash"  # type: ignore"##, &[(1, 18)]);
+        // Line starts inside a triple-quoted string that closes mid-line
+        f("x = \"\"\"\n#fake\"\"\" # type: ignore", &[(2, 9)]);
+        // A comment above code keeps its own line and offset
+        f("  # type: ignore\nx = 1", &[(1, 2)]);
+    }
+
+    #[test]
     fn test_parse_ignore_comment() {
         fn f(x: &str, tool: Option<Tool>, kind: &[&str]) {
             let dummy_line = LineNumber::default();
             assert_eq!(
-                Ignore::parse_ignore_comment(x, dummy_line),
+                Ignore::parse_ignore_comment(x, dummy_line, 0),
                 tool.map(|tool| Suppression {
                     tool,
                     kind: kind.map(|x| (*x).to_owned()),
                     comment_line: dummy_line,
+                    comment_offset: 0,
                 }),
                 "{x:?}"
             );
@@ -750,6 +787,7 @@ x = """
                         tool: x.0,
                         kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
                         comment_line: LineNumber::new(x.1).unwrap(),
+                        comment_offset: 0,
                     })
                     .collect::<Vec<_>>(),
                 "{x:?}"
@@ -837,6 +875,7 @@ x = """
                         tool: x.0,
                         kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
                         comment_line: LineNumber::new(x.1).unwrap(),
+                        comment_offset: 0,
                     })
                     .collect::<Vec<_>>(),
                 "{x:?}"
