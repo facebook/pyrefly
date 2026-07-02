@@ -152,6 +152,103 @@ Example(id="123")  # E: Missing argument `attribute_1`
 );
 
 pydantic_testcase!(
+    test_model_validate_nested_field_range,
+    r#"
+from pydantic import BaseModel, Field
+
+class Item(BaseModel):
+    sku: str
+    quantity: int = Field(ge=1)
+
+class Inventory(BaseModel):
+    items: list[Item]
+
+Inventory.model_validate({"items": [{"sku": "A-100", "quantity": 5}]})
+Inventory.model_validate({"items": [{"sku": "B-200", "quantity": -3}]})  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
+
+bad = {"items": [{"sku": "B-200", "quantity": -3}]}  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
+Inventory.model_validate(bad)
+"#,
+);
+
+pydantic_testcase!(
+    test_model_validate_from_attributes_accepts_object,
+    r#"
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    x: int
+
+def validate(obj: object) -> Model:
+    return Model.model_validate(obj, from_attributes=True)
+"#,
+);
+
+pydantic_testcase!(
+    test_custom_model_validate_is_not_overwritten,
+    r#"
+from typing import Self
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    x: int
+
+    @classmethod
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        return cls(x=0)
+
+def validate(obj: object) -> int:
+    return Model.model_validate(obj).x
+"#,
+);
+
+pydantic_testcase!(
+    test_super_model_validate_returns_self,
+    r#"
+from typing import Self
+from pydantic import BaseModel
+
+class Parent(BaseModel):
+    x: int
+
+class Child(Parent):
+    y: int
+
+    @classmethod
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        return super().model_validate(
+            obj,
+            strict=strict,
+            from_attributes=from_attributes,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
+
+def validate(obj: object) -> int:
+    return Child.model_validate(obj, from_attributes=True).y
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
