@@ -18,8 +18,26 @@ use crate::stubgen::extract::StubVariable;
 pub fn emit_stub(stub: &ModuleStub) -> String {
     let mut out = String::new();
 
+    let mut typing_names = Vec::new();
+    if stub.uses_callable {
+        typing_names.push("Callable");
+    }
+    if stub.uses_classvar {
+        typing_names.push("ClassVar");
+    }
+    if stub.uses_self {
+        typing_names.push("Self");
+    }
+    if !typing_names.is_empty() {
+        out.push_str(&format!("from typing import {}\n", typing_names.join(", ")));
+    }
+
     if stub.uses_incomplete {
-        out.push_str("from _typeshed import Incomplete\n\n");
+        out.push_str("from _typeshed import Incomplete\n");
+    }
+
+    if !typing_names.is_empty() || stub.uses_incomplete {
+        out.push('\n');
     }
 
     emit_items(&stub.items, &mut out, "");

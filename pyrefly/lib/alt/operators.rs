@@ -12,13 +12,12 @@ use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::LitStyle;
-use pyrefly_types::literal::Literal;
 use pyrefly_types::quantified::Quantified;
-use pyrefly_types::quantified::QuantifiedKind;
-use pyrefly_types::tensor::TensorType;
-use pyrefly_types::tensor::broadcast_shapes;
+use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::shaped_array::broadcast_shapes;
+use pyrefly_types::simplify::intersect;
 use pyrefly_types::type_var::Restriction;
-use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCompare;
@@ -29,7 +28,6 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use vec1::vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -41,12 +39,19 @@ use crate::binding::binding::KeyAnnotation;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EqualityCompatibilityGroup {
+    Numeric,
+    BytesLike,
+    SetLike,
+    Str,
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn callable_dunder_helper(
@@ -59,7 +64,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         opname: &Name,
         call_arg_type: &Type,
     ) -> Type {
-        self.record_resolved_trace(range, method_type.clone());
+        self.record_resolved_trace(range, &method_type);
         let callable = self.as_call_target_or_error(
             method_type,
             CallStyle::Method(opname),
@@ -79,7 +84,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    /// Try to handle binary operations on symbolic integer types (Dim, SizeExpr, TypeVar Quantified).
+    /// Try to handle binary operations on symbolic integer types (Dim and SizeExpr).
     /// Returns Some(result_type) if the operation was handled, None otherwise.
     fn try_symint_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
         // Only handle if tensor shapes feature is enabled
@@ -95,40 +100,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
 
-        // Check if at least one operand is a symbolic dimension type or literal int
-        let is_dim_operand = |ty: &Type| match ty {
+        // Literal integers are allowed as the non-shape side of dimension arithmetic, but
+        // ordinary literal arithmetic should keep the normal integer operator behavior.
+        let is_shape_operand = |ty: &Type| match ty {
             Type::Dim(_) | Type::Size(_) => true,
-            Type::Literal(box Literal {
-                value: Lit::Int(_), ..
-            }) => true,
-            Type::QuantifiedValue(q) => {
-                matches!(q.kind, QuantifiedKind::TypeVar)
-            }
             _ => false,
         };
-        if !is_dim_operand(lhs) && !is_dim_operand(rhs) {
+        if !is_shape_operand(lhs) && !is_shape_operand(rhs) {
             return None;
         }
 
-        // Extract the dimension type from Dim, Literal, or Quantified
+        // Extract the dimension type from Dim, Size, or an integer literal paired with one.
         let to_dim_type = |ty: &Type| -> Option<Type> {
             match ty {
                 Type::Dim(inner_ty) => {
                     // Dim wraps a dimension type (could be SizeExpr, Quantified, etc.)
                     Some((**inner_ty).clone())
                 }
-                Type::Literal(box Literal {
-                    value: Lit::Int(n), ..
-                }) => {
+                Type::Literal(f) if let Lit::Int(n) = &f.value => {
                     // Convert literal to SizeExpr
                     n.as_i64()
                         .map(|val| self.heap.mk_size(SizeExpr::Literal(val)))
-                }
-                Type::QuantifiedValue(q)
-                    if matches!(q.kind, pyrefly_types::quantified::QuantifiedKind::TypeVar) =>
-                {
-                    // TypeVar Quantified can be used in dimension arithmetic
-                    Some(Type::Quantified(q.clone()))
                 }
                 Type::Size(_) => {
                     // SizeExpr is already a dimension type - pass through
@@ -151,28 +143,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => unreachable!(),
         };
 
-        // If either operand is Dim, return Dim-wrapped result.
-        // If both operands are Literal[int], convert result back to Literal[int].
-        // Otherwise (e.g., Dim-bounded type parameters), return unwrapped dimension type.
+        // If either operand is Dim, return Dim-wrapped result. Otherwise
+        // (e.g., Dim-bounded type parameters), return the dimension expression.
         if matches!(lhs, Type::Dim(_)) || matches!(rhs, Type::Dim(_)) {
             Some(self.heap.mk_dim(result_ty))
-        } else if matches!(
-            lhs,
-            Type::Literal(box Literal {
-                value: Lit::Int(_), ..
-            })
-        ) && matches!(
-            rhs,
-            Type::Literal(box Literal {
-                value: Lit::Int(_), ..
-            })
-        ) {
-            // Both operands are Literal[int], so convert SizeExpr::Literal back to Literal[int]
-            if let Type::Size(SizeExpr::Literal(n)) = &result_ty {
-                Some(Lit::Int(LitInt::new(*n)).to_implicit_type())
-            } else {
-                Some(result_ty)
-            }
         } else {
             Some(result_ty)
         }
@@ -228,11 +202,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|(dunder, _, _)| format!("`{dunder}`"))
                 .collect::<Vec<_>>()
                 .join(" or ");
-            self.error(
+            self.error_with_context(
                 errors,
                 range,
-                ErrorInfo::Context(&context),
+                ErrorKind::UnsupportedOperation,
                 format!("Cannot find {dunders}"),
+                Some(&context),
             )
         }
     }
@@ -255,19 +230,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap
                     .mk_unpacked_tuple(Vec::new(), self.heap.mk_tuple(l.clone()), r.clone())
             }
-            (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Concrete(r)) => {
+            (Tuple::Unpacked(l), Tuple::Concrete(r)) => {
+                let (l_prefix, l_middle, l_suffix) = &**l;
                 let mut new_suffix = l_suffix.clone();
                 new_suffix.extend(r.clone());
                 self.heap
                     .mk_unpacked_tuple(l_prefix.clone(), l_middle.clone(), new_suffix)
             }
-            (Tuple::Concrete(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
+            (Tuple::Concrete(l), Tuple::Unpacked(r)) => {
+                let (r_prefix, r_middle, r_suffix) = &**r;
                 let mut new_prefix = l.clone();
                 new_prefix.extend(r_prefix.clone());
                 self.heap
                     .mk_unpacked_tuple(new_prefix, r_middle.clone(), r_suffix.clone())
             }
-            (Tuple::Unbounded(l), Tuple::Unpacked(box (r_prefix, r_middle, r_suffix))) => {
+            (Tuple::Unbounded(l), Tuple::Unpacked(r)) => {
+                let (r_prefix, r_middle, r_suffix) = &**r;
                 let mut middle = r_prefix.clone();
                 middle.push((**l).clone());
                 middle.push(
@@ -280,7 +258,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     r_suffix.clone(),
                 )
             }
-            (Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)), Tuple::Unbounded(r)) => {
+            (Tuple::Unpacked(l), Tuple::Unbounded(r)) => {
+                let (l_prefix, l_middle, l_suffix) = &**l;
                 let mut middle = l_suffix.clone();
                 middle.push((**r).clone());
                 middle.push(
@@ -293,10 +272,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Vec::new(),
                 )
             }
-            (
-                Tuple::Unpacked(box (l_prefix, l_middle, l_suffix)),
-                Tuple::Unpacked(box (r_prefix, r_middle, r_suffix)),
-            ) => {
+            (Tuple::Unpacked(l), Tuple::Unpacked(r)) => {
+                let (l_prefix, l_middle, l_suffix) = &**l;
+                let (r_prefix, r_middle, r_suffix) = &**r;
                 let mut middle = l_suffix.clone();
                 middle.extend(r_prefix.clone());
                 middle.push(
@@ -318,18 +296,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn try_tuple_repeat(&self, lhs: &Type, rhs: &Type) -> Option<Type> {
         let (elements, repeats) = match (lhs, rhs) {
-            (
-                Type::Tuple(Tuple::Concrete(elts)),
-                Type::Literal(box Literal {
-                    value: Lit::Int(n), ..
-                }),
-            ) => (elts, n.as_i64()?),
-            (
-                Type::Literal(box Literal {
-                    value: Lit::Int(n), ..
-                }),
-                Type::Tuple(Tuple::Concrete(elts)),
-            ) => (elts, n.as_i64()?),
+            (Type::Tuple(Tuple::Concrete(elts)), Type::Literal(f))
+                if let Lit::Int(n) = &f.value =>
+            {
+                (elts, n.as_i64()?)
+            }
+            (Type::Literal(f), Type::Tuple(Tuple::Concrete(elts)))
+                if let Lit::Int(n) = &f.value =>
+            {
+                (elts, n.as_i64()?)
+            }
             _ => return None,
         };
         if repeats <= 0 {
@@ -396,7 +372,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 x.range,
-                ErrorInfo::Kind(ErrorKind::DivisionByZero),
+                ErrorKind::DivisionByZero,
                 format!(
                     "Cannot divide by zero: `{}` with a literal zero divisor",
                     x.op.as_str()
@@ -409,13 +385,86 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check if a type is exactly `Literal[0]` (either implicit or explicit).
     fn is_literal_zero(ty: &Type) -> bool {
-        matches!(
-            ty,
-            Type::Literal(box Literal {
-                value: Lit::Int(n),
-                ..
-            }) if *n == LitInt::new(0)
-        )
+        matches!(ty, Type::Literal(f) if f.value == Lit::Int(LitInt::new(0)))
+    }
+
+    /// Performs an operation `f` on a quantified `q`, which may be narrowed to a concrete type.
+    fn on_quantified(
+        &self,
+        q: &Quantified,
+        narrowed_type: Option<&Type>,
+        f: &dyn Fn(&Type) -> Type,
+    ) -> Type {
+        if let Restriction::Constraints(constraints) = &q.restriction {
+            let cur_constraints = if let Some(narrowed_type) = narrowed_type {
+                vec![narrowed_type]
+            } else {
+                constraints.iter().collect()
+            };
+            self.unions(cur_constraints.into_map(|constraint| {
+                let res = f(constraint);
+                if res == *constraint {
+                    // If f returned the constraint unchanged, preserve the quantified.
+                    intersect(
+                        vec![q.clone().to_type(self.heap), res.clone()],
+                        res,
+                        self.heap,
+                    )
+                } else {
+                    res
+                }
+            }))
+        } else if let Some(narrowed_type) = narrowed_type {
+            f(narrowed_type)
+        } else {
+            f(&q.upper_bound(self.stdlib, self.heap))
+        }
+    }
+
+    fn on_quantifieds(
+        &self,
+        left: &Type,
+        right: &Type,
+        f: &dyn Fn(&Type, &Type) -> Type,
+    ) -> Option<Type> {
+        match (left.as_quantified(), right.as_quantified()) {
+            (Some((left_q, left_narrow)), Some((right_q, right_narrow)))
+                if matches!(left_q.restriction(), Restriction::Constraints(_))
+                    && left_q == right_q =>
+            {
+                Some(
+                    self.on_quantified(left_q, left_narrow.or(right_narrow), &|constraint| {
+                        f(constraint, constraint)
+                    }),
+                )
+            }
+            // We skip non-union bounds to avoid accidentally erasing `Self` typevars.
+            (Some((left_q, left_narrow)), _)
+                if matches!(
+                    left_q.restriction(),
+                    Restriction::Constraints(_) | Restriction::Bound(Type::Union(_))
+                ) =>
+            {
+                Some(
+                    self.on_quantified(left_q, left_narrow, &|left_restriction| {
+                        f(left_restriction, right)
+                    }),
+                )
+            }
+            (_, Some((right_q, right_narrow)))
+                if matches!(
+                    right_q.restriction(),
+                    Restriction::Constraints(_) | Restriction::Bound(Type::Union(_))
+                ) =>
+            {
+                Some(
+                    self.on_quantified(right_q, right_narrow, &|right_restriction| {
+                        f(left, right_restriction)
+                    }),
+                )
+            }
+            _ => None,
+        }
     }
 
     fn binop_types(&self, x: &ExprBinOp, lhs: &Type, rhs: &Type, errors: &ErrorCollector) -> Type {
@@ -446,20 +495,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Without loss of generality, consider e1 + e2 where e1 has type int and e2 has type Any.
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
-                if let Type::Any(style) = &rhs {
-                    style.propagate()
-                } else if let Type::Any(style) = &lhs {
-                    style.propagate()
-                } else if x.op == Operator::BitOr
+                //
+                // Exception: when one operand is a shaped Tensor, fall through
+                // to dunder dispatch. Tensor's arithmetic dunders accept any
+                // numeric type and return Self, so the shape is preserved
+                // regardless of the other operand's type. Without this, e.g.
+                // Tensor[B, 1] / (2**n - 1.0) loses shape because 2**n is Any.
+                if (lhs.is_any() || rhs.is_any())
+                    && !matches!(lhs, Type::ShapedArray(_))
+                    && !matches!(rhs, Type::ShapedArray(_))
+                {
+                    if let Type::Any(style) = &rhs {
+                        return style.propagate();
+                    } else if let Type::Any(style) = &lhs {
+                        return style.propagate();
+                    }
+                }
+                if x.op == Operator::BitOr
                     && let Some(l) = self.untype_opt(lhs.clone(), x.left.range(), errors)
                     && let Some(r) = self.untype_opt(rhs.clone(), x.right.range(), errors)
                 {
                     self.heap.mk_type_of(self.union(l, r))
                 } else if x.op == Operator::Add
-                    && ((matches!(lhs, Type::LiteralString(_)) && rhs.is_literal_string())
-                        || (matches!(rhs, Type::LiteralString(_)) && lhs.is_literal_string()))
+                    && let Some(lhs_style) = lhs.lit_string_style()
+                    && let Some(rhs_style) = rhs.lit_string_style()
                 {
-                    self.heap.mk_literal_string(LitStyle::Implicit)
+                    self.heap.mk_literal_string(match (lhs_style, rhs_style) {
+                        (LitStyle::Explicit, LitStyle::Explicit) => LitStyle::Explicit,
+                        _ => LitStyle::Implicit,
+                    })
                 } else if x.op == Operator::Add
                     && let Type::Tuple(l) = lhs
                     && let Type::Tuple(r) = rhs
@@ -478,11 +542,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         | Operator::Mod
                         | Operator::Pow
                         | Operator::FloorDiv
-                ) && let Type::Tensor(l_tensor) = lhs
-                    && let Type::Tensor(r_tensor) = rhs
+                ) && let Type::ShapedArray(l_shaped_array) = lhs
+                    && let Type::ShapedArray(r_shaped_array) = rhs
                 {
                     // Tensor element-wise operations with broadcasting
-                    self.broadcast_tensor_binop(l_tensor, r_tensor, x.range, errors)
+                    self.broadcast_shaped_array_binop(
+                        l_shaped_array,
+                        r_shaped_array,
+                        x.range,
+                        errors,
+                    )
                 } else if let Some(result) = self.try_symint_binop(x.op, lhs, rhs) {
                     result
                 } else if x.op == Operator::Pow
@@ -495,9 +564,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         // if the exponent is a positive int, return int
                         // if the exponent is a negative int, return float
                         // if the exponent is unknown, call the `__pow__` method like normal
-                        Type::Literal(box Literal {
-                            value: Lit::Int(n), ..
-                        }) => {
+                        Type::Literal(f) if let Lit::Int(n) = &f.value => {
                             if *n == LitInt::new(0) {
                                 LitInt::new(1).to_implicit_type()
                             } else if *n < LitInt::new(0) {
@@ -524,29 +591,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     }
                 } else {
-                    match (lhs, rhs) {
-                        (Type::Quantified(left_q), Type::Quantified(right_q))
-                            if left_q == right_q
-                                && let Restriction::Constraints(constraints) =
-                                    &left_q.restriction =>
-                        {
-                            self.unions(constraints.map(|constraint| {
-                                self.binop_types(x, constraint, constraint, errors)
-                            }))
-                        }
-                        // We skip non-union bounds to avoid accidentally erasing `Self` typevars.
-                        (Type::Quantified(left_q), _)
-                            if let Some(left_restriction) = self.as_union_restriction(left_q) =>
-                        {
-                            self.binop_types(x, &left_restriction, rhs, errors)
-                        }
-                        (_, Type::Quantified(right_q))
-                            if let Some(right_restriction) = self.as_union_restriction(right_q) =>
-                        {
-                            self.binop_types(x, lhs, &right_restriction, errors)
-                        }
-                        _ => binop_call(x.op, lhs, rhs, x.range),
-                    }
+                    self.on_quantifieds(lhs, rhs, &|left, right| {
+                        self.binop_types(x, left, right, errors)
+                    })
+                    .unwrap_or_else(|| binop_call(x.op, lhs, rhs, x.range))
                 }
             })
         })
@@ -585,7 +633,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 x.range,
-                ErrorInfo::Kind(ErrorKind::DivisionByZero),
+                ErrorKind::DivisionByZero,
                 format!(
                     "Cannot divide by zero: `{}=` with a literal zero divisor",
                     x.op.as_str()
@@ -601,10 +649,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else if let Type::Any(style) = &rhs {
                     style.propagate()
                 } else if x.op == Operator::Add
-                    && base.is_literal_string()
-                    && rhs.is_literal_string()
+                    && let Some(lhs_style) = lhs.lit_string_style()
+                    && let Some(rhs_style) = rhs.lit_string_style()
                 {
-                    self.heap.mk_literal_string(LitStyle::Implicit)
+                    self.heap.mk_literal_string(match (lhs_style, rhs_style) {
+                        (LitStyle::Explicit, LitStyle::Explicit) => LitStyle::Explicit,
+                        _ => LitStyle::Implicit,
+                    })
                 } else if x.op == Operator::Add
                     && let Type::Tuple(ref l) = base
                     && let Type::Tuple(r) = rhs
@@ -650,6 +701,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 comparator.range(),
                 errors,
             );
+            self.check_incompatible_comparison(
+                &current_left,
+                &right,
+                *op,
+                comparator.range(),
+                errors,
+            );
 
             let right_range = comparator.range();
             let result = self.compare_types(
@@ -669,16 +727,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.unions(results)
     }
 
-    /// Returns the restriction on the given Quantified if the restriction is a union
-    fn as_union_restriction(&self, q: &Quantified) -> Option<Type> {
-        let restriction = q.bound_type(self.stdlib, self.heap);
-        if matches!(restriction, Type::Union(_)) {
-            Some(restriction)
-        } else {
-            None
-        }
-    }
-
     fn compare_types(
         &self,
         x: &ExprCompare,
@@ -696,48 +744,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // This mirrors the same check in binop_infer.
                     (Type::Any(style), _) => style.propagate(),
                     (_, Type::Any(style)) => style.propagate(),
-                    (Type::Quantified(left_q), Type::Quantified(right_q))
-                        if left_q == right_q
-                            && let Restriction::Constraints(constraints) = &left_q.restriction =>
+                    // If the RHS of a containment check isn't a quantified, it may contain a
+                    // nested quantified that on_quantifieds would fail to detect.
+                    _ if (!matches!(op, CmpOp::In | CmpOp::NotIn)
+                        || right.as_quantified().is_some())
+                        && let Some(ret_if_quantified) =
+                            self.on_quantifieds(left, right, &|left, right| {
+                                self.compare_types(
+                                    x,
+                                    op,
+                                    left,
+                                    right,
+                                    current_left_range,
+                                    current_right_range,
+                                    errors,
+                                )
+                            }) =>
                     {
-                        self.unions(constraints.map(|constraint| {
-                            self.compare_types(
-                                x,
-                                op,
-                                constraint,
-                                constraint,
-                                current_left_range,
-                                current_right_range,
-                                errors,
-                            )
-                        }))
-                    }
-                    // We skip non-union bounds to avoid accidentally erasing `Self` typevars.
-                    (Type::Quantified(left_q), _)
-                        if let Some(left_restriction) = self.as_union_restriction(left_q) =>
-                    {
-                        self.compare_types(
-                            x,
-                            op,
-                            &left_restriction,
-                            right,
-                            current_left_range,
-                            current_right_range,
-                            errors,
-                        )
-                    }
-                    (_, Type::Quantified(right_q))
-                        if let Some(right_restriction) = self.as_union_restriction(right_q) =>
-                    {
-                        self.compare_types(
-                            x,
-                            op,
-                            left,
-                            &right_restriction,
-                            current_left_range,
-                            current_right_range,
-                            errors,
-                        )
+                        ret_if_quantified
                     }
                     _ => {
                         let context = || {
@@ -767,7 +791,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     errors,
                                     Some(&context),
                                 ) {
-                                    ret
+                                    self.check_dunder_bool_is_callable(&ret, x.range, errors);
+                                    self.heap.mk_class_type(self.stdlib.bool().clone())
                                 } else {
                                     let iteration_errors = self.error_collector();
                                     let iterables = self.iterate(
@@ -832,7 +857,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassType(_)
                 | Type::SelfType(_)
                 | Type::Quantified(_)
-                | Type::Tensor(_)
+                | Type::ShapedArray(_)
                 | Type::NNModule(_) => {
                     self.call_method_or_error(t, method, x.range, &[], &[], errors, Some(&context))
                 }
@@ -850,7 +875,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => self.error(
                     errors,
                     x.range,
-                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                    ErrorKind::UnsupportedOperation,
                     context().format(),
                 ),
             }
@@ -909,7 +934,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::UnnecessaryComparison),
+                ErrorKind::UnnecessaryComparison,
                 format!(
                     "Identity comparison `{} {} {}` is always {}",
                     left_str,
@@ -920,23 +945,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         };
         let emit_instance_is_class_warning = |instance_str: &str, class_str: &str, is_op: bool| {
-            errors.add(
-                range,
-                ErrorInfo::Kind(ErrorKind::UnnecessaryComparison),
-                vec1![
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::UnnecessaryComparison,
                     format!(
                         "Identity comparison between an instance of `{}` and class `{}` is always {}",
                         instance_str,
                         class_str,
                         if is_op { "False" } else { "True" }
                     ),
-                    format!(
-                        "Did you mean to do `{}isinstance(..., {})`?",
-                        if is_op { "" } else { "not " },
-                        class_str,
-                    )
-                ],
-            );
+                )
+                .with_detail(format!(
+                    "Did you mean to do `{}isinstance(..., {})`?",
+                    if is_op { "" } else { "not " },
+                    class_str,
+                ))
+                .emit();
         };
 
         match (left, right) {
@@ -996,24 +1021,82 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// broadcast_shapes handles all shape variants: Concrete shapes are broadcast
     /// precisely, Unpacked shapes match suffix then middles then prefixes, and
     /// mixed Concrete+Unpacked aligns against the suffix.
-    fn broadcast_tensor_binop(
+    fn broadcast_shaped_array_binop(
         &self,
-        left: &TensorType,
-        right: &TensorType,
+        left: &ShapedArrayType,
+        right: &ShapedArrayType,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
         match broadcast_shapes(&left.shape, &right.shape) {
-            Ok(result_shape) => TensorType::new(left.base_class.clone(), result_shape).to_type(),
+            Ok(result_shape) => self.shaped_array_with_shape(left, result_shape).to_type(),
             Err(err) => {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::UnsupportedOperation),
+                    ErrorKind::UnsupportedOperation,
                     format!("Cannot broadcast tensor shapes: {}", err),
                 );
                 Type::any_error()
             }
+        }
+    }
+    /// Checks for incompatible equality comparisons between types that cannot overlap.
+    fn check_incompatible_comparison(
+        &self,
+        left: &Type,
+        right: &Type,
+        op: CmpOp,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+            return;
+        }
+        if left.is_any() || right.is_any() || left.is_never() || right.is_never() {
+            return;
+        }
+        let Some(left_group) = self.equality_compatibility_group(left) else {
+            return;
+        };
+        let Some(right_group) = self.equality_compatibility_group(right) else {
+            return;
+        };
+        if left_group == right_group {
+            return;
+        }
+        let left_display = self.for_display(left.clone());
+        let right_display = self.for_display(right.clone());
+        self.error(
+            errors,
+            range,
+            ErrorKind::IncompatibleComparison,
+            format!(
+                "Comparison `{}` between incompatible types `{}` and `{}`",
+                op.as_str(),
+                left_display,
+                right_display
+            ),
+        );
+    }
+
+    fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
+        let class = match ty {
+            Type::ClassType(cls) => cls.class_object(),
+            Type::Literal(lit) => lit.value.general_class_type(self.stdlib).class_object(),
+            Type::LiteralString(_) => self.stdlib.str().class_object(),
+            _ => return None,
+        };
+        match (class.qname().module_name().as_str(), class.name().as_str()) {
+            ("builtins", "bool" | "int" | "float" | "complex") | ("decimal", "Decimal") => {
+                Some(EqualityCompatibilityGroup::Numeric)
+            }
+            ("builtins", "bytes" | "bytearray" | "memoryview") => {
+                Some(EqualityCompatibilityGroup::BytesLike)
+            }
+            ("builtins", "set" | "frozenset") => Some(EqualityCompatibilityGroup::SetLike),
+            ("builtins", "str") => Some(EqualityCompatibilityGroup::Str),
+            _ => None,
         }
     }
 }

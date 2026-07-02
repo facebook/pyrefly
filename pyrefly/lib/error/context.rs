@@ -101,25 +101,6 @@ impl ErrorContext {
     }
 }
 
-/// Info about an error. All errors have a kind; some also have a context (see ErrorContext).
-/// Use ErrorInfo::Context for errors with both a kind and a context (the kind will be looked up
-/// from the context); use ErrorInfo::Kind for errors with a kind but no context.
-pub enum ErrorInfo<'a> {
-    Context(&'a dyn Fn() -> ErrorContext),
-    Kind(ErrorKind),
-}
-
-impl<'a> ErrorInfo<'a> {
-    /// Build ErrorInfo from a kind and context. Note that the kind is used only when the context is None.
-    pub fn new(error_kind: ErrorKind, context: Option<&'a dyn Fn() -> ErrorContext>) -> Self {
-        if let Some(ctx) = context {
-            Self::Context(ctx)
-        } else {
-            Self::Kind(error_kind)
-        }
-    }
-}
-
 /// The context in which a got <: want type check occurs. This differs from ErrorContext in that
 /// TypeCheckContext applies specifically to type mismatches. For example:
 ///   class C:
@@ -189,8 +170,9 @@ pub enum TypeCheckKind {
     /// Check of a parameter's default value against its type annotation.
     FunctionParameterDefault(Name),
     /// Check against type of a TypedDict key. The name may be None if the type comes from
-    /// `extra_items` or some other non-literal-key source.
-    TypedDictKey(Option<Name>),
+    /// `extra_items` or some other non-literal-key source. The bool indicates whether the
+    /// TypedDict was inferred (anonymous) rather than explicitly declared.
+    TypedDictKey(Option<Name>, bool),
     /// Check an unpacked dict against a TypedDict, e.g., `x: MyTypedDict = {**unpacked_dict}`.
     TypedDictUnpacking,
     /// Check unpacking of an open TypedDict into a TypedDict. Used to report instances of
@@ -210,10 +192,6 @@ pub enum TypeCheckKind {
     AnnAssign,
     /// Check one portion of an unpacked assignment (e.g. `x, y = foo()`) against the expected type.
     UnpackedAssign,
-    /// We break cycles using recursive `Var`s, which the solver might pin. When we record a final
-    /// answer, if the solver pinned the Var to an incompatible type, we record a type error with this
-    /// kind. This is hard to understand and should be avoided when possible.
-    CycleBreaking,
     /// Class used in an `except C` clause.
     ExceptionClass,
     /// Yielding a value that conflicts with the return annotation.
@@ -260,7 +238,7 @@ impl TypeCheckKind {
             Self::CallKwArgs(..) => ErrorKind::BadArgumentType,
             Self::CallUnpackKwArg(..) => ErrorKind::BadArgumentType,
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
-            Self::TypedDictKey(..) => ErrorKind::BadTypedDictKey,
+            Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,
             Self::TypedDictOpenUnpacking => ErrorKind::OpenUnpacking,
             Self::Attribute(..) => ErrorKind::BadAssignment,
@@ -268,7 +246,6 @@ impl TypeCheckKind {
             Self::IterationVariableMismatch(..) => ErrorKind::BadAssignment,
             Self::AnnAssign => ErrorKind::BadAssignment,
             Self::UnpackedAssign => ErrorKind::BadAssignment,
-            Self::CycleBreaking => ErrorKind::BadAssignment,
             Self::ExceptionClass => ErrorKind::InvalidInheritance,
             Self::YieldValue => ErrorKind::InvalidYield,
             Self::YieldFrom => ErrorKind::InvalidYield,

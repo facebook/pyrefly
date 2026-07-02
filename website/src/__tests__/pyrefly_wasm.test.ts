@@ -123,7 +123,7 @@ movie: Movie = {'name': 'Blade Runner',
                 "`Literal['1982']` is not assignable to TypedDict key `year` with type `int`"
             );
             expect(typedDictError).toBeDefined();
-            expect(typedDictError.kind).toBe('bad-typed-dict-key');
+            expect(typedDictError.kind).toBe('bad-assignment');
         });
     });
 
@@ -164,7 +164,7 @@ tes
             const testCompletion = completions.find((c) => c.label === 'test');
             expect(testCompletion).toBeDefined();
             expect(testCompletion.detail).toContain('(x: int) -> int');
-            expect(testCompletion.kind).toBe(3); // Function kind
+            expect(testCompletion.kind).toBe(1); // Monaco Function kind (LSP's is 3)
         });
     });
 

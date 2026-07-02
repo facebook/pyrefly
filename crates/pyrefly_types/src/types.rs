@@ -42,11 +42,13 @@ use crate::callable::Params;
 use crate::callable::PrefixParam;
 use crate::callable::PropertyMetadata;
 use crate::callable::PropertyRole;
+use crate::callable_residual::CallableResidual;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
 use crate::dimension;
 use crate::dimension::SizeExpr;
+use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
 use crate::keywords::DataclassTransformMetadata;
@@ -57,10 +59,11 @@ use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
+use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
-use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::Restriction;
@@ -323,11 +326,16 @@ impl TArgs {
 
     pub fn substitute_into_mut(&self, ty: &mut Type) {
         match ty {
-            Type::TypeAlias(box TypeAliasData::Ref(r))
-            | Type::UntypedAlias(box TypeAliasData::Ref(r)) => {
-                // We don't have the value of the type alias available to do the substitution, so store
-                // the targs so that we can apply them when the value is looked up.
-                r.args = Some(self.clone())
+            Type::TypeAlias(ta) | Type::UntypedAlias(ta)
+                if matches!(**ta, TypeAliasData::Ref(_)) =>
+            {
+                // Repeated match because pattern guards cannot mutably borrow.
+                if let TypeAliasData::Ref(r) = &mut **ta {
+                    // Store targs so they can be applied when the value is looked up.
+                    r.args = Some(self.clone())
+                } else {
+                    unreachable!("guarded by matches! above")
+                }
             }
             _ => self.substitution().substitute_into_mut(ty),
         }
@@ -636,7 +644,7 @@ impl VisitMut<Type> for Union {
 
 /// An nn.Module instance with captured constructor arguments.
 ///
-/// Analogous to how `TensorType` wraps `ClassType` + shape info, `NNModuleType`
+/// Analogous to how `ShapedArrayType` wraps `ClassType` + shape info, `NNModuleType`
 /// wraps `ClassType` + a field map of captured init args. This allows DSL forward
 /// functions to access constructor parameters (e.g., `kernel_size`, `stride`)
 /// directly from the type, without requiring every shape-relevant parameter to
@@ -689,7 +697,7 @@ impl Ord for NNModuleType {
     }
 }
 
-impl pyrefly_util::visit::Visit<Type> for NNModuleType {
+impl Visit<Type> for NNModuleType {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
         self.class.recurse(f);
         for (_, ty) in self.fields.iter() {
@@ -698,7 +706,7 @@ impl pyrefly_util::visit::Visit<Type> for NNModuleType {
     }
 }
 
-impl pyrefly_util::visit::VisitMut<Type> for NNModuleType {
+impl VisitMut<Type> for NNModuleType {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         self.class.recurse_mut(f);
         for (_, ty) in self.fields.iter_mut() {
@@ -707,7 +715,7 @@ impl pyrefly_util::visit::VisitMut<Type> for NNModuleType {
     }
 }
 
-impl crate::equality::TypeEq for NNModuleType {
+impl TypeEq for NNModuleType {
     fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
         crate::equality::TypeEq::type_eq(&self.class, &other.class, ctx)
             && self.fields.len() == other.fields.len()
@@ -736,6 +744,11 @@ pub enum Type {
     LiteralString(LitStyle),
     /// typing.Callable
     Callable(Box<Callable>),
+    /// The result of solving a parameter in a higher-order function call against some part of a
+    /// generic or overloaded argument type. This type captures information about the structure
+    /// of the argument, so that we can resonstruct the same generic/overload structure if it
+    /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
+    CallableResidual(Box<CallableResidual>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
@@ -771,9 +784,9 @@ pub enum Type {
     /// For a TypedDict type `C`, `Partial[C]` represents an object with any subset of read-write
     /// keys from `C`, where each present key has the same value type as in `C`.
     PartialTypedDict(TypedDict),
-    /// Tensor type with shape information
+    /// Shaped-array type with shape information.
     /// Example: Tensor[2, 3] represents a 2x3 tensor
-    Tensor(Box<TensorType>),
+    ShapedArray(Box<ShapedArrayType>),
     /// nn.Module instance with captured constructor arguments.
     /// Wraps a ClassType + field map of init args, enabling DSL forward
     /// functions to access shape-relevant constructor parameters directly.
@@ -846,6 +859,9 @@ pub enum Type {
     /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
     /// stores a reference that is untyped once we actually look up the value.
     UntypedAlias(Box<TypeAliasData>),
+    // Sentinel types, documented here: https://docs.python.org/3.15/library/functions.html#sentinel
+    // First introduced in PEP 661: https://peps.python.org/pep-0661/
+    Sentinel(Sentinel),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -881,6 +897,7 @@ impl Visit for Type {
             Type::Literal(x) => x.visit(f),
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
+            Type::CallableResidual(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
             Type::Overload(x) => x.visit(f),
@@ -890,7 +907,7 @@ impl Visit for Type {
             Type::ClassType(x) => x.visit(f),
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
-            Type::Tensor(x) => x.visit(f),
+            Type::ShapedArray(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
             Type::Size(x) => x.visit(f),
             Type::Dim(x) => x.visit(f),
@@ -906,6 +923,7 @@ impl Visit for Type {
             Type::Annotated(x, _metadata) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
+            Type::Sentinel(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
@@ -936,6 +954,7 @@ impl VisitMut for Type {
             Type::Literal(x) => x.visit_mut(f),
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
+            Type::CallableResidual(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
             Type::Overload(x) => x.visit_mut(f),
@@ -945,7 +964,7 @@ impl VisitMut for Type {
             Type::ClassType(x) => x.visit_mut(f),
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
-            Type::Tensor(x) => x.visit_mut(f),
+            Type::ShapedArray(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
             Type::Size(x) => x.visit_mut(f),
             Type::Dim(x) => x.visit_mut(f),
@@ -961,6 +980,7 @@ impl VisitMut for Type {
             Type::Annotated(x, _metadata) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
+            Type::Sentinel(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
@@ -1111,18 +1131,29 @@ impl Type {
     }
 
     pub fn is_implicit_literal(&self) -> bool {
-        matches!(
-            self,
-            Type::Literal(box Literal { style: LitStyle::Implicit, ..}) |
-            Type::LiteralString(LitStyle::Implicit)
-        )
+        match self {
+            Type::Literal(lit) => lit.style == LitStyle::Implicit,
+            Type::LiteralString(LitStyle::Implicit) => true,
+            _ => false,
+        }
     }
 
     pub fn is_literal_string(&self) -> bool {
+        self.lit_string_style().is_some()
+    }
+
+    /// A scalar type cannot decompose into a container element type.
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, Type::Literal(_) | Type::LiteralString(_) | Type::None)
+    }
+
+    /// If this type is a literal string (either `LiteralString` or a `Literal` string value),
+    /// return its `LitStyle`.
+    pub fn lit_string_style(&self) -> Option<&LitStyle> {
         match self {
-            Type::LiteralString(_) => true,
-            Type::Literal(l) if l.value.is_string() => true,
-            _ => false,
+            Type::LiteralString(style) => Some(style),
+            Type::Literal(l) if l.value.is_string() => Some(&l.style),
+            _ => None,
         }
     }
 
@@ -1355,11 +1386,8 @@ impl Type {
 
     pub fn is_typeguard(&self) -> bool {
         match self {
-            Type::Callable(box callable)
-            | Type::Function(box Function {
-                signature: callable,
-                metadata: _,
-            }) => callable.is_typeguard(),
+            Type::Callable(c) => c.is_typeguard(),
+            Type::Function(f) => f.signature.is_typeguard(),
             Type::Forall(forall) => forall.body.is_typeguard(),
             Type::BoundMethod(method) => method.func.is_typeguard(),
             Type::Overload(overload) => overload.is_typeguard(),
@@ -1369,16 +1397,19 @@ impl Type {
 
     pub fn is_typeis(&self) -> bool {
         match self {
-            Type::Callable(box callable)
-            | Type::Function(box Function {
-                signature: callable,
-                metadata: _,
-            }) => callable.is_typeis(),
+            Type::Callable(c) => c.is_typeis(),
+            Type::Function(f) => f.signature.is_typeis(),
             Type::Forall(forall) => forall.body.is_typeis(),
             Type::BoundMethod(method) => method.func.is_typeis(),
             Type::Overload(overload) => overload.is_typeis(),
             _ => false,
         }
+    }
+
+    pub fn is_assert_shape(&self) -> bool {
+        self.visit_toplevel_func_metadata(&|meta| {
+            meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
+        })
     }
 
     pub fn is_none(&self) -> bool {
@@ -1387,7 +1418,7 @@ impl Type {
 
     pub fn callee_kind(&self) -> Option<CalleeKind> {
         match self {
-            Type::Callable(_) => Some(CalleeKind::Callable),
+            Type::Callable(_) | Type::CallableResidual(_) => Some(CalleeKind::Callable),
             Type::Function(func) => Some(CalleeKind::Function(func.metadata.kind.clone())),
             Type::ClassDef(c) => Some(CalleeKind::Class(c.kind())),
             Type::Forall(forall) => forall.body.clone().as_type().callee_kind(),
@@ -1400,16 +1431,27 @@ impl Type {
     pub fn subst_mut_fn(&mut self, mp: &mut dyn FnMut(&Quantified) -> Option<Type>) {
         // We are looking up Quantified in a map, and Quantified may contain a Quantified within it.
         // Therefore, to make sure we still get matches, work top-down (not using `transform`).
-        fn f(ty: &mut Type, mp: &mut dyn FnMut(&Quantified) -> Option<Type>) {
+        fn f(
+            ty: &mut Type,
+            mp: &mut dyn FnMut(&Quantified) -> Option<Type>,
+            shadowed: &mut Vec<Quantified>,
+        ) {
             if let Type::Quantified(x) = ty {
-                if let Some(w) = mp(x) {
+                if !shadowed.contains(x)
+                    && let Some(w) = mp(x)
+                {
                     *ty = w;
                 }
+            } else if let Type::Forall(forall) = ty {
+                let old_len = shadowed.len();
+                shadowed.extend(forall.tparams.iter().cloned());
+                ty.recurse_mut(&mut |x| f(x, mp, shadowed));
+                shadowed.truncate(old_len);
             } else {
-                ty.recurse_mut(&mut |x| f(x, mp));
+                ty.recurse_mut(&mut |x| f(x, mp, shadowed));
             }
         }
-        f(self, mp);
+        f(self, mp, &mut Vec::new());
     }
 
     pub fn subst_mut(&mut self, mp: &SmallMap<&Quantified, &Type>) {
@@ -1458,28 +1500,34 @@ impl Type {
         &'a self,
         visit: &dyn Fn(&'a FuncMetadata) -> T,
     ) -> T {
-        match self {
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                tparams: _,
-                body: Forallable::Function(func),
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func:
-                    BoundMethodType::Function(func)
-                    | BoundMethodType::Forall(Forall {
-                        tparams: _,
-                        body: func,
-                    }),
-                ..
-            }) => visit(&func.metadata),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => visit(&overload.metadata),
-            _ => T::default(),
+        let func: Option<&Function> = match self {
+            Type::Function(func) => Some(func),
+            Type::Forall(forall) => match &forall.body {
+                Forallable::Function(func) => Some(func),
+                _ => None,
+            },
+            Type::BoundMethod(bm) => match &bm.func {
+                BoundMethodType::Function(func) => Some(func),
+                BoundMethodType::Forall(forall) => Some(&forall.body),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(func) = func {
+            return visit(&func.metadata);
         }
+        let overload: Option<&Overload> = match self {
+            Type::Overload(overload) => Some(overload),
+            Type::BoundMethod(bm) => match &bm.func {
+                BoundMethodType::Overload(overload) => Some(overload),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(overload) = overload {
+            return visit(&overload.metadata);
+        }
+        T::default()
     }
 
     pub fn has_toplevel_func_metadata(&self) -> bool {
@@ -1538,6 +1586,15 @@ impl Type {
         clone
     }
 
+    /// Returns `true` if the metadata was successfully set (i.e., the type is function-like).
+    pub fn set_property_metadata(&mut self, metadata: PropertyMetadata) -> bool {
+        let mut metadata = Some(metadata);
+        self.transform_toplevel_func_metadata(|meta| {
+            meta.flags.property_metadata = metadata.take();
+        });
+        metadata.is_none()
+    }
+
     pub fn is_overload(&self) -> bool {
         self.visit_toplevel_func_metadata(&|meta| meta.flags.is_overload)
     }
@@ -1562,27 +1619,33 @@ impl Type {
     /// Transforms this type's function metadata, if it is a function. Note that we do *not*
     /// recurse into the type to find nested function types.
     pub fn transform_toplevel_func_metadata(&mut self, mut f: impl FnMut(&mut FuncMetadata)) {
-        match self {
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                tparams: _,
-                body: Forallable::Function(func),
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func:
-                    BoundMethodType::Function(func)
-                    | BoundMethodType::Forall(Forall {
-                        tparams: _,
-                        body: func,
-                    }),
-                ..
-            }) => f(&mut func.metadata),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => f(&mut overload.metadata),
-            _ => {}
+        let func: Option<&mut Function> = match self {
+            Type::Function(func) => Some(func),
+            Type::Forall(forall) => match &mut forall.body {
+                Forallable::Function(func) => Some(func),
+                _ => None,
+            },
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Function(func) => Some(func),
+                BoundMethodType::Forall(forall) => Some(&mut forall.body),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(func) = func {
+            f(&mut func.metadata);
+            return;
+        }
+        let overload: Option<&mut Overload> = match self {
+            Type::Overload(overload) => Some(overload),
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Overload(overload) => Some(overload),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(overload) = overload {
+            f(&mut overload.metadata);
         }
     }
 
@@ -1591,28 +1654,25 @@ impl Type {
     pub fn visit_toplevel_callable<'a>(&'a self, mut f: impl FnMut(&'a Callable)) {
         match self {
             Type::Callable(callable) => f(callable),
-            Type::Forall(box Forall {
-                body: Forallable::Callable(callable),
-                ..
-            }) => f(callable),
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                body: Forallable::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Forall(Forall { body: func, .. }),
-                ..
-            }) => f(&func.signature),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => {
+            Type::Forall(forall) => match &forall.body {
+                Forallable::Callable(callable) => f(callable),
+                Forallable::Function(func) => f(&func.signature),
+                _ => {}
+            },
+            Type::Function(func) => f(&func.signature),
+            Type::BoundMethod(bm) => match &bm.func {
+                BoundMethodType::Function(func) => f(&func.signature),
+                BoundMethodType::Forall(forall) => f(&forall.body.signature),
+                BoundMethodType::Overload(overload) => {
+                    for x in overload.signatures.iter() {
+                        match x {
+                            OverloadType::Function(function) => f(&function.signature),
+                            OverloadType::Forall(forall) => f(&forall.body.signature),
+                        }
+                    }
+                }
+            },
+            Type::Overload(overload) => {
                 for x in overload.signatures.iter() {
                     match x {
                         OverloadType::Function(function) => f(&function.signature),
@@ -1629,28 +1689,25 @@ impl Type {
     pub fn transform_toplevel_callable<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
         match self {
             Type::Callable(callable) => f(callable),
-            Type::Forall(box Forall {
-                body: Forallable::Callable(callable),
-                ..
-            }) => f(callable),
-            Type::Function(box func)
-            | Type::Forall(box Forall {
-                body: Forallable::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Function(func),
-                ..
-            })
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Forall(Forall { body: func, .. }),
-                ..
-            }) => f(&mut func.signature),
-            Type::Overload(overload)
-            | Type::BoundMethod(box BoundMethod {
-                func: BoundMethodType::Overload(overload),
-                ..
-            }) => {
+            Type::Forall(forall) => match &mut forall.body {
+                Forallable::Callable(callable) => f(callable),
+                Forallable::Function(func) => f(&mut func.signature),
+                _ => {}
+            },
+            Type::Function(func) => f(&mut func.signature),
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Function(func) => f(&mut func.signature),
+                BoundMethodType::Forall(forall) => f(&mut forall.body.signature),
+                BoundMethodType::Overload(overload) => {
+                    for x in overload.signatures.iter_mut() {
+                        match x {
+                            OverloadType::Function(function) => f(&mut function.signature),
+                            OverloadType::Forall(forall) => f(&mut forall.body.signature),
+                        }
+                    }
+                }
+            },
+            Type::Overload(overload) => {
                 for x in overload.signatures.iter_mut() {
                     match x {
                         OverloadType::Function(function) => f(&mut function.signature),
@@ -1703,7 +1760,7 @@ impl Type {
         sigs
     }
 
-    fn widen_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
+    fn promote_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
         match &*ty {
             Type::Literal(lit) if lit.style == LitStyle::Implicit => {
                 *ty = lit.value.general_class_type(stdlib).clone().to_type()
@@ -1718,27 +1775,21 @@ impl Type {
         match &mut self {
             Type::Union(union) => {
                 for member in &mut union.members {
-                    Self::widen_one_implicit_literal(member, stdlib);
+                    Self::promote_one_implicit_literal(member, stdlib);
                 }
             }
-            _ => Self::widen_one_implicit_literal(&mut self, stdlib),
+            _ => Self::promote_one_implicit_literal(&mut self, stdlib),
         }
         self
     }
 
     pub fn promote_implicit_literals(mut self, stdlib: &Stdlib) -> Type {
         fn g(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
-            // Don't recurse into NNModule fields — they carry captured constructor
-            // args (e.g., padding=Literal[1]) that DSL forward functions need as
-            // concrete literals to compute output shapes.
-            if matches!(ty, Type::NNModule(_)) {
-                return;
-            }
             ty.recurse_mut(&mut |ty| g(ty, f));
             f(ty);
         }
         g(&mut self, &mut |ty| {
-            Self::widen_one_implicit_literal(ty, stdlib)
+            Self::promote_one_implicit_literal(ty, stdlib)
         });
         self
     }
@@ -1785,12 +1836,12 @@ impl Type {
         })
     }
 
-    pub fn explicit_literals(self) -> Self {
+    pub fn with_literal_style(self, style: LitStyle) -> Self {
         self.transform(&mut |ty| {
             if let Type::Literal(lit) = ty {
-                lit.style = LitStyle::Explicit;
-            } else if let Type::LiteralString(style) = ty {
-                *style = LitStyle::Explicit;
+                lit.style = style;
+            } else if let Type::LiteralString(lit_style) = ty {
+                *lit_style = style;
             }
         })
     }
@@ -1831,9 +1882,19 @@ impl Type {
         self
     }
 
-    pub fn as_quantified(&self) -> Option<Quantified> {
+    /// If this type represents a (possibly narrowed) quantified (i.e., `Q`  or `Q & T`), returns
+    /// the quantified `Q` plus the type `T` it is narrowed to.
+    pub fn as_quantified(&self) -> Option<(&Quantified, Option<&Type>)> {
         match self {
-            Type::Quantified(q) => Some((**q).clone()),
+            Type::Quantified(q) => Some((q, None)),
+            Type::Intersect(x) => match x.0.as_slice() {
+                [Type::Quantified(q), t] | [t, Type::Quantified(q)]
+                    if !matches!(t, Type::Quantified(_)) =>
+                {
+                    Some((q, Some(t)))
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1848,7 +1909,7 @@ impl Type {
 
     pub fn into_unions(self) -> Vec<Type> {
         match self {
-            Type::Union(box Union { members: types, .. }) => types,
+            Type::Union(u) => u.members,
             _ => vec![self],
         }
     }
@@ -1856,15 +1917,12 @@ impl Type {
     /// Create an optional type (union with None).
     pub fn optional(x: Self) -> Self {
         // We would like the resulting type not nested, and well sorted.
-        if let Type::Union(box Union {
-            members: mut xs, ..
-        }) = x
-        {
-            match xs.binary_search(&Type::None) {
-                Ok(_) => Type::union(xs),
+        if let Type::Union(mut u) = x {
+            match u.members.binary_search(&Type::None) {
+                Ok(_) => Type::union(u.members),
                 Err(i) => {
-                    xs.insert(i, Type::None);
-                    Type::union(xs)
+                    u.members.insert(i, Type::None);
+                    Type::union(u.members)
                 }
             }
         } else {
@@ -1888,6 +1946,7 @@ impl Type {
             Type::ParamSpec(t) => Some(t.qname()),
             Type::SelfType(cls) => Some(cls.qname()),
             Type::Literal(lit) if let Lit::Enum(e) = &lit.value => Some(e.class.qname()),
+            Type::Sentinel(s) => Some(s.qname()),
             _ => None,
         }
     }
@@ -1901,10 +1960,11 @@ impl Type {
             Type::Literal(lit) if let Lit::Str(x) = &lit.value => Some(!x.is_empty()),
             Type::Type(_) => Some(true),
             Type::None => Some(false),
+            Type::Sentinel(_) => Some(true),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
-            Type::Union(box Union { members, .. }) => {
+            Type::Union(u) => {
                 let mut answer = None;
-                for option in members {
+                for option in &u.members {
                     let option_bool = option.as_bool();
                     option_bool?;
                     if answer.is_none() {

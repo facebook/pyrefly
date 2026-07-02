@@ -415,18 +415,17 @@ assert_type(z, dict[str, int])
 );
 
 testcase!(
-    bug = "Container contents should be promoted",
     test_redundant_empty_container_constructor_call,
     r#"
 from typing import assert_type
 
 x = list([])
 x.append(1)
-assert_type(x, list[int])  # E: assert_type(list[Literal[1]], list[int])
+assert_type(x, list[int])
 
 y = dict({})
 y['k'] = 3
-assert_type(y, dict[str, int])  # E: assert_type(dict[Literal['k'], Literal[3]], dict[str, int])
+assert_type(y, dict[str, int])
     "#,
 );
 
@@ -539,5 +538,51 @@ def f(x, flag) -> None: ...
 
 f(d, 42)
 assert_type(d, dict[str, int])
+    "#,
+);
+
+testcase!(
+    test_container_literal_no_implicit_any,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import assert_type
+
+foo = {"a": 1, "b": None}
+assert_type(foo["a"], int)
+assert_type(foo["b"], None)
+assert_type(foo, dict[str, int | None])
+
+bar = [1, None]
+assert_type(bar, list[int | None])
+    "#,
+);
+
+// Regression test: narrowing reads (like `item not in values`) should not block
+// first-use inference. The `append` call after the narrowing should pin
+// the empty list's element type.
+testcase!(
+    test_narrowing_does_not_block_first_use_inference,
+    TestEnv::new().enable_implicit_any_error(),
+    r#"
+from typing import assert_type
+
+values = []
+for item in [1, 1, 2, 2, 3]:
+    if item not in values:
+        values.append(item)
+assert_type(values, list[int])
+    "#,
+);
+
+testcase!(
+    test_list_of_or,
+    r#"
+from typing import assert_type, Sequence
+def f(x: Sequence[object] | None):
+    y = list(x or [])  # this should *not* pin on first use
+    assert_type(y, list[object])
+    y.append(1)
+    y.append("")
+    assert_type(y, list[object])
     "#,
 );

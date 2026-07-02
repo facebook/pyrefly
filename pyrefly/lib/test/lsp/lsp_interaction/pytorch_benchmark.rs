@@ -44,7 +44,6 @@ fn test_pytorch_error_propagation_latency() {
         indexing_mode: IndexingMode::LazyBlocking,
         workspace_indexing_limit: 50,
         build_system_blocking: false,
-        enable_external_references: false,
     };
     // Use all available cores for realistic benchmarking
     let mut interaction =

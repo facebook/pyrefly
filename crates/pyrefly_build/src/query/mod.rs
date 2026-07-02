@@ -6,6 +6,7 @@
  */
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
@@ -37,6 +38,33 @@ use crate::source_db::Target;
 
 pub mod buck;
 pub mod custom;
+
+pub(crate) fn path_is_from_stubs_package(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|component| component.ends_with("-stubs"))
+    })
+}
+
+fn same_module_path_compare(left: InternedPath, right: InternedPath) -> Ordering {
+    match (
+        left.as_path().extension().and_then(OsStr::to_str),
+        right.as_path().extension().and_then(OsStr::to_str),
+    ) {
+        (Some("pyi"), Some("py")) => Ordering::Less,
+        (Some("py"), Some("pyi")) => Ordering::Greater,
+        _ => match (
+            path_is_from_stubs_package(left.as_path()),
+            path_is_from_stubs_package(right.as_path()),
+        ) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            _ => Ordering::Equal,
+        },
+    }
+}
 
 /// An enum representing something that has been included by the build system, and
 /// which the build system should query for when building the sourcedb.
@@ -120,6 +148,27 @@ impl fmt::Display for BuckExitReason {
             Self::SignalInterruption(signal) => write!(f, "signal_{signal}"),
             Self::Other(code) => write!(f, "other_{code}"),
         }
+    }
+}
+
+/// Formats a context snippet around a JSON parse error, showing the problematic
+/// line and surrounding context. `error_line_1indexed` is the 1-indexed line
+/// number from serde_json.
+fn format_parse_error_context(content: &str, error_line_1indexed: usize) -> String {
+    let lines = content.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return "Context: ```\n<empty output>\n\n```".to_owned();
+    }
+    let error_line = std::cmp::min(error_line_1indexed.saturating_sub(1), lines.len() - 1);
+    let start = error_line.saturating_sub(30);
+    let end = std::cmp::min(lines.len() - 1, error_line + 20);
+
+    let leading = lines[start..=error_line].iter().join("\n");
+    let trailing = lines[error_line + 1..end + 1].iter().join("\n");
+    if trailing.is_empty() {
+        format!("Context: ```\n{leading} # THIS LINE HAS A PROBLEM\n```")
+    } else {
+        format!("Context: ```\n{leading} # THIS LINE HAS A PROBLEM\n{trailing}\n```")
     }
 }
 
@@ -209,25 +258,19 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                     )
                 }) {
                     Err(e) => {
-                        let Some(downcast) = e.downcast_ref::<serde_json::error::Error>() else {
+                        let error_line = e
+                            .downcast_ref::<serde_json::error::Error>()
+                            .map(|d| d.line());
+                        let Some(error_line) = error_line else {
                             return Err(e);
                         };
                         let Ok(content) = String::from_utf8(result.stdout) else {
                             return Err(e);
                         };
-                        let lines = content.lines().collect::<Vec<_>>();
-                        let error_line = downcast.line();
-                        let start = std::cmp::max(0, error_line - 30);
-                        let end = std::cmp::min(lines.len() - 1, error_line + 20);
-                        let cont = std::cmp::min(error_line + 1, end);
-
-                        let e = e.context(
-                            format!(
-                                "Context: ```\n{} # THIS LINE HAS A PROBLEM\n{}\n```",
-                                lines[start..=error_line].iter().join("\n"),
-                                lines[cont..=end].iter().join("\n"),
-                            )
-                        );
+                        let e = e.context(format_parse_error_context(
+                            &content,
+                            error_line,
+                        ));
 
                         Err(e)
                     },
@@ -281,16 +324,38 @@ pub(crate) struct PythonLibraryManifest {
 }
 
 impl PythonLibraryManifest {
+    fn strip_stubs_suffixes(&mut self) {
+        let old_srcs = std::mem::replace(&mut self.srcs, SmallMap::new());
+        for (module, paths) in old_srcs {
+            let normalized_module =
+                ModuleName::from_parts(module.components().into_iter().map(|component| {
+                    if let Some(stripped) = component.as_str().strip_suffix("-stubs") {
+                        stripped.to_owned()
+                    } else {
+                        component.to_string()
+                    }
+                }));
+            if let Some(existing) = self.srcs.get_mut(&normalized_module) {
+                existing.extend(paths);
+            } else {
+                self.srcs.insert(normalized_module, paths);
+            }
+        }
+        self.srcs
+            .values_mut()
+            .for_each(|paths| paths.sort_by(|left, right| same_module_path_compare(*left, *right)));
+    }
+
     fn replace_alias_deps(&mut self, aliases: &SmallMap<Target, Target>) {
         self.deps = self
             .deps
             .iter()
             .map(|t| {
-                if let Some(replace) = aliases.get(t) {
-                    replace.dupe()
-                } else {
-                    t.dupe()
+                let mut current = t;
+                while let Some(replace) = aliases.get(current) {
+                    current = replace;
                 }
+                current.dupe()
             })
             .collect();
     }
@@ -410,6 +475,7 @@ impl TargetManifestDatabase {
                 TargetManifest::Alias { .. } => continue,
                 TargetManifest::Library(lib) => {
                     lib.replace_alias_deps(&aliases);
+                    lib.strip_stubs_suffixes();
                     lib.rewrite_relative_to_root(&self.root);
                 }
             }
@@ -984,8 +1050,8 @@ mod tests {
                     (
                         "pyre.client.log.log",
                         &[
-                            "pyre/client/log/log.py",
                             "pyre/client/log/log.pyi",
+                            "pyre/client/log/log.py",
                         ]
                     ),
                     (
@@ -1024,8 +1090,8 @@ mod tests {
                     (
                         "log.log",
                         &[
-                            "pyre/client/log/log.py",
                             "pyre/client/log/log.pyi",
+                            "pyre/client/log/log.py",
                         ]
                     ),
                     (
@@ -1170,6 +1236,33 @@ mod tests {
         assert_eq!(
             TargetManifestDatabase::get_test_database().produce_map().0,
             expected
+        );
+    }
+
+    #[test]
+    fn test_produce_db_strips_stubs_suffix() {
+        let db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//torch:stubs".to_owned()) => TargetManifest::lib(
+                    &[("torch-stubs", &["torch-stubs/__init__.pyi"])],
+                    &[],
+                    "torch/BUCK",
+                    &[],
+                    None,
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+
+        let result = db.produce_map().0;
+        let manifest = result
+            .get(&Target::from_string("//torch:stubs".to_owned()))
+            .unwrap();
+        assert!(manifest.srcs.contains_key(&ModuleName::from_str("torch")));
+        assert!(
+            !manifest
+                .srcs
+                .contains_key(&ModuleName::from_str("torch-stubs"))
         );
     }
 
@@ -1356,6 +1449,115 @@ mod tests {
                 .packages
                 .contains_key(&ModuleName::from_str("generated")),
             "generated:main should have synthesized 'generated' package"
+        );
+    }
+
+    #[test]
+    fn test_chained_aliases_resolved_transitively() {
+        let db = TargetManifestDatabase::new(
+            smallmap! {
+                Target::from_string("//click/8.1.7/sources:py".to_owned()) => TargetManifest::lib(
+                    &[("click", &["click/__init__.py"])],
+                    &[],
+                    "click/BUCK",
+                    &[],
+                    None,
+                ),
+                Target::from_string("//click/8.1.7:py".to_owned()) => TargetManifest::alias(
+                    "//click/8.1.7/sources:py"
+                ),
+                Target::from_string("//click:click".to_owned()) => TargetManifest::alias(
+                    "//click/8.1.7:py"
+                ),
+                Target::from_string("//app:main".to_owned()) => TargetManifest::lib(
+                    &[("app.main", &["app/main.py"])],
+                    &["//click:click"],
+                    "app/BUCK",
+                    &[],
+                    None,
+                ),
+            },
+            PathBuf::from("/repo"),
+        );
+
+        let (result, _) = db.produce_map();
+        let app = result
+            .get(&Target::from_string("//app:main".to_owned()))
+            .unwrap();
+        assert_eq!(
+            app.deps,
+            map_deps(&["//click/8.1.7/sources:py"]),
+            "dep on //click:click should resolve through two alias levels to //click/8.1.7/sources:py"
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_single_line() {
+        assert_eq!(
+            format_parse_error_context(r#"{"bad json"#, 1),
+            "Context: ```\n{\"bad json # THIS LINE HAS A PROBLEM\n```",
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_empty_content() {
+        assert_eq!(
+            format_parse_error_context("", 1),
+            "Context: ```\n<empty output>\n\n```",
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_error_line_beyond_content() {
+        // serde_json reports line 10, but content only has 2 lines;
+        // error_line is clamped to the last line
+        assert_eq!(
+            format_parse_error_context("line1\nline2", 10),
+            "Context: ```\nline1\nline2 # THIS LINE HAS A PROBLEM\n```",
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_error_line_zero() {
+        // serde_json is 1-indexed, except when errors aren't associated with position.
+        assert_eq!(
+            format_parse_error_context("line1\nline2", 0),
+            "Context: ```\nline1 # THIS LINE HAS A PROBLEM\nline2\n```",
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_multiline_error_at_start() {
+        assert_eq!(
+            format_parse_error_context("line1\nline2\nline3\nline4\nline5", 1),
+            "Context: ```\nline1 # THIS LINE HAS A PROBLEM\nline2\nline3\nline4\nline5\n```",
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_multiline_error_in_middle() {
+        assert_eq!(
+            format_parse_error_context("line1\nline2\nline3\nline4\nline5", 3),
+            "Context: ```\nline1\nline2\nline3 # THIS LINE HAS A PROBLEM\nline4\nline5\n```",
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_multiline_error_at_end() {
+        // No trailing context when the error is on the last line
+        assert_eq!(
+            format_parse_error_context("line1\nline2\nline3", 3),
+            "Context: ```\nline1\nline2\nline3 # THIS LINE HAS A PROBLEM\n```",
+        );
+    }
+
+    #[test]
+    fn test_format_parse_error_context_trailing_newline() {
+        // .lines() drops a trailing newline, so content has 2 lines but
+        // serde_json may report line 3; error_line clamps to last line
+        assert_eq!(
+            format_parse_error_context("line1\nline2\n", 3),
+            "Context: ```\nline1\nline2 # THIS LINE HAS A PROBLEM\n```",
         );
     }
 

@@ -672,10 +672,12 @@ def check_project(
         pyright_errors = parse_error_count(pyright_output)
         pyright_error_list = None
 
-    # Mypy — run inside the project's venv so it can resolve installed deps.
-    # The mypy_cmd uses {mypy} placeholder, replaced with just "mypy" from the venv.
+    # Mypy — point at the venv's Python so it resolves installed deps.
     # 10 minute timeout to avoid hanging on large projects.
-    mypy_cmd = project.mypy_cmd.format(mypy="mypy")
+    mypy_venv_flag = (
+        f" --python-executable {venv_python}" if os.path.exists(venv_python) else ""
+    )
+    mypy_cmd = project.mypy_cmd.format(mypy=f"mypy{mypy_venv_flag}")
     start = time.time()
     pm = run(
         f". {activate} && {mypy_cmd}",

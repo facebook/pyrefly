@@ -35,13 +35,14 @@ from typing import (
     Literal,
     NoReturn,
     Protocol,
+    TypeAlias,
     TypeVar,
     final,
     overload,
     runtime_checkable,
     type_check_only,
 )
-from typing_extensions import LiteralString, Self, TypeAlias, Unpack, deprecated
+from typing_extensions import LiteralString, Self, Unpack, deprecated
 
 from . import path as _path
 
@@ -176,9 +177,11 @@ __all__ = [
 if sys.version_info >= (3, 14):
     # reload_environ was added to __all__ in Python 3.14.1
     __all__ += ["readinto", "reload_environ"]
+if sys.platform == "linux" and sys.version_info >= (3, 15):
+    __all__ += ["_clearenv"]
 if sys.platform == "darwin" and sys.version_info >= (3, 12):
     __all__ += ["PRIO_DARWIN_BG", "PRIO_DARWIN_NONUI", "PRIO_DARWIN_PROCESS", "PRIO_DARWIN_THREAD"]
-if sys.platform == "darwin" and sys.version_info >= (3, 10):
+if sys.platform == "darwin":
     __all__ += ["O_EVTONLY", "O_NOFOLLOW_ANY", "O_SYMLINK"]
 if sys.platform == "linux":
     __all__ += [
@@ -226,6 +229,31 @@ if sys.platform == "linux":
     ]
 if sys.platform == "linux" and sys.version_info >= (3, 14):
     __all__ += ["SCHED_DEADLINE", "SCHED_NORMAL"]
+if sys.platform == "linux" and sys.version_info >= (3, 15):
+    __all__ += [
+        "AT_NO_AUTOMOUNT",
+        "AT_STATX_DONT_SYNC",
+        "AT_STATX_FORCE_SYNC",
+        "AT_STATX_SYNC_AS_STAT",
+        "STATX_ATIME",
+        "STATX_BASIC_STATS",
+        "STATX_BLOCKS",
+        "STATX_BTIME",
+        "STATX_CTIME",
+        "STATX_DIOALIGN",
+        "STATX_GID",
+        "STATX_INO",
+        "STATX_MNT_ID",
+        "STATX_MNT_ID_UNIQUE",
+        "STATX_MODE",
+        "STATX_MTIME",
+        "STATX_NLINK",
+        "STATX_SIZE",
+        "STATX_TYPE",
+        "STATX_UID",
+        "statx",
+        "statx_result",
+    ]
 if sys.platform == "linux" and sys.version_info >= (3, 13):
     __all__ += [
         "POSIX_SPAWN_CLOSEFROM",
@@ -259,7 +287,7 @@ if sys.platform == "linux" and sys.version_info >= (3, 12):
         "unshare",
         "PIDFD_NONBLOCK",
     ]
-if sys.platform == "linux" and sys.version_info >= (3, 10):
+if sys.platform == "linux":
     __all__ += [
         "EFD_CLOEXEC",
         "EFD_NONBLOCK",
@@ -446,7 +474,9 @@ if sys.platform != "win32" and sys.version_info >= (3, 13):
     __all__ += ["grantpt", "posix_openpt", "ptsname", "unlockpt"]
 if sys.platform != "win32" and sys.version_info >= (3, 11):
     __all__ += ["login_tty"]
-if sys.platform != "win32" and sys.version_info >= (3, 10):
+if sys.platform != "win32" and sys.version_info >= (3, 15):
+    __all__ += ["NODEV", "O_FSYNC"]
+elif sys.platform != "win32":
     __all__ += ["O_FSYNC"]
 if sys.platform != "darwin" and sys.platform != "win32":
     __all__ += [
@@ -614,9 +644,12 @@ if sys.platform == "darwin" and sys.version_info >= (3, 12):
 SEEK_SET: Final = 0
 SEEK_CUR: Final = 1
 SEEK_END: Final = 2
-if sys.platform != "win32":
+if sys.platform == "linux":
     SEEK_DATA: Final = 3
     SEEK_HOLE: Final = 4
+elif sys.platform == "darwin":
+    SEEK_HOLE: Final = 3
+    SEEK_DATA: Final = 4
 
 O_RDONLY: Final[int]
 O_WRONLY: Final[int]
@@ -658,12 +691,37 @@ if sys.platform != "linux" and sys.platform != "win32":
     O_SHLOCK: Final[int]
     O_EXLOCK: Final[int]
 
-if sys.platform == "darwin" and sys.version_info >= (3, 10):
+if sys.platform == "darwin":
     O_EVTONLY: Final[int]
     O_NOFOLLOW_ANY: Final[int]
     O_SYMLINK: Final[int]
 
-if sys.platform != "win32" and sys.version_info >= (3, 10):
+if sys.platform != "win32" and sys.version_info >= (3, 15):
+    NODEV: Final[int]
+
+if sys.platform == "linux" and sys.version_info >= (3, 15):
+    AT_NO_AUTOMOUNT: Final[int]
+    AT_STATX_DONT_SYNC: Final[int]
+    AT_STATX_FORCE_SYNC: Final[int]
+    AT_STATX_SYNC_AS_STAT: Final[int]
+    STATX_ATIME: Final[int]
+    STATX_BASIC_STATS: Final[int]
+    STATX_BLOCKS: Final[int]
+    STATX_BTIME: Final[int]
+    STATX_CTIME: Final[int]
+    STATX_DIOALIGN: Final[int]
+    STATX_GID: Final[int]
+    STATX_INO: Final[int]
+    STATX_MNT_ID: Final[int]
+    STATX_MNT_ID_UNIQUE: Final[int]
+    STATX_MODE: Final[int]
+    STATX_MTIME: Final[int]
+    STATX_NLINK: Final[int]
+    STATX_SIZE: Final[int]
+    STATX_TYPE: Final[int]
+    STATX_UID: Final[int]
+
+if sys.platform != "win32":
     O_FSYNC: Final[int]
 
 if sys.platform != "linux" and sys.platform != "win32" and sys.version_info >= (3, 13):
@@ -710,18 +768,21 @@ class _Environ(MutableMapping[AnyStr, AnyStr], Generic[AnyStr]):
         encodevalue: _EnvironCodeFunc[AnyStr],
         decodevalue: _EnvironCodeFunc[AnyStr],
     ) -> None: ...
+
     @overload
     def get(self, key: AnyStr, default: None = None) -> AnyStr | None: ...
     @overload
     def get(self, key: AnyStr, default: AnyStr) -> AnyStr: ...
     @overload
     def get(self, key: AnyStr, default: _T) -> AnyStr | _T: ...
+
     @overload
     def pop(self, key: AnyStr) -> AnyStr: ...
     @overload
     def pop(self, key: AnyStr, default: AnyStr) -> AnyStr: ...
     @overload
     def pop(self, key: AnyStr, default: _T) -> AnyStr | _T: ...
+
     def setdefault(self, key: AnyStr, value: AnyStr) -> AnyStr: ...
     def copy(self) -> dict[AnyStr, AnyStr]: ...
     def __delitem__(self, key: AnyStr) -> None: ...
@@ -731,6 +792,7 @@ class _Environ(MutableMapping[AnyStr, AnyStr], Generic[AnyStr]):
     def __len__(self) -> int: ...
     def __or__(self, other: Mapping[_T1, _T2]) -> dict[AnyStr | _T1, AnyStr | _T2]: ...
     def __ror__(self, other: Mapping[_T1, _T2]) -> dict[AnyStr | _T1, AnyStr | _T2]: ...
+
     # We use @overload instead of a Union for reasons similar to those given for
     # overloading MutableMapping.update in stdlib/typing.pyi
     # The type: ignore is needed due to incompatible __or__/__ior__ signatures
@@ -745,6 +807,9 @@ if sys.platform != "win32":
 
 if sys.version_info >= (3, 14):
     def reload_environ() -> None: ...
+
+if sys.platform == "linux" and sys.version_info >= (3, 15):
+    def _clearenv() -> None: ...
 
 if sys.version_info >= (3, 11) or sys.platform != "win32":
     EX_OK: Final[int]
@@ -802,8 +867,7 @@ class stat_result(structseq[float], tuple[int, int, int, int, int, int, int, flo
     # st_uid, st_gid, st_size, st_atime, st_mtime, st_ctime.
     #
     # More items may be added at the end by some implementations.
-    if sys.version_info >= (3, 10):
-        __match_args__: Final = ("st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size")
+    __match_args__: Final = ("st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size")
 
     @property
     def st_mode(self) -> int:
@@ -844,11 +908,9 @@ class stat_result(structseq[float], tuple[int, int, int, int, int, int, int, flo
     # platform dependent (time of most recent metadata change on Unix, or the time of creation on Windows)
     if sys.version_info >= (3, 12) and sys.platform == "win32":
         @property
-        @deprecated(
-            """\
+        @deprecated("""\
 Use st_birthtime instead to retrieve the file creation time. \
-In the future, this property will contain the last metadata change time."""
-        )
+In the future, this property will contain the last metadata change time.""")
         def st_ctime(self) -> float: ...
     else:
         @property
@@ -897,9 +959,13 @@ In the future, this property will contain the last metadata change time."""
             # On other Unix systems (such as FreeBSD), the following attributes may be
             # available (but may be only filled out if root tries to use them):
             @property
-            def st_gen(self) -> int: ...  # file generation number
+            def st_gen(self) -> int:
+                """generation number"""
+                ...
             @property
-            def st_birthtime(self) -> float: ...  # time of file creation in seconds
+            def st_birthtime(self) -> float:
+                """time of creation"""
+                ...
     if sys.platform == "darwin":
         @property
         def st_flags(self) -> int: ...  # user defined flags for file
@@ -966,6 +1032,7 @@ def listdir(path: int) -> list[str]:
     entries '.' and '..' even if they are present in the directory.
     """
     ...
+
 @final
 class DirEntry(Generic[AnyStr]):
     # This is what the scandir iterator yields
@@ -1007,19 +1074,18 @@ class DirEntry(Generic[AnyStr]):
 
 @final
 class statvfs_result(structseq[int], tuple[int, int, int, int, int, int, int, int, int, int, int]):
-    if sys.version_info >= (3, 10):
-        __match_args__: Final = (
-            "f_bsize",
-            "f_frsize",
-            "f_blocks",
-            "f_bfree",
-            "f_bavail",
-            "f_files",
-            "f_ffree",
-            "f_favail",
-            "f_flag",
-            "f_namemax",
-        )
+    __match_args__: Final = (
+        "f_bsize",
+        "f_frsize",
+        "f_blocks",
+        "f_bfree",
+        "f_bavail",
+        "f_files",
+        "f_ffree",
+        "f_favail",
+        "f_flag",
+        "f_namemax",
+    )
 
     @property
     def f_bsize(self) -> int: ...
@@ -1047,6 +1113,7 @@ class statvfs_result(structseq[int], tuple[int, int, int, int, int, int, int, in
 # ----- os function stubs -----
 def fsencode(filename: StrOrBytesPath) -> bytes: ...
 def fsdecode(filename: StrOrBytesPath) -> str: ...
+
 @overload
 def fspath(path: str) -> str:
     """
@@ -1077,6 +1144,7 @@ def fspath(path: PathLike[AnyStr]) -> AnyStr:
     types raise a TypeError.
     """
     ...
+
 def get_exec_path(env: Mapping[str, str] | None = None) -> list[str]: ...
 def getlogin() -> str:
     """Return the actual login name."""
@@ -1098,6 +1166,7 @@ def strerror(code: int, /) -> str:
 def umask(mask: int, /) -> int:
     """Set the current numeric umask and return the previous umask."""
     ...
+
 @final
 class uname_result(structseq[str], tuple[str, str, str, str, str]):
     """
@@ -1109,8 +1178,7 @@ class uname_result(structseq[str], tuple[str, str, str, str, str]):
 
     See os.uname for more information.
     """
-    if sys.version_info >= (3, 10):
-        __match_args__: Final = ("sysname", "nodename", "release", "version", "machine")
+    __match_args__: Final = ("sysname", "nodename", "release", "version", "machine")
 
     @property
     def sysname(self) -> str:
@@ -1181,12 +1249,8 @@ if sys.platform != "win32":
         """Set program scheduling priority."""
         ...
     if sys.platform != "darwin":
-        def getresuid() -> tuple[int, int, int]:
-            """Return a tuple of the current process's real, effective, and saved user ids."""
-            ...
-        def getresgid() -> tuple[int, int, int]:
-            """Return a tuple of the current process's real, effective, and saved group ids."""
-            ...
+        def getresuid() -> tuple[int, int, int]: ...
+        def getresgid() -> tuple[int, int, int]: ...
 
     def getuid() -> int:
         """Return the current process's user id."""
@@ -1213,12 +1277,8 @@ if sys.platform != "win32":
         """Set the current process's real and effective group ids."""
         ...
     if sys.platform != "darwin":
-        def setresgid(rgid: int, egid: int, sgid: int, /) -> None:
-            """Set the current process's real, effective, and saved group ids."""
-            ...
-        def setresuid(ruid: int, euid: int, suid: int, /) -> None:
-            """Set the current process's real, effective, and saved user ids."""
-            ...
+        def setresgid(rgid: int, egid: int, sgid: int, /) -> None: ...
+        def setresuid(ruid: int, euid: int, suid: int, /) -> None: ...
 
     def setreuid(ruid: int, euid: int, /) -> None:
         """Set the current process's real and effective user ids."""
@@ -1251,6 +1311,7 @@ if sys.platform != "win32":
     def getenvb(key: bytes) -> bytes | None: ...
     @overload
     def getenvb(key: bytes, default: _T) -> bytes | _T: ...
+
     def putenv(name: StrOrBytesPath, value: StrOrBytesPath, /) -> None:
         """Change or add an environment variable."""
         ...
@@ -1341,6 +1402,7 @@ def fdopen(
     closefd: bool = True,
     opener: _Opener | None = None,
 ) -> IO[Any]: ...
+
 def close(fd: int) -> None:
     """Close a file descriptor."""
     ...
@@ -1499,41 +1561,10 @@ if sys.platform != "win32":
         """
         ...
     if sys.platform != "darwin":
-        def fdatasync(fd: FileDescriptorLike) -> None:
-            """Force write of fd to disk without forcing update of metadata."""
-            ...
-        def pipe2(flags: int, /) -> tuple[int, int]:
-            """
-            Create a pipe with flags set atomically.
-
-            Returns a tuple of two file descriptors:
-              (read_fd, write_fd)
-
-            flags can be constructed by ORing together one or more of these values:
-            O_NONBLOCK, O_CLOEXEC.
-            """
-            ...
-        def posix_fallocate(fd: int, offset: int, length: int, /) -> None:
-            """
-            Ensure a file has allocated at least a particular number of bytes on disk.
-
-            Ensure that the file specified by fd encompasses a range of bytes
-            starting at offset bytes from the beginning and continuing for length bytes.
-            """
-            ...
-        def posix_fadvise(fd: int, offset: int, length: int, advice: int, /) -> None:
-            """
-            Announce an intention to access data in a specific pattern.
-
-            Announce an intention to access data in a specific pattern, thus allowing
-            the kernel to make optimizations.
-            The advice applies to the region of the file specified by fd starting at
-            offset and continuing for length bytes.
-            advice is one of POSIX_FADV_NORMAL, POSIX_FADV_SEQUENTIAL,
-            POSIX_FADV_RANDOM, POSIX_FADV_NOREUSE, POSIX_FADV_WILLNEED, or
-            POSIX_FADV_DONTNEED.
-            """
-            ...
+        def fdatasync(fd: FileDescriptorLike) -> None: ...
+        def pipe2(flags: int, /) -> tuple[int, int]: ...  # some flavors of Unix
+        def posix_fallocate(fd: int, offset: int, length: int, /) -> None: ...
+        def posix_fadvise(fd: int, offset: int, length: int, advice: int, /) -> None: ...
 
     def pread(fd: int, length: int, offset: int, /) -> bytes:
         """
@@ -1593,8 +1624,7 @@ if sys.platform != "win32":
         """
         ...
     if sys.platform != "darwin":
-        if sys.version_info >= (3, 10):
-            RWF_APPEND: Final[int]  # docs say available on 3.7+, stubtest says otherwise
+        RWF_APPEND: Final[int]
         RWF_DSYNC: Final[int]
         RWF_SYNC: Final[int]
         RWF_HIPRI: Final[int]
@@ -1642,8 +1672,7 @@ if sys.version_info >= (3, 14):
 
 @final
 class terminal_size(structseq[int], tuple[int, int]):
-    if sys.version_info >= (3, 10):
-        __match_args__: Final = ("columns", "lines")
+    __match_args__: Final = ("columns", "lines")
 
     @property
     def columns(self) -> int:
@@ -1790,8 +1819,25 @@ def chmod(path: FileDescriptorOrPath, mode: int, *, dir_fd: int | None = None, f
     ...
 
 if sys.platform != "win32" and sys.platform != "linux":
-    def chflags(path: StrOrBytesPath, flags: int, follow_symlinks: bool = True) -> None: ...  # some flavors of Unix
-    def lchflags(path: StrOrBytesPath, flags: int) -> None: ...
+    def chflags(path: StrOrBytesPath, flags: int, follow_symlinks: bool = True) -> None:
+        """
+        Set file flags.
+
+        If follow_symlinks is False, and the last element of the path is a symbolic
+          link, chflags will change flags on the symbolic link itself instead of the
+          file the link points to.
+        follow_symlinks may not be implemented on your platform.  If it is
+        unavailable, using it will raise a NotImplementedError.
+        """
+        ...
+    def lchflags(path: StrOrBytesPath, flags: int) -> None:
+        """
+        Set file flags.
+
+        This function will not follow symbolic links.
+        Equivalent to chflags(path, flags, follow_symlinks=False).
+        """
+        ...
 
 if sys.platform != "win32":
     def chroot(path: StrOrBytesPath) -> None:
@@ -1989,6 +2035,7 @@ def rmdir(path: StrOrBytesPath, *, dir_fd: int | None = None) -> None:
       If it is unavailable, using it will raise a NotImplementedError.
     """
     ...
+
 @final
 @type_check_only
 class _ScandirIterator(Generic[AnyStr]):
@@ -2035,6 +2082,7 @@ def scandir(path: GenericPath[AnyStr]) -> _ScandirIterator[AnyStr]:
     If path is None, uses the path='.'.
     """
     ...
+
 def stat(path: FileDescriptorOrPath, *, dir_fd: int | None = None, follow_symlinks: bool = True) -> stat_result:
     """
     Perform a stat system call on the given path.
@@ -2070,6 +2118,70 @@ if sys.platform != "win32":
           If this functionality is unavailable, using it raises an exception.
         """
         ...
+
+if sys.platform == "linux" and sys.version_info >= (3, 15):
+    @final
+    class statx_result:
+        @property
+        def stx_mask(self) -> int: ...
+        @property
+        def stx_blksize(self) -> int: ...
+        @property
+        def stx_attributes(self) -> int: ...
+        @property
+        def stx_attributes_mask(self) -> int: ...
+        @property
+        def stx_rdev_major(self) -> int: ...
+        @property
+        def stx_rdev_minor(self) -> int: ...
+        @property
+        def stx_rdev(self) -> int: ...
+        @property
+        def stx_dev_major(self) -> int: ...
+        @property
+        def stx_dev_minor(self) -> int: ...
+        @property
+        def stx_dev(self) -> int: ...
+        @property
+        def stx_mode(self) -> int | None: ...
+        @property
+        def stx_nlink(self) -> int | None: ...
+        @property
+        def stx_uid(self) -> int | None: ...
+        @property
+        def stx_gid(self) -> int | None: ...
+        @property
+        def stx_ino(self) -> int | None: ...
+        @property
+        def stx_size(self) -> int | None: ...
+        @property
+        def stx_blocks(self) -> int | None: ...
+        @property
+        def stx_atime(self) -> float | None: ...
+        @property
+        def stx_atime_ns(self) -> int | None: ...
+        @property
+        def stx_btime(self) -> float | None: ...
+        @property
+        def stx_btime_ns(self) -> int | None: ...
+        @property
+        def stx_ctime(self) -> float | None: ...
+        @property
+        def stx_ctime_ns(self) -> int | None: ...
+        @property
+        def stx_mtime(self) -> float | None: ...
+        @property
+        def stx_mtime_ns(self) -> int | None: ...
+        @property
+        def stx_mnt_id(self) -> int | None: ...
+        @property
+        def stx_dio_mem_align(self) -> int | None: ...
+        @property
+        def stx_dio_offset_align(self) -> int | None: ...
+
+    def statx(
+        path: FileDescriptorOrPath, mask: int, *, flags: int = 0, dir_fd: int | None = None, follow_symlinks: bool = True
+    ) -> statx_result: ...
 
 def symlink(
     src: StrOrBytesPath, dst: StrOrBytesPath, target_is_directory: bool = False, *, dir_fd: int | None = None
@@ -2172,6 +2284,7 @@ if sys.platform != "win32":
         follow_symlinks: bool = False,
         dir_fd: int | None = None,
     ) -> Iterator[tuple[bytes, list[bytes], list[bytes], int]]: ...
+
     if sys.platform == "linux":
         def getxattr(path: FileDescriptorOrPath, attribute: StrOrBytesPath, *, follow_symlinks: bool = True) -> bytes: ...
         def listxattr(path: FileDescriptorOrPath | None = None, *, follow_symlinks: bool = True) -> list[str]: ...
@@ -2306,49 +2419,28 @@ class _wrap_close:
     def write(self, s: str, /) -> int: ...
     def writelines(self, lines: Iterable[str], /) -> None: ...
 
-if sys.version_info >= (3, 14):
-    @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def popen(cmd: str, mode: str = "r", buffering: int = -1) -> _wrap_close: ...
-    @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnl(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: StrOrBytesPath) -> int: ...
-    @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnle(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: Any) -> int: ...  # Imprecise sig
-
-else:
-    def popen(cmd: str, mode: str = "r", buffering: int = -1) -> _wrap_close: ...
-    def spawnl(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: StrOrBytesPath) -> int: ...
-    def spawnle(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: Any) -> int: ...  # Imprecise sig
+@deprecated("Soft deprecated. Use the subprocess module instead.")
+def popen(cmd: str, mode: str = "r", buffering: int = -1) -> _wrap_close: ...
+@deprecated("Soft deprecated. Use the subprocess module instead.")
+def spawnl(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: StrOrBytesPath) -> int: ...
+@deprecated("Soft deprecated. Use the subprocess module instead.")
+def spawnle(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: Any) -> int: ...  # Imprecise sig
 
 if sys.platform != "win32":
-    if sys.version_info >= (3, 14):
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnv(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int: ...
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnve(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int: ...
-
-    else:
-        def spawnv(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int: ...
-        def spawnve(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int: ...
-
-else:
-    if sys.version_info >= (3, 14):
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnv(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, /) -> int: ...
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnve(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, env: _ExecEnv, /) -> int: ...
-
-    else:
-        def spawnv(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, /) -> int: ...
-        def spawnve(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, env: _ExecEnv, /) -> int: ...
-
-if sys.version_info >= (3, 14):
     @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def system(command: StrOrBytesPath) -> int: ...
-
+    def spawnv(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int: ...
+    @deprecated("Soft deprecated. Use the subprocess module instead.")
+    def spawnve(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int: ...
 else:
-    def system(command: StrOrBytesPath) -> int:
-        """Execute the command in a subshell."""
-        ...
+    @deprecated("Soft deprecated. Use the subprocess module instead.")
+    def spawnv(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, /) -> int: ...
+    @deprecated("Soft deprecated. Use the subprocess module instead.")
+    def spawnve(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, env: _ExecEnv, /) -> int: ...
+
+@deprecated("Soft deprecated. Use the subprocess module instead.")
+def system(command: StrOrBytesPath) -> int:
+    """Execute the command in a subshell."""
+    ...
 
 @final
 class times_result(structseq[float], tuple[float, float, float, float, float]):
@@ -2362,8 +2454,7 @@ class times_result(structseq[float], tuple[float, float, float, float, float]):
 
     See os.times for more information.
     """
-    if sys.version_info >= (3, 10):
-        __match_args__: Final = ("user", "system", "children_user", "children_system", "elapsed")
+    __match_args__: Final = ("user", "system", "children_user", "children_system", "elapsed")
 
     @property
     def user(self) -> float:
@@ -2392,7 +2483,7 @@ def times() -> times_result:
 
     The object returned behaves like a named tuple with these fields:
       (utime, stime, cutime, cstime, elapsed_time)
-    All fields are floating-point numbers.
+    All fields are floating point numbers.
     """
     ...
 def waitpid(pid: int, options: int, /) -> tuple[int, int]:
@@ -2407,34 +2498,19 @@ def waitpid(pid: int, options: int, /) -> tuple[int, int]:
     ...
 
 if sys.platform == "win32":
-    if sys.version_info >= (3, 10):
-        def startfile(
-            filepath: StrOrBytesPath,
-            operation: str = ...,
-            arguments: str = "",
-            cwd: StrOrBytesPath | None = None,
-            show_cmd: int = 1,
-        ) -> None: ...
-    else:
-        def startfile(filepath: StrOrBytesPath, operation: str = ...) -> None: ...
+    def startfile(
+        filepath: StrOrBytesPath, operation: str = ..., arguments: str = "", cwd: StrOrBytesPath | None = None, show_cmd: int = 1
+    ) -> None: ...
 
 else:
-    if sys.version_info >= (3, 14):
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnlp(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: StrOrBytesPath) -> int: ...
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnlpe(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: Any) -> int: ...  # Imprecise signature
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnvp(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int: ...
-        @deprecated("Soft deprecated. Use the subprocess module instead.")
-        def spawnvpe(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int: ...
-
-    else:
-        def spawnlp(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: StrOrBytesPath) -> int: ...
-        def spawnlpe(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: Any) -> int: ...  # Imprecise signature
-        def spawnvp(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int: ...
-        def spawnvpe(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int: ...
-
+    @deprecated("Soft deprecated. Use the subprocess module instead.")
+    def spawnlp(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: StrOrBytesPath) -> int: ...
+    @deprecated("Soft deprecated. Use the subprocess module instead.")
+    def spawnlpe(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: Any) -> int: ...  # Imprecise signature
+    @deprecated("Soft deprecated. Use the subprocess module instead.")
+    def spawnvp(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int: ...
+    @deprecated("Soft deprecated. Use the subprocess module instead.")
+    def spawnvpe(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int: ...
     def wait() -> tuple[int, int]:
         """
         Wait for completion of a child process.
@@ -2447,17 +2523,7 @@ else:
     if sys.platform != "darwin" or sys.version_info >= (3, 13):
         @final
         class waitid_result(structseq[int], tuple[int, int, int, int, int]):
-            """
-            waitid_result: Result from waitid.
-
-            This object may be accessed either as a tuple of
-              (si_pid, si_uid, si_signo, si_status, si_code),
-            or via the attributes si_pid, si_uid, and so on.
-
-            See os.waitid for more information.
-            """
-            if sys.version_info >= (3, 10):
-                __match_args__: Final = ("si_pid", "si_uid", "si_signo", "si_status", "si_code")
+            __match_args__: Final = ("si_pid", "si_uid", "si_signo", "si_status", "si_code")
 
             @property
             def si_pid(self) -> int: ...
@@ -2470,22 +2536,7 @@ else:
             @property
             def si_code(self) -> int: ...
 
-        def waitid(idtype: int, ident: int, options: int, /) -> waitid_result | None:
-            """
-            Returns the result of waiting for a process or processes.
-
-              idtype
-                Must be one of be P_PID, P_PGID or P_ALL.
-              id
-                The id to wait on.
-              options
-                Constructed from the ORing of one or more of WEXITED, WSTOPPED
-                or WCONTINUED and additionally may be ORed with WNOHANG or WNOWAIT.
-
-            Returns either waitid_result or None if WNOHANG is specified and there are
-            no children in a waitable state.
-            """
-            ...
+        def waitid(idtype: int, ident: int, options: int, /) -> waitid_result | None: ...
 
     from resource import struct_rusage
 
@@ -2535,7 +2586,36 @@ else:
         """Return the signal that terminated the process that provided the status value."""
         ...
 
-    if sys.version_info >= (3, 13):
+    if sys.version_info >= (3, 15):
+        def posix_spawn(
+            path: StrOrBytesPath,
+            argv: _ExecVArgs,
+            env: _ExecEnv | None,
+            /,
+            *,
+            file_actions: Sequence[tuple[Any, ...]] | None = (),
+            setpgroup: int | None = None,  # None allowed starting in 3.15
+            resetids: bool = False,
+            setsid: bool = False,
+            setsigmask: Iterable[int] = (),
+            setsigdef: Iterable[int] = (),
+            scheduler: tuple[Any, sched_param] | None = None,  # None allowed starting in 3.15
+        ) -> int: ...
+        def posix_spawnp(
+            path: StrOrBytesPath,
+            argv: _ExecVArgs,
+            env: _ExecEnv | None,
+            /,
+            *,
+            file_actions: Sequence[tuple[Any, ...]] | None = (),
+            setpgroup: int | None = None,  # None allowed starting in 3.15
+            resetids: bool = False,
+            setsid: bool = False,
+            setsigmask: Iterable[int] = (),
+            setsigdef: Iterable[int] = (),
+            scheduler: tuple[Any, sched_param] | None = None,  # None allowed starting in 3.15
+        ) -> int: ...
+    elif sys.version_info >= (3, 13):
         def posix_spawn(
             path: StrOrBytesPath,
             argv: _ExecVArgs,
@@ -2651,20 +2731,11 @@ else:
 if sys.platform != "win32":
     @final
     class sched_param(structseq[int], tuple[int]):
-        """
-        Currently has only one field: sched_priority
-
-        sched_priority
-          A scheduling parameter.
-        """
-        if sys.version_info >= (3, 10):
-            __match_args__: Final = ("sched_priority",)
+        __match_args__: Final = ("sched_priority",)
 
         def __new__(cls, sched_priority: int) -> Self: ...
         @property
-        def sched_priority(self) -> int:
-            """the scheduling priority"""
-            ...
+        def sched_priority(self) -> int: ...
 
     def sched_get_priority_min(policy: int) -> int:
         """Get the minimum scheduling priority for policy."""
@@ -2676,58 +2747,13 @@ if sys.platform != "win32":
         """Voluntarily relinquish the CPU."""
         ...
     if sys.platform != "darwin":
-        def sched_setscheduler(pid: int, policy: int, param: sched_param, /) -> None:
-            """
-            Set the scheduling policy for the process identified by pid.
-
-            If pid is 0, the calling process is changed.
-            param is an instance of sched_param.
-            """
-            ...
-        def sched_getscheduler(pid: int, /) -> int:
-            """
-            Get the scheduling policy for the process identified by pid.
-
-            Passing 0 for pid returns the scheduling policy for the calling process.
-            """
-            ...
-        def sched_rr_get_interval(pid: int, /) -> float:
-            """
-            Return the round-robin quantum for the process identified by pid, in seconds.
-
-            Value returned is a float.
-            """
-            ...
-        def sched_setparam(pid: int, param: sched_param, /) -> None:
-            """
-            Set scheduling parameters for the process identified by pid.
-
-            If pid is 0, sets parameters for the calling process.
-            param should be an instance of sched_param.
-            """
-            ...
-        def sched_getparam(pid: int, /) -> sched_param:
-            """
-            Returns scheduling parameters for the process identified by pid.
-
-            If pid is 0, returns parameters for the calling process.
-            Return value is an instance of sched_param.
-            """
-            ...
-        def sched_setaffinity(pid: int, mask: Iterable[int], /) -> None:
-            """
-            Set the CPU affinity of the process identified by pid to mask.
-
-            mask should be an iterable of integers identifying CPUs.
-            """
-            ...
-        def sched_getaffinity(pid: int, /) -> set[int]:
-            """
-            Return the affinity of the process identified by pid (or the current process if zero).
-
-            The affinity is returned as a set of CPU identifiers.
-            """
-            ...
+        def sched_setscheduler(pid: int, policy: int, param: sched_param, /) -> None: ...  # some flavors of Unix
+        def sched_getscheduler(pid: int, /) -> int: ...  # some flavors of Unix
+        def sched_rr_get_interval(pid: int, /) -> float: ...  # some flavors of Unix
+        def sched_setparam(pid: int, param: sched_param, /) -> None: ...  # some flavors of Unix
+        def sched_getparam(pid: int, /) -> sched_param: ...  # some flavors of Unix
+        def sched_setaffinity(pid: int, mask: Iterable[int], /) -> None: ...  # some flavors of Unix
+        def sched_getaffinity(pid: int, /) -> set[int]: ...  # some flavors of Unix
 
 def cpu_count() -> int | None:
     """
@@ -2854,7 +2880,7 @@ if sys.version_info >= (3, 12) and sys.platform == "win32":
     def listmounts(volume: str) -> list[str]: ...
     def listvolumes() -> list[str]: ...
 
-if sys.version_info >= (3, 10) and sys.platform == "linux":
+if sys.platform == "linux":
     EFD_CLOEXEC: Final[int]
     EFD_NONBLOCK: Final[int]
     EFD_SEMAPHORE: Final[int]
@@ -2933,4 +2959,11 @@ if sys.version_info >= (3, 13) or sys.platform != "win32":
 if sys.platform != "linux":
     if sys.version_info >= (3, 13) or sys.platform != "win32":
         # Added to Windows in 3.13.
-        def lchmod(path: StrOrBytesPath, mode: int) -> None: ...
+        def lchmod(path: StrOrBytesPath, mode: int) -> None:
+            """
+            Change the access permissions of a file, without following symbolic links.
+
+            If path is a symlink, this affects the link itself rather than the target.
+            Equivalent to chmod(path, mode, follow_symlinks=False)."
+            """
+            ...

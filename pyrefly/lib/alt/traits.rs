@@ -18,6 +18,7 @@ use crate::alt::class::class_field::ClassField;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
+use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
@@ -34,11 +35,13 @@ use crate::binding::binding::BindingAbstractClassCheck;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassBaseType;
+use crate::binding::binding::BindingClassChecks;
+use crate::binding::binding::BindingClassDisjointBase;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::BindingClassMetadata;
 use crate::binding::binding::BindingClassMro;
+use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
-use crate::binding::binding::BindingConsistentOverrideCheck;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
@@ -49,7 +52,6 @@ use crate::binding::binding::BindingTypeAlias;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunctionRange;
 use crate::binding::binding::BindingVariance;
-use crate::binding::binding::BindingVarianceCheck;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::EmptyAnswer;
@@ -58,11 +60,13 @@ use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassChecks;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
+use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
-use crate::binding::binding::KeyConsistentOverrideCheck;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExpect;
@@ -73,7 +77,6 @@ use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::KeyVariance;
-use crate::binding::binding::KeyVarianceCheck;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
@@ -113,10 +116,8 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     /// Record that recursive value along with the answer.
     fn record_recursive(
         _answers: &AnswersSolver<Ans>,
-        _range: TextRange,
         answer: Arc<Self::Answer>,
         _recursive: Var,
-        _errors: &ErrorCollector,
     ) -> Arc<Self::Answer> {
         answer
     }
@@ -157,14 +158,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
 
     fn record_recursive(
         answers: &AnswersSolver<Ans>,
-        range: TextRange,
         answer: Arc<TypeInfo>,
         recursive: Var,
-        errors: &ErrorCollector,
     ) -> Arc<TypeInfo> {
         let ty_info = answer
             .arc_clone()
-            .map_ty(|ty| answers.record_recursive(range, ty, recursive, errors));
+            .map_ty(|ty| answers.record_recursive(ty, recursive));
         Arc::new(ty_info)
     }
 
@@ -176,7 +175,9 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
             }
             Binding::LambdaParameter(id, owner) => {
                 let var = answers.resolve_lambda_param_var(*id, *owner);
-                Some(Arc::new(TypeInfo::of_ty(var.to_type(answers.heap))))
+                Some(Arc::new(TypeInfo::of_ty(
+                    answers.solver().expand_unwrap(var),
+                )))
             }
             _ => None,
         }
@@ -187,10 +188,10 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExpect {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingExpect,
-        _range: TextRange,
+        range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<EmptyAnswer> {
-        answers.solve_expectation(binding, errors)
+        answers.solve_expectation(binding, range, errors)
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
@@ -213,14 +214,14 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyTypeAlias {
     }
 }
 
-impl<Ans: LookupAnswer> Solve<Ans> for KeyConsistentOverrideCheck {
+impl<Ans: LookupAnswer> Solve<Ans> for KeyClassChecks {
     fn solve(
         answers: &AnswersSolver<Ans>,
-        binding: &BindingConsistentOverrideCheck,
+        binding: &BindingClassChecks,
         _range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<EmptyAnswer> {
-        answers.solve_consistent_override_check(binding, errors)
+        answers.solve_class_checks(binding, errors)
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
@@ -414,21 +415,6 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyVariance {
     }
 }
 
-impl<Ans: LookupAnswer> Solve<Ans> for KeyVarianceCheck {
-    fn solve(
-        answers: &AnswersSolver<Ans>,
-        binding: &BindingVarianceCheck,
-        _range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Arc<EmptyAnswer> {
-        answers.solve_variance_check(binding, errors)
-    }
-
-    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        EmptyAnswer
-    }
-}
-
 impl<Ans: LookupAnswer> Solve<Ans> for KeyAnnotation {
     fn solve(
         answers: &AnswersSolver<Ans>,
@@ -477,6 +463,21 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMro {
     }
 }
 
+impl<Ans: LookupAnswer> Solve<Ans> for KeyClassDisjointBase {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingClassDisjointBase,
+        _range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Arc<ClassDisjointBase> {
+        answers.solve_class_disjoint_base(binding, errors)
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        ClassDisjointBase::recursive()
+    }
+}
+
 impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
     fn solve(
         answers: &AnswersSolver<Ans>,
@@ -496,14 +497,36 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
     }
 }
 
+impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSubscriptSymmetry {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingClassSubscriptSymmetry,
+        _range: TextRange,
+        _errors: &ErrorCollector,
+    ) -> Arc<bool> {
+        if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
+            Arc::new(answers.calculate_subscript_symmetry(cls))
+        } else {
+            Arc::new(true)
+        }
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        true
+    }
+}
+
 impl<Ans: LookupAnswer> Solve<Ans> for KeyLegacyTypeParam {
     fn solve(
         answers: &AnswersSolver<Ans>,
         binding: &BindingLegacyTypeParam,
-        _range: TextRange,
+        range: TextRange,
         _errors: &ErrorCollector,
     ) -> Arc<LegacyTypeParameterLookup> {
-        answers.solve_legacy_tparam(binding)
+        // `range` is the KeyLegacyTypeParam's own range (first occurrence of the TypeVar
+        // name in this scope), which is unique per (scope, TypeVar) pair and serves as
+        // the scope anchor for deterministic Quantified identity.
+        answers.solve_legacy_tparam(binding, range)
     }
 
     fn promote_recursive(heap: &TypeHeap, _: Var) -> Self::Answer {

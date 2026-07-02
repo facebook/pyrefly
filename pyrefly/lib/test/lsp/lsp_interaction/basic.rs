@@ -32,11 +32,15 @@ fn test_initialize_basic() {
         )
         .expect_response(json!({"capabilities": {
             "positionEncoding": "utf-16",
-            "textDocumentSync": 2,
+            "textDocumentSync": {
+                "openClose": true,
+                "change": 2,
+                "save": { "includeText": false }
+            },
             "definitionProvider": true,
             "typeDefinitionProvider": true,
             "codeActionProvider": {
-                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.delete", "refactor.move", "refactor.inline", "source.fixAll"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.delete", "refactor.move", "refactor.inline", "source.fixAll", "source.fixAll.pyrefly"]
             },
             "codeLensProvider": {
                 "resolveProvider": false,

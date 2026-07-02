@@ -492,6 +492,59 @@ assert_type(f(0), Any)
 "#,
 );
 
+testcase!(
+    test_no_type_check_dunder_new_preserves_self_default,
+    r#"
+from typing import no_type_check, assert_type
+
+class C:
+    @no_type_check
+    def __new__(cls):
+        return super().__new__(cls)
+
+class D(C): ...
+
+assert_type(C.__new__(C), C)
+assert_type(C.__new__(D), D)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3561
+testcase!(
+    test_no_type_check_suppresses_unannotated_return,
+    TestEnv::new().enable_unannotated_return_error(),
+    r#"
+from typing import no_type_check
+
+@no_type_check
+def f():  # no error: @no_type_check suppresses unannotated-return
+    pass
+
+@no_type_check
+def g() -> None:  # no error: annotated, and @no_type_check suppresses the check anyway
+    pass
+
+def h():  # E: `h` is missing a return annotation
+    pass
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3561 — typing_extensions alias
+testcase!(
+    test_no_type_check_typing_extensions_suppresses_unannotated_return,
+    TestEnv::new().enable_unannotated_return_error(),
+    r#"
+from typing_extensions import no_type_check
+
+@no_type_check
+def f():  # no error: @no_type_check from typing_extensions suppresses unannotated-return
+    pass
+
+def g():  # E: `g` is missing a return annotation
+    pass
+"#,
+);
+
 /// Verifies that `analyze_unannotated_for_ide` is gated on `Require` level:
 /// - `Require::Errors` (batch/CLI): unannotated bodies are skipped, no body errors.
 /// - `Require::Everything` (IDE): unannotated bodies are analyzed, body errors reported.

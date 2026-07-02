@@ -31,13 +31,18 @@ use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_config::config::OutputFormat;
+use pyrefly_config::config::SynthesizedPresetReason;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::finder::ConfigError;
+use pyrefly_config::migration::run::MigratedConfigSource;
+use pyrefly_config::migration::run::MigratedFromKind;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::args::clap_env;
+use pyrefly_util::demand_tree::DemandCollector;
+use pyrefly_util::demand_tree::report_json;
 use pyrefly_util::display;
 use pyrefly_util::display::count;
 use pyrefly_util::display::number_thousands;
@@ -56,10 +61,13 @@ use tracing::info;
 
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
+use crate::commands::files::UpsellDecision;
+use crate::commands::files::get_config_finder_for_snippet;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::Error;
+use crate::error::error::ErrorRenderer;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::LegacyError;
 use crate::error::legacy::LegacyErrors;
@@ -75,7 +83,9 @@ use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::state::state::Transaction;
-use crate::state::subscriber::ProgressBarSubscriber;
+use crate::state::steps::Step;
+use crate::state::subscriber::ProgressBarStyle;
+use crate::state::subscriber::TestSubscriber;
 
 /// Result data from a non-watch check run, used for telemetry logging.
 pub struct CheckResult {
@@ -127,12 +137,14 @@ impl FullCheckArgs {
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
         self.config_override.validate()?;
-        let (files_to_check, config_finder) = self.files.resolve(self.config_override, wrapper)?;
+        let (files_to_check, config_finder, upsell) =
+            self.files.resolve(self.config_override, wrapper)?;
         run_check(
             self.args,
             self.watch,
             files_to_check,
             config_finder,
+            upsell,
             thread_count,
         )
         .await
@@ -152,6 +164,7 @@ async fn run_check(
     watch: bool,
     files_to_check: Box<dyn Includes>,
     config_finder: ConfigFinder,
+    upsell: UpsellDecision,
     thread_count: ThreadCount,
 ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
     if watch {
@@ -161,12 +174,12 @@ async fn run_check(
             display::intersperse_iter(";", || roots.iter().map(|p| p.display()))
         );
         let watcher = Watcher::notify(&roots)?;
-        args.run_watch(watcher, files_to_check, config_finder, thread_count)
+        args.run_watch(watcher, files_to_check, config_finder, upsell, thread_count)
             .await?;
         Ok((CommandExitStatus::Success, None))
     } else {
         let (status, _, check_result) =
-            args.run_once(files_to_check, config_finder, thread_count)?;
+            args.run_once(files_to_check, config_finder, upsell, thread_count)?;
         Ok((status, Some(check_result)))
     }
 }
@@ -208,11 +221,10 @@ pub struct SnippetCheckArgs {
 impl SnippetCheckArgs {
     pub async fn run(
         self,
-        wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
-        let (_, config_finder) =
-            FilesArgs::get(vec![], self.config, self.config_override, wrapper)?;
+        let config_finder = get_config_finder_for_snippet(self.config, self.config_override)?;
+
         let check_args = CheckArgs {
             output: self.output,
             behavior: BehaviorArgs {
@@ -262,6 +274,10 @@ struct OutputArgs {
     /// Format for pysa report output (json or capnp)
     #[arg(long, value_enum, default_value_t = report::pysa::PysaFormat::Capnp)]
     report_pysa_format: report::pysa::PysaFormat,
+    /// Report the cross-module demand tree (aggregated summary of LookupAnswer
+    /// and LookupExport calls). Useful for analyzing laziness properties.
+    #[arg(long, value_name = "OUTPUT_FILE")]
+    report_demand_tree: Option<PathBuf>,
     /// Generate a CinderX-format type report (experimental, internal-only).
     #[arg(long, value_name = "OUTPUT_DIR", hide = true)]
     report_cinderx: Option<PathBuf>,
@@ -319,9 +335,16 @@ struct OutputArgs {
     )]
     summary: Summary,
 
-    /// Suppress the progress bar during type checking.
-    #[arg(long)]
+    /// Suppress the progress bar during type checking. Deprecated: use `--progress-bar=no` instead.
+    #[arg(long, hide = true)]
     no_progress_bar: bool,
+
+    /// Set the progress bar style.
+    /// `interactive` (default) shows a visual progress bar.
+    /// `simple` prints periodic log-style progress messages (suitable for piping or non-interactive use).
+    /// `no` disables progress reporting entirely.
+    #[arg(long, value_enum)]
+    progress_bar: Option<ProgressBarStyle>,
 
     /// When specified, strip this prefix from any paths in the output.
     /// Pass "" to show absolute paths. When omitted, we will use the current working directory.
@@ -357,6 +380,18 @@ impl OutputArgs {
 
     fn output_format(&self) -> OutputFormat {
         self.output_format.unwrap_or_default()
+    }
+
+    /// Resolve the effective progress bar style, taking deprecated flags into account.
+    fn progress_bar_style(&self) -> ProgressBarStyle {
+        if let Some(style) = &self.progress_bar {
+            return style.clone();
+        }
+        if self.no_progress_bar || self.summary == Summary::None {
+            ProgressBarStyle::No
+        } else {
+            ProgressBarStyle::Interactive
+        }
     }
 }
 
@@ -397,11 +432,12 @@ fn write_errors_to_file(
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
 
-fn write_errors_to_console(
+pub(crate) fn write_errors_to_console(
     format: OutputFormat,
     relative_to: &Path,
     errors: &[Error],
@@ -411,6 +447,7 @@ fn write_errors_to_console(
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
+        OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -421,11 +458,11 @@ fn write_error_text_to_file(
     errors: &[Error],
     verbose: bool,
 ) -> anyhow::Result<()> {
-    let mut file = BufWriter::new(File::create(path)?);
+    let mut renderer = ErrorRenderer::plain(BufWriter::new(File::create(path)?));
     for e in errors {
-        e.write_line(&mut file, relative_to, verbose)?;
+        renderer.write(e, relative_to, verbose)?;
     }
-    file.flush()?;
+    renderer.flush()?;
     Ok(())
 }
 
@@ -434,9 +471,14 @@ fn write_error_text_to_console(
     errors: &[Error],
     verbose: bool,
 ) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stdout.lock()), color_choice);
     for error in errors {
-        error.print_colors(relative_to, verbose);
+        renderer.write(error, relative_to, verbose)?;
+        renderer.flush()?;
     }
+    renderer.flush()?;
     Ok(())
 }
 
@@ -503,6 +545,126 @@ fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
     buffered_write_error_github(stdout(), errors)
 }
 
+/// True for characters allowed by the XML 1.0 `Char` production. Everything else
+/// (NUL and most other C0 controls, U+FFFE, U+FFFF) is illegal *anywhere* in an
+/// XML document — including inside CDATA, which has no escape mechanism — so such
+/// characters must be dropped or the document is not well-formed. Rust `char`
+/// already excludes surrogates, so they need no special handling here.
+fn is_xml_char(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
+    )
+}
+
+fn xml_escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            // Tabs/newlines are valid but get normalized to spaces in attribute
+            // values, so emit them as character references to preserve them.
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\t' => out.push_str("&#9;"),
+            c if is_xml_char(c) => out.push(c),
+            _ => {} // drop characters illegal in XML
+        }
+    }
+    out
+}
+
+fn xml_escape_cdata(s: &str) -> String {
+    // CDATA admits any valid XML character except the delimiter "]]>", which
+    // would close the section early — split it across CDATA boundaries. Illegal
+    // XML characters have no CDATA escape, so they are dropped outright.
+    s.chars()
+        .filter(|c| is_xml_char(*c))
+        .collect::<String>()
+        .replace("]]>", "]]]]><![CDATA[>")
+}
+
+/// Render diagnostics as a JUnit `<testsuites>` report. JUnit XML has no notion
+/// of severity, so every diagnostic is emitted as a `<failure>` whose `type` is
+/// the Pyrefly error kind (the conventional "failure type" slot). Severity
+/// filtering happens upstream via `--min-severity`, so by default only errors
+/// reach us; warnings appear only when the caller lowers the threshold.
+fn write_error_junit_xml<W: Write>(
+    mut writer: W,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let n = errors.len();
+
+    writeln!(writer, r#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
+    writeln!(writer, "<testsuites>")?;
+    writeln!(
+        writer,
+        r#"  <testsuite name="pyrefly" tests="{n}" failures="{n}" errors="0" time="0">"#
+    )?;
+
+    for err in errors {
+        let error_path = err.path().as_path();
+        let path = error_path
+            .strip_prefix(relative_to)
+            .unwrap_or(error_path)
+            .to_string_lossy()
+            .into_owned();
+        let line = err.display_range().start.line_within_cell().get();
+        let kind = err.error_kind().to_name();
+
+        writeln!(
+            writer,
+            r#"    <testcase classname="{}" name="{}:L{}" file="{}" line="{}" time="0">"#,
+            xml_escape_attr(&path),
+            xml_escape_attr(kind),
+            line,
+            xml_escape_attr(&path),
+            line,
+        )?;
+        writeln!(
+            writer,
+            r#"      <failure type="{}" message="{}"><![CDATA[{}]]></failure>"#,
+            xml_escape_attr(kind),
+            xml_escape_attr(err.msg_header()),
+            xml_escape_cdata(&err.msg()),
+        )?;
+        writeln!(writer, "    </testcase>")?;
+    }
+
+    writeln!(writer, "  </testsuite>")?;
+    writeln!(writer, "</testsuites>")?;
+    Ok(())
+}
+
+fn buffered_write_error_junit_xml(
+    writer: impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_junit_xml(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_junit_xml_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let file = File::create(path)?;
+    buffered_write_error_junit_xml(file, relative_to, errors)
+}
+
+fn write_error_junit_xml_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_junit_xml(stdout(), relative_to, errors)
+}
+
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
     let normalized = severity_to_str(severity);
     match normalized.as_str() {
@@ -558,7 +720,7 @@ pub struct Handles {
 }
 
 impl Handles {
-    pub fn new(files: Vec<PathBuf>) -> Self {
+    pub fn new(files: impl IntoIterator<Item = PathBuf>) -> Self {
         let mut handles = Self {
             path_data: HashSet::new(),
         };
@@ -566,6 +728,14 @@ impl Handles {
             handles.path_data.insert(ModulePath::filesystem(file));
         }
         handles
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.path_data.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.path_data.len()
     }
 
     pub fn all(
@@ -693,6 +863,78 @@ impl Timings {
     }
 }
 
+/// URL referenced from the unconfigured-config upsell. Kept as a module-level
+/// constant so the wording can stay short and tests can pin the exact string
+/// the user sees.
+const UPSELL_DOCS_URL: &str = "https://pyrefly.org/en/docs/installation/";
+
+/// Resolve an `UpsellDecision` into the concrete reason (or `None` for
+/// "stay silent"). The `Determine` case walks handles with a
+/// short-circuit on the first config mismatch; the other variants are
+/// O(1).
+fn decide_upsell(
+    decision: UpsellDecision,
+    handles: &[Handle],
+    transaction: &Transaction,
+) -> Option<SynthesizedPresetReason> {
+    match decision {
+        UpsellDecision::Skip => None,
+        UpsellDecision::Show(reason) => Some(reason),
+        UpsellDecision::Determine => {
+            let mut iter = handles.iter().filter_map(|h| transaction.get_config(h));
+            let first = iter.next()?;
+            if iter.any(|c| c != first) {
+                return None;
+            }
+            first.synthesized_preset_reason
+        }
+    }
+}
+
+/// Write the "no pyrefly.toml found" upsell for a single
+/// `SynthesizedPresetReason`. Pure function of the reason — trivial to
+/// unit-test against a `Vec<u8>` without spinning up a real check run.
+///
+/// `UserOverride` is intentionally suppressed: the user chose the
+/// preset themselves (via `--preset` or the IDE `typeCheckingMode`
+/// setting), so nagging them to configure pyrefly would be noise.
+fn write_unconfigured_upsell<W: Write>(
+    reason: SynthesizedPresetReason,
+    out: &mut W,
+) -> std::io::Result<()> {
+    match reason {
+        SynthesizedPresetReason::Migrated(kind) => {
+            let (location, preset) = match kind {
+                MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile) => {
+                    ("your `mypy.ini`", "legacy")
+                }
+                MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => {
+                    ("`[tool.mypy]` in your `pyproject.toml`", "legacy")
+                }
+                MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile) => {
+                    ("your `pyrightconfig.json`", "default")
+                }
+                MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => {
+                    ("`[tool.pyright]` in your `pyproject.toml`", "default")
+                }
+            };
+            writeln!(
+                out,
+                "No `pyrefly.toml` found — using settings imported from {location} (preset: {preset}).",
+            )?;
+            writeln!(out, "Run `pyrefly init` to continue setting up Pyrefly.")?;
+            writeln!(out, "Docs: {UPSELL_DOCS_URL}")?;
+        }
+        SynthesizedPresetReason::NoNearbyConfig => {
+            writeln!(out, "No `pyrefly.toml` found — using preset `basic`.")?;
+            writeln!(out, "Run `pyrefly init` to continue setting up Pyrefly.")?;
+            writeln!(out, "Docs: {UPSELL_DOCS_URL}")?;
+        }
+        SynthesizedPresetReason::UserOverride => {}
+    }
+    Ok(())
+}
+
 impl CheckArgs {
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
@@ -700,18 +942,20 @@ impl CheckArgs {
         mut self,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
+        upsell: UpsellDecision,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>, CheckResult)> {
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         timings.list_files = list_files_start.elapsed();
+        let handles = Handles::new(expanded_file_list);
         debug!(
             "Checking {} files (listing took {})",
-            expanded_file_list.len(),
+            handles.len(),
             Timings::show(timings.list_files),
         );
-        if expanded_file_list.is_empty() {
+        if handles.is_empty() {
             return Ok((
                 CommandExitStatus::Success,
                 Vec::new(),
@@ -722,16 +966,13 @@ impl CheckArgs {
             ));
         }
 
-        let holder = Forgetter::new(State::new(config_finder, thread_count), true);
-        let handles = Handles::new(expanded_file_list);
+        let state = Forgetter::new(State::new(config_finder, thread_count), true);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
-            holder
-                .as_ref()
-                .new_transaction(require_levels.default, None),
+            state.as_ref().new_transaction(require_levels.default, None),
             true,
         );
-        let (loaded_handles, _, sourcedb_errors) = handles.all(holder.as_ref().config_finder());
+        let (loaded_handles, _, sourcedb_errors) = handles.all(state.as_ref().config_finder());
 
         // Project-level output settings can come from config when CLI flags are absent.
         if (self.output.baseline.is_none()
@@ -739,7 +980,7 @@ impl CheckArgs {
             || self.output.min_severity.is_none())
             && let Some(handle) = loaded_handles.first()
         {
-            let config = holder.as_ref().config_finder().python_file(
+            let config = state.as_ref().config_finder().python_file(
                 ModuleNameWithKind::guaranteed(handle.module()),
                 handle.path(),
             );
@@ -754,6 +995,7 @@ impl CheckArgs {
             &loaded_handles,
             sourcedb_errors,
             require_levels.specified,
+            upsell,
         )?;
         let check_result = CheckResult::from_errors(&errors, &relative_to, checked_file_count);
         Ok((status, errors, check_result))
@@ -809,6 +1051,8 @@ impl CheckArgs {
             &[handle],
             vec![],
             require_levels.specified,
+            // Snippet checks are interactive ad-hoc inputs — never upsell.
+            UpsellDecision::Skip,
         )?;
         Ok((status, CheckResult::from_errors(&errors, &relative_to, 1)))
     }
@@ -818,11 +1062,12 @@ impl CheckArgs {
         mut watcher: Watcher,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
+        mut upsell: UpsellDecision,
         thread_count: ThreadCount,
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder, thread_count);
@@ -867,7 +1112,12 @@ impl CheckArgs {
                 &loaded_handles,
                 sourcedb_errors,
                 require_levels.specified,
+                upsell,
             );
+            // The upsell is a one-time CTA. Re-nagging on every file
+            // save during a long watch session is noise — clamp to
+            // `Skip` after the first iteration regardless of decision.
+            upsell = UpsellDecision::Skip;
             state.commit_transaction(transaction, None);
             if let Err(e) = res {
                 eprintln!("{e:#}");
@@ -875,7 +1125,7 @@ impl CheckArgs {
             let events = get_watcher_events(&mut watcher).await?;
             transaction = state.new_committable_transaction(
                 require_levels.default,
-                Some(Box::new(ProgressBarSubscriber::new())),
+                self.output.progress_bar_style().make_subscriber(),
             );
             let new_transaction_mut = transaction.as_mut();
             new_transaction_mut.invalidate_events(&events);
@@ -920,6 +1170,7 @@ impl CheckArgs {
         handles: &[Handle],
         mut sourcedb_errors: Vec<ConfigError>,
         require: Require,
+        upsell: UpsellDecision,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
@@ -949,15 +1200,17 @@ impl CheckArgs {
         }
 
         let type_check_start = Instant::now();
-        let show_progress_bar =
-            self.output.summary != Summary::None && !self.output.no_progress_bar;
-        if show_progress_bar {
-            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
-        }
+        let demand_tree_subscriber = if self.output.report_demand_tree.is_some() {
+            transaction.set_demand_collector(Some(DemandCollector::new()));
+            let sub = TestSubscriber::new();
+            transaction.set_subscriber(Some(Box::new(sub.dupe())));
+            Some(sub)
+        } else {
+            transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
+            None
+        };
         transaction.run(handles, require, None);
-        if show_progress_bar {
-            transaction.set_subscriber(None);
-        }
+        transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
             transaction.get_all_errors()
@@ -1023,6 +1276,17 @@ impl CheckArgs {
                 .collect()
         };
 
+        // Filter by minimum severity. Directives are not subject to this
+        // filter — they are merged separately in the output step below.
+        // This must run before `--suppress-errors` so suppression respects
+        // the user's severity threshold: a finding the user asked to hide
+        // via `--min-severity` should not get a suppression comment written
+        // into source.
+        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
+        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
+            .into_iter()
+            .partition(|e| e.severity() >= min_severity);
+
         // Suppress operates on ordinary diagnostics only — directives are
         // structurally excluded since they live in `directives`, not `ordinary_errors`.
         if self.behavior.suppress_errors {
@@ -1040,13 +1304,6 @@ impl CheckArgs {
             let unused_errors = loads.collect_unused_ignore_errors(&collected);
             suppress::remove_unused_ignores(unused_errors);
         }
-
-        // Filter by minimum severity. Directives are not subject to this
-        // filter — they are merged separately in the output step below.
-        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
-        let (ordinary_errors, hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
-            .into_iter()
-            .partition(|e| e.severity() >= min_severity);
 
         // We update the baseline file if requested, after reporting any new
         // errors using the old baseline. Directives are structurally excluded
@@ -1075,12 +1332,7 @@ impl CheckArgs {
 
         // Count only ordinary errors for exit code determination. Directives
         // (e.g. reveal_type) do not contribute to the error count.
-        let mut ordinary_errors_count = config_errors_count;
-        for error in &ordinary_errors {
-            if error.severity() >= Severity::Error {
-                ordinary_errors_count += 1;
-            }
-        }
+        let ordinary_errors_count = config_errors_count + ordinary_errors.len();
 
         // Merge directives into the display list, re-sorting by module
         // name, path, and source range so output preserves file/line
@@ -1112,7 +1364,12 @@ impl CheckArgs {
 
         if self.output.summary != Summary::None {
             let suppress_count = errors.suppressed.len();
-            let mut parts = vec![count(ordinary_errors_count, "error")];
+            let label = if min_severity < Severity::Error {
+                "diagnostic"
+            } else {
+                "error"
+            };
+            let mut parts = vec![count(ordinary_errors_count, label)];
             if suppress_count > 0 {
                 parts.push(format!("{} suppressed", number_thousands(suppress_count)));
             }
@@ -1159,9 +1416,28 @@ impl CheckArgs {
                 memory_trace.peak()
             );
         }
+
+        // Upsell users without a `pyrefly.toml` to run `pyrefly init`.
+        // Routed to stderr unconditionally so machine-readable output
+        // formats on stdout (json, omit-errors, …) stay clean.
+        //
+        // Treated as part of the summary: `--summary=none` suppresses
+        // it alongside the error-count line.
+        //
+        // The decision was largely made up front (see `UpsellDecision`):
+        // project mode and explicit `--config` short-circuit without
+        // walking handles. Only the `Determine` case — file-args
+        // without `--config` — needs a per-handle check, and even then
+        // it's bounded by the user's explicit args (not a project
+        // expansion) and short-circuits on the first config mismatch.
+        if self.output.summary != Summary::None
+            && let Some(reason) = decide_upsell(upsell, handles, transaction)
+        {
+            let _ = write_unconfigured_upsell(reason, &mut std::io::stderr());
+        }
         if let Some(output_path) = &self.output.report_timings {
             eprintln!("Computing timing information");
-            transaction.set_subscriber(Some(Box::new(ProgressBarSubscriber::new())));
+            transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
             transaction.report_timings(output_path)?;
             transaction.set_subscriber(None);
         }
@@ -1201,6 +1477,20 @@ impl CheckArgs {
                 report::dependency_graph::dependency_graph(transaction, handles),
             )?;
         }
+        if let Some(path) = &self.output.report_demand_tree {
+            let roots = transaction.take_demand_roots();
+            let module_steps: Vec<(String, &'static str)> = demand_tree_subscriber
+                .expect("demand_tree_subscriber is set when report_demand_tree is Some")
+                .finish_detailed()
+                .into_iter()
+                .map(|(handle, info)| {
+                    let label = info.last_step.map_or("Nothing", Step::label);
+                    (handle.module().as_str().to_owned(), label)
+                })
+                .collect();
+            let output = report_json(&roots, &module_steps);
+            fs_anyhow::write(path, output)?;
+        }
         if self.behavior.expectations {
             loads.check_against_expectations()?;
             Ok((CommandExitStatus::Success, output_errors))
@@ -1222,12 +1512,10 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
-    use vec1::Vec1;
-    use vec1::vec1;
 
     use super::*;
 
-    fn sample_error(msg: Vec1<String>) -> Error {
+    fn sample_error(msg: String) -> Error {
         let module = Module::new(
             ModuleName::from_str("sample"),
             ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
@@ -1237,14 +1525,14 @@ mod tests {
             module,
             TextRange::new(TextSize::from(0), TextSize::from(1)),
             msg,
+            Vec::new(),
             ErrorKind::BadAssignment,
         )
     }
 
     #[test]
     fn github_actions_command_includes_full_path_and_metadata() {
-        let cmd = github_actions_command(&sample_error(vec1!["bad".into()]))
-            .expect("should emit command");
+        let cmd = github_actions_command(&sample_error("bad".into())).expect("should emit command");
         assert!(cmd.starts_with("::error "), "{cmd}");
         assert!(
             cmd.contains("file=/repo/foo.py"),
@@ -1259,9 +1547,9 @@ mod tests {
 
     #[test]
     fn github_actions_command_respects_severity_mapping() {
-        let warning = sample_error(vec1!["bad".into()]).with_severity(Severity::Warn);
-        let notice = sample_error(vec1!["bad".into()]).with_severity(Severity::Info);
-        let ignored = sample_error(vec1!["bad".into()]).with_severity(Severity::Ignore);
+        let warning = sample_error("bad".into()).with_severity(Severity::Warn);
+        let notice = sample_error("bad".into()).with_severity(Severity::Info);
+        let ignored = sample_error("bad".into()).with_severity(Severity::Ignore);
         assert!(
             github_actions_command(&warning)
                 .unwrap()
@@ -1288,12 +1576,87 @@ mod tests {
 
     #[test]
     fn github_output_format_writes_commands() {
-        let errors = vec![sample_error(vec1!["bad".into()])];
+        let errors = vec![sample_error("bad".into())];
         let mut buf = Vec::new();
         write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn junit_xml_output_format_writes_well_formed_xml() {
+        let errors = vec![
+            sample_error("first error".into()),
+            sample_error("second error".into()),
+        ];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#),
+            "missing XML declaration: {output}"
+        );
+        assert!(
+            output.contains(r#"<testsuite name="pyrefly" tests="2" failures="2""#),
+            "missing testsuite element: {output}"
+        );
+        assert!(
+            output.contains("<failure type="),
+            "missing failure element: {output}"
+        );
+        assert!(
+            output.contains("repo/foo.py"),
+            "missing file path: {output}"
+        );
+        assert!(
+            output.ends_with("</testsuites>\n"),
+            "missing closing tag: {output}"
+        );
+    }
+
+    #[test]
+    fn junit_xml_escapes_special_chars_in_messages() {
+        let errors = vec![sample_error(r#"a < b & c > d "e" 'f'"#.into())];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("&lt;"), "< not escaped: {output}");
+        assert!(output.contains("&amp;"), "& not escaped: {output}");
+        assert!(output.contains("&gt;"), "> not escaped: {output}");
+        assert!(output.contains("&quot;"), "\" not escaped: {output}");
+        assert!(output.contains("&apos;"), "' not escaped: {output}");
+
+        // CDATA split for ]]>
+        let errors2 = vec![sample_error("x ]]> y".into())];
+        let mut buf2 = Vec::new();
+        write_error_junit_xml(&mut buf2, Path::new("/"), &errors2).unwrap();
+        let output2 = String::from_utf8(buf2).unwrap();
+        assert!(
+            output2.contains("]]]]><![CDATA["),
+            "CDATA ]]> was not split across CDATA boundaries: {output2}"
+        );
+    }
+
+    #[test]
+    fn junit_xml_strips_invalid_control_chars() {
+        // NUL and other C0 control characters are illegal in XML even inside a
+        // CDATA section, so they must be dropped (not just escaped) to keep the
+        // document well-formed. The surrounding text must survive.
+        let errors = vec![sample_error("bad\u{0}\u{8}\u{1f}msg".into())];
+        let mut buf = Vec::new();
+        write_error_junit_xml(&mut buf, Path::new("/"), &errors).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            !output
+                .chars()
+                .any(|c| !matches!(c, '\n' | '\t') && (c as u32) < 0x20),
+            "illegal control char leaked into output: {output:?}"
+        );
+        assert!(
+            output.contains("badmsg"),
+            "surrounding message text was lost: {output}"
+        );
     }
 
     #[test]
@@ -1320,5 +1683,74 @@ mod tests {
         output.inherit_defaults_from_config(&config);
 
         assert_eq!(output.output_format(), OutputFormat::Json);
+    }
+
+    fn upsell_string(reason: SynthesizedPresetReason) -> String {
+        let mut buf = Vec::new();
+        write_unconfigured_upsell(reason, &mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn upsell_for_no_nearby_config() {
+        let s = upsell_string(SynthesizedPresetReason::NoNearbyConfig);
+        assert!(s.contains("preset `basic`"), "{s}");
+        assert!(s.contains("`pyrefly init`"), "{s}");
+        assert!(s.contains(UPSELL_DOCS_URL), "{s}");
+    }
+
+    #[test]
+    fn upsell_for_migrated_from_mypy_ini() {
+        let s = upsell_string(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
+            MigratedConfigSource::DedicatedFile,
+        )));
+        assert!(s.contains("your `mypy.ini`"), "{s}");
+        assert!(s.contains("preset: legacy"), "{s}");
+        assert!(s.contains("`pyrefly init`"), "{s}");
+    }
+
+    #[test]
+    fn upsell_for_migrated_from_mypy_pyproject() {
+        let s = upsell_string(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
+            MigratedConfigSource::PyprojectToml,
+        )));
+        assert!(s.contains("`[tool.mypy]` in your `pyproject.toml`"), "{s}");
+        // Make sure the dedicated-file phrasing isn't accidentally
+        // reused here.
+        assert!(!s.contains("your `mypy.ini`"), "{s}");
+        assert!(s.contains("preset: legacy"), "{s}");
+        assert!(s.contains("`pyrefly init`"), "{s}");
+    }
+
+    #[test]
+    fn upsell_for_migrated_from_pyrightconfig() {
+        let s = upsell_string(SynthesizedPresetReason::Migrated(
+            MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
+        ));
+        assert!(s.contains("your `pyrightconfig.json`"), "{s}");
+        assert!(s.contains("preset: default"), "{s}");
+        assert!(s.contains("`pyrefly init`"), "{s}");
+    }
+
+    #[test]
+    fn upsell_for_migrated_from_pyright_pyproject() {
+        let s = upsell_string(SynthesizedPresetReason::Migrated(
+            MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
+        ));
+        assert!(
+            s.contains("`[tool.pyright]` in your `pyproject.toml`"),
+            "{s}"
+        );
+        assert!(!s.contains("your `pyrightconfig.json`"), "{s}");
+        assert!(s.contains("preset: default"), "{s}");
+        assert!(s.contains("`pyrefly init`"), "{s}");
+    }
+
+    /// `UserOverride` is suppressed: the user explicitly chose a
+    /// preset via the IDE setting or `--preset` flag.
+    #[test]
+    fn upsell_is_silent_for_user_override() {
+        let s = upsell_string(SynthesizedPresetReason::UserOverride);
+        assert!(s.is_empty(), "expected no upsell, got {s:?}");
     }
 }

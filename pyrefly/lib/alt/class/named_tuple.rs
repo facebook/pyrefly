@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
@@ -17,7 +16,6 @@ use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
@@ -51,7 +49,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     *range,
-                    ErrorInfo::Kind(ErrorKind::BadClassDefinition),
+                    ErrorKind::BadClassDefinition,
                     format!(
                         "NamedTuple field '{name}' without a default may not follow NamedTuple field with a default"
                     ),
@@ -128,7 +126,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ParamList::new(params),
                 self.heap.mk_self_type(self.as_class_type_unchecked(cls)),
             ),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::NEW, None),
+            metadata: FuncMetadata::method(cls, dunder::NEW),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -142,7 +140,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ];
         let ty = self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::INIT, None),
+            metadata: FuncMetadata::method(cls, dunder::INIT),
         });
         ClassSynthesizedField::new(ty)
     }
@@ -168,7 +166,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap
                     .mk_class_type(self.stdlib.iterable(self.unions(element_types))),
             ),
-            metadata: FuncMetadata::def(self.module().dupe(), cls.dupe(), dunder::ITER, None),
+            metadata: FuncMetadata::method(cls, dunder::ITER),
         });
         ClassSynthesizedField::new(ty)
     }

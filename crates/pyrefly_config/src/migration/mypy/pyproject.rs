@@ -90,6 +90,8 @@ struct MypySection {
     #[serde(default)]
     disallow_any_generics: Option<bool>,
     #[serde(default)]
+    disallow_any_explicit: Option<bool>,
+    #[serde(default)]
     strict: Option<bool>,
     #[serde(default)]
     report_deprecated_as_note: Option<bool>,
@@ -199,6 +201,13 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
             "mypy",
             "disallow_any_generics",
             Some(disallow_any_generics.to_string()),
+        );
+    }
+    if let Some(disallow_any_explicit) = mypy.disallow_any_explicit {
+        ini.set(
+            "mypy",
+            "disallow_any_explicit",
+            Some(disallow_any_explicit.to_string()),
         );
     }
     if let Some(strict) = mypy.strict {
@@ -331,6 +340,28 @@ mypy_path = "a:b,c"
         assert_eq!(
             cfg.search_path_from_file,
             vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_mypy_path_with_config_file_dir() -> anyhow::Result<()> {
+        // Airflow-style: `mypy_path` entries are written relative to the config
+        // file via `$MYPY_CONFIG_FILE_DIR`. They migrate to clean relative
+        // search paths so the resulting config stays portable.
+        let src = r#"[tool.mypy]
+mypy_path = [
+    "$MYPY_CONFIG_FILE_DIR/airflow-core/src",
+    "$MYPY_CONFIG_FILE_DIR/providers/amazon/src",
+]
+"#;
+        let cfg = parse_pyproject_config(src)?;
+        assert_eq!(
+            cfg.search_path_from_file,
+            vec![
+                PathBuf::from("airflow-core/src"),
+                PathBuf::from("providers/amazon/src"),
+            ]
         );
         Ok(())
     }

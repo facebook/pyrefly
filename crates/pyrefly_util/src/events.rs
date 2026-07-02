@@ -9,7 +9,6 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use lsp_types::FileChangeType;
 use notify::EventKind;
 
 use crate::stdlib::is_python_stdlib_file;
@@ -41,6 +40,7 @@ impl CategorizedEvents {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new_lsp(events: Vec<lsp_types::FileEvent>) -> CategorizedEvents {
+        use lsp_types::FileChangeType;
         let mut res = CategorizedEvents::default();
         for event in events {
             if let Ok(path) = event.uri.to_file_path()

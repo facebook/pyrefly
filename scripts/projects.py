@@ -138,6 +138,28 @@ def get_mypy_primer_projects() -> list[Project]:
             expected_mypy_success=True,
         ),
         Project(
+            location="https://github.com/twisted/twisted",
+            mypy_cmd="{mypy} src/twisted",
+            pyright_cmd="{pyright} src/twisted",
+            pyrefly_cmd="{pyrefly} src/twisted",
+            deps=[
+                "attrs",
+                "automat",
+                "constantly",
+                "hyperlink",
+                "incremental",
+                "zope.interface",
+                "typing_extensions",
+            ],
+        ),
+        Project(
+            location="https://github.com/hypothesisworks/hypothesis",
+            mypy_cmd="{mypy} hypothesis/src/hypothesis",
+            pyright_cmd="{pyright} hypothesis/src/hypothesis",
+            pyrefly_cmd="{pyrefly} hypothesis/src/hypothesis",
+            deps=["attrs", "sortedcontainers"],
+        ),
+        Project(
             location="https://github.com/sphinx-doc/sphinx",
             mypy_cmd="{mypy} sphinx",
             pyright_cmd="{pyright} sphinx",
@@ -150,7 +172,7 @@ def get_mypy_primer_projects() -> list[Project]:
             mypy_cmd="{mypy} sklearn",
             pyright_cmd="{pyright} sklearn",
             pyrefly_cmd="{pyrefly} sklearn",
-            deps=["numpy"],
+            deps=["joblib", "numpy", "scipy-stubs", "threadpoolctl"],
             expected_mypy_success=True,
             cost={"mypy": 15, "pyright": 240},
         ),
@@ -161,6 +183,9 @@ def get_mypy_primer_projects() -> list[Project]:
             pyrefly_cmd="{pyrefly} src",
             deps=["types-filelock", "types-freezegun", "types-setuptools"],
             expected_mypy_success=True,
+            # The upstream repo contains symlinks whose targets include a trailing newline.
+            # https://github.com/pypa/bandersnatch/pull/2280
+            skip_pyrefly=True,
         ),
         Project(
             location="https://github.com/hauntsaninja/boostedblob",
@@ -884,7 +909,14 @@ def get_mypy_primer_projects() -> list[Project]:
             mypy_cmd="{mypy} .",
             pyright_cmd="{pyright}",
             pyrefly_cmd="{pyrefly} .",
-            deps=["numpy", "optype", "packaging", "scipy"],
+            deps=[
+                "array-api-compat",
+                "numpy",
+                "numpy-typing-compat",
+                "optype",
+                "packaging",
+                "scipy",
+            ],
             expected_mypy_success=True,
             expected_pyright_success=True,
         ),
@@ -1654,5 +1686,12 @@ def get_mypy_primer_projects() -> list[Project]:
             pyright_cmd="{pyright} src/pytest_autoprofile tests",
             pyrefly_cmd="{pyrefly} src/pytest_autoprofile tests",
             deps=["pytest", "pluggy", "line_profiler", "typing-extensions"],
+        ),
+        Project(
+            location="https://github.com/python-attrs/cattrs",
+            mypy_cmd="{mypy} src",
+            pyright_cmd="{pyright} src",
+            pyrefly_cmd="{pyrefly} src",
+            deps=["attrs"],
         ),
     ]

@@ -35,7 +35,6 @@ use crate::alt::class::class_field::ClassAttribute;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
-use crate::error::context::ErrorInfo;
 use crate::types::class::ClassType;
 
 pub fn is_nn_module_dict(cls: &ClassType) -> bool {
@@ -222,10 +221,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             // Check if the slice is a string literal
             let key_ty = self.expr_infer(slice, errors);
-            if let Type::Literal(box pyrefly_types::literal::Literal {
-                value: Lit::Str(field_name),
-                ..
-            }) = &key_ty
+            if let Type::Literal(f) = &key_ty
+                && let pyrefly_types::literal::Literal {
+                    value: Lit::Str(field_name),
+                    ..
+                } = &**f
             {
                 // Look up the field in the TypedDict
                 if let Some(metadata) = self
@@ -250,7 +250,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return self.error(
                         errors,
                         slice.range(),
-                        ErrorInfo::Kind(ErrorKind::BadTypedDictKey),
+                        ErrorKind::BadTypedDictKey,
                         format!(
                             "ModuleDict key `{}` not found in TypedDict `{}`",
                             field_name,

@@ -1,8 +1,7 @@
 import sys
 from _typeshed import ReadOnlyBuffer, SupportsRead, SupportsWrite
 from curses import _ncurses_version
-from typing import Any, Final, final, overload
-from typing_extensions import TypeAlias
+from typing import Any, Final, TypeAlias, final, overload
 
 # NOTE: This module is ordinarily only available on Unix, but the windows-curses
 # package makes it available on Windows as well with the same contents.
@@ -96,13 +95,12 @@ BUTTON4_PRESSED: Final[int]
 BUTTON4_RELEASED: Final[int]
 BUTTON4_TRIPLE_CLICKED: Final[int]
 # Darwin ncurses doesn't provide BUTTON5_* constants prior to 3.12.10 and 3.13.3
-if sys.version_info >= (3, 10):
-    if sys.version_info >= (3, 12) or sys.platform != "darwin":
-        BUTTON5_PRESSED: Final[int]
-        BUTTON5_RELEASED: Final[int]
-        BUTTON5_CLICKED: Final[int]
-        BUTTON5_DOUBLE_CLICKED: Final[int]
-        BUTTON5_TRIPLE_CLICKED: Final[int]
+if sys.version_info >= (3, 12) or sys.platform != "darwin":
+    BUTTON5_PRESSED: Final[int]
+    BUTTON5_RELEASED: Final[int]
+    BUTTON5_CLICKED: Final[int]
+    BUTTON5_DOUBLE_CLICKED: Final[int]
+    BUTTON5_TRIPLE_CLICKED: Final[int]
 BUTTON_ALT: Final[int]
 BUTTON_CTRL: Final[int]
 BUTTON_SHIFT: Final[int]
@@ -448,16 +446,14 @@ def halfdelay(tenths: int, /) -> None:
 def has_colors() -> bool:
     """Return True if the terminal can display colors; otherwise, return False."""
     ...
+def has_extended_color_support() -> bool:
+    """
+    Return True if the module supports extended colors; otherwise, return False.
 
-if sys.version_info >= (3, 10):
-    def has_extended_color_support() -> bool:
-        """
-        Return True if the module supports extended colors; otherwise, return False.
-
-        Extended color support allows more than 256 color-pairs for terminals
-        that support more than 16 colors (e.g. xterm-256color).
-        """
-        ...
+    Extended color support allows more than 256 color-pairs for terminals
+    that support more than 16 colors (e.g. xterm-256color).
+    """
+    ...
 
 if sys.version_info >= (3, 14):
     def assume_default_colors(fg: int, bg: int, /) -> None: ...
@@ -927,6 +923,7 @@ class error(Exception): ...
 @final
 class window:  # undocumented
     encoding: str
+
     @overload
     def addch(self, ch: _ChType, attr: int = ...) -> None:
         """
@@ -969,6 +966,7 @@ class window:  # undocumented
         current settings for the window object.
         """
         ...
+
     @overload
     def addnstr(self, str: str, n: int, attr: int = ...) -> None:
         """
@@ -1015,6 +1013,7 @@ class window:  # undocumented
         current settings for the window object.
         """
         ...
+
     @overload
     def addstr(self, str: str, attr: int = ...) -> None:
         """
@@ -1057,6 +1056,7 @@ class window:  # undocumented
         current settings for the window object.
         """
         ...
+
     def attroff(self, attr: int, /) -> None:
         """Remove attribute attr from the "background" set."""
         ...
@@ -1123,6 +1123,7 @@ class window:  # undocumented
         used for that parameter.
         """
         ...
+
     @overload
     def box(self) -> None:
         """
@@ -1153,6 +1154,7 @@ class window:  # undocumented
         horch.  The default corner characters are always used by this function.
         """
         ...
+
     @overload
     def chgat(self, attr: int) -> None: ...
     @overload
@@ -1161,11 +1163,13 @@ class window:  # undocumented
     def chgat(self, y: int, x: int, attr: int) -> None: ...
     @overload
     def chgat(self, y: int, x: int, num: int, attr: int) -> None: ...
+
     def clear(self) -> None: ...
     def clearok(self, yes: int) -> None: ...
     def clrtobot(self) -> None: ...
     def clrtoeol(self) -> None: ...
     def cursyncup(self) -> None: ...
+
     @overload
     def delch(self) -> None:
         """
@@ -1190,7 +1194,9 @@ class window:  # undocumented
             X-coordinate.
         """
         ...
+
     def deleteln(self) -> None: ...
+
     @overload
     def derwin(self, begin_y: int, begin_x: int) -> window:
         """
@@ -1231,6 +1237,7 @@ class window:  # undocumented
         screen.
         """
         ...
+
     def echochar(self, ch: _ChType, attr: int = 0, /) -> None:
         """
         Add character ch with attribute attr, and refresh.
@@ -1256,6 +1263,7 @@ class window:  # undocumented
     def getbkgd(self) -> tuple[int, int]:
         """Return the window's current background character/attribute pair."""
         ...
+
     @overload
     def getch(self) -> int:
         """
@@ -1288,6 +1296,7 @@ class window:  # undocumented
         is returned if there is no input, else getch() waits until a key is pressed.
         """
         ...
+
     @overload
     def get_wch(self) -> int | str:
         """
@@ -1318,6 +1327,7 @@ class window:  # undocumented
         keypad keys, and other special keys.
         """
         ...
+
     @overload
     def getkey(self) -> str:
         """
@@ -1350,8 +1360,10 @@ class window:  # undocumented
         key name.  In no-delay mode, an exception is raised if there is no input.
         """
         ...
+
     def getmaxyx(self) -> tuple[int, int]: ...
     def getparyx(self) -> tuple[int, int]: ...
+
     @overload
     def getstr(self) -> bytes: ...
     @overload
@@ -1360,7 +1372,9 @@ class window:  # undocumented
     def getstr(self, y: int, x: int) -> bytes: ...
     @overload
     def getstr(self, y: int, x: int, n: int) -> bytes: ...
+
     def getyx(self) -> tuple[int, int]: ...
+
     @overload
     def hline(self, ch: _ChType, n: int) -> None:
         """
@@ -1397,9 +1411,11 @@ class window:  # undocumented
             Attributes for the characters.
         """
         ...
+
     def idcok(self, flag: bool) -> None: ...
     def idlok(self, yes: bool) -> None: ...
     def immedok(self, flag: bool) -> None: ...
+
     @overload
     def inch(self) -> int:
         """
@@ -1428,6 +1444,7 @@ class window:  # undocumented
         The bottom 8 bits are the character proper, and upper bits are the attributes.
         """
         ...
+
     @overload
     def insch(self, ch: _ChType, attr: int = ...) -> None:
         """
@@ -1466,8 +1483,10 @@ class window:  # undocumented
         the rightmost characters on the line being lost.
         """
         ...
+
     def insdelln(self, nlines: int) -> None: ...
     def insertln(self) -> None: ...
+
     @overload
     def insnstr(self, str: str, n: int, attr: int = ...) -> None:
         """
@@ -1518,6 +1537,7 @@ class window:  # undocumented
         specified).
         """
         ...
+
     @overload
     def insstr(self, str: str, attr: int = ...) -> None:
         """
@@ -1562,10 +1582,12 @@ class window:  # undocumented
         if specified).
         """
         ...
+
     @overload
     def instr(self, n: int = 2047) -> bytes: ...
     @overload
     def instr(self, y: int, x: int, n: int = 2047) -> bytes: ...
+
     def is_linetouched(self, line: int, /) -> bool:
         """
         Return True if the specified line was modified, otherwise return False.
@@ -1584,6 +1606,7 @@ class window:  # undocumented
     def mvwin(self, new_y: int, new_x: int) -> None: ...
     def nodelay(self, yes: bool) -> None: ...
     def notimeout(self, yes: bool) -> None: ...
+
     @overload
     def noutrefresh(self) -> None:
         """
@@ -1606,6 +1629,7 @@ class window:  # undocumented
         that, call doupdate().
         """
         ...
+
     @overload
     def overlay(self, destwin: window) -> None:
         """
@@ -1640,6 +1664,7 @@ class window:  # undocumented
         destination window.
         """
         ...
+
     @overload
     def overwrite(self, destwin: window) -> None:
         """
@@ -1676,6 +1701,7 @@ class window:  # undocumented
         window.
         """
         ...
+
     def putwin(self, file: SupportsWrite[bytes], /) -> None:
         """
         Write all data associated with the window into the provided file object.
@@ -1696,6 +1722,7 @@ class window:  # undocumented
         """
         ...
     def redrawwin(self) -> None: ...
+
     @overload
     def refresh(self) -> None:
         """
@@ -1734,6 +1761,7 @@ class window:  # undocumented
         sminrow, or smincol are treated as if they were zero.
         """
         ...
+
     def resize(self, nlines: int, ncols: int) -> None: ...
     def scroll(self, lines: int = 1) -> None:
         """
@@ -1761,6 +1789,7 @@ class window:  # undocumented
         ...
     def standend(self) -> None: ...
     def standout(self) -> None: ...
+
     @overload
     def subpad(self, begin_y: int, begin_x: int) -> window:
         """
@@ -1799,6 +1828,7 @@ class window:  # undocumented
         lower right corner of the window.
         """
         ...
+
     @overload
     def subwin(self, begin_y: int, begin_x: int) -> window:
         """
@@ -1837,6 +1867,7 @@ class window:  # undocumented
         lower right corner of the window.
         """
         ...
+
     def syncdown(self) -> None: ...
     def syncok(self, flag: bool) -> None: ...
     def syncup(self) -> None: ...
@@ -1852,6 +1883,7 @@ class window:  # undocumented
         ...
     def touchwin(self) -> None: ...
     def untouchwin(self) -> None: ...
+
     @overload
     def vline(self, ch: _ChType, n: int) -> None:
         """

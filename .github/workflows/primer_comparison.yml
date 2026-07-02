@@ -7,9 +7,8 @@ on:
         description: 'Comma-separated project names to run (empty = all). See scripts/projects.py for valid names.'
         required: false
         default: ''
-  # Uncomment to enable daily runs after manual testing:
-  # schedule:
-  #   - cron: '0 6 * * *'
+  schedule:
+    - cron: '0 6 * * *'
 
 permissions: {}
 
@@ -36,7 +35,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-01-18
+          toolchain: stable
 
       - name: Install type checkers
         run: pip install pyright mypy

@@ -534,8 +534,9 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<ClassId, ClassDefi
             .collect::<Vec<_>>();
 
         let mro = match &*get_class_mro(&class, &context.answers_context) {
-            ClassMro::Resolved(mro) => PysaClassMro::Resolved(
-                mro.iter()
+            ClassMro::Resolved { ancestors, .. } => PysaClassMro::Resolved(
+                ancestors
+                    .iter()
                     .map(|class_type| ClassRef::from_class(class_type.class_object(), context))
                     .collect::<Vec<_>>(),
             ),

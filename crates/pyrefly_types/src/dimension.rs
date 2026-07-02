@@ -19,7 +19,6 @@ use std::fmt::Display;
 
 use crate::equality::TypeEq;
 use crate::literal::Lit;
-use crate::literal::Literal;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -31,7 +30,7 @@ use crate::types::Type;
 ///
 /// Type variables (`Type::Quantified`), solver variables (`Type::Var`), and
 /// unknown dimensions (`Type::Any`) are represented directly as `Type` in
-/// `TensorShape.dims`, not wrapped in `SizeExpr`.
+/// `ShapedArrayShape.dims`, not wrapped in `SizeExpr`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SizeExpr {
     /// Concrete dimension: Tensor[2, 3]
@@ -94,15 +93,13 @@ impl SizeExpr {
 
     /// Convert a Type to a SizeExpr (used for extracting literal dimensions).
     /// Returns None if the type is not a concrete literal or expression.
-    /// Type variables, Vars, and Any should remain as Type in TensorShape.dims.
+    /// Type variables, Vars, and Any should remain as Type in ShapedArrayShape.dims.
     pub fn from_type(ty: &Type) -> Option<SizeExpr> {
         match ty {
             // SizeExpr type -> unwrap and return the SizeExpr directly
             Type::Size(dim) => Some(dim.clone()),
             // Literal integer -> Literal dimension
-            Type::Literal(box Literal {
-                value: Lit::Int(i), ..
-            }) => i.as_i64().map(SizeExpr::Literal),
+            Type::Literal(lit) if let Lit::Int(i) = &lit.value => i.as_i64().map(SizeExpr::Literal),
             // Symbolic integer -> recursively extract SizeExpr from the Type
             Type::Dim(ty) => SizeExpr::from_type(ty),
             // All other types (Quantified, Var, Any, etc.) should remain as Type

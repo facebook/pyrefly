@@ -59,6 +59,104 @@ class Base:
 );
 
 testcase!(
+    test_nested_function_can_access_implicit_builtins,
+    r#"
+def outer():
+    def inner(x: object) -> list[int]:
+        return [len([x])]
+    return inner
+"#,
+);
+
+testcase!(
+    test_builtin_use_before_module_shadow,
+    r#"
+print(len([1]))
+len = 5
+"#,
+);
+
+testcase!(
+    test_builtin_class_use_before_module_shadow,
+    r#"
+class TimeoutError(TimeoutError):
+    pass
+raise TimeoutError("x")
+"#,
+);
+
+testcase!(
+    test_module_definition_named_like_builtin,
+    r#"
+def compile(x: int, *, fullgraph: bool) -> int:
+    return x
+
+compile(1, fullgraph=True)
+"#,
+);
+
+testcase!(
+    test_builtin_special_form_before_module_shadow,
+    r#"
+from typing import assert_type
+x: tuple[int, str] = (1, "a")
+assert_type(x, tuple[int, str])
+y: dict[str, int] = {}
+assert_type(y, dict[str, int])
+tuple = 5
+dict = 6
+"#,
+);
+
+testcase!(
+    test_deeply_nested_function_can_access_implicit_builtins,
+    r#"
+from typing import assert_type
+def a():
+    def b():
+        def c() -> int:
+            return len([1, 2])
+        return c
+    return b
+assert_type(a()()(), int)
+"#,
+);
+
+testcase!(
+    test_sibling_nested_functions_materialize_distinct_builtins,
+    r#"
+from typing import assert_type
+def outer():
+    def uses_len(xs: list[int]) -> int:
+        return len(xs)
+    def uses_abs(n: int) -> int:
+        return abs(n)
+    return uses_len, uses_abs
+assert_type(outer()[0]([1]), int)
+assert_type(outer()[1](-1), int)
+"#,
+);
+
+testcase!(
+    test_local_shadow_still_reports_uninitialized_after_builtin_use,
+    r#"
+len([1])
+
+def f(cond: bool) -> int:
+    if cond:
+        len = 1
+    return len  # E: `len` may be uninitialized
+"#,
+);
+
+testcase!(
+    test_unknown_name_suggests_builtin,
+    r#"
+smax  # E: Did you mean `max`?
+"#,
+);
+
+testcase!(
     test_unknown_name_suggests_similar,
     r#"
 long_variable_name = 1
@@ -281,12 +379,13 @@ x: str = ""
 );
 
 testcase!(
-    test_nonlocal_ref_before_def,
+    test_global_builtin_before_def,
     r#"
-def f(x: int) -> None:
-    def g():
-        nonlocal x
-        x = 1
+from typing import assert_type
+def lex():
+    global input
+    assert_type(input(), str)
+    input = 2
 "#,
 );
 
@@ -1378,5 +1477,27 @@ class Config:
     name: str = "default"
     if coin():
         debug = True
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3398
+testcase!(
+    test_walrus_in_comprehension_reads_enclosing_scope_param,
+    r#"
+def demo(text: str) -> None:
+    [text := text.replace(s, f"\\{s}") for s in "&#" if s in text]
+"#,
+);
+
+// Walrus target read on the RHS should not resolve through a class scope.
+// Python raises UnboundLocalError here because comprehensions can't see class
+// scopes; we should not silently resolve `text` to the class's `str`.
+testcase!(
+    test_walrus_in_comprehension_skips_class_scope,
+    r#"
+class C:
+    text: str = "hello"
+    def method(self) -> None:
+        result = [text := text.replace("a", "b") for _ in [1]]  # E: `text` is uninitialized
 "#,
 );

@@ -11,19 +11,20 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Number::Int;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
-use vec1::Vec1;
 
 use super::types::LocalRefactorCodeAction;
-use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::Transaction;
+use crate::state::lsp::quick_fixes::extract_shared::find_local_definition;
 use crate::state::lsp::quick_fixes::extract_shared::reference_in_disallowed_scope;
 
 pub(crate) fn inline_variable_code_actions(
@@ -37,16 +38,8 @@ pub(crate) fn inline_variable_code_actions(
         return None;
     }
     let module_info = transaction.get_module_info(handle)?;
-    let defs = transaction
-        .find_definition(handle, position, FindPreference::default())
-        .map(Vec1::into_vec)
-        .unwrap_or_default();
-    let def = defs.into_iter().find(|def| {
-        def.module.path() == module_info.path()
-            && matches!(
-                def.metadata.symbol_kind(),
-                Some(SymbolKind::Variable | SymbolKind::Constant)
-            )
+    let def = find_local_definition(transaction, handle, position, &module_info, |k| {
+        matches!(k, Some(SymbolKind::Variable | SymbolKind::Constant))
     })?;
     let ast = transaction.get_ast(handle)?;
     let (assignment_range, value_expr) =
@@ -91,13 +84,40 @@ pub(crate) fn inline_variable_code_actions(
     if value_text.contains('\n') {
         return None;
     }
-    let replacement = format!("({value_text})");
     let mut edits = Vec::new();
+    let always_needs_parens = matches!(
+        value_expr,
+        Expr::BoolOp(_)
+            | Expr::BinOp(_)
+            | Expr::Compare(_)
+            | Expr::UnaryOp(_)
+            | Expr::If(_)
+            | Expr::Lambda(_)
+            | Expr::Named(_)
+            | Expr::Generator(_)
+            | Expr::Tuple(_)
+            | Expr::Await(_)
+            | Expr::Yield(_)
+            | Expr::YieldFrom(_)
+    );
+
     for range in references {
         if range == def.definition_range {
             continue;
         }
-        edits.push((module_info.dupe(), range, replacement.clone()));
+        let covering_nodes = Ast::locate_node(ast.as_ref(), range.start());
+        let parent = covering_nodes.get(1);
+
+        let needs_parens_for_attribute_access =
+            matches!(parent, Some(AnyNodeRef::ExprAttribute(_)))
+                && matches!(value_expr, Expr::NumberLiteral(n) if matches!(n.value, Int(_)));
+
+        let replacement = if needs_parens_for_attribute_access || always_needs_parens {
+            format!("({value_text})")
+        } else {
+            value_text.to_owned()
+        };
+        edits.push((module_info.dupe(), range, replacement));
     }
     if edits.is_empty() {
         return None;
@@ -216,21 +236,17 @@ fn references_in_nested_scope(
 fn collect_nested_scopes(stmts: &[Stmt], scope_range: TextRange, ranges: &mut Vec<TextRange>) {
     for stmt in stmts {
         match stmt {
-            Stmt::FunctionDef(function_def) => {
-                if scope_range.contains_range(function_def.range()) {
-                    if function_def.range() != scope_range {
-                        ranges.push(function_def.range());
-                    }
-                    collect_nested_scopes(&function_def.body, scope_range, ranges);
+            Stmt::FunctionDef(function_def) if scope_range.contains_range(function_def.range()) => {
+                if function_def.range() != scope_range {
+                    ranges.push(function_def.range());
                 }
+                collect_nested_scopes(&function_def.body, scope_range, ranges);
             }
-            Stmt::ClassDef(class_def) => {
-                if scope_range.contains_range(class_def.range()) {
-                    if class_def.range() != scope_range {
-                        ranges.push(class_def.range());
-                    }
-                    collect_nested_scopes(&class_def.body, scope_range, ranges);
+            Stmt::ClassDef(class_def) if scope_range.contains_range(class_def.range()) => {
+                if class_def.range() != scope_range {
+                    ranges.push(class_def.range());
                 }
+                collect_nested_scopes(&class_def.body, scope_range, ranges);
             }
             _ => {}
         }

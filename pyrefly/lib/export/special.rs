@@ -48,7 +48,6 @@ pub enum SpecialExport {
     Overload,
     Override,
     AbstractMethod,
-    SelfType,
     Generic,
     Protocol,
     PydanticConfigDict,
@@ -72,6 +71,14 @@ pub enum SpecialExport {
     Final,
     TypingMapping,
     TypeForm,
+    UsesShapeDsl,
+    ShapeDslFunction,
+    ShapedArray,
+    Sentinel,
+    BuiltinsSentinel,
+    AttrsLegacyAttrib,
+    AttrsNextGenField,
+    AttrsNothing,
 }
 
 impl SpecialExport {
@@ -91,7 +98,6 @@ impl SpecialExport {
             "TypedDict" => Some(Self::TypedDict),
             "namedtuple" => Some(Self::CollectionsNamedTuple),
             "NamedTuple" => Some(Self::TypingNamedTuple),
-            "Self" => Some(Self::SelfType),
             "assert_type" => Some(Self::AssertType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
@@ -135,6 +141,14 @@ impl SpecialExport {
             "Final" => Some(Self::Final),
             "Mapping" => Some(Self::TypingMapping),
             "TypeForm" => Some(Self::TypeForm),
+            "uses_shape_dsl" => Some(Self::UsesShapeDsl),
+            "shape_dsl_function" => Some(Self::ShapeDslFunction),
+            "shaped_array" => Some(Self::ShapedArray),
+            "Sentinel" => Some(Self::Sentinel),
+            "sentinel" => Some(Self::BuiltinsSentinel),
+            "attr" | "attrib" | "ib" => Some(Self::AttrsLegacyAttrib),
+            "field" => Some(Self::AttrsNextGenField),
+            "NOTHING" => Some(Self::AttrsNothing),
             _ => None,
         }
     }
@@ -142,7 +156,10 @@ impl SpecialExport {
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
             Self::TypeVar | Self::TypeVarTuple => {
-                matches!(m.as_str(), "typing" | "typing_extensions" | "torch_shapes")
+                matches!(
+                    m.as_str(),
+                    "typing" | "typing_extensions" | "shape_extensions"
+                )
             }
             Self::TypeAlias
             | Self::ParamSpec
@@ -158,7 +175,6 @@ impl SpecialExport {
             | Self::NoTypeCheck
             | Self::Overload
             | Self::Override
-            | Self::SelfType
             | Self::Cast
             | Self::Generic
             | Self::Protocol
@@ -204,7 +220,39 @@ impl SpecialExport {
                 "typing" | "typing_extensions" | "collections.abc"
             ),
             Self::Deprecated => matches!(m.as_str(), "warnings" | "typing_extensions"),
+            Self::UsesShapeDsl => matches!(m.as_str(), "shape_extensions"),
+            Self::ShapeDslFunction => matches!(m.as_str(), "shape_extensions.dsl"),
+            Self::ShapedArray => matches!(m.as_str(), "shape_extensions"),
+            Self::Sentinel => matches!(m.as_str(), "typing_extensions"),
+            Self::BuiltinsSentinel => matches!(m.as_str(), "builtins"),
+            Self::AttrsLegacyAttrib | Self::AttrsNextGenField | Self::AttrsNothing => {
+                matches!(m.as_str(), "attr" | "attrs")
+            }
         }
+    }
+
+    /// Returns true if subscripting this export produces a type expression,
+    /// even in a value context (e.g. `list["A | B"]`).
+    pub fn is_static_type_subscript(self) -> bool {
+        matches!(
+            self,
+            Self::Union
+                | Self::Optional
+                | Self::Annotated
+                | Self::Callable
+                | Self::BuiltinsDict
+                | Self::TypingDict
+                | Self::BuiltinsList
+                | Self::TypingList
+                | Self::BuiltinsTuple
+                | Self::TypingTuple
+                | Self::BuiltinsType
+                | Self::TypingType
+                | Self::BuiltinsSet
+                | Self::BuiltinsFrozenset
+                | Self::TypingMapping
+                | Self::TypeForm
+        )
     }
 
     /// Returns true if this is a builtin type that has a single positional

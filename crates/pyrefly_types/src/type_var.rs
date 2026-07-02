@@ -24,6 +24,8 @@ use ruff_python_ast::Identifier;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
+use crate::quantified::Quantified;
+use crate::quantified::QuantifiedKind;
 use crate::simplify::unions;
 use crate::stdlib::Stdlib;
 use crate::types::Type;
@@ -62,12 +64,23 @@ impl Restriction {
         matches!(self, Self::Bound(_) | Self::Constraints(_))
     }
 
-    pub(crate) fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+    fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap, kind: QuantifiedKind) -> Type {
         match self {
             Self::Bound(t) => t.clone(),
             Self::Constraints(ts) => unions(ts.clone(), heap),
-            Self::Unrestricted => stdlib.object().clone().to_type(),
+            Self::Unrestricted => match kind {
+                QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
+                QuantifiedKind::ParamSpec => Type::Ellipsis,
+                QuantifiedKind::TypeVarTuple => Type::any_tuple(),
+            },
         }
+    }
+}
+
+impl Quantified {
+    /// The upper bound of this type parameter as a type.
+    pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+        self.restriction.as_type(stdlib, heap, self.kind)
     }
 }
 
@@ -83,10 +96,10 @@ pub enum PreInferenceVariance {
 impl Display for PreInferenceVariance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PreInferenceVariance::Covariant => write!(f, "Covariant"),
-            PreInferenceVariance::Contravariant => write!(f, "Contravariant"),
-            PreInferenceVariance::Invariant => write!(f, "Invariant"),
-            PreInferenceVariance::Undefined => write!(f, "Undefined"),
+            PreInferenceVariance::Covariant => write!(f, "covariant"),
+            PreInferenceVariance::Contravariant => write!(f, "contravariant"),
+            PreInferenceVariance::Invariant => write!(f, "invariant"),
+            PreInferenceVariance::Undefined => write!(f, "undefined"),
         }
     }
 }
@@ -190,9 +203,9 @@ impl TypeVar {
     }
 
     /// The upper bound of this legacy TypeVar as a type.
-    /// TypeVar is always of TypeVar kind, so unrestricted defaults to `object`.
-    pub fn bound_type(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
-        self.restriction().as_type(stdlib, heap)
+    pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
+        self.restriction()
+            .as_type(stdlib, heap, QuantifiedKind::TypeVar)
     }
 
     pub fn type_eq_inner(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {

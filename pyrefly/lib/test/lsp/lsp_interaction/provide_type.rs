@@ -18,7 +18,9 @@ fn test_provide_type_unopened_file() {
     interaction.set_root(root.path().join("provide_type"));
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -46,7 +48,9 @@ fn test_provide_type_unopened_file_with_dependencies() {
     interaction.set_root(root.path().join("provide_type"));
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -74,7 +78,9 @@ fn test_provide_type_from_pyi_file() {
     interaction.set_root(root.path().join("provide_type_pyi"));
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -113,7 +119,9 @@ fn test_provide_type_directly_from_pyi_file() {
     interaction.set_root(root.path().join("provide_type_pyi"));
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();
@@ -151,7 +159,9 @@ fn do_test(line: u32, col: u32, expected: &'static str) {
     interaction.set_root(root.path().join("provide_type"));
     interaction
         .initialize(InitializeSettings {
-            configuration: Some(None),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
             ..Default::default()
         })
         .unwrap();

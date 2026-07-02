@@ -64,8 +64,16 @@ pub trait LookupExport {
     /// Get the docstring range for an export. Records a dependency on `name` from `module` regardless of if it exists.
     fn docstring_range(&self, module: ModuleName, name: &Name) -> Option<TextRange>;
 
-    /// Check if an export is marked as `Final`. Records a dependency on `name` from `module` regardless of if it exists.
-    fn is_final(&self, module: ModuleName, name: &Name) -> bool;
+    /// Get where an export originates. Records a dependency on `name` from `module` regardless of if it exists.
+    fn export_origin(&self, module: ModuleName, name: &Name) -> ExportOrigin;
+}
+
+/// Result of checking whether an export is `Final`, including the defining module and name
+/// found by following re-export chains.
+pub struct ExportOrigin {
+    /// The module and name where the export is ultimately defined.
+    pub origin: (ModuleName, Name),
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +169,17 @@ impl Exports {
             for x in &self.definitions.dunder_all.entries {
                 match x {
                     DunderAllEntry::Name(_, x) => {
+                        // A name listed in `__all__` but only defined inside an
+                        // `if __name__ == "__main__":` guard is not importable, so it must be
+                        // excluded from the wildcard surface to match `exports()`.
+                        if self
+                            .definitions
+                            .definitions
+                            .get(x)
+                            .is_some_and(|def| def.main_guard_only)
+                        {
+                            continue;
+                        }
                         result.insert(x.clone());
                     }
                     DunderAllEntry::Module(_, x) => {
@@ -189,9 +208,9 @@ impl Exports {
     ///   Recorded as a default NameDep (both flags false) — presence in the
     ///   names map denotes an existence change, which overlaps with any dep
     ///   on that name.
-    /// - Metadata: is_import status, implicitly_imported_submodules, deprecation,
-    ///   or special_exports changed for a name that exists in both. Sets the
-    ///   metadata flag.
+    /// - Metadata: is_import status, import style, final_names,
+    ///   implicitly_imported_submodules, deprecation, or special_exports changed
+    ///   for a name that exists in both. Sets the metadata flag.
     /// - Wildcard set: the set of names exported via `from M import *` changed.
     ///   Sets the wildcard flag. Only checked if the old wildcard was previously
     ///   forced (meaning some rdep depends on it); if not, no rdep can be
@@ -211,11 +230,16 @@ impl Exports {
                 Some(other_def) => {
                     // Name exists in both. Check metadata.
                     if self_def.style.is_import() != other_def.style.is_import()
+                        // Both sides are imports here; full equality is safe (and necessary) only
+                        // for import variants — others carry positional data
+                        || (self_def.style.is_import() && self_def.style != other_def.style)
+                        || self_defs.final_names.get(name) != other_defs.final_names.get(name)
                         || self_defs.implicitly_imported_submodules.contains(name)
                             != other_defs.implicitly_imported_submodules.contains(name)
                         || self_defs.deprecated.get(name) != other_defs.deprecated.get(name)
                         || self_defs.special_exports.get(name)
                             != other_defs.special_exports.get(name)
+                        || self_def.main_guard_only != other_def.main_guard_only
                     {
                         changed.0.names.entry(name.clone()).or_default().metadata = true;
                     }
@@ -336,6 +360,9 @@ impl Exports {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.definitions.definitions.iter_hashed() {
+                if definition.main_guard_only {
+                    continue;
+                }
                 let deprecation = self.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.definitions.special_exports.get_hashed(name).copied();
                 let is_final = self.definitions.final_names.contains_key_hashed(name);
@@ -486,8 +513,11 @@ mod tests {
             false
         }
 
-        fn is_final(&self, _module: ModuleName, _name: &Name) -> bool {
-            false
+        fn export_origin(&self, module: ModuleName, name: &Name) -> ExportOrigin {
+            ExportOrigin {
+                origin: (module, name.clone()),
+                is_final: false,
+            }
         }
     }
 
@@ -592,5 +622,39 @@ _x = 2
         eq_wildcards(&b, &imports, &[]);
         assert!(!contains(&a, &imports, "magic"));
         assert!(contains(&b, &imports, "magic"));
+    }
+
+    #[test]
+    fn changed_exports_detects_finality_change() {
+        let old = mk_exports("x: Final = 1", ModuleStyle::Executable);
+        let new = mk_exports("x = 1", ModuleStyle::Executable);
+        let lookup = SmallMap::new();
+        let mut changed = ModuleChanges::default();
+        old.changed_exports(&new, &lookup, &mut changed);
+        assert!(
+            changed
+                .0
+                .names
+                .get(&Name::new("x"))
+                .is_some_and(|dep| dep.metadata),
+            "changing Final status should be detected as a metadata change"
+        );
+    }
+
+    #[test]
+    fn changed_exports_detects_import_target_change() {
+        let old = mk_exports("from a import x", ModuleStyle::Executable);
+        let new = mk_exports("from b import x", ModuleStyle::Executable);
+        let lookup = SmallMap::new();
+        let mut changed = ModuleChanges::default();
+        old.changed_exports(&new, &lookup, &mut changed);
+        assert!(
+            changed
+                .0
+                .names
+                .get(&Name::new("x"))
+                .is_some_and(|dep| dep.metadata),
+            "changing import target should be detected as a metadata change"
+        );
     }
 }

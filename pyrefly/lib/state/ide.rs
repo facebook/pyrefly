@@ -44,6 +44,21 @@ pub enum IntermediateDefinition {
     Module(TextRange, ModuleName),
 }
 
+/// An edit that imports a single name into a module.
+///
+/// - `range` is a zero-length insertion point.
+/// - `insert_text` is the full import line to insert (`from m import x\n`).
+/// - `display_text` is the human-readable import (`from m import x`) for UI
+///   display.
+/// - `module_name` is the resolved module the name is imported from (the `m` in
+///   `from m import x`), used for UI labels like `(import m)`.
+pub(crate) struct ImportEdit {
+    pub range: TextRange,
+    pub insert_text: String,
+    pub display_text: String,
+    pub module_name: String,
+}
+
 pub fn key_to_intermediate_definition(
     bindings: &Bindings,
     key: &Key,
@@ -138,19 +153,9 @@ fn create_intermediate_definition_from(
             Binding::Import(x) => {
                 return Some(IntermediateDefinition::NamedImport(
                     def_key.range(),
-                    x.0,
-                    x.1.clone(),
-                    x.2,
-                ));
-            }
-            Binding::ImportViaGetattr(x) => {
-                // For __getattr__ imports, the name doesn't exist directly in the module,
-                // so we point to __getattr__ instead.
-                return Some(IntermediateDefinition::NamedImport(
-                    def_key.range(),
-                    x.0,
-                    pyrefly_python::dunder::GETATTR.clone(),
-                    None,
+                    x.module,
+                    x.name.clone(),
+                    x.original_name_range,
                 ));
             }
             Binding::Module(x) => {
@@ -223,6 +228,23 @@ fn create_intermediate_definition_from(
                     special_export: None,
                 }));
             }
+            // A receiver-constrained class assignment is a same-scope
+            // rebind whose visible result is class-shaped. The first patch
+            // resolves navigation/metadata through the original class
+            // receiver: even on a compatible refining write, jumping to
+            // definition from the LHS lands on the original class, since
+            // that is the binding the receiver semantics treat as the
+            // canonical identity for future writes. (The refined RHS class
+            // is still reachable by hovering or jumping from the RHS
+            // expression itself.) The same applies to receiver-bearing
+            // multi-target and unpacked rebinds.
+            Binding::NameAssign(na) if let Some(receiver_idx) = na.receiver_idx => {
+                current_binding = bindings.get(receiver_idx);
+            }
+            Binding::MultiTargetAssign(_, _, _, Some(receiver))
+            | Binding::UnpackedValue(_, _, _, _, Some(receiver)) => {
+                current_binding = bindings.get(receiver.idx);
+            }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {
                     location: def_key.range(),
@@ -238,14 +260,14 @@ fn create_intermediate_definition_from(
     None
 }
 
-pub fn insert_import_edit(
+pub(crate) fn insert_import_edit(
     ast: &ModModule,
     config_finder: &ConfigFinder,
     handle_to_insert_import: Handle,
     handle_to_import_from: Handle,
     export_name: &str,
     import_format: ImportFormat,
-) -> (TextSize, String, String) {
+) -> ImportEdit {
     let use_absolute_import = match import_format {
         ImportFormat::Absolute => true,
         ImportFormat::Relative => {
@@ -309,13 +331,13 @@ pub fn import_regular_import_edit(
     (position, import_text, completion_label)
 }
 
-pub fn insert_import_edit_with_forced_import_format(
+pub(crate) fn insert_import_edit_with_forced_import_format(
     ast: &ModModule,
     handle_to_insert_import: Handle,
     handle_to_import_from: Handle,
     export_name: &str,
     use_absolute_import: bool,
-) -> (TextSize, String, String) {
+) -> ImportEdit {
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
         first_stmt.range().start()
     } else {
@@ -331,12 +353,17 @@ pub fn insert_import_edit_with_forced_import_format(
     } else {
         handle_to_import_from.module()
     };
-    let insert_text = format!(
-        "from {} import {}\n",
+    let display_text = format!(
+        "from {} import {export_name}",
         module_name_to_import.as_str(),
-        export_name
     );
-    (position, insert_text, module_name_to_import.to_string())
+    let insert_text = format!("{display_text}\n",);
+    ImportEdit {
+        range: TextRange::at(position, TextSize::new(0)),
+        insert_text,
+        display_text,
+        module_name: module_name_to_import.to_string(),
+    }
 }
 
 /// Some handles must be imported in absolute style,

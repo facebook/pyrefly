@@ -84,9 +84,6 @@ impl Severity {
 pub enum ErrorKind {
     /// Attempting to call a method marked with `@abstractmethod`.
     AbstractMethodCall,
-    /// Attempting to annotate a name with incompatible annotations.
-    /// e.g. when a name is annotated in multiple branches of an if statement
-    AnnotationMismatch,
     /// Raised when an assert_type() call fails.
     AssertType,
     /// Attempting to call a function with the wrong number of arguments.
@@ -149,21 +146,53 @@ pub enum ErrorKind {
     /// An error caused by unpacking.
     /// e.g. attempting to unpack an iterable into the wrong number of variables.
     BadUnpacking,
+    /// A symbol has no type coverage. Emitted only by `pyrefly coverage check`.
+    CoverageMissing,
+    /// A symbol has partial type coverage. Emitted only by `pyrefly coverage check`.
+    CoveragePartial,
     /// Calling a function marked with `@deprecated`
     Deprecated,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
+    /// Explicit usage of `typing.Any` in an annotation.
+    ExplicitAny,
     /// Raised when a class implicitly becomes abstract by defining abstract members without
     /// inheriting from `abc.ABC` or using `abc.ABCMeta`.
     ImplicitAbstractClass,
-    /// This error is raised when Pyrefly infers an implicit `Any`
+    /// Umbrella error kind for cases where Pyrefly infers an implicit `Any`.
+    /// Most concrete sites emit one of the more specific sub-kinds below;
+    /// `implicit-any` itself is reserved for the umbrella suppression/config
+    /// code (suppressing `implicit-any` suppresses every sub-kind).
     ImplicitAny,
+    /// An implicit `Any` introduced when a class attribute is defined by
+    /// assignment to `self.x = None` or `self.x = ()` without an explicit
+    /// annotation.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyAttribute,
+    /// An implicit `Any` introduced when an empty container (`[]`, `{}`) cannot
+    /// be inferred from context and is pinned to a container of `Any`.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyEmptyContainer,
+    /// An implicit `Any` introduced because a function parameter has no
+    /// annotation. The `self` and `cls` parameters of methods are excluded.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyParameter,
+    /// An implicit `Any` introduced when a generic class, type alias, or
+    /// special form (e.g., `tuple`, `Callable`, `type`) is used without
+    /// explicit type arguments. Pyrefly defaults the missing type parameters
+    /// to `Any`.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyTypeArgument,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
     /// do not recognize as always executing (we recognize constructors and some test setup
     /// methods).
     ImplicitlyDefinedAttribute,
+    /// Equality or inequality comparison between incompatible types.
+    IncompatibleComparison,
+    /// Overload residual branch pruning left no valid branch for a solved type variable.
+    IncompatibleOverloadResidual,
     /// An inconsistency between inherited fields or methods from multiple base classes.
     InconsistentInheritance,
     /// An inconsistency between the signature of a function overload and the implementation.
@@ -177,8 +206,13 @@ pub enum ErrorKind {
     InvalidAnnotation,
     /// Passing an argument that is invalid for reasons besides type.
     InvalidArgument,
-    /// Error caused by incorrect usage of a decorator.
-    /// e.g. using @final on a top-level function
+    /// A method-only decorator was applied to a top-level function.
+    /// e.g. using `@final` or `@override` on a top-level function.
+    /// Defaults to `warn` because such usage is harmless at runtime and is
+    /// sometimes intentional. Decorator misuse that violates a typing spec
+    /// (e.g. `@dataclass` on a `Protocol`, `@disjoint_base` on a function)
+    /// is reported under `BadClassDefinition` or `BadFunctionDefinition`
+    /// instead, both of which default to `error`.
     InvalidDecorator,
     /// An error caused by incorrect inheritance in a class or type definition.
     /// e.g. a metaclass that is not a subclass of `type`.
@@ -195,6 +229,8 @@ pub enum ErrorKind {
     /// A use of `typing.Self` in a context where Pyrefly does not recognize it as
     /// mapping to a valid class type.
     InvalidSelfType,
+    /// An error caused by incorrect usage or definition of a Sentinel.
+    InvalidSentinel,
     /// Attempting to call `super()` in a way that is not allowed.
     /// e.g. calling `super(Y, x)` on an object `x` that does not match the class `Y`.
     InvalidSuperCall,
@@ -253,8 +289,26 @@ pub enum ErrorKind {
     OpenUnpacking,
     /// An error related to parsing or syntax.
     ParseError,
+    /// A potential conflict between an explicit keyword argument and a NotRequired
+    /// TypedDict field. The field may be absent at runtime, so the conflict is not
+    /// guaranteed. This is a separate error code from BadKeywordArgument to allow
+    /// users to opt-in to this stricter check.
+    PotentialBadKeywordArgument,
     /// A protocol attribute was first defined inside a method instead of the class body.
     ProtocolImplicitlyDefinedAttribute,
+    /// Calling `.cuda()` on a `torch.Tensor` hard-codes the target device.
+    /// Use `.to(device)` instead for device-agnostic code.
+    PytorchEfficiencyLintCudaCall,
+    /// Calling `.item()` on a `torch.Tensor` forces GPU→CPU synchronization,
+    /// blocking the training loop until all pending GPU operations complete.
+    PytorchEfficiencyLintItemCall,
+    /// Passing a `torch.Tensor` to `print()` triggers `__repr__`, which forces
+    /// GPU→CPU synchronization.
+    PytorchEfficiencyLintPrintTensor,
+    /// Calling `.to(device)` on a tensor returned by a factory function like
+    /// `torch.zeros()` that already accepts a `device=` parameter. Passing
+    /// `device=` directly avoids allocating the tensor on CPU first.
+    PytorchEfficiencyLintRedundantToCall,
     /// The attribute exists but cannot be modified.
     ReadOnly,
     /// Attempting to annotate or redefine a name with a type that conflicts with an existing annotation in scope.
@@ -265,9 +319,17 @@ pub enum ErrorKind {
     RedundantCondition,
     /// Raised by a call to reveal_type().
     RevealType,
-    /// An attribute is missing a type annotation and is initialized with the `None` literal.
+    /// Passing a string to something that expects an iterable of strings.
+    StringAsIterable,
+    /// DEPRECATED: use [ImplicitAnyAttribute] (`implicit-any-attribute`) instead.
+    /// Kept so that existing `# pyrefly: ignore[unannotated-attribute]` comments
+    /// and config entries continue to work. This variant is never emitted by
+    /// the type checker.
     UnannotatedAttribute,
-    /// A function parameter is missing a type annotation.
+    /// DEPRECATED: use [ImplicitAnyParameter] (`implicit-any-parameter`) instead.
+    /// Kept so that existing `# pyrefly: ignore[unannotated-parameter]` comments
+    /// and config entries continue to work. This variant is never emitted by
+    /// the type checker.
     UnannotatedParameter,
     /// A protocol member is assigned a value in the class body without an explicit type annotation.
     UnannotatedProtocolMember,
@@ -286,10 +348,14 @@ pub enum ErrorKind {
     /// Identity comparison (`is` or `is not`) between types that are provably disjoint
     /// or between literals whose comparison result is statically known.
     UnnecessaryComparison,
+    /// Warning when calling a builtin type constructor (str, int, float, bool, bytes) on a value that is already of that type.
+    UnnecessaryTypeConversion,
     /// A return or yield that can never be reached.
     /// This occurs when a return/yield follows a statement that always exits,
     /// such as return, raise, break, or continue.
     Unreachable,
+    /// A match case whose pattern can never match the subject type.
+    UnreachableMatchCase,
     /// `__all__` is defined but cannot be statically analyzed.
     UnresolvableDunderAll,
     /// Protocols decorated with `@runtime_checkable` can be used in `isinstance` checks
@@ -308,6 +374,10 @@ pub enum ErrorKind {
     UnusedCoroutine,
     /// A suppression comment is unused (no error to suppress, or specific codes are unused)
     UnusedIgnore,
+    /// A `# type: ignore` comment is unused (no error to suppress on that line)
+    UnusedTypeIgnore,
+    /// `@overload` bodies are never executed, so executable body logic is usually dead code.
+    UselessOverloadBody,
     /// The inferred variance of a type variable does not match its declared variance.
     /// For example, a type variable used only in covariant positions in a protocol should be declared covariant.
     VarianceMismatch,
@@ -325,6 +395,12 @@ impl std::str::FromStr for ErrorKind {
 /// Also means we can grab error code names without allocation, which is nice.
 static ERROR_KIND_CACHE: LazyLock<SmallMap<String, ErrorKind>> = LazyLock::new(ErrorKind::cache);
 
+static PYTORCH_EFFICIENCY_LINTS: LazyLock<Vec<ErrorKind>> = LazyLock::new(|| {
+    enum_iterator::all::<ErrorKind>()
+        .filter(|k| k.to_name().starts_with("pytorch-efficiency-lint-"))
+        .collect()
+});
+
 impl ErrorKind {
     fn cache() -> SmallMap<String, ErrorKind> {
         let mut map = SmallMap::new();
@@ -335,6 +411,11 @@ impl ErrorKind {
         }
 
         map
+    }
+
+    /// All error kinds with the `pytorch-efficiency-lint-` prefix.
+    pub fn pytorch_efficiency_lints() -> &'static [ErrorKind] {
+        &PYTORCH_EFFICIENCY_LINTS
     }
 
     pub fn to_name(self) -> &'static str {
@@ -352,6 +433,10 @@ impl ErrorKind {
             ErrorKind::BadOverrideMutableAttribute | ErrorKind::BadOverrideParamName => {
                 Some(ErrorKind::BadOverride)
             }
+            ErrorKind::ImplicitAnyAttribute
+            | ErrorKind::ImplicitAnyEmptyContainer
+            | ErrorKind::ImplicitAnyParameter
+            | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
             _ => None,
         }
     }
@@ -361,6 +446,8 @@ impl ErrorKind {
     pub fn deprecated_alias(self) -> Option<ErrorKind> {
         match self {
             ErrorKind::BadOverrideParamName => Some(ErrorKind::BadParamNameOverride),
+            ErrorKind::ImplicitAnyAttribute => Some(ErrorKind::UnannotatedAttribute),
+            ErrorKind::ImplicitAnyParameter => Some(ErrorKind::UnannotatedParameter),
             _ => None,
         }
     }
@@ -376,12 +463,20 @@ impl ErrorKind {
     pub fn default_severity(self) -> Severity {
         // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
+            ErrorKind::CoverageMissing => Severity::Warn,
+            ErrorKind::CoveragePartial => Severity::Warn,
             ErrorKind::Deprecated => Severity::Warn,
             ErrorKind::DivisionByZero => Severity::Warn,
+            ErrorKind::ExplicitAny => Severity::Ignore,
             ErrorKind::ImplicitAbstractClass => Severity::Ignore,
             ErrorKind::ImplicitAny => Severity::Ignore,
+            ErrorKind::ImplicitAnyAttribute => Severity::Ignore,
+            ErrorKind::ImplicitAnyEmptyContainer => Severity::Ignore,
+            ErrorKind::ImplicitAnyParameter => Severity::Ignore,
+            ErrorKind::ImplicitAnyTypeArgument => Severity::Ignore,
             ErrorKind::ImplicitImport => Severity::Warn,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
+            ErrorKind::IncompatibleComparison => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
@@ -390,18 +485,28 @@ impl ErrorKind {
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintCudaCall => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintItemCall => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintPrintTensor => Severity::Ignore,
+            ErrorKind::PytorchEfficiencyLintRedundantToCall => Severity::Ignore,
             ErrorKind::RedundantCast => Severity::Warn,
             ErrorKind::RedundantCondition => Severity::Warn,
             ErrorKind::RevealType => Severity::Info,
+            ErrorKind::StringAsIterable => Severity::Ignore,
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
+            ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
+            ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
             ErrorKind::UntypedImport => Severity::Warn,
             ErrorKind::UnusedIgnore => Severity::Ignore,
+            ErrorKind::UnusedTypeIgnore => Severity::Ignore,
             ErrorKind::VarianceMismatch => Severity::Warn,
+            // Overload bodies are runtime-dead, so this should warn rather than fail CI by default.
+            ErrorKind::UselessOverloadBody => Severity::Warn,
             _ => Severity::Error,
         }
     }
@@ -412,6 +517,21 @@ impl ErrorKind {
     /// per-kind severity overrides (e.g. `--ignore reveal-type`).
     pub fn is_directive(self) -> bool {
         matches!(self, ErrorKind::RevealType)
+    }
+
+    /// A soft error is a warning that should not influence overload selection
+    /// or other type-inference decisions. The type check itself passed, but the
+    /// code pattern is suspicious.
+    pub fn is_soft(self) -> bool {
+        matches!(self, ErrorKind::StringAsIterable)
+    }
+
+    /// Coverage kinds are emitted only by `pyrefly coverage check`.
+    pub fn is_coverage(self) -> bool {
+        matches!(
+            self,
+            ErrorKind::CoverageMissing | ErrorKind::CoveragePartial
+        )
     }
 
     /// Returns the public documentation URL for this error kind.
@@ -434,6 +554,16 @@ mod tests {
     use pulldown_cmark::TagEnd;
 
     use super::*;
+
+    fn severity_str(s: Severity) -> &'static str {
+        match s {
+            Severity::Ignore => "ignore",
+            Severity::Info => "info",
+            Severity::Warn => "warn",
+            Severity::Error => "error",
+        }
+    }
+
     #[test]
     fn test_error_kind_name() {
         assert_eq!(ErrorKind::Unsupported.to_name(), "unsupported");
@@ -441,9 +571,13 @@ mod tests {
     }
 
     #[test]
-    fn test_doc() {
+    fn test_doc_headers() {
         // Verifies that the secondary headers in error-kinds.mdx contain the same variants as the ErrorKind enum and are sorted lexicographically.
-        let mut all_error_kinds = all::<ErrorKind>();
+
+        // Coverage kinds are only emitted by `pyrefly coverage check`, non-configurable, and
+        // therefore intentionally undocumented.
+        let mut all_error_kinds = all::<ErrorKind>().filter(|k| !k.is_coverage());
+
         let doc_path = std::env::var("ERROR_KINDS_DOC_PATH").expect(
             "ERROR_KINDS_DOC_PATH env var not set: cargo or buck should set this automatically",
         );
@@ -496,6 +630,39 @@ mod tests {
                 "Documentation at {doc_path} is missing error kind: {}",
                 leftover_error_kind.to_name()
             );
+        }
+    }
+
+    #[test]
+    fn test_doc_severities() {
+        let doc_path = std::env::var("ERROR_KINDS_DOC_PATH").expect(
+            "ERROR_KINDS_DOC_PATH env var not set: cargo or buck should set this automatically",
+        );
+        let doc_contents = std::fs::read_to_string(&doc_path)
+            .unwrap_or_else(|e| panic!("Failed to read {doc_path}: {e}"));
+        for kind in all::<ErrorKind>().filter(|k| !k.is_coverage()) {
+            let header = format!("## {}", kind.to_name());
+            let section_start = doc_contents.find(&header).expect(
+                "could not validate documented severities due to missing error kind header",
+            );
+            let rest = &doc_contents[section_start + header.len()..];
+            let section_end = rest.find("\n## ").unwrap_or(rest.len());
+            let section = &rest[..section_end];
+            let expected_severity = severity_str(kind.default_severity());
+            if kind.default_severity() != Severity::Error {
+                let expected_prefix = format!("\n\nDefault severity: `{expected_severity}`\n");
+                if !section.starts_with(&expected_prefix) {
+                    panic!(
+                        "Error kind `{}` must have `Default severity: `{expected_severity}`` as the first line after the ## header.",
+                        kind.to_name(),
+                    );
+                }
+            } else if section.contains("Default severity:") {
+                panic!(
+                    "Error kind `{}` has default severity `error` (the default) and should not have a `Default severity:` line.",
+                    kind.to_name(),
+                );
+            }
         }
     }
 }

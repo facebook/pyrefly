@@ -105,6 +105,9 @@ pub struct Stdlib {
     /// After 3.14, `typing_extensions` reexports from `typing`.
     /// For 3.12 and 3.13 defined separately in both locations.
     type_alias_type: StdlibResult<ClassType>,
+    /// Defined in `typing_extensions` as Sentinel.
+    /// Defined in `builtins` as `sentinel` since 3.15.
+    sentinel: StdlibResult<ClassType>,
     traceback_type: StdlibResult<ClassType>,
     builtins_type: StdlibResult<ClassType>,
     /// Introduced in Python 3.10.
@@ -257,6 +260,11 @@ impl Stdlib {
             param_spec_kwargs: lookup_concrete(standardised(3, 10), "ParamSpecKwargs"),
             type_var_tuple: lookup_concrete(standardised(3, 11), "TypeVarTuple"),
             type_alias_type: lookup_concrete(standardised(3, 12), "TypeAliasType"),
+            sentinel: if version.at_least(3, 15) {
+                lookup_concrete(builtins, "sentinel")
+            } else {
+                lookup_concrete(typing_extensions, "Sentinel")
+            },
             traceback_type: lookup_concrete(types, "TracebackType"),
             function_type: lookup_concrete(types, "FunctionType"),
             method_type: lookup_concrete(types, "MethodType"),
@@ -430,6 +438,10 @@ impl Stdlib {
         Some(Self::apply(self.exception_group.as_ref()?, vec![x]))
     }
 
+    pub fn exception_group_object(&self) -> Option<&Class> {
+        Some(&Self::unwrap(self.exception_group.as_ref()?).0)
+    }
+
     pub fn union_type(&self) -> Option<&ClassType> {
         Some(Self::primitive(self.union_type.as_ref()?))
     }
@@ -575,6 +587,10 @@ impl Stdlib {
 
     pub fn type_alias_type(&self) -> &ClassType {
         Self::primitive(&self.type_alias_type)
+    }
+
+    pub fn sentinel(&self) -> &ClassType {
+        Self::primitive(&self.sentinel)
     }
 
     pub fn traceback_type(&self) -> &ClassType {

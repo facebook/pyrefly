@@ -424,41 +424,6 @@ issubclass(ConcreteClass, RuntimeProtocol)
 );
 
 testcase!(
-    test_protocol_data_protocol_issubclass,
-    r#"
-from typing import Protocol, runtime_checkable
-
-# Data protocol (has non-method members)
-@runtime_checkable
-class DataProtocol(Protocol):
-    x: int
-    def method(self) -> str: ...
-
-# Non-data protocol (only methods)
-@runtime_checkable
-class NonDataProtocol(Protocol):
-    def method(self) -> str: ...
-
-class ConcreteClass:
-    x: int = 42
-    def method(self) -> str:
-        return "hello"
-
-obj = ConcreteClass()
-
-# isinstance should work for both data and non-data protocols
-isinstance(obj, DataProtocol)
-isinstance(obj, NonDataProtocol)
-
-# issubclass should work for non-data protocols
-issubclass(ConcreteClass, NonDataProtocol)
-
-# issubclass should fail for data protocols
-issubclass(ConcreteClass, DataProtocol)  # E: Protocol `DataProtocol` has non-method members and cannot be used with issubclass()
-"#,
-);
-
-testcase!(
     test_protocol_union_isinstance,
     r#"
 from typing import Protocol, runtime_checkable, Union
@@ -713,6 +678,18 @@ class X:
         return "42"
 isinstance(X(), Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
 issubclass(X, Sized) # E: Runtime checkable protocol `Sized` has an unsafe overlap with type `X`
+"#,
+);
+
+testcase!(
+    test_runtime_checkable_protocol_never_no_unsafe_overlap,
+    r#"
+from collections.abc import Iterable
+from typing import Never
+
+def f(x: Never) -> None:
+    if isinstance(x, Iterable):
+        pass
 "#,
 );
 
@@ -1009,6 +986,23 @@ def to_foo() -> Foo[MySeries]:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1202
+testcase!(
+    test_assert_type_structurally_identical_protocols,
+    r#"
+from typing import Protocol, assert_type
+
+class F1(Protocol):
+    a: int
+
+class F2(Protocol):
+    a: int
+
+def f(f2: F2):
+    assert_type(f2, F1)
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/2925
 testcase!(
     test_protocol_ambiguous_member,
@@ -1022,5 +1016,113 @@ class Ambiguous(Protocol):
 class Ok(Protocol):
     x: int
     y: str = "default"
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_method_filtered_by_self,
+    r#"
+from __future__ import annotations
+from datetime import timedelta
+from typing import Generic, TypeVar, Protocol, overload, assert_type
+
+T_contra = TypeVar("T_contra", contravariant=True)
+S1_co = TypeVar("S1_co", bound=timedelta | int | float, covariant=True)
+S2_co = TypeVar("S2_co", bound=timedelta | int | float, covariant=True)
+
+class SupportsProtoTrueDiv(Protocol[T_contra, S2_co]):
+    def _proto_truediv(self, other: T_contra, /) -> ElementOpsMixin[S2_co]: ...
+
+class ElementOpsMixin(Protocol, Generic[S2_co]):
+    @overload
+    def _proto_truediv(self: ElementOpsMixin[int], other: int, /) -> ElementOpsMixin[float]: ...
+    @overload
+    def _proto_truediv(self: ElementOpsMixin[timedelta], other: timedelta, /) -> ElementOpsMixin[float]: ...
+
+class Series(ElementOpsMixin[S2_co], Protocol):
+    def __truediv__(self: SupportsProtoTrueDiv[T_contra, S1_co], other: T_contra) -> Series[S1_co]: ...
+
+def main2(s: Series[timedelta]) -> None:
+    td = timedelta(1)
+    assert_type(s / td, Series[float])
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_referencing_protocol_terminates,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+R = TypeVar("R", covariant=True)
+
+
+class Lens(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /) -> R2: ...
+
+
+class BaseLens(Lens[S, R], Protocol):
+    def at(self) -> Lens[S, R]:
+        return self
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_mutual_recursion_terminates,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+
+
+class A(Protocol[S]):
+    @overload
+    def __call__[S2, R2](self: B[S2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: B[S2], state: S2, /) -> R2: ...
+
+
+class B(Protocol[S]):
+    @overload
+    def __call__[S2, R2](self: A[S2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: A[S2], state: S2, /) -> R2: ...
+
+
+class Impl(A[S], B[S], Protocol):
+    def at(self) -> A[S]:
+        return self
+"#,
+);
+
+testcase!(
+    test_protocol_overloaded_generic_self_non_conforming_still_rejected,
+    r#"
+from typing import Protocol, TypeVar, overload
+
+S = TypeVar("S", covariant=True)
+R = TypeVar("R", covariant=True)
+
+
+class Lens(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: Lens[S2, R2], state: S2, /) -> R2: ...
+    def extra(self) -> int: ...
+
+
+class HasCallNoExtra(Protocol[S, R]):
+    @overload
+    def __call__[S2, R2](self: HasCallNoExtra[S2, R2], state: S2, /, value: R2) -> S2: ...
+    @overload
+    def __call__[S2, R2](self: HasCallNoExtra[S2, R2], state: S2, /) -> R2: ...
+
+
+def f(x: HasCallNoExtra[int, str]) -> Lens[int, str]:
+    return x  # E: not assignable to declared return type
 "#,
 );

@@ -18,9 +18,11 @@ use lsp_types::HoverContents;
 use lsp_types::SemanticTokens;
 use lsp_types::SemanticTokensLegend;
 use lsp_types::SemanticTokensResult;
+use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::LiveSourceDatabase;
+use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::SourceDatabase;
-use pyrefly_build::source_db::Target;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
@@ -28,19 +30,15 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
-use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::prelude::VecExt;
-use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::thread_pool::ThreadCount;
-use pyrefly_util::watch_pattern::WatchPattern;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
-use starlark_map::small_set::SmallSet;
 
 use crate::config::config::ConfigFile;
 use crate::config::error_kind::Severity;
@@ -68,15 +66,6 @@ impl PlaygroundSourceDatabase {
 }
 
 impl SourceDatabase for PlaygroundSourceDatabase {
-    fn modules_to_check(&self) -> Vec<Handle> {
-        self.module_mappings
-            .iter()
-            .map(|(module_name, module_path)| {
-                Handle::new(*module_name, module_path.dupe(), self.sys_info.dupe())
-            })
-            .collect()
-    }
-
     fn lookup(
         &self,
         module_name: ModuleName,
@@ -93,27 +82,19 @@ impl SourceDatabase for PlaygroundSourceDatabase {
         Some(Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
     }
 
-    fn query_source_db(
-        &self,
-        _: SmallSet<InternedPath>,
-        _: bool,
-    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
-        (Ok(false), TelemetrySourceDbRebuildInstanceStats::default())
-    }
-
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern> {
-        self.module_mappings
-            .values()
-            .map(|p| WatchPattern::file(p.as_path().to_path_buf()))
-            .collect()
-    }
-
-    fn get_target(&self, _: Option<&Path>) -> Option<Target> {
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
         None
     }
+}
 
-    fn get_generated_files(&self) -> SmallSet<InternedPath> {
-        SmallSet::new()
+impl ModuleEnumerator for PlaygroundSourceDatabase {
+    fn modules_to_check(&self) -> Vec<Handle> {
+        self.module_mappings
+            .iter()
+            .map(|(module_name, module_path)| {
+                Handle::new(*module_name, module_path.dupe(), self.sys_info.dupe())
+            })
+            .collect()
     }
 }
 
@@ -205,13 +186,57 @@ pub struct Diagnostic {
     pub filename: String,
 }
 
+/// A Monaco `ISingleEditOperation`.
+#[derive(Serialize)]
+pub struct CompletionTextEdit {
+    range: Range,
+    text: String,
+}
+
 #[derive(Serialize)]
 pub struct AutoCompletionItem {
     label: String,
     detail: Option<String>,
-    kind: Option<CompletionItemKind>,
+    /// A Monaco `CompletionItemKind`, whose numbering differs from LSP's.
+    kind: Option<i32>,
     #[serde(rename(serialize = "sortText"))]
     sort_text: Option<String>,
+    /// Without these, accepting an import completion does nothing visible.
+    #[serde(rename(serialize = "additionalTextEdits"))]
+    import_edits: Option<Vec<CompletionTextEdit>>,
+}
+
+/// LSP and Monaco both number `CompletionItemKind`, but differently. Monaco's values:
+/// https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/standalone/standaloneEnums.ts
+fn to_monaco_completion_kind(kind: CompletionItemKind) -> i32 {
+    match kind {
+        CompletionItemKind::METHOD => 0,
+        CompletionItemKind::FUNCTION => 1,
+        CompletionItemKind::CONSTRUCTOR => 2,
+        CompletionItemKind::FIELD => 3,
+        CompletionItemKind::VARIABLE => 4,
+        CompletionItemKind::CLASS => 5,
+        CompletionItemKind::STRUCT => 6,
+        CompletionItemKind::INTERFACE => 7,
+        CompletionItemKind::MODULE => 8,
+        CompletionItemKind::PROPERTY => 9,
+        CompletionItemKind::EVENT => 10,
+        CompletionItemKind::OPERATOR => 11,
+        CompletionItemKind::UNIT => 12,
+        CompletionItemKind::VALUE => 13,
+        CompletionItemKind::CONSTANT => 14,
+        CompletionItemKind::ENUM => 15,
+        CompletionItemKind::ENUM_MEMBER => 16,
+        CompletionItemKind::KEYWORD => 17,
+        CompletionItemKind::TEXT => 18,
+        CompletionItemKind::COLOR => 19,
+        CompletionItemKind::FILE => 20,
+        CompletionItemKind::REFERENCE => 21,
+        CompletionItemKind::FOLDER => 23,
+        CompletionItemKind::TYPE_PARAMETER => 24,
+        CompletionItemKind::SNIPPET => 27,
+        _ => unreachable!("unknown LSP CompletionItemKind"),
+    }
 }
 
 #[derive(Serialize)]
@@ -440,7 +465,7 @@ impl Playground {
                     message_header: e.msg_header().to_owned(),
                     message_details: e.msg_details().unwrap_or("").to_owned(),
                     kind: e.error_kind().to_name().to_owned(),
-                    // Severity values defined here: https://microsoft.github.io/monaco-editor/typedoc/enums/MarkerSeverity.html
+                    // Severity values defined here: https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/standalone/standaloneEnums.ts
                     severity: match e.severity() {
                         Severity::Error => 8,
                         Severity::Warn => 4,
@@ -584,7 +609,7 @@ impl Playground {
         Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data: transaction
-                .semantic_tokens(handle, range, None)
+                .semantic_tokens(handle, range, None, true)
                 .unwrap_or_default(),
         }))
     }
@@ -648,12 +673,25 @@ impl Playground {
                      detail,
                      sort_text,
                      kind,
+                     additional_text_edits,
                      ..
                  }| AutoCompletionItem {
                     label,
                     detail,
-                    kind,
+                    kind: kind.map(to_monaco_completion_kind),
                     sort_text,
+                    // Convert LSP ranges (0-based) to the 1-based coordinates Monaco wants.
+                    import_edits: additional_text_edits.map(|edits| {
+                        edits.into_map(|TextEdit { range, new_text }| CompletionTextEdit {
+                            range: Range {
+                                start_line: range.start.line as i32 + 1,
+                                start_col: range.start.character as i32 + 1,
+                                end_line: range.end.line as i32 + 1,
+                                end_col: range.end.character as i32 + 1,
+                            },
+                            text: new_text,
+                        })
+                    }),
                 },
             )
     }
@@ -687,6 +725,33 @@ impl Playground {
 mod tests {
     use super::*;
     use crate::config::error_kind::ErrorKind;
+
+    #[test]
+    fn test_autocomplete_includes_auto_import_edit() {
+        // gh-2967: accepting an auto-import completion must also insert its import line.
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("sandbox.py".to_owned(), "reveal_type".to_owned());
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        let items = state.autocomplete(Position::new(1, 12));
+        let reveal = items
+            .iter()
+            .find(|i| i.label == "reveal_type")
+            .expect("reveal_type completion should be offered");
+
+        // Monaco's Function kind is 1 (LSP's is 3), verifying the kind remap.
+        assert_eq!(reveal.kind, Some(1));
+        let edits = reveal
+            .import_edits
+            .as_ref()
+            .expect("reveal_type completion should carry an auto-import edit");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].text, "from typing import reveal_type\n");
+        assert_eq!(edits[0].range.start_line, 1);
+        assert_eq!(edits[0].range.start_col, 1);
+    }
 
     #[test]
     fn test_regular_import() {

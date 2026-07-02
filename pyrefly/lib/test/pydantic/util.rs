@@ -9,7 +9,7 @@ use crate::test::util::TestEnv;
 
 pub fn pydantic_env() -> TestEnv {
     let path = std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
-    TestEnv::new_with_site_package_path(&path)
+    TestEnv::new_with_site_package_paths(&[&path])
 }
 
 #[macro_export]

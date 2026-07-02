@@ -109,6 +109,10 @@ pub struct TelemetryEvent {
     /// The LSP request ID, used to correlate CancelRequest notifications with
     /// the requests they cancel.
     pub request_id: Option<String>,
+    /// Variable per-error detail paired with
+    /// the stable error kind in the top-level `error` column. Lets Scuba
+    /// group by kind without losing the underlying message.
+    pub error_detail: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -141,6 +145,8 @@ pub struct TelemetryServerState {
     pub server_start_time: Instant,
     pub agent_session_id: Option<String>,
     pub agent_invocation_id: Option<String>,
+    /// Names of active experiments for this server session.
+    pub active_experiments: Vec<String>,
 }
 
 #[derive(Default)]
@@ -199,6 +205,18 @@ pub struct TelemetryTransactionStats {
     pub cold_modules: usize,
     /// Number of modules cloned from committed state.
     pub warm_modules: usize,
+    /// Total filesystem stat calls (is_file, exists, is_dir in finder).
+    pub total_stat_count: usize,
+    /// Stat calls exceeding 1ms (likely EdenFS remote fetch).
+    pub slow_stat_count: usize,
+    /// Cumulative time of slow stat calls.
+    pub slow_stat_time: Duration,
+    /// Total filesystem read calls (read_to_string in load).
+    pub total_read_count: usize,
+    /// Read calls exceeding 1ms (likely EdenFS remote fetch).
+    pub slow_read_count: usize,
+    /// Cumulative time of slow read calls.
+    pub slow_read_time: Duration,
 }
 
 #[derive(Default)]
@@ -250,6 +268,10 @@ pub struct TelemetryExternalWorkspaceSymbolsStats {
     pub db_name: Option<String>,
     pub result_count: usize,
     pub find_repo_ms: Option<Duration>,
+    /// Time the request spent waiting on the in-flight warmup
+    /// `listDatabases` RPC instead of issuing a duplicate one. Only set when
+    /// the request raced the warmup window.
+    pub warmup_wait_ms: Option<Duration>,
     pub angle_query_ms: Option<Duration>,
 }
 
@@ -260,9 +282,31 @@ pub struct TelemetryExternalReferencesStats {
     pub result_file_count: usize,
     pub result_span_count: usize,
     pub find_repo_ms: Option<Duration>,
+    /// Time the request spent waiting on the in-flight warmup
+    /// `listDatabases` RPC instead of issuing a duplicate one. Only set when
+    /// the request raced the warmup window.
+    pub warmup_wait_ms: Option<Duration>,
     pub angle_query_ms: Option<Duration>,
     pub cas_init_error: Option<String>,
+    /// Wall time of the entire resolve step (envelope around the phase
+    /// timers below).
     pub resolve_locations_ms: Option<Duration>,
+    /// Sum of `fs::read_to_string` time across all result files.
+    pub resolve_disk_read_ms: Option<Duration>,
+    /// Sum of blake3 hashing time across all result files.
+    pub resolve_hash_ms: Option<Duration>,
+    /// Time spent in the batched CAS download for stale (changed) files.
+    pub resolve_cas_download_ms: Option<Duration>,
+    /// Sum of `similar::TextDiff::from_lines` (build + materialize) time
+    /// across all stale (digest, file) pairs.
+    pub resolve_textdiff_ms: Option<Duration>,
+    /// Result files whose on-disk hash matched the Glean-indexed digest.
+    pub resolve_unchanged_file_count: usize,
+    /// Result files whose on-disk content has drifted from the indexed
+    /// version and therefore went through the CAS+diff remap path.
+    pub resolve_changed_file_count: usize,
+    /// Result files that could not be read from disk.
+    pub resolve_unreadable_file_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,6 +497,7 @@ impl TelemetryEvent {
                 canceled: false,
                 empty_response_reason: None,
                 request_id: None,
+                error_detail: None,
             },
             queue,
         )
@@ -487,6 +532,7 @@ impl TelemetryEvent {
             canceled: false,
             empty_response_reason: None,
             request_id: None,
+            error_detail: None,
         }
     }
 

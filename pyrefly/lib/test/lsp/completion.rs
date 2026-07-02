@@ -748,6 +748,81 @@ Completion Results:
 }
 
 #[test]
+fn from_import_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    // NOTE: trailing space after `import` is intentional — it places the
+    // cursor in whitespace so the empty-import completion path triggers.
+    let main_code = "from foo import \n#               ^\n";
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let expected = [
+        "# main.py",
+        "1 | from foo import ",
+        "                    ^",
+        "Completion Results:",
+        "- (Variable) imperial_guard",
+        "- (Constant) __annotations__",
+        "- (Constant) __builtins__",
+        "- (Constant) __cached__",
+        "- (Constant) __debug__",
+        "- (Constant) __dict__",
+        "- (Constant) __doc__",
+        "- (Constant) __file__",
+        "- (Constant) __loader__",
+        "- (Constant) __name__",
+        "- (Constant) __package__",
+        "- (Constant) __path__",
+        "- (Constant) __spec__",
+        "",
+        "",
+        "# foo.py",
+    ]
+    .join("\n");
+    assert_eq!(expected, report.trim());
+}
+
+#[test]
+fn from_import_relative_empty_trailing_whitespace_test() {
+    let foo_code = r#"
+imperial_guard = "cool"
+"#;
+    // NOTE: trailing space after `import` is intentional.
+    let main_code = "from .foo import \n#                ^\n";
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", main_code), ("foo", foo_code)],
+        get_default_test_report(),
+    );
+    let expected = [
+        "# main.py",
+        "1 | from .foo import ",
+        "                     ^",
+        "Completion Results:",
+        "- (Variable) imperial_guard",
+        "- (Constant) __annotations__",
+        "- (Constant) __builtins__",
+        "- (Constant) __cached__",
+        "- (Constant) __debug__",
+        "- (Constant) __dict__",
+        "- (Constant) __doc__",
+        "- (Constant) __file__",
+        "- (Constant) __loader__",
+        "- (Constant) __name__",
+        "- (Constant) __package__",
+        "- (Constant) __path__",
+        "- (Constant) __spec__",
+        "",
+        "",
+        "# foo.py",
+    ]
+    .join("\n");
+    assert_eq!(expected, report.trim());
+}
+
+#[test]
 fn from_import_deprecated() {
     let foo_code = r#"
 from warnings import deprecated
@@ -1211,6 +1286,65 @@ Completion Results:
 }
 
 #[test]
+fn completion_class_override_members() {
+    let code = r#"
+from typing import *
+from abc import ABC, abstractmethod
+
+class A(ABC):
+    @property
+    @abstractmethod
+    def error_message(self):
+        """
+        Child classes must provide an error message string.
+        """
+        ...
+
+class B(A):
+    erro = ""
+#   ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.iter().any(|item| item.label == "error_message"),
+        "Expected inherited override completion, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn attribute_completion_remains_unfiltered() {
+    let code = r#"
+class A:
+    name = 1
+
+a = A()
+a.zz
+#  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let completions = txn.completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.iter().any(|item| item.label == "name"),
+        "Expected normal attribute completions to remain unfiltered, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn builtins_doesnt_autoimport() {
     let code = r#"
 isins
@@ -1236,8 +1370,6 @@ Completion Results:
 - (Class) DivisionImpossible: from decimal import DivisionImpossible
 
 - (Function) disjoint_base: from typing_extensions import disjoint_base
-
-- (Function) fix_missing_locations: from ast import fix_missing_locations
 
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 
@@ -1504,8 +1636,82 @@ Completion Results:
     );
 }
 
-// todo(kylei): completion on known dict values
-// Pyright completes "a", "b"
+// Literal-value completion fires in expected-type contexts (annotated
+// assignment, return, attribute target), sourcing the expected type from
+// `get_expected_type_at` when the cursor is not a call argument.
+#[test]
+fn completion_literal_annotated_assignment() {
+    let code = r#"
+from typing import Literal
+x: Literal['foo', 'bar'] = '
+#                           ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+3 | x: Literal['foo', 'bar'] = '
+                                ^
+Completion Results:
+- (Value) 'bar': Literal['bar'] inserting `bar`
+- (Value) 'foo': Literal['foo'] inserting `foo`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_return() {
+    let code = r#"
+from typing import Literal
+def f() -> Literal['foo', 'bar']:
+    return '
+#           ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+4 |     return '
+                ^
+Completion Results:
+- (Value) 'bar': Literal['bar'] inserting `bar`
+- (Value) 'foo': Literal['foo'] inserting `foo`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_literal_attribute_assignment() {
+    let code = r#"
+from typing import Literal
+class C:
+    x: Literal['foo', 'bar']
+c = C()
+c.x = '
+#      ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+6 | c.x = '
+           ^
+Completion Results:
+- (Value) 'bar': Literal['bar'] inserting `bar`
+- (Value) 'foo': Literal['foo'] inserting `foo`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn completion_dict() {
     let code = r#"
@@ -1521,9 +1727,57 @@ x["
 3 | x["
       ^
 Completion Results:
+- (Field) a: Literal[3]
+- (Field) b: Literal[4]
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn completion_dict_no_quote() {
+    // Before any key string is typed (`x[`), offer the known keys with quoted
+    // insert text so selecting one produces `x["a"`.
+    let code = r#"
+x = {"a": 3, "b": 4}
+x[
+# ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        r#"
+# main.py
+3 | x[
+      ^
+Completion Results:
+- (Field) a: Literal[3] inserting `"a"`
+- (Field) b: Literal[4] inserting `"b"`
+- (Variable) x: dict[str, int]
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn completion_dict_no_keys_for_list() {
+    // A list subscript has only index facets, never string keys, so the bare
+    // subscript path must not offer any dict-key (Field) completions.
+    let code = r#"
+xs = [1, 2, 3]
+xs[
+#  ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert!(
+        labels.is_empty(),
+        "Expected no dict-key completions for a list subscript, got: {labels:?}"
     );
 }
 
@@ -2758,8 +3012,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[Unknown]) -> None: ...
-- (Field) p: Unknown
+- (Method) m: def m(self: C[@3]) -> None: ...
+- (Field) p: @3
 "#
         .trim(),
         report.trim(),

@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod attrs;
 pub mod base_class;
 pub mod binding;
 pub mod bindings;
@@ -16,6 +17,7 @@ pub mod metadata;
 pub mod narrow;
 pub mod pattern;
 pub mod pydantic;
+pub mod pytest;
 pub mod scope;
 pub mod stmt;
 pub mod table;

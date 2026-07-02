@@ -44,6 +44,7 @@ pub fn create_bundled_stub_config(
     permissive_ignores: Option<bool>,
 ) -> ConfigFile {
     let mut config_file = ConfigFile::default();
+    config_file.interpreters.skip_interpreter_query = true;
     config_file.python_environment.site_package_path = Some(Vec::new());
 
     if let Some(paths) = search_paths {
