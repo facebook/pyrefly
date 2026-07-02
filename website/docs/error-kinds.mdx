@@ -1702,6 +1702,19 @@ if "abc":
   ...
 ```
 
+## regex
+
+This error is raised when Pyrefly can statically detect an invalid regular expression pattern or an invalid literal group access on a regular expression match.
+
+```python
+import re
+
+re.compile("(")  # missing ), unterminated subpattern at position 0 [regex]
+
+if m := re.search("(?P<name>.*)", "example"):
+    m.group("missing")  # No such group: 'missing' [regex]
+```
+
 ## reveal-type
 
 Default severity: `info`
