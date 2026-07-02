@@ -3201,6 +3201,14 @@ impl<'a> Transaction<'a> {
         quick_fixes::invert_boolean::invert_boolean_code_actions(self, handle, selection)
     }
 
+    pub fn if_to_match_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::if_to_match::if_to_match_code_actions(self, handle, selection)
+    }
+
     pub fn extract_superclass_code_actions(
         &self,
         handle: &Handle,
