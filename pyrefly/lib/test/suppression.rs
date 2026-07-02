@@ -49,6 +49,15 @@ testcase!(
 );
 
 testcase!(
+    test_pyrefly_top_level_ignore_typed,
+    r#"
+# pyrefly: ignore-errors[bad-assignment]
+x: int = "x"
+3 + "3"  # E:
+"#,
+);
+
+testcase!(
     test_pyrefly_top_level_ignore_wrong_same_line,
     r#"
 3 + "3" # pyrefly: ignore-errors # E:

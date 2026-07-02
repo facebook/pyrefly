@@ -10,12 +10,12 @@ use std::mem;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_python::ignore::Suppression;
 use pyrefly_python::ignore::Tool;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
 
 use crate::config::error::ErrorConfig;
 use crate::config::error_kind::Severity;
@@ -219,16 +219,24 @@ impl ErrorCollector {
     fn is_error_suppressed(
         err: &Error,
         fstring_ranges: &[(LineNumber, LineNumber)],
-        ignore_all: &SmallMap<Tool, LineNumber>,
+        ignore_all: &[Suppression],
         error_config: &ErrorConfig,
     ) -> bool {
         // Check whole-file ignore-all directives first.
         // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
         if err.error_kind() != ErrorKind::UnusedIgnore
-            && error_config
-                .enabled_ignores
-                .iter()
-                .any(|tool| ignore_all.contains_key(tool))
+            && err.error_kind().suppression_names().any(|kind| {
+                ignore_all.iter().any(|supp| {
+                    error_config.enabled_ignores.contains(&supp.tool())
+                        && match supp.tool() {
+                            Tool::Pyrefly => {
+                                supp.error_codes().is_empty()
+                                    || supp.error_codes().iter().any(|x| x == kind)
+                            }
+                            _ => true,
+                        }
+                })
+            })
         {
             return true;
         }
@@ -258,7 +266,7 @@ impl ErrorCollector {
         &self,
         error_config: &ErrorConfig,
         fstring_ranges: &[(LineNumber, LineNumber)],
-        ignore_all: &SmallMap<Tool, LineNumber>,
+        ignore_all: &[Suppression],
         result: &mut CollectedErrors,
     ) {
         let mut errors = self.errors.lock();
@@ -290,7 +298,7 @@ impl ErrorCollector {
 
     pub fn collect(&self, error_config: &ErrorConfig) -> CollectedErrors {
         let mut result = CollectedErrors::default();
-        self.collect_into(error_config, &[], &SmallMap::new(), &mut result);
+        self.collect_into(error_config, &[], &[], &mut result);
         result
     }
 }
