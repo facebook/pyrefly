@@ -49,6 +49,7 @@ use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
+use crate::state::lsp::is_deprecated_stdlib_alias;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
 use crate::types::types::Type;
@@ -622,6 +623,12 @@ impl Transaction<'_> {
                     )
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
+                let is_deprecated = export.deprecation.is_some()
+                    || is_deprecated_stdlib_alias(
+                        handle.sys_info().version(),
+                        &imported_module,
+                        &name,
+                    );
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
@@ -639,7 +646,7 @@ impl Transaction<'_> {
                                 description: Some(module_description),
                             },
                         ),
-                        tags: if export.deprecation.is_some() {
+                        tags: if is_deprecated {
                             Some(vec![CompletionItemTag::DEPRECATED])
                         } else {
                             None

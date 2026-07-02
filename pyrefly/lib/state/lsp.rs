@@ -29,6 +29,7 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::gas::Gas;
@@ -99,6 +100,61 @@ mod quick_fixes;
 
 pub(crate) use self::quick_fixes::move_module::MoveModuleMemberContext;
 pub(crate) use self::quick_fixes::types::LocalRefactorCodeAction;
+
+pub(crate) fn is_deprecated_stdlib_alias(
+    python_version: PythonVersion,
+    module_name: &str,
+    name: &str,
+) -> bool {
+    if module_name != "typing" {
+        return false;
+    }
+    if python_version.at_least(3, 10) && matches!(name, "Optional" | "Union") {
+        return true;
+    }
+    python_version.at_least(3, 9)
+        && matches!(
+            name,
+            "AbstractSet"
+                | "AsyncContextManager"
+                | "AsyncGenerator"
+                | "AsyncIterable"
+                | "AsyncIterator"
+                | "Awaitable"
+                | "ByteString"
+                | "Callable"
+                | "ChainMap"
+                | "Collection"
+                | "Container"
+                | "ContextManager"
+                | "Coroutine"
+                | "Counter"
+                | "DefaultDict"
+                | "Deque"
+                | "Dict"
+                | "FrozenSet"
+                | "Generator"
+                | "ItemsView"
+                | "Iterable"
+                | "Iterator"
+                | "KeysView"
+                | "List"
+                | "Mapping"
+                | "MappingView"
+                | "Match"
+                | "MutableMapping"
+                | "MutableSequence"
+                | "MutableSet"
+                | "OrderedDict"
+                | "Pattern"
+                | "Reversible"
+                | "Sequence"
+                | "Set"
+                | "Tuple"
+                | "Type"
+                | "ValuesView"
+        )
+}
 
 #[derive(Debug)]
 pub(crate) enum CalleeKind {
@@ -3102,7 +3158,12 @@ impl<'a> Transaction<'a> {
             import_format,
         );
         let range = import_edit.range;
-        let is_deprecated = export.deprecation.is_some();
+        let is_deprecated = export.deprecation.is_some()
+            || is_deprecated_stdlib_alias(
+                handle.sys_info().version(),
+                &import_edit.module_name,
+                unknown_name,
+            );
         let title = format!(
             "Insert import: `{}`{}",
             import_edit.display_text,
@@ -4014,7 +4075,7 @@ impl<'a> Transaction<'a> {
     /// - Returns true if both modules should be shown in auto-import suggestions.
     /// - Handles stdlib patterns where a public module (`io`) re-exports from a
     ///   private implementation module (`_io`).
-    fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
+    fn should_include_reexport(original: &Handle, canonical: &Handle, name: &Name) -> bool {
         let canonical_module = canonical.module();
         let original_module = original.module();
         let canonical_components = canonical_module.components();
@@ -4050,6 +4111,16 @@ impl<'a> Transaction<'a> {
                 return true;
             }
         }
+        if canonical_module.as_str() == "typing"
+            && original_module.as_str() == "collections.abc"
+            && is_deprecated_stdlib_alias(
+                original.sys_info().version(),
+                canonical_module.as_str(),
+                name.as_str(),
+            )
+        {
+            return true;
+        }
         false
     }
 
@@ -4068,7 +4139,7 @@ impl<'a> Transaction<'a> {
                         {
                             let mut results = vec![(canonical_handle.dupe(), export.clone())];
                             if canonical_handle != *handle
-                                && (Self::should_include_reexport(handle, &canonical_handle)
+                                && (Self::should_include_reexport(handle, &canonical_handle, &name)
                                     || (exports_data.is_explicit_reexport(&name)
                                         && Self::allows_explicit_reexport(handle)))
                             {
@@ -4114,7 +4185,7 @@ impl<'a> Transaction<'a> {
                             export.clone(),
                         ));
                         if canonical_handle != *handle
-                            && (Self::should_include_reexport(handle, &canonical_handle)
+                            && (Self::should_include_reexport(handle, &canonical_handle, name)
                                 || (exports_data.is_explicit_reexport(name)
                                     && Self::allows_explicit_reexport(handle)))
                         {
