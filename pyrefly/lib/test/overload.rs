@@ -2319,3 +2319,48 @@ y: Any = ...
 f(y=y)  # E: (x: int, y: str = ..., ...) -> int [closest match]\n    (x: str, y: int = ..., ...) -> str
     "#,
 );
+
+testcase!(
+    test_overload_constrained_typevar_arg,
+    r#"
+from typing import overload, assert_type
+
+class A: ...
+class B: ...
+
+@overload
+def g(x: A) -> A: ...
+@overload
+def g(x: B) -> B: ...
+def g(x: A | B) -> A | B: ...
+
+def f[T: (A, B)](x: T) -> None:
+    g(x)  # constrained typevar expands to its constraints; each matches an overload
+
+def h[T: (A, B)](x: T) -> A | B:
+    return g(x)
+
+assert_type(g(A()), A)
+assert_type(g(B()), B)
+"#,
+);
+
+testcase!(
+    test_overload_constrained_typevar_arg_no_match,
+    r#"
+from typing import overload
+
+class A: ...
+class B: ...
+class C: ...
+
+@overload
+def g(x: A) -> A: ...
+@overload
+def g(x: C) -> C: ...
+def g(x: A | C) -> A | C: ...
+
+def f[T: (A, B)](x: T) -> None:
+    g(x)  # E: No matching overload found for function `g`
+"#,
+);
