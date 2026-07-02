@@ -1671,6 +1671,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 original_decoratee.clone()
             }
+            Type::ClassType(cls) if cls.has_qname("functools", "_lru_cache_wrapper") => {
+                // Keep the original callable as a real intersection member so simplification
+                // cannot collapse the type to just the wrapper.
+                self.heap.mk_intersect(
+                    vec![self.heap.mk_class_type(cls), original_decoratee.clone()],
+                    original_decoratee.clone(),
+                )
+            }
+            Type::KwCall(mut call) if matches!(&call.return_ty, Type::ClassType(cls) if cls.has_qname("functools", "_lru_cache_wrapper")) => {
+                if original_decoratee.property_metadata().is_some() {
+                    original_decoratee.clone()
+                } else {
+                    call.return_ty = self.heap.mk_intersect(
+                        vec![call.return_ty.clone(), original_decoratee.clone()],
+                        original_decoratee.clone(),
+                    );
+                    self.heap.mk_kw_call(*call)
+                }
+            }
             // Heuristic for union-typed decorators (e.g. dual-use decorators that
             // can be applied with or without parentheses like @d or @d(flag)):
             //
