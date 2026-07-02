@@ -9,6 +9,7 @@ use std::cell::LazyCell;
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
+use std::iter::once;
 use std::slice;
 
 use dupe::Dupe;
@@ -55,6 +56,7 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
+use ruff_python_ast::ConversionFlag;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -67,7 +69,10 @@ use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprTuple;
+use ruff_python_ast::FStringPart;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::InterpolatedStringElement;
+use ruff_python_ast::InterpolatedStringElements;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
@@ -253,6 +258,20 @@ enum ExprExpectation<'a, 'b, 'subset> {
     },
 }
 
+#[derive(Debug, Default)]
+struct FStringFormatSpec {
+    presentation: Option<char>,
+    fill: Option<char>,
+    alignment: Option<char>,
+    sign: Option<char>,
+    negative_zero: bool,
+    alternate: bool,
+    zero_padding: bool,
+    grouping: Option<char>,
+    precision: bool,
+    fractional_grouping: Option<char>,
+}
+
 impl<'a, 'b, 'subset> ExprOptions<'a, 'b, 'subset> {
     pub fn infer(errors: &'a ErrorCollector, hint: Option<HintRef<'a, 'b>>) -> Self {
         Self {
@@ -436,6 +455,297 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .key_to_idx_hashed_opt(Hashed::new(&anon_key))?;
         matches!(self.bindings().get(idx), Binding::ClassDef(..))
             .then(|| self.get_hashed(Hashed::new(&anon_key)).ty().clone())
+    }
+
+    fn fstring_infer_elements(
+        &self,
+        elements: &InterpolatedStringElements,
+        errors: &ErrorCollector,
+        all_literal_strings: &mut bool,
+    ) {
+        for element in elements {
+            match element {
+                InterpolatedStringElement::Literal(_) => {}
+                InterpolatedStringElement::Interpolation(interpolation) => {
+                    let expr_ty = self.expr_infer(&interpolation.expression, errors);
+                    if !expr_ty.is_literal_string() {
+                        *all_literal_strings = false;
+                    }
+                    if let Some(format_spec) = &interpolation.format_spec {
+                        if let Some(spec) = Self::literal_fstring_format_spec(&format_spec.elements)
+                        {
+                            self.check_fstring_format_spec(
+                                &expr_ty,
+                                &spec,
+                                interpolation.conversion,
+                                interpolation.range,
+                                errors,
+                            );
+                        }
+                        self.fstring_infer_elements(
+                            &format_spec.elements,
+                            errors,
+                            all_literal_strings,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn literal_fstring_format_spec(elements: &InterpolatedStringElements) -> Option<String> {
+        let mut spec = String::new();
+        for element in elements {
+            match element {
+                InterpolatedStringElement::Literal(literal) => spec.push_str(&literal.value),
+                InterpolatedStringElement::Interpolation(_) => return None,
+            }
+        }
+        Some(spec)
+    }
+
+    fn check_fstring_format_spec(
+        &self,
+        actual: &Type,
+        spec: &str,
+        conversion: ConversionFlag,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if spec.is_empty() {
+            return;
+        }
+        let converted;
+        let actual = if matches!(conversion, ConversionFlag::None) {
+            actual
+        } else {
+            converted = self.heap.mk_class_type(self.stdlib.str().clone());
+            &converted
+        };
+        self.map_over_union(actual, |member| {
+            self.check_fstring_format_spec_for_type(member, spec, range, errors);
+        });
+    }
+
+    fn check_fstring_format_spec_for_type(
+        &self,
+        actual: &Type,
+        spec: &str,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if actual.is_any() || actual.is_error() || actual.is_never() {
+            return;
+        }
+        if self.uses_custom_or_unknown_format(actual) {
+            return;
+        }
+        let valid_builtin = self.unions(vec![
+            self.heap.mk_class_type(self.stdlib.str().clone()),
+            self.heap.mk_class_type(self.stdlib.int().clone()),
+            self.heap.mk_class_type(self.stdlib.float().clone()),
+            self.heap.mk_class_type(self.stdlib.complex().clone()),
+        ]);
+        if self.is_subset_eq(actual, &valid_builtin) {
+            let parsed = match Self::parse_fstring_format_spec(spec) {
+                Ok(parsed) => parsed,
+                Err(msg) => {
+                    errors
+                        .error_builder(range, ErrorKind::InvalidArgument, msg)
+                        .emit();
+                    return;
+                }
+            };
+            let expected = match parsed.presentation {
+                None => None,
+                Some('s') => Some(self.heap.mk_class_type(self.stdlib.str().clone())),
+                Some('b' | 'c' | 'd' | 'o' | 'x' | 'X') => {
+                    Some(self.heap.mk_class_type(self.stdlib.int().clone()))
+                }
+                Some('%') => Some(self.unions(vec![
+                    self.heap.mk_class_type(self.stdlib.int().clone()),
+                    self.heap.mk_class_type(self.stdlib.float().clone()),
+                ])),
+                Some('e' | 'E' | 'f' | 'F' | 'g' | 'G' | 'n') => Some(self.unions(vec![
+                    self.heap.mk_class_type(self.stdlib.int().clone()),
+                    self.heap.mk_class_type(self.stdlib.float().clone()),
+                    self.heap.mk_class_type(self.stdlib.complex().clone()),
+                ])),
+                Some(_) => unreachable!("The parser validates presentation types"),
+            };
+            if let Some(expected) = expected
+                && !self.is_subset_eq(actual, &expected)
+            {
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::BadArgumentType,
+                        format!(
+                            "Incompatible types in string interpolation (expression has type `{}`, placeholder has type `{}`)",
+                            self.for_display(actual.clone()),
+                            self.for_display(expected),
+                        ),
+                    )
+                    .emit();
+                return;
+            }
+            let is_string =
+                self.is_subset_eq(actual, &self.heap.mk_class_type(self.stdlib.str().clone()));
+            // Integers use floating-point formatting when a floating-point presentation is given.
+            let integer_presentation = self
+                .is_subset_eq(actual, &self.heap.mk_class_type(self.stdlib.int().clone()))
+                && !matches!(
+                    parsed.presentation,
+                    Some('e' | 'E' | 'f' | 'F' | 'g' | 'G' | '%')
+                );
+            let is_complex = !is_string
+                && !self.is_subset_eq(
+                    actual,
+                    &self.heap.mk_class_type(self.stdlib.float().clone()),
+                );
+            let reason = if is_string
+                && (parsed.sign.is_some()
+                    || parsed.negative_zero
+                    || parsed.alternate
+                    || parsed.alignment == Some('=')
+                    || parsed.grouping.is_some()
+                    || parsed.fractional_grouping.is_some())
+            {
+                Some("Numeric format flags are not allowed for strings")
+            } else if integer_presentation && parsed.negative_zero {
+                Some("Negative zero coercion is not allowed for integer presentations")
+            } else if integer_presentation
+                && (parsed.precision || parsed.fractional_grouping.is_some())
+            {
+                Some("Precision is not allowed for integer presentations")
+            } else if parsed.presentation == Some('c')
+                && (parsed.sign.is_some() || parsed.alternate)
+            {
+                Some("Sign and alternate form are not allowed with the `c` presentation")
+            } else if (parsed.grouping.is_some() || parsed.fractional_grouping.is_some())
+                && matches!(parsed.presentation, Some('c' | 'n'))
+            {
+                Some("Grouping is not allowed with the `c` or `n` presentation")
+            } else if parsed.grouping == Some(',')
+                && matches!(parsed.presentation, Some('b' | 'o' | 'x' | 'X'))
+            {
+                Some("Comma grouping is not allowed for binary, octal or hexadecimal presentations")
+            } else if is_complex
+                && ((parsed.zero_padding && parsed.fill.is_none())
+                    || parsed.fill == Some('0')
+                    || parsed.alignment == Some('='))
+            {
+                Some("Zero padding and `=` alignment are not allowed for complex numbers")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::InvalidArgument,
+                        format!(
+                            "Invalid format specification `{spec}` for type `{}`: {reason}",
+                            self.for_display(actual.clone()),
+                        ),
+                    )
+                    .emit();
+            }
+            return;
+        }
+        errors
+            .error_builder(
+                range,
+                ErrorKind::InvalidArgument,
+                format!(
+                    "The type `{}` doesn't support format specifiers",
+                    self.for_display(actual.clone()),
+                ),
+            )
+            .with_detail("Maybe you want to add `!s` to the conversion".to_owned())
+            .emit();
+    }
+
+    /// Parse the standard mini-language, retaining options needed for type-specific validation.
+    fn parse_fstring_format_spec(spec: &str) -> Result<FStringFormatSpec, String> {
+        let chars = spec.chars().collect::<Vec<_>>();
+        let mut parsed = FStringFormatSpec::default();
+        let mut i = 0;
+        if chars.len() >= 2 && matches!(chars[1], '<' | '>' | '=' | '^') {
+            parsed.fill = Some(chars[0]);
+            parsed.alignment = Some(chars[1]);
+            i = 2;
+        } else if chars
+            .first()
+            .is_some_and(|c| matches!(c, '<' | '>' | '=' | '^'))
+        {
+            parsed.alignment = Some(chars[0]);
+            i = 1;
+        }
+        if chars.get(i).is_some_and(|c| matches!(c, '+' | '-' | ' ')) {
+            parsed.sign = Some(chars[i]);
+            i += 1;
+        }
+        if chars.get(i) == Some(&'z') {
+            parsed.negative_zero = true;
+            i += 1;
+        }
+        if chars.get(i) == Some(&'#') {
+            parsed.alternate = true;
+            i += 1;
+        }
+        if chars.get(i) == Some(&'0') {
+            parsed.zero_padding = true;
+            i += 1;
+        }
+        while chars.get(i).is_some_and(|c| c.is_ascii_digit()) {
+            i += 1;
+        }
+        if chars.get(i).is_some_and(|c| matches!(c, '_' | ',')) {
+            parsed.grouping = Some(chars[i]);
+            i += 1;
+        }
+        if chars.get(i) == Some(&'.') {
+            i += 1;
+            let precision_start = i;
+            while chars.get(i).is_some_and(|c| c.is_ascii_digit()) {
+                i += 1;
+            }
+            parsed.precision = i != precision_start;
+            if chars.get(i).is_some_and(|c| matches!(c, '_' | ',')) {
+                parsed.fractional_grouping = Some(chars[i]);
+                i += 1;
+            }
+            if !parsed.precision && parsed.fractional_grouping.is_none() {
+                return Err(format!("Unrecognized format specification `{spec}`"));
+            }
+        }
+        parsed.presentation = match chars.get(i) {
+            None => None,
+            Some(c) if i + 1 == chars.len() && "bcdoxXeEfFgGns%".contains(*c) => Some(*c),
+            _ => return Err(format!("Unrecognized format specification `{spec}`")),
+        };
+        Ok(parsed)
+    }
+
+    /// Only known builtin implementations use the standard format mini-language.
+    fn uses_custom_or_unknown_format(&self, ty: &Type) -> bool {
+        let cls = match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => cls,
+            Type::Literal(lit) => lit.value.general_class_type(self.stdlib),
+            _ => return false,
+        };
+        let mro = self.get_mro_for_class(cls.class_object());
+        if !mro.linearization_complete() || self.extends_any(cls.class_object()) {
+            return true;
+        }
+        once(cls)
+            .chain(mro.ancestors_no_object())
+            .find(|ancestor| {
+                self.get_field_from_current_class_only(ancestor.class_object(), &dunder::FORMAT)
+                    .is_some()
+            })
+            .is_some_and(|owner| owner.class_object().module_name() != ModuleName::builtins())
     }
 
     /// Infer a type for an expression, with an optional type hint that influences the inferred type.
@@ -1008,12 +1318,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Expr::FString(x) => {
                 let mut all_literal_strings = true;
-                x.visit(&mut |x| {
-                    let fstring_expr_ty = self.expr_infer(x, errors);
-                    if !fstring_expr_ty.is_literal_string() {
-                        all_literal_strings = false;
+                for part in x.value.iter() {
+                    match part {
+                        FStringPart::Literal(_) => {}
+                        FStringPart::FString(fstring) => {
+                            self.fstring_infer_elements(
+                                &fstring.elements,
+                                errors,
+                                &mut all_literal_strings,
+                            );
+                        }
                     }
-                });
+                }
                 match Lit::from_fstring(x) {
                     Some(lit) => lit.to_implicit_type(),
                     _ if all_literal_strings => self.heap.mk_literal_string(LitStyle::Implicit),

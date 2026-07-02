@@ -832,6 +832,174 @@ c = f"{arr['foo']}"  # E: Cannot index into `list[int]`
 );
 
 testcase!(
+    test_checked_fstrings,
+    r#"
+from datetime import date
+
+f"{None:0>2}"  # E: doesn't support format specifiers
+f"{date(1, 1, 1):%}"
+f"{date(2024, 3, 5):%-d/%-m}"
+f"{'s':.2f}"  # E: Incompatible types in string interpolation
+f"{'s':c}"  # E: Incompatible types in string interpolation
+
+i = 1
+f"{i:1}"
+f"{i:.1f}"
+f"{i:c}"
+x = -0.0
+f"{x:z.1f}"
+s = "s"
+f"{s:1}"
+f"{s:.2}"
+dynamic_spec = ""
+f"{s:{dynamic_spec}}"
+f"{None!s:0>2}"
+
+class CustomFormat:
+    def __format__(self, format_spec: str) -> str:
+        return ""
+
+f"{CustomFormat():whatever}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_custom_builtin_subclasses,
+    r#"
+class CustomInt(int):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class InheritedCustomInt(CustomInt):
+    pass
+
+class CustomStr(str):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class PlainInt(int):
+    pass
+
+class PlainStr(str):
+    pass
+
+class FormatMixin:
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class ShadowedInt(int, FormatMixin):
+    pass
+
+class CustomBytes(bytes):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+f"{CustomInt():custom}"
+f"{InheritedCustomInt():custom}"
+f"{CustomStr():.2f}"
+f"{CustomStr():c}"
+f"{PlainInt():custom}"  # E: Unrecognized format specification
+f"{PlainStr():.2f}"  # E: Incompatible types in string interpolation
+f"{CustomStr()!s:.2f}"  # E: Incompatible types in string interpolation
+f"{CustomInt()!r:custom}"  # E: Unrecognized format specification
+f"{ShadowedInt():custom}"  # E: Unrecognized format specification
+f"{CustomBytes():>10}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_builtin_options,
+    r#"
+s = "s"
+f"{b'xy':>10}"  # E: doesn't support format specifiers
+f"{b'xy':s}"  # E: doesn't support format specifiers
+f"{b'xy'}"
+f"{b'xy':}"
+f"{b'xy'!s:>10}"
+f"{b'xy'!r:s}"
+f"{1:s}"  # E: Incompatible types in string interpolation
+f"{1.0:s}"  # E: Incompatible types in string interpolation
+f"{1j:s}"  # E: Incompatible types in string interpolation
+f"{s:+}"  # E: Numeric format flags are not allowed for strings
+f"{s:,}"  # E: Numeric format flags are not allowed for strings
+f"{s:_}"  # E: Numeric format flags are not allowed for strings
+f"{s:#}"  # E: Numeric format flags are not allowed for strings
+f"{s:z}"  # E: Numeric format flags are not allowed for strings
+f"{s:=10}"  # E: Numeric format flags are not allowed for strings
+f"{s:.2_}"  # E: Numeric format flags are not allowed for strings
+f"{1:z}"  # E: Negative zero coercion is not allowed for integer presentations
+f"{1:zd}"  # E: Negative zero coercion is not allowed for integer presentations
+f"{1:.2}"  # E: Precision is not allowed for integer presentations
+f"{1:.2d}"  # E: Precision is not allowed for integer presentations
+f"{1:._d}"  # E: Precision is not allowed for integer presentations
+f"{1:+c}"  # E: Sign and alternate form are not allowed
+f"{1:#c}"  # E: Sign and alternate form are not allowed
+f"{1:,c}"  # E: Grouping is not allowed
+f"{1:,n}"  # E: Grouping is not allowed
+f"{1.0:_n}"  # E: Grouping is not allowed
+f"{1:,x}"  # E: Comma grouping is not allowed
+f"{1j:%}"  # E: Incompatible types in string interpolation
+f"{1j:010}"  # E: Zero padding and `=` alignment are not allowed
+f"{1j:0>10}"  # E: Zero padding and `=` alignment are not allowed
+f"{1j:=10}"  # E: Zero padding and `=` alignment are not allowed
+f"{1:.f}"  # E: Unrecognized format specification
+f"{s:!r}"  # E: Unrecognized format specification
+
+f"{s:s}"
+f"{s:010}"
+f"{s:>10.2s}"
+f"{s:+>10}"
+f"{s:z>10}"
+f"{1:0=+#10_x}"
+f"{1:010c}"
+f"{1:z.2f}"
+f"{1:+.2%}"
+f"{1.0:0=+z#10,.2f}"
+f"{1.0:.2n}"
+f"{1.0:,.2_f}"
+f"{1.0:._f}"
+f"{1j:>+z#10,.2f}"
+f"{1j:x>010}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_unknown_inheritance,
+    r#"
+from typing import Any
+
+def check(base: Any):
+    class Foo(base):
+        pass
+
+    class Child(Foo):
+        pass
+
+    class UnknownInt(int, base):
+        pass
+
+    f"{Foo():>10}"
+    f"{Child():>10}"
+    f"{UnknownInt():custom}"
+
+class A:
+    pass
+
+class B(A):
+    pass
+
+class C(A, B):  # E: nonlinearizable inheritance chain
+    pass
+
+class D(C):
+    pass
+
+f"{C():>10}"
+f"{D():>10}"
+"#,
+);
+
+testcase!(
     test_ternary_expression,
     r#"
 from typing import assert_type, Literal
