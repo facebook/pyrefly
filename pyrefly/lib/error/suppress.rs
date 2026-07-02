@@ -98,6 +98,11 @@ impl SerializedError {
         self.name == ErrorKind::UnusedIgnore.to_name()
     }
 
+    /// Returns true if this error is an UnusedTypeIgnore error.
+    pub fn is_unused_type_ignore(&self) -> bool {
+        self.name == ErrorKind::UnusedTypeIgnore.to_name()
+    }
+
     /// Returns true if this error is a directive (e.g. reveal_type) that
     /// should never be suppressed.
     pub fn is_directive(&self) -> bool {
@@ -555,18 +560,21 @@ fn update_ignore_comment_with_used_codes(
 /// - "Unused `# pyrefly: ignore` comment" -> remove entire comment
 /// - "Unused `# pyrefly: ignore` comment for code(s): X, Y" -> remove entire comment
 /// - "Unused error code(s) in `# pyrefly: ignore`: X, Y" -> remove only those codes
-pub fn remove_unused_ignores(unused_ignore_errors: Vec<Error>) -> usize {
+pub fn remove_unused_ignores(unused_ignore_errors: Vec<Error>, remove_type_ignores: bool) -> usize {
     let serialized: Vec<SerializedError> = unused_ignore_errors
         .iter()
         .filter_map(SerializedError::from_error)
         .collect();
-    remove_unused_ignores_from_serialized(serialized)
+    remove_unused_ignores_from_serialized(serialized, remove_type_ignores)
 }
 
 /// Removes unused ignore comments from source files using SerializedError.
 /// This is similar to remove_unused_ignores but works with SerializedError instead of Error,
 /// allowing it to be used with errors parsed from JSON.
-pub fn remove_unused_ignores_from_serialized(unused_ignore_errors: Vec<SerializedError>) -> usize {
+pub fn remove_unused_ignores_from_serialized(
+    unused_ignore_errors: Vec<SerializedError>,
+    remove_type_ignores: bool,
+) -> usize {
     if unused_ignore_errors.is_empty() {
         return 0;
     }
@@ -608,6 +616,8 @@ pub fn remove_unused_ignores_from_serialized(unused_ignore_errors: Vec<Serialize
                             // Pyre messages are "Unused pyre-fixme comment".
                             if msg.starts_with("Unused `# pyrefly: ignore` comment")
                                 || msg.starts_with("Unused pyre-fixme comment")
+                                || (remove_type_ignores
+                                    && msg.starts_with("Unused `# type: ignore` comment"))
                             {
                                 // Remove entire comment (blanket unused or all codes unused)
                                 let code_part = &line[..comment_start];
@@ -734,7 +744,7 @@ mod tests {
         let (errors, tdir) = get_errors(before);
         let collected = errors.collect_errors();
         let unused_errors = errors.collect_unused_ignore_errors(&collected);
-        let removals = suppress::remove_unused_ignores(unused_errors);
+        let removals = suppress::remove_unused_ignores(unused_errors, false);
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
         assert_eq!(after, got_file);
         assert_eq!(removals, expected_removals);
@@ -751,7 +761,7 @@ mod tests {
         let (errors, tdir) = get_errors(before);
         let collected = errors.collect_errors();
         let unused_errors = errors.collect_unused_ignore_errors(&collected);
-        let removals = suppress::remove_unused_ignores(unused_errors);
+        let removals = suppress::remove_unused_ignores(unused_errors, false);
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
         assert_eq!(after, got_file);
         assert_eq!(removals, expected_removals);
@@ -1437,9 +1447,25 @@ def f() -> int:
     // Helper function to test remove_unused_ignores_from_serialized
     fn assert_remove_ignores_from_serialized(
         file_content: &str,
+        serialized_errors: Vec<SerializedError>,
+        expected_content: &str,
+        expected_removals: usize,
+    ) {
+        assert_remove_ignores_from_serialized_with_flag(
+            file_content,
+            serialized_errors,
+            expected_content,
+            expected_removals,
+            false,
+        );
+    }
+
+    fn assert_remove_ignores_from_serialized_with_flag(
+        file_content: &str,
         mut serialized_errors: Vec<SerializedError>,
         expected_content: &str,
         expected_removals: usize,
+        remove_type_ignores: bool,
     ) {
         let tdir = tempfile::tempdir().unwrap();
         let path = get_path(&tdir);
@@ -1450,7 +1476,8 @@ def f() -> int:
             error.path = path.clone();
         }
 
-        let removals = suppress::remove_unused_ignores_from_serialized(serialized_errors);
+        let removals =
+            suppress::remove_unused_ignores_from_serialized(serialized_errors, remove_type_ignores);
 
         let got_file = fs_anyhow::read_to_string(&path).unwrap();
         assert_eq!(expected_content, got_file);
@@ -1560,7 +1587,7 @@ def g() -> str:
             },
         ];
 
-        let removals = suppress::remove_unused_ignores_from_serialized(errors);
+        let removals = suppress::remove_unused_ignores_from_serialized(errors, false);
 
         assert_eq!(fs_anyhow::read_to_string(&path1).unwrap(), "x = 1\n");
         assert_eq!(fs_anyhow::read_to_string(&path2).unwrap(), "y = 2\n");
@@ -1570,7 +1597,7 @@ def g() -> str:
     #[test]
     fn test_remove_unused_ignores_from_serialized_empty_list() {
         let errors: Vec<SerializedError> = vec![];
-        let removals = suppress::remove_unused_ignores_from_serialized(errors);
+        let removals = suppress::remove_unused_ignores_from_serialized(errors, false);
         assert_eq!(removals, 0);
     }
 
@@ -2074,10 +2101,89 @@ build_query(
             name: "unused-ignore".to_owned(),
             message: "Unused pyre-fixme comment".to_owned(),
         }];
-        let removals = suppress::remove_unused_ignores_from_serialized(errors);
+        let removals = suppress::remove_unused_ignores_from_serialized(errors, false);
         let got = fs_anyhow::read_to_string(&path).unwrap();
         assert_eq!(want, got);
         assert_eq!(removals, 1);
+    }
+
+    #[test]
+    fn test_remove_unused_type_ignore_inline() {
+        let input = "x = 1  # type: ignore\n";
+        let want = "x = 1\n";
+        let errors = vec![SerializedError {
+            path: PathBuf::from("test.py"),
+            line: 0,
+            name: "unused-type-ignore".to_owned(),
+            message: "Unused `# type: ignore` comment".to_owned(),
+        }];
+        assert_remove_ignores_from_serialized_with_flag(input, errors, want, 1, true);
+    }
+
+    #[test]
+    fn test_remove_unused_type_ignore_preserved_without_flag() {
+        // R1: without the flag, # type: ignore must never be removed
+        let input = "x = 1  # type: ignore\n";
+        let errors = vec![SerializedError {
+            path: PathBuf::from("test.py"),
+            line: 0,
+            name: "unused-type-ignore".to_owned(),
+            message: "Unused `# type: ignore` comment".to_owned(),
+        }];
+        assert_remove_ignores_from_serialized_with_flag(input, errors, input, 0, false);
+    }
+
+    #[test]
+    fn test_remove_unused_type_ignore_with_code() {
+        // R7: unused # type: ignore[code] is removed whole
+        let input = "x = 1  # type: ignore[attr-defined]\n";
+        let want = "x = 1\n";
+        let errors = vec![SerializedError {
+            path: PathBuf::from("test.py"),
+            line: 0,
+            name: "unused-type-ignore".to_owned(),
+            message: "Unused `# type: ignore` comment".to_owned(),
+        }];
+        assert_remove_ignores_from_serialized_with_flag(input, errors, want, 1, true);
+    }
+
+    #[test]
+    fn test_remove_both_unused_type_and_pyrefly_ignores() {
+        // Both pyrefly:ignore and type:ignore on the same line, both unused.
+        // With flag=true, replace_all removes all matching patterns on the line.
+        // Note: line_errors holds one error per line (last-insert wins), so
+        // the type:ignore error drives removal; replace_all clears both patterns.
+        let input = "x = 1  # pyrefly: ignore  # type: ignore\n";
+        let want = "x = 1\n";
+        let errors = vec![
+            SerializedError {
+                path: PathBuf::from("test.py"),
+                line: 0,
+                name: "unused-ignore".to_owned(),
+                message: "Unused `# pyrefly: ignore` comment".to_owned(),
+            },
+            SerializedError {
+                path: PathBuf::from("test.py"),
+                line: 0,
+                name: "unused-type-ignore".to_owned(),
+                message: "Unused `# type: ignore` comment".to_owned(),
+            },
+        ];
+        assert_remove_ignores_from_serialized_with_flag(input, errors, want, 1, true);
+    }
+
+    #[test]
+    fn test_pyrefly_ignore_removed_with_type_ignore_flag_set() {
+        // R5: existing pyrefly:ignore removal is unaffected regardless of the type-ignore flag.
+        let input = "x = 1  # pyrefly: ignore\n";
+        let want = "x = 1\n";
+        let errors = vec![SerializedError {
+            path: PathBuf::from("test.py"),
+            line: 0,
+            name: "unused-ignore".to_owned(),
+            message: "Unused `# pyrefly: ignore` comment".to_owned(),
+        }];
+        assert_remove_ignores_from_serialized_with_flag(input, errors, want, 1, true);
     }
 
     #[test]

@@ -150,3 +150,22 @@ If your project uses other tools that place suppression comments on the line bef
 :::note
 `pyrefly suppress` is equivalent to `pyrefly check --suppress-errors`, and `pyrefly suppress --remove-unused` is equivalent to `pyrefly check --remove-unused-ignores`.
 :::
+
+:::note
+By default, `pyrefly suppress --remove-unused` (and `pyrefly check --remove-unused-ignores`) only
+removes unused `# pyrefly: ignore` and `# pyre-...` comments. It never touches `# type: ignore`
+comments, because those are shared with other type checkers and removing them by default could break
+other tools in your project.
+
+To also remove unused `# type: ignore` comments, pass `--remove-unused-type-ignores` alongside
+the removal flag:
+
+```
+pyrefly suppress --remove-unused --remove-unused-type-ignores
+# or
+pyrefly check --remove-unused-ignores --remove-unused-type-ignores
+```
+
+Only **unused** `# type: ignore` comments are removed — if the comment is actively suppressing a
+real error, it is left in place.
+:::
