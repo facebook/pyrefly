@@ -252,11 +252,8 @@ impl Transaction<'_> {
                 // If the coerced type is an Overload, expand it into multiple signatures
                 // so signature help displays each overload separately.
                 if let Type::Overload(overload) = coerced {
-                    let callables: Vec<Type> = overload
-                        .signatures
-                        .into_iter()
-                        .map(|s| s.as_type())
-                        .collect();
+                    let callables: Vec<Type> =
+                        overload.signatures.iter().map(|s| s.as_type()).collect();
                     CallInfo {
                         callables,
                         chosen_overload_index: None,

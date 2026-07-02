@@ -2379,13 +2379,13 @@ pub mod tests {
         };
 
         let overload = Type::Overload(Overload {
-            signatures: vec1![
+            signatures: Arc::new(vec1![
                 OverloadType::Function(sig1.clone()),
                 OverloadType::Forall(Forall {
                     tparams: fake_tparams(vec![fake_tparam(8, "T", QuantifiedKind::TypeVar)]),
                     body: sig2.clone()
                 })
-            ],
+            ]),
             metadata: Box::new(sig1.metadata.clone()),
         });
 
@@ -2421,13 +2421,13 @@ def overloaded_func[T](
         let bound_method_overload = Type::BoundMethod(Box::new(BoundMethod {
             obj: Type::any_explicit(),
             func: BoundMethodType::Overload(Overload {
-                signatures: vec1![
+                signatures: Arc::new(vec1![
                     OverloadType::Function(sig1.clone()),
                     OverloadType::Forall(Forall {
                         tparams: fake_tparams(vec![fake_tparam(9, "T", QuantifiedKind::TypeVar)]),
                         body: sig2
                     })
-                ],
+                ]),
                 metadata: Box::new(sig1.metadata),
             }),
         }));

@@ -358,7 +358,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         let ty = self.heap.mk_overload(Overload {
-            signatures: vec1![
+            signatures: Arc::new(vec1![
                 OverloadType::Function(Function {
                     signature: Callable::list(ParamList::new(kw_params), self.heap.mk_none()),
                     metadata: FuncMetadata::method(cls, dunder::INIT),
@@ -367,7 +367,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     signature: Callable::list(ParamList::new(map_params), self.heap.mk_none()),
                     metadata: FuncMetadata::method(cls, dunder::INIT),
                 })
-            ],
+            ]),
             metadata: Box::new(FuncMetadata::method(cls, dunder::INIT)),
         });
         ClassSynthesizedField::new(ty)
@@ -458,7 +458,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             metadata: metadata.clone(),
         });
 
-        let signatures = vec1![partial_overload, tuple_overload, overload_kwargs];
+        let signatures = Arc::new(vec1![partial_overload, tuple_overload, overload_kwargs]);
 
         ClassSynthesizedField::new(self.heap.mk_overload(Overload {
             signatures,
@@ -616,7 +616,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             value_ty,
         ));
         ClassSynthesizedField::new(self.heap.mk_overload(Overload {
-            signatures,
+            signatures: Arc::new(signatures),
             metadata: Box::new(metadata),
         }))
     }
@@ -707,7 +707,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut literal_signatures,
             );
         }
-        let signatures = Vec1::try_from_vec(literal_signatures).ok()?;
+        let signatures = Arc::new(Vec1::try_from_vec(literal_signatures).ok()?);
         Some(ClassSynthesizedField::new(self.heap.mk_overload(
             Overload {
                 signatures,
@@ -760,7 +760,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         Some(ClassSynthesizedField::new(self.heap.mk_overload(
             Overload {
-                signatures: Vec1::try_from_vec(overloads).ok()?,
+                signatures: Arc::new(Vec1::try_from_vec(overloads).ok()?),
                 metadata: Box::new(metadata),
             },
         )))

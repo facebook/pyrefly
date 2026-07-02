@@ -730,23 +730,26 @@ impl ClassField {
                     }
                 }
                 Type::Overload(Overload { signatures, .. }) => {
-                    signatures.iter_mut().for_each(|sig| match sig {
-                        OverloadType::Function(body)
-                            if let Some(tparams) = prepend_class_tparams_if_used(body, None) =>
-                        {
-                            *sig = OverloadType::Forall(Forall {
-                                tparams,
-                                body: body.clone(),
-                            })
-                        }
-                        OverloadType::Forall(Forall { tparams, body })
-                            if let Some(new_tparams) =
-                                prepend_class_tparams_if_used(body, Some(tparams)) =>
-                        {
-                            *tparams = new_tparams;
-                        }
-                        _ => {}
-                    });
+                    Arc::make_mut(signatures)
+                        .iter_mut()
+                        .for_each(|sig| match sig {
+                            OverloadType::Function(body)
+                                if let Some(tparams) =
+                                    prepend_class_tparams_if_used(body, None) =>
+                            {
+                                *sig = OverloadType::Forall(Forall {
+                                    tparams,
+                                    body: body.clone(),
+                                })
+                            }
+                            OverloadType::Forall(Forall { tparams, body })
+                                if let Some(new_tparams) =
+                                    prepend_class_tparams_if_used(body, Some(tparams)) =>
+                            {
+                                *tparams = new_tparams;
+                            }
+                            _ => {}
+                        });
                 }
                 ty => {
                     if !cls_tparams.is_empty() {
@@ -2807,15 +2810,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Forall(f) => forall(f.body.clone(), &quantified, Some(&f.tparams))
                 .map_or(ty, |forall| self.heap.mk_forall(forall)),
             Type::Overload(overload) => self.heap.mk_overload(Overload {
-                signatures: overload.signatures.clone().mapped(|sig| match &sig {
-                    OverloadType::Function(func) => {
-                        forall(func.clone(), &quantified, None).map_or(sig, OverloadType::Forall)
+                signatures: Arc::new((*overload.signatures).clone().mapped(|sig| {
+                    match &sig {
+                        OverloadType::Function(func) => forall(func.clone(), &quantified, None)
+                            .map_or(sig, OverloadType::Forall),
+                        OverloadType::Forall(Forall { tparams, body }) => {
+                            forall(body.clone(), &quantified, Some(tparams))
+                                .map_or(sig, OverloadType::Forall)
+                        }
                     }
-                    OverloadType::Forall(Forall { tparams, body }) => {
-                        forall(body.clone(), &quantified, Some(tparams))
-                            .map_or(sig, OverloadType::Forall)
-                    }
-                }),
+                })),
                 metadata: overload.metadata.clone(),
             }),
             _ => ty,
@@ -2878,7 +2882,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && filtered_sigs.len() < overload.signatures.len()
         {
             return Some(Overload {
-                signatures: filtered_sigs,
+                signatures: Arc::new(filtered_sigs),
                 metadata: overload.metadata.clone(),
             });
         }
@@ -4707,15 +4711,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         OverloadType::Function(f) => f.signature.get_first_param(),
                         OverloadType::Forall(forall) => forall.body.signature.get_first_param(),
                     };
-                    let applicable: Vec<_> = overload
-                        .signatures
+                    let applicable: Vec<_> = Arc::unwrap_or_clone(overload.signatures)
                         .into_iter()
                         .filter(|sig| {
                             self_param(sig)
                                 .is_none_or(|param| self.is_subset_eq(&child_type, &param))
                         })
                         .collect();
-                    let signatures = vec1::Vec1::try_from_vec(applicable).ok()?;
+                    let signatures = Arc::new(vec1::Vec1::try_from_vec(applicable).ok()?);
                     Some(
                         BoundMethod {
                             obj,

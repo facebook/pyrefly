@@ -338,9 +338,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let metadata = self.merge_overload_metadata_no_implementation(&acc);
                     let func_name = acc.first().2.kind.function_name().into_owned();
                     Type::Overload(Overload {
-                        signatures: self
-                            .extract_signatures(&func_name, acc, errors)
-                            .mapped(|(_, sig)| sig),
+                        signatures: Arc::new(
+                            self.extract_signatures(&func_name, acc, errors)
+                                .mapped(|(_, sig)| sig),
+                        ),
                         metadata: Box::new(metadata.clone()),
                     })
                 }
@@ -375,7 +376,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     self.check_signature_consistency(&sigs, &def, errors);
                     Type::Overload(Overload {
-                        signatures: sigs.mapped(|(_, sig)| sig),
+                        signatures: Arc::new(sigs.mapped(|(_, sig)| sig)),
                         metadata: Box::new(metadata),
                     })
                 }
@@ -2435,7 +2436,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .ok()
                 .map(|signatures| {
                     Type::Overload(Overload {
-                        signatures,
+                        signatures: Arc::new(signatures),
                         metadata: overload.metadata.clone(),
                     })
                 }),
