@@ -48,7 +48,7 @@ fn test_inlay_hints() {
             if hint.position.line != 0 || hint.position.character != 21 {
                 return false;
             }
-            check_inlay_hint_label_values(
+            if !check_inlay_hint_label_values(
                 hint,
                 &[
                     (" -> ", false),
@@ -65,7 +65,18 @@ fn test_inlay_hints() {
                     ("]", false),
                     ("]", false),
                 ],
-            )
+            ) {
+                return false;
+            }
+            let text_edits = match &hint.text_edits {
+                Some(edits) if edits.len() == 1 => &edits[0],
+                _ => return false,
+            };
+            text_edits.new_text == " -> tuple[Literal[1], Literal[2]]"
+                && text_edits.range.start.line == 0
+                && text_edits.range.start.character == 21
+                && text_edits.range.end.line == 0
+                && text_edits.range.end.character == 21
         })
         .unwrap();
 
@@ -83,7 +94,7 @@ fn test_inlay_hints() {
             if hint.position.line != 0 || hint.position.character != 6 {
                 return false;
             }
-            check_inlay_hint_label_values(
+            if !check_inlay_hint_label_values(
                 hint,
                 &[
                     (": ", false),
@@ -100,7 +111,18 @@ fn test_inlay_hints() {
                     ("]", false),
                     ("]", false),
                 ],
-            )
+            ) {
+                return false;
+            }
+            let text_edits = match &hint.text_edits {
+                Some(edits) if edits.len() == 1 => &edits[0],
+                _ => return false,
+            };
+            text_edits.new_text == ": tuple[Literal[1], Literal[2]]"
+                && text_edits.range.start.line == 0
+                && text_edits.range.start.character == 6
+                && text_edits.range.end.line == 0
+                && text_edits.range.end.character == 6
         })
         .unwrap();
 
@@ -118,7 +140,7 @@ fn test_inlay_hints() {
             if hint.position.line != 0 || hint.position.character != 15 {
                 return false;
             }
-            check_inlay_hint_label_values(
+            if !check_inlay_hint_label_values(
                 hint,
                 &[
                     (" -> ", false),
@@ -127,7 +149,18 @@ fn test_inlay_hints() {
                     ("0", false),
                     ("]", false),
                 ],
-            )
+            ) {
+                return false;
+            }
+            let text_edits = match &hint.text_edits {
+                Some(edits) if edits.len() == 1 => &edits[0],
+                _ => return false,
+            };
+            text_edits.new_text == " -> Literal[0]"
+                && text_edits.range.start.line == 0
+                && text_edits.range.start.character == 15
+                && text_edits.range.end.line == 0
+                && text_edits.range.end.character == 15
         })
         .unwrap();
 
