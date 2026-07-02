@@ -51,6 +51,7 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -120,6 +121,10 @@ fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
 
 fn default_true() -> bool {
     true
+}
+
+fn position_in_augassign_operator(augassign: &StmtAugAssign, position: TextSize) -> bool {
+    position > augassign.target.range().end() && position < augassign.value.range().start()
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -1984,6 +1989,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
+        position: TextSize,
     ) -> Result<Option<(Type, Name)>, EmptyResponseReason> {
         // Look up the type of an expression, distinguishing "no answers"
         // from "answers available but no type trace for this range."
@@ -2030,6 +2036,15 @@ impl<'a> Transaction<'a> {
                 AnyNodeRef::ExprBinOp(binop) => {
                     let dunder_name = Name::new_static(binop.op.dunder());
                     Some(type_at(binop.left.range()).map(|left_type| (left_type, dunder_name)))
+                }
+                AnyNodeRef::StmtAugAssign(augassign) => {
+                    if !position_in_augassign_operator(augassign, position) {
+                        return None;
+                    }
+                    let dunder_name = Name::new_static(augassign.op.in_place_dunder());
+                    Some(
+                        type_at(augassign.target.range()).map(|left_type| (left_type, dunder_name)),
+                    )
                 }
                 AnyNodeRef::ExprUnaryOp(unaryop) => {
                     let dunder_name = match unaryop.op {
@@ -2094,6 +2109,28 @@ impl<'a> Transaction<'a> {
         self.get_chosen_overload_trace_for_surface(handle, subscript.range(), true)
     }
 
+    pub(crate) fn augmented_assignment_operator_type_at(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+    ) -> Option<Type> {
+        if self.identifier_at(handle, position).is_some() {
+            return None;
+        }
+        let module = self.get_ast(handle)?;
+        let augassign =
+            Ast::locate_node(&module, position)
+                .into_iter()
+                .find_map(|node| match node {
+                    AnyNodeRef::StmtAugAssign(augassign) => Some(augassign),
+                    _ => None,
+                })?;
+        if !position_in_augassign_operator(augassign, position) {
+            return None;
+        }
+        self.get_chosen_overload_trace_for_surface(handle, augassign.range(), true)
+    }
+
     /// Try operator-based go-to-definition. Returns `Ok(None)` when there is
     /// no operator at the cursor, `Ok(Some(...))` on success, or
     /// `Err(...)` when an operator was found but couldn't be resolved.
@@ -2101,9 +2138,11 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
+        position: TextSize,
         preference: FindPreference,
     ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
-        let Some((base_type, dunder_name)) = self.find_operator_dunder(handle, covering_nodes)?
+        let Some((base_type, dunder_name)) =
+            self.find_operator_dunder(handle, covering_nodes, position)?
         else {
             return Ok(None);
         };
@@ -2636,9 +2675,12 @@ impl<'a> Transaction<'a> {
                     };
                 }
                 // Fall back to operator handling
-                if let Some(defs) =
-                    self.find_definition_for_operator(handle, &covering_nodes, preference)?
-                {
+                if let Some(defs) = self.find_definition_for_operator(
+                    handle,
+                    &covering_nodes,
+                    position,
+                    preference,
+                )? {
                     return Ok(defs);
                 }
                 let found = covering_nodes
