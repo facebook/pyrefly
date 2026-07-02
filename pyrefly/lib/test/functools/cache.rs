@@ -8,6 +8,31 @@
 //! `functools.cache` and `functools.lru_cache` preserve the wrapped function's call signature.
 
 use crate::functools_testcase;
+use crate::test::util::TestEnv;
+use crate::testcase;
+
+fn cached_overload_env() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "pkg",
+        "pkg/__init__.pyi",
+        r#"
+from functools import lru_cache
+from typing import Literal, Self, overload
+
+class HasProps:
+    @overload
+    @classmethod
+    @lru_cache
+    def properties(cls: type[Self], *, _with_props: Literal[False] = False) -> set[str]: ...
+    @overload
+    @classmethod
+    @lru_cache
+    def properties(cls: type[Self], *, _with_props: Literal[True] = True) -> dict[str, object]: ...
+"#,
+    );
+    env
+}
 
 functools_testcase!(
     test_cache_preserves_function_signature,
@@ -84,5 +109,17 @@ assert_type(C.lru_method(c, 1), str)
 assert_type(c.lru_method(1), str)
 c.lru_method("x")  # E: Argument `Literal['x']` is not assignable to parameter `x` with type `int`
 c.lru_method.cache_clear()
+"#,
+);
+
+testcase!(
+    test_lru_cache_preserves_overload_signatures_in_stubs,
+    cached_overload_env(),
+    r#"
+from pkg import HasProps
+from typing import assert_type
+
+assert_type(HasProps.properties(), set[str])
+assert_type(HasProps.properties(_with_props=True), dict[str, object])
 "#,
 );

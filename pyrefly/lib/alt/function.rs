@@ -2129,6 +2129,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Vec1<(TextRange, OverloadType)> {
         ts.mapped(|(range, t, metadata)| {
+            let display_t = t.clone();
+            let mut t = t;
+            let t = loop {
+                match t {
+                    Type::Intersect(intersect) => t = intersect.1,
+                    Type::KwCall(call) => t = call.return_ty,
+                    t => break t,
+                }
+            };
             (
                 range,
                 match t {
@@ -2180,7 +2189,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     format!(
                         "`{}` has type `{}` after decorator application, which is not callable",
                         func,
-                        self.for_display(t)
+                        self.for_display(display_t)
                     ),
                 );
                         OverloadType::Function(Function {
