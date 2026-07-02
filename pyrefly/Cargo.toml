@@ -54,6 +54,7 @@ pyrefly_graph = { path = "../crates/pyrefly_graph" }
 pyrefly_python = { path = "../crates/pyrefly_python" }
 pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
+pyrefly_triton = { path = "../crates/pyrefly_triton" }
 rayon = "1.11.0"
 regex = "1.12.4"
 ruff_annotate_snippets = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
