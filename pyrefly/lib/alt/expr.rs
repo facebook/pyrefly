@@ -783,11 +783,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_unpack(ty)
             }
             Expr::Slice(x) => {
-                let elt_exprs = [x.lower.as_ref(), x.upper.as_ref(), x.step.as_ref()];
-                let elts = elt_exprs
-                    .iter()
-                    .filter_map(|e| e.map(|e| self.expr_infer(e, errors)))
-                    .collect::<Vec<_>>();
+                let none = self.heap.mk_none();
+                let elts = vec![
+                    x.lower
+                        .as_ref()
+                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                    x.upper
+                        .as_ref()
+                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                    x.step
+                        .as_ref()
+                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                ];
                 self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
             Expr::IpyEscapeCommand(x) => {
@@ -2496,6 +2503,61 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // TODO: Handle subscription of intersections properly.
                 base = x.1;
             }
+            let is_builtin_sequence = match &base {
+                Type::Tuple(_) => true,
+                Type::ClassType(cls) | Type::SelfType(cls) => {
+                    cls.is_builtin("list")
+                        || (self.as_tuple(cls).is_some()
+                            && !self.class_overrides_tuple_getitem(cls))
+                }
+                _ => false,
+            };
+
+            if let Expr::Slice(slice_expr) = slice
+                && is_builtin_sequence
+            {
+                let index_dunder = Name::new_static("__index__");
+                for (expr, is_step) in [
+                    (&slice_expr.lower, false),
+                    (&slice_expr.upper, false),
+                    (&slice_expr.step, true),
+                ]
+                    .into_iter()
+                    .filter_map(|(expr, is_step)| expr.as_deref().map(|expr| (expr, is_step)))
+                {
+                    let ty = self.expr_infer(expr, errors);
+                    if is_step
+                        && matches!(&ty, Type::Literal(lit) if lit.value.as_index_i64() == Some(0))
+                    {
+                        return self.error(
+                            errors,
+                            expr.range(),
+                            ErrorKind::BadIndex,
+                            "Slice step cannot be zero".to_owned(),
+                        );
+                    }
+                    let valid = match &ty {
+                        Type::Any(_) | Type::None => true,
+                        Type::Union(u) => u.members.iter().all(|ty| {
+                            matches!(ty, Type::Any(_) | Type::None)
+                                || matches!(ty, Type::Literal(lit) if lit.value.as_index_i64().is_some())
+                                || self.has_attr(ty, &index_dunder)
+                        }),
+                        Type::Literal(lit) if lit.value.as_index_i64().is_some() => true,
+                        _ => self.has_attr(&ty, &index_dunder),
+                    };
+                    if !valid {
+                        return self.error(
+                            errors,
+                            expr.range(),
+                            ErrorKind::BadIndex,
+                            "Slice indices must be integers or have an `__index__` method"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+
             match base {
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
