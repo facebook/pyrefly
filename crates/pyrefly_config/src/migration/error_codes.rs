@@ -23,6 +23,7 @@ impl ConfigOptionMigrater for ErrorCodes {
         mypy_cfg: &Ini,
         pyrefly_cfg: &mut ConfigFile,
     ) -> anyhow::Result<()> {
+        let warn_return_any = util::get_bool_or_default(mypy_cfg, "mypy", "warn_return_any");
         let warn_redundant_casts =
             util::get_bool_or_default(mypy_cfg, "mypy", "warn_redundant_casts");
         let disallow_untyped_defs =
@@ -39,6 +40,7 @@ impl ConfigOptionMigrater for ErrorCodes {
             util::get_bool_or_default(mypy_cfg, "mypy", "allow_redefinitions");
         let strict = util::get_bool_or_default(mypy_cfg, "mypy", "strict");
         let mypy_flags = MypyErrorConfigFlags {
+            warn_return_any,
             warn_redundant_casts,
             disallow_untyped_defs,
             disallow_incomplete_defs,

@@ -267,6 +267,14 @@ pub enum ErrorKind {
     NameMismatch,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
+    /// Umbrella error kind for cases where `Any` is returned from a function with a concrete return type.
+    NoAnyReturn,
+    /// An explicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnExplicit,
+    /// An implicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnImplicit,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
     /// The SCC fixpoint iteration did not converge within the maximum number of
@@ -437,6 +445,9 @@ impl ErrorKind {
             | ErrorKind::ImplicitAnyEmptyContainer
             | ErrorKind::ImplicitAnyParameter
             | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
+            ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
+                Some(ErrorKind::NoAnyReturn)
+            }
             _ => None,
         }
     }
@@ -481,6 +492,9 @@ impl ErrorKind {
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::NameMismatch => Severity::Warn,
+            ErrorKind::NoAnyReturn => Severity::Ignore,
+            ErrorKind::NoAnyReturnExplicit => Severity::Ignore,
+            ErrorKind::NoAnyReturnImplicit => Severity::Ignore,
             ErrorKind::NonExhaustiveMatch => Severity::Warn,
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,

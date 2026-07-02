@@ -118,6 +118,7 @@ pub fn expand_config_file_dir(path: &str) -> String {
 
 #[derive(Default)]
 pub struct MypyErrorConfigFlags {
+    pub warn_return_any: bool,
     pub warn_redundant_casts: bool,
     pub disallow_untyped_defs: bool,
     pub disallow_incomplete_defs: bool,
@@ -143,6 +144,7 @@ pub fn make_error_config(
         errors.insert(error_code, Severity::Error);
     }
     if let Some(MypyErrorConfigFlags {
+        warn_return_any,
         warn_redundant_casts,
         disallow_untyped_defs,
         disallow_incomplete_defs,
@@ -154,6 +156,9 @@ pub fn make_error_config(
     }) = mypy_error_config_flags
     {
         // These severities take precedence over enable/disable
+        if warn_return_any {
+            errors.insert(ErrorKind::NoAnyReturn.to_name().to_owned(), Severity::Error);
+        }
         if warn_redundant_casts || strict {
             errors.insert(
                 ErrorKind::RedundantCast.to_name().to_owned(),
@@ -243,6 +248,7 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
             }
             "deprecated" => add(severity, ErrorKind::Deprecated),
             "name-match" => add(severity, ErrorKind::NameMismatch),
+            "no-any-return" => add(severity, ErrorKind::NoAnyReturn),
             _ => {}
         }
     }

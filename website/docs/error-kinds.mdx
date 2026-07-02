@@ -1140,6 +1140,60 @@ class Ex:
 del Ex.meaning  # no-access
 ```
 
+## no-any-return
+
+Default severity: `ignore`
+
+Umbrella error code for cases where a returned expression is `Any` in a function declared to return a concrete type. Enabling this catches places where `Any` silently bypasses the function's declared return type.
+
+Concrete diagnostics are emitted under one of the more specific sub-kinds:
+- [`no-any-return-explicit`](#no-any-return-explicit)
+- [`no-any-return-implicit`](#no-any-return-implicit)
+
+## no-any-return-explicit
+
+Default severity: `ignore`
+
+The returned expression has type `Any`, but the function is declared to return a concrete type. The returned `Any` originates from an explicit annotation or other introduction into the type system.
+
+This is a sub-kind of [no-any-return](#no-any-return): suppressing `no-any-return` also suppresses this error.
+
+```python
+from typing import Any
+
+def f() -> int:
+    x: Any = 3
+    return x  # no-any-return-explicit: Returning Any from function declared to return "int"
+
+# Fix: provide an explicit annotation so the type is known precisely.
+def g() -> int:
+    x: int = 3
+    return x
+```
+
+## no-any-return-implicit
+
+Default severity: `ignore`
+
+The returned expression was inferred as `Any` (e.g., from an untyped function or undefined variable), but the function's return annotation is a concrete type. This usually indicates that adding annotations would restore type precision.
+
+This is a sub-kind of [no-any-return](#no-any-return): suppressing `no-any-return` also suppresses this error.
+
+```python
+def get_value(x):  # no annotations, return type is Any
+    return x
+
+def f() -> int:
+    return get_value(3)  # no-any-return-implicit: Returning implicit Any from function declared to return "int"
+
+# Fix: annotate the source function.
+def get_typed_value(x: int) -> int:
+    return x
+
+def g() -> int:
+    return get_typed_value(3)  # OK
+```
+
 ## no-matching-overload
 
 This error is similar to the other bad function call errors, but specifically for cases where a function decorated with `@overload` is called with arguments that do not match any of the overloaded variations.
