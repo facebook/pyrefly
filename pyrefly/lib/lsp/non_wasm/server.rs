@@ -5089,14 +5089,24 @@ impl Server {
                     );
 
                     let text_edits = if hint_data.insertable {
-                        Some(vec![TextEdit {
-                            range: Range::new(position, position),
-                            new_text: label_parts.iter().map(|(text, _)| text.as_str()).collect(),
-                        }])
+                        hint_data.text_edit.map(|text_edit| {
+                            let mut edits = Vec::with_capacity(1 + hint_data.import_edits.len());
+                            edits.push(TextEdit {
+                                range: Range::new(position, position),
+                                new_text: text_edit,
+                            });
+                            for (offset, import_text) in hint_data.import_edits {
+                                let insert_position = info.to_lsp_position(offset);
+                                edits.push(TextEdit {
+                                    range: Range::new(insert_position, insert_position),
+                                    new_text: import_text,
+                                });
+                            }
+                            edits
+                        })
                     } else {
                         None
                     };
-
                     Some(InlayHint {
                         position,
                         label,
