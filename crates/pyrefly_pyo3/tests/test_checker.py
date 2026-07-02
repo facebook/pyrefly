@@ -22,8 +22,8 @@ _CLI = os.environ.get(
 
 def _avg_ms(iterations, call):
     start = time.perf_counter()
-    for _ in range(iterations):
-        call()
+    for i in range(iterations):
+        call(i)
     return (time.perf_counter() - start) / iterations * 1000
 
 
@@ -34,12 +34,12 @@ def benchmark(iterations=50):
         (root / "helper.py").write_text(_HELPER)
         (root / "main.py").write_text(_SNIPPET)
 
-        old = _avg_ms(iterations, lambda: subprocess.run(
+        old = _avg_ms(iterations, lambda i: subprocess.run(
             [_CLI, "check", str(root / "main.py")], cwd=root, capture_output=True))
 
         checker = pyrefly_api.Checker(project_root=str(root))
-        checker.check(_SNIPPET) # warm
-        new = _avg_ms(iterations, lambda: checker.check(_SNIPPET))
+        checker.check(_SNIPPET) # warm; try to make it random
+        new = _avg_ms(iterations, lambda i: checker.check(f"{_SNIPPET}  # {i}"))
 
     print(f"iter: {iterations}")
     print(f"subprocess : {old:.3f} ms/call")
