@@ -121,6 +121,7 @@ pub struct TestEnv {
     string_as_iterable_warning: bool,
     strict_callable_subtyping: bool,
     spec_compliant_overloads: bool,
+    treat_all_caps_as_final: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
@@ -155,6 +156,7 @@ impl TestEnv {
             string_as_iterable_warning: false,
             strict_callable_subtyping: false,
             spec_compliant_overloads: false,
+            treat_all_caps_as_final: true,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -413,6 +415,7 @@ impl TestEnv {
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
+        config.root.treat_all_caps_as_final = Some(self.treat_all_caps_as_final);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

@@ -311,6 +311,10 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_compliant_overloads: Option<bool>,
 
+    /// Whether to treat module-level ALL_CAPS names as final after their first assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treat_all_caps_as_final: Option<bool>,
+
     /// Any unknown config items
     #[serde(default, flatten)]
     pub(crate) extras: ExtraConfigs,
@@ -418,6 +422,10 @@ impl ConfigBase {
 
     pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
         base.spec_compliant_overloads
+    }
+
+    pub fn get_treat_all_caps_as_final(base: &Self) -> Option<bool> {
+        base.treat_all_caps_as_final
     }
 }
 
