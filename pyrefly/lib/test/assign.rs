@@ -952,19 +952,34 @@ assert_type(y, str)
 
 // https://github.com/facebook/pyrefly/issues/2928
 testcase!(
-    bug = "Should detect too many values when unpacking a string literal",
     test_unpack_string_too_many,
     r#"
-a, b = "abc"
+a, b = "abc"  # E: Cannot unpack
+"#,
+);
+
+testcase!(
+    test_unpack_string_exact_length,
+    r#"
+a, b = "12"
+"#,
+);
+
+testcase!(
+    test_unpack_string_splat,
+    r#"
+x, *y = "123"
+x, *y = "12"
+x, *y = "1"
+x, *y = ""  # E: Cannot unpack
 "#,
 );
 
 // https://github.com/facebook/pyrefly/issues/2927
 testcase!(
-    bug = "Should detect too few values when unpacking a single-char string",
     test_unpack_string_too_few,
     r#"
-a, b = "x"
+a, b = "x"  # E: Cannot unpack
 "#,
 );
 
@@ -1042,6 +1057,29 @@ xs: list[Any] = []
 y: int
 for y in xs:
     assert_type(y, int)
+"#,
+);
+
+testcase!(
+    test_for_loop_unpack_string,
+    r#"
+for k, v in {"x": 1}:  # E: Cannot unpack
+    pass
+
+xs: list[str] = []
+for a, b in xs:  # E: Cannot unpack
+    pass
+"#,
+);
+
+testcase!(
+    test_for_loop_unpack_parenthesized_tuple_annotation,
+    r#"
+from __future__ import annotations
+
+x: list[(str, str)] = []
+for a, b in x:
+    pass
 "#,
 );
 

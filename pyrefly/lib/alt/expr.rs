@@ -2499,8 +2499,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match base {
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
-                        let tys = xs
-                            .map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
+                        let tys = self.type_arguments_for_class_subscript(slice, errors);
                         self.specialize_forall(*forall, tys, range, errors)
                     } else {
                         let name = forall.body.name();
@@ -2585,7 +2584,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassDef(cls) => self.class_subscript_infer(&cls, slice, xs, range, errors),
                 Type::Type(f) if matches!(&*f, Type::Quantified(q) if q.is_type_var()) => {
                     // Repeated match because pattern guards cannot move out of bindings.
-                    let Type::Quantified(quantified) = *f else { unreachable!("guarded by matches! above") };
+                    let Type::Quantified(quantified) = *f else {
+                        unreachable!("guarded by matches! above")
+                    };
                     let quantified = *quantified;
                     let base_display_ty =
                         self.heap.mk_type(self.heap.mk_quantified(quantified.clone()));
@@ -2856,6 +2857,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             }
         })
+    }
+
+    fn type_arguments_for_class_subscript(
+        &self,
+        slice: &Expr,
+        errors: &ErrorCollector,
+    ) -> Vec<Type> {
+        match slice {
+            Expr::Tuple(tuple) if tuple.parenthesized => {
+                let ty = self.apply_special_form(SpecialForm::Tuple, slice, slice.range(), errors);
+                vec![self.untype(ty, slice.range(), errors)]
+            }
+            _ => Ast::unpack_slice(slice)
+                .map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors)),
+        }
     }
 
     /// Handle tensor indexing operations
@@ -3569,7 +3585,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(result) = class_getitem_result.or(metaclass_getitem_result) {
             result
         } else {
-            let targs = self.parse_class_type_args(cls, xs, errors);
+            let targs = if self.solver().tensor_shapes {
+                self.parse_class_type_args(cls, xs, errors)
+            } else {
+                self.type_arguments_for_class_subscript(slice, errors)
+            };
             self.heap
                 .mk_type_of(self.specialize(cls, targs, range, errors))
         }

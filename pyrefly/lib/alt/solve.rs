@@ -265,6 +265,11 @@ pub enum Iterable {
     OfTypeVarTuple(Quantified),
 }
 
+enum StringUnpackSource {
+    KnownLen(usize),
+    UnknownLen,
+}
+
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Solve a `BindingLegacyTypeParam`, producing a `LegacyTypeParameterLookup` that tells the
     /// caller whether the name is a type parameter and, if so, which `Quantified` to use.
@@ -928,6 +933,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
                 vec![Iterable::OfType(ty)]
             }
+        }
+    }
+
+    fn string_unpack_source(&self, ty: &Type) -> Option<StringUnpackSource> {
+        match ty {
+            Type::ClassType(cls) if cls == self.stdlib.str() => {
+                Some(StringUnpackSource::UnknownLen)
+            }
+            Type::Literal(lit) => match &lit.value {
+                Lit::Str(s) => Some(StringUnpackSource::KnownLen(s.chars().count())),
+                _ => None,
+            },
+            Type::LiteralString(_) => Some(StringUnpackSource::UnknownLen),
+            _ => None,
         }
     }
 
@@ -2270,6 +2289,40 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Iterable is `Never`: producing expression cannot complete, so this
                 // unpacking is unreachable. Skip to avoid a spurious `NotIterable`.
                 if iterable_ty.ty().is_never() {
+                    return Arc::new(EmptyAnswer);
+                }
+                if let Some(error) =
+                    self.string_unpack_source(iterable_ty.ty())
+                        .and_then(|string| match (string, expect) {
+                            (StringUnpackSource::KnownLen(len), SizeExpectation::Eq(n))
+                                if len != *n =>
+                            {
+                                Some(format!(
+                                    "Cannot unpack {} (of size {}) into {}",
+                                    iterable_ty,
+                                    len,
+                                    expect.message(),
+                                ))
+                            }
+                            (StringUnpackSource::KnownLen(len), SizeExpectation::Ge(n))
+                                if len < *n =>
+                            {
+                                Some(format!(
+                                    "Cannot unpack {} (of size {}) into {}",
+                                    iterable_ty,
+                                    len,
+                                    expect.message(),
+                                ))
+                            }
+                            (StringUnpackSource::KnownLen(_), _) => None,
+                            (StringUnpackSource::UnknownLen, _) => Some(format!(
+                                "Cannot unpack {} into {}",
+                                iterable_ty,
+                                expect.message(),
+                            )),
+                        })
+                {
+                    self.error(errors, *range, ErrorKind::BadUnpacking, error);
                     return Arc::new(EmptyAnswer);
                 }
                 let iterables = self.iterate(iterable_ty.ty(), *range, errors, None);
