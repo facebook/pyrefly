@@ -336,9 +336,10 @@ fn trace_export_origin(
         }
 
         match transaction.get_exports(&cur_handle).get(&cur_name) {
-            Some(ExportLocation::ThisModule(_)) | None => {
+            Some(ExportLocation::ThisModule(_)) => {
                 return Some(format!("{module_name}.{cur_name}"));
             }
+            None => return None,
             Some(ExportLocation::OtherModule(other_module, alias)) => {
                 if let Some(alias) = alias {
                     cur_name = alias.clone();
@@ -2877,6 +2878,22 @@ def g(x: int) -> int:
         assert!(fqns.contains("pkg._internal.bar"));
         assert!(!fqns.contains("pkg._internal.foo"));
         assert!(!fqns.contains("pkg.baz"));
+
+        // A re-export of a name its origin module doesn't define keeps the
+        // local FQN but traces to no origin (github.com/facebook/pyrefly/issues/4025)
+        let fqns = compute(
+            &[
+                (
+                    "pkg",
+                    "pkg/__init__.py",
+                    "from pkg._internal import ghost\n__all__ = [\"ghost\"]\n",
+                ),
+                ("pkg._internal", "pkg/_internal.py", "x: int = 1\n"),
+            ],
+            &["pkg", "pkg._internal"],
+        );
+        assert!(fqns.contains("pkg.ghost"));
+        assert!(!fqns.contains("pkg._internal.ghost"));
     }
 
     /// Dataclass and NamedTuple fields are IMPLICIT; methods on those classes count normally.
