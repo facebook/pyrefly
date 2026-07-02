@@ -489,6 +489,19 @@ def f(x: object) -> object:
     return x
 ```
 
+## helpful-string
+
+Default severity: `ignore`
+
+This diagnostic catches values in f-strings whose default string representation is unlikely to be useful in a user-facing message, such as `None` or an object whose class does not define a custom `__str__`, `__repr__`, or `__format__`.
+
+```python
+class User: ...
+
+f"{User()}"  # helpful-string
+f"{None}"    # helpful-string
+```
+
 ## implicit-abstract-class
 
 Default severity: `ignore`

@@ -46,6 +46,7 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
+use ruff_python_ast::ConversionFlag;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
@@ -56,7 +57,11 @@ use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprTuple;
+use ruff_python_ast::FString;
+use ruff_python_ast::FStringPart;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::InterpolatedElement;
+use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
@@ -214,6 +219,12 @@ enum ConditionRedundantReason {
     Class(Name),
     /// Instance of a class that defines neither `__bool__` nor `__len__`, so always truthy
     InstanceAlwaysTruthy(Name),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HelpfulStringReason {
+    BadBuiltin,
+    MissingStringMethod,
 }
 
 impl ConditionRedundantReason {
@@ -735,12 +746,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::FString(x) => {
                 let mut all_literal_strings = true;
-                x.visit(&mut |x| {
-                    let fstring_expr_ty = self.expr_infer(x, errors);
-                    if !fstring_expr_ty.is_literal_string() {
-                        all_literal_strings = false;
-                    }
-                });
+                for part in &x.value {
+                    self.fstring_part_infer(part, &mut all_literal_strings, errors);
+                }
                 match Lit::from_fstring(x) {
                     Some(lit) => lit.to_implicit_type(),
                     _ if all_literal_strings => self.heap.mk_literal_string(LitStyle::Implicit),
@@ -3566,6 +3574,159 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         self.heap
             .mk_type_of(self.specialize(cls, vec![target_ty], range, errors))
+    }
+
+    fn fstring_part_infer(
+        &self,
+        part: &FStringPart,
+        all_literal_strings: &mut bool,
+        errors: &ErrorCollector,
+    ) {
+        match part {
+            FStringPart::Literal(_) => {}
+            FStringPart::FString(fstring) => {
+                self.fstring_infer(fstring, all_literal_strings, errors)
+            }
+        }
+    }
+
+    fn fstring_infer(
+        &self,
+        fstring: &FString,
+        all_literal_strings: &mut bool,
+        errors: &ErrorCollector,
+    ) {
+        for element in &fstring.elements {
+            let InterpolatedStringElement::Interpolation(interpolation) = element else {
+                continue;
+            };
+            self.fstring_interpolation_infer(interpolation, all_literal_strings, errors);
+        }
+    }
+
+    fn fstring_interpolation_infer(
+        &self,
+        interpolation: &InterpolatedElement,
+        all_literal_strings: &mut bool,
+        errors: &ErrorCollector,
+    ) {
+        let ty = self.expr_infer(&interpolation.expression, errors);
+        if !ty.is_literal_string() {
+            *all_literal_strings = false;
+        }
+        if interpolation.conversion == ConversionFlag::None {
+            self.check_helpful_string(&ty, interpolation.expression.range(), errors);
+        }
+        if let Some(format_spec) = &interpolation.format_spec {
+            for element in &format_spec.elements {
+                let InterpolatedStringElement::Interpolation(interpolation) = element else {
+                    continue;
+                };
+                self.fstring_interpolation_infer(interpolation, all_literal_strings, errors);
+            }
+        }
+    }
+
+    fn check_helpful_string(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
+        if let Some(reason) = self.get_helpful_string_reason(ty) {
+            let type_display = self.for_display(ty.clone());
+            let msg = match reason {
+                HelpfulStringReason::BadBuiltin => {
+                    format!("The string for `{type_display}` isn't helpful in a user-facing string")
+                }
+                HelpfulStringReason::MissingStringMethod => {
+                    format!(
+                        "The type `{type_display}` doesn't define a custom `__format__`, `__str__`, or `__repr__` method"
+                    )
+                }
+            };
+            self.error(errors, range, ErrorKind::HelpfulString, msg);
+        }
+    }
+
+    fn get_helpful_string_reason(&self, ty: &Type) -> Option<HelpfulStringReason> {
+        match ty {
+            Type::Any(_) | Type::Never(_) => None,
+            Type::Literal(_) | Type::LiteralString(_) | Type::Tuple(_) | Type::TypedDict(_) => None,
+            Type::None => Some(HelpfulStringReason::BadBuiltin),
+            Type::Union(union) => union
+                .members
+                .iter()
+                .find_map(|member| self.get_helpful_string_reason(member)),
+            Type::ClassType(class_type) => {
+                self.get_class_helpful_string_reason(class_type.class_object())
+            }
+            Type::ClassDef(cls) => {
+                if cls.module_name().as_str() == "builtins" {
+                    None
+                } else {
+                    Some(HelpfulStringReason::MissingStringMethod)
+                }
+            }
+            Type::Function(_) | Type::BoundMethod(_) | Type::Callable(_) | Type::Overload(_) => {
+                Some(HelpfulStringReason::MissingStringMethod)
+            }
+            _ => None,
+        }
+    }
+
+    fn get_class_helpful_string_reason(&self, cls: &Class) -> Option<HelpfulStringReason> {
+        let metadata = self.get_metadata_for_class(cls);
+        if metadata.dataclass_metadata().is_some() {
+            return None;
+        }
+        if cls.is_builtin("object") || self.class_has_bad_builtin_string(cls) {
+            return Some(HelpfulStringReason::BadBuiltin);
+        }
+        if self.class_has_custom_string_method(cls) {
+            return None;
+        }
+        if cls.module_name().as_str() == "builtins" || self.class_has_builtin_base(cls) {
+            None
+        } else {
+            Some(HelpfulStringReason::MissingStringMethod)
+        }
+    }
+
+    fn class_has_custom_string_method(&self, cls: &Class) -> bool {
+        [cls]
+            .into_iter()
+            .chain(
+                self.get_mro_for_class(cls)
+                    .ancestors_no_object()
+                    .iter()
+                    .map(|ancestor| ancestor.class_object()),
+            )
+            .any(|cls| {
+                [dunder::FORMAT, dunder::STR, dunder::REPR]
+                    .iter()
+                    .any(|name| self.get_field_from_current_class_only(cls, name).is_some())
+            })
+    }
+
+    fn class_has_bad_builtin_string(&self, cls: &Class) -> bool {
+        [cls]
+            .into_iter()
+            .chain(
+                self.get_mro_for_class(cls)
+                    .ancestors_no_object()
+                    .iter()
+                    .map(|ancestor| ancestor.class_object()),
+            )
+            .any(|cls| {
+                cls.module_name().as_str() == "builtins"
+                    && matches!(
+                        cls.name().as_str(),
+                        "enumerate" | "filter" | "map" | "object" | "reversed" | "super" | "zip"
+                    )
+            })
+    }
+
+    fn class_has_builtin_base(&self, cls: &Class) -> bool {
+        self.get_mro_for_class(cls)
+            .ancestors_no_object()
+            .iter()
+            .any(|ancestor| ancestor.class_object().module_name().as_str() == "builtins")
     }
 
     fn class_subscript_infer(
