@@ -6282,7 +6282,10 @@ def foo():
             vec![
                 (
                     "4:3-6:13",
-                    define_callees(vec![create_call_target("test.inner", TargetType::Function)]),
+                    define_callees(vec![
+                        create_call_target("test.inner", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
                 ),
                 (
                     "7:3-7:10",
