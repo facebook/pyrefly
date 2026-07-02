@@ -43,6 +43,7 @@ use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
 use crate::binding::pydantic::FROZEN_DEFAULT;
+use crate::binding::pydantic::GET_PYDANTIC_CORE_SCHEMA;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
@@ -557,19 +558,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
+            let ignore_errors = self.error_swallower();
             let metadata_items = self.get_annotated_metadata(
                 annotation_expr,
                 TypeFormContext::ClassVarAnnotation,
-                &self.error_swallower(),
+                &ignore_errors,
             );
-            // Look through metadata items and find a Field(...) call, then extract its keywords
+            let mut field_flags = None;
+            let mut has_custom_schema = false;
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
                     && let Some(keywords) = self.compute_dataclass_field_initialization(call, dm)
                 {
-                    return Some(keywords);
+                    field_flags = Some(keywords);
+                }
+                let metadata_ty = self.expr_infer(metadata_item, &ignore_errors);
+                if self.has_static_attr(&metadata_ty, &GET_PYDANTIC_CORE_SCHEMA) {
+                    has_custom_schema = true;
                 }
             }
+            if has_custom_schema {
+                let mut flags = field_flags.unwrap_or_else(DataclassFieldKeywords::new);
+                flags.converter_param = Some(self.heap.mk_any_explicit());
+                return Some(flags);
+            }
+            return field_flags;
         }
         None
     }
