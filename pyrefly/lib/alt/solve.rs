@@ -5870,7 +5870,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     unreachable!("guarded by matches! above")
                 };
                 let mut aliased_type = self.untype_opt(ta.as_type(), range, errors)?;
-                if let Type::Union(f) = &mut aliased_type {
+                if let Type::Union(f) = &mut aliased_type
+                    && f.display_name.is_none()
+                {
                     f.display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
                 Some(aliased_type)
