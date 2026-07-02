@@ -175,6 +175,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn is_pydantic_strict_type_alias(&self, ty: &Type) -> bool {
+        if let Type::TypeAlias(ta) = ty {
+            let alias = self.get_type_alias(ta);
+            if let Type::Annotated(_, metadata) = alias.as_type() {
+                return metadata
+                    .iter()
+                    .any(|metadata| self.is_pydantic_strict_metadata(metadata));
+            }
+        }
+        false
+    }
+
     /// Helper function to find inherited keyword values from parent pydantic model metadata.
     /// Only inherits from parents that are themselves pydantic models, not from arbitrary
     /// dataclass parents whose config values (e.g. strict) may have different defaults.
@@ -557,6 +569,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
+            let mut keywords = None;
             let metadata_items = self.get_annotated_metadata(
                 annotation_expr,
                 TypeFormContext::ClassVarAnnotation,
@@ -565,11 +578,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
-                    && let Some(keywords) = self.compute_dataclass_field_initialization(call, dm)
+                    && let Some(field_keywords) =
+                        self.compute_dataclass_field_initialization(call, dm)
                 {
-                    return Some(keywords);
+                    keywords = Some(field_keywords);
+                    break;
                 }
             }
+            let errors = self.error_swallower();
+            let has_strict_metadata = metadata_items.iter().any(|metadata| {
+                self.is_pydantic_strict_metadata(&self.expr_infer(metadata, &errors))
+            }) || self
+                .is_pydantic_strict_type_alias(&self.expr_infer(annotation_expr, &errors));
+            if has_strict_metadata
+                && keywords
+                    .as_ref()
+                    .is_none_or(|keywords| keywords.strict.is_none())
+            {
+                keywords
+                    .get_or_insert_with(DataclassFieldKeywords::new)
+                    .strict = Some(true);
+            }
+            return keywords;
         }
         None
     }
