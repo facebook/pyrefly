@@ -194,14 +194,7 @@ fn merge_overloads(functions: &mut Vec<Function>) {
 
         for &idx in &indices {
             let func = &functions[idx];
-            let short_name = func.name.rsplit('.').next().unwrap_or(&func.name);
-            let has_annotation = func.return_annotation.is_some();
-            let ret = if !has_annotation && is_implicit_dunder_return(short_name) {
-                SlotRank::Skip
-            } else {
-                SlotRank::classify(has_annotation, func.is_return_type_known)
-            };
-            return_rank = return_rank.max(ret);
+            return_rank = return_rank.max(func.return_rank);
 
             for param in &func.parameters {
                 if let Some(key) = &param.merge_key {
@@ -772,23 +765,20 @@ fn parse_functions(
                 .and_then(|t| t.property_metadata().map(|m| m.role.clone()));
             let is_property_deleter = matches!(property_role, Some(PropertyRole::DeleterDecorator));
 
-            // Implicit dunder returns (e.g. __init__ → None) are always
-            // excluded from coverage, even when explicitly annotated.
-            //
-            // Property setters/deleters have a trivial `-> None` return that
-            // is not a meaningful typable, so skip it like implicit returns.
+            // Implicit dunder returns (e.g. __init__ → None) and property setter/deleter
+            // returns are trivial, so they are excluded even when explicitly annotated.
             let skip_return = is_property_deleter
                 || matches!(
                     property_role,
                     Some(PropertyRole::Setter | PropertyRole::SetterDecorator)
                 )
                 || (fun.class_key.is_some() && is_implicit_dunder_return(fun.def.name.as_str()));
-            let return_slot = if skip_return {
-                SlotCounts::default()
+            let return_rank = if skip_return {
+                SlotRank::Skip
             } else {
-                SlotRank::classify(return_annotation.is_some(), is_return_type_known).into()
+                SlotRank::classify(return_annotation.is_some(), is_return_type_known)
             };
-            let mut func_slots = return_slot;
+            let mut func_slots = SlotCounts::from(return_rank);
             let mut n_params = 0usize;
             let mut non_self_index = 0usize;
 
@@ -862,7 +852,7 @@ fn parse_functions(
             functions.push(Function {
                 name: func_name,
                 return_annotation,
-                is_return_type_known,
+                return_rank,
                 parameters,
                 is_type_known,
                 property_role,
@@ -901,7 +891,7 @@ fn parse_functions(
                     location,
                     range,
                     return_annotation: target_func.return_annotation.clone(),
-                    is_return_type_known: target_func.is_return_type_known,
+                    return_rank: target_func.return_rank,
                     parameters: target_func.parameters.clone(),
                     is_type_known: target_func.is_type_known,
                     property_role: target_func.property_role.clone(),
@@ -2302,7 +2292,7 @@ mod tests {
                 } else {
                     None
                 },
-                is_return_type_known: has_return,
+                return_rank: SlotRank::classify(has_return, has_return),
                 parameters: params
                     .into_iter()
                     .enumerate()

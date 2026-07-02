@@ -173,8 +173,8 @@ pub struct ReportSuppression {
 pub struct Function {
     pub name: String,
     pub return_annotation: Option<String>,
-    /// Whether the return type contains no `Any`.
-    pub is_return_type_known: bool,
+    #[serde(skip)]
+    pub return_rank: SlotRank,
     pub parameters: Vec<Parameter>,
     pub is_type_known: bool,
     /// Property role if this function is a property accessor, `None` otherwise.
