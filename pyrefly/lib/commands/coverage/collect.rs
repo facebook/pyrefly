@@ -1584,8 +1584,16 @@ fn is_untyped(slots: &SlotCounts, strict: bool) -> bool {
     slots.n_untyped > 0 || (strict && slots.n_any > 0)
 }
 
-fn untyped_error(module: &Module, slots: &SlotCounts, range: TextRange, name: &str) -> Error {
-    let (kind, desc) = if slots.n_untyped == slots.n_typable {
+fn untyped_error(
+    module: &Module,
+    slots: &SlotCounts,
+    strict: bool,
+    range: TextRange,
+    name: &str,
+) -> Error {
+    // Under --strict, `Any`-annotated slots also count as untyped (gh-4024).
+    let n_untyped = slots.n_untyped + if strict { slots.n_any } else { 0 };
+    let (kind, desc) = if n_untyped == slots.n_typable {
         (ErrorKind::CoverageMissing, "is untyped")
     } else {
         (ErrorKind::CoveragePartial, "is not fully typed")
@@ -1617,12 +1625,20 @@ fn collect_untyped_errors(
             && is_public(&func.name)
             && (func.property_role.is_none() || seen_properties.insert(&func.name))
         {
-            errors.push(untyped_error(module, &func.slots, func.range, &func.name));
+            errors.push(untyped_error(
+                module,
+                &func.slots,
+                strict,
+                func.range,
+                &func.name,
+            ));
         }
     }
     for var in variables {
         if is_untyped(&var.slots, strict) && is_public(&var.name) {
-            errors.push(untyped_error(module, &var.slots, var.range, &var.name));
+            errors.push(untyped_error(
+                module, &var.slots, strict, var.range, &var.name,
+            ));
         }
     }
 }
@@ -2239,6 +2255,44 @@ mod tests {
                 assert_eq!(want, got, "check/report desync in {file} (strict={strict})");
             }
         }
+    }
+
+    /// gh-4024: under `--strict` a fully-`Any` symbol has no typed slots left,
+    /// so it must be reported as coverage-missing, not coverage-partial.
+    #[test]
+    fn test_untyped_error_kinds() {
+        let (p, _) = parse_test_module("any_annotations.py", TestEnv::new());
+        let kinds = |strict: bool| {
+            let mut errors = Vec::new();
+            collect_untyped_errors(
+                &mut errors,
+                &p.module,
+                &p.functions,
+                &p.variables,
+                strict,
+                None,
+            );
+            errors
+                .iter()
+                .map(|e| {
+                    (
+                        e.msg_header().split('`').nth(1).unwrap().to_owned(),
+                        e.error_kind(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Non-strict: every annotated slot counts as covered, so nothing is reported.
+        assert_eq!(kinds(false), vec![]);
+        // Strict: fully-`Any` symbols are missing; mixed `Any`/concrete is partial.
+        assert_eq!(
+            kinds(true),
+            vec![
+                ("test.func_any".to_owned(), ErrorKind::CoverageMissing),
+                ("test.func_mixed".to_owned(), ErrorKind::CoveragePartial),
+                ("test.x".to_owned(), ErrorKind::CoverageMissing),
+            ]
+        );
     }
 
     #[test]
