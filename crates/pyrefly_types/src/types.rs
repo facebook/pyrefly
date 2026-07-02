@@ -1771,6 +1771,8 @@ impl Type {
                     }
                 }
             }
+            Type::Intersect(intersect) => intersect.1.visit_toplevel_callable(f),
+            Type::KwCall(call) => call.return_ty.visit_toplevel_callable(f),
             _ => {}
         }
     }
@@ -1806,6 +1808,8 @@ impl Type {
                     }
                 }
             }
+            Type::Intersect(intersect) => intersect.1.transform_toplevel_callable(f),
+            Type::KwCall(call) => call.return_ty.transform_toplevel_callable(f),
             _ => {}
         }
     }
