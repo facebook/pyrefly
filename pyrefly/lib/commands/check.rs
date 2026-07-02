@@ -437,7 +437,7 @@ fn write_errors_to_file(
     }
 }
 
-fn write_errors_to_console(
+pub(crate) fn write_errors_to_console(
     format: OutputFormat,
     relative_to: &Path,
     errors: &[Error],
@@ -720,7 +720,7 @@ pub struct Handles {
 }
 
 impl Handles {
-    pub fn new(files: Vec<PathBuf>) -> Self {
+    pub fn new(files: impl IntoIterator<Item = PathBuf>) -> Self {
         let mut handles = Self {
             path_data: HashSet::new(),
         };
@@ -728,6 +728,14 @@ impl Handles {
             handles.path_data.insert(ModulePath::filesystem(file));
         }
         handles
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.path_data.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.path_data.len()
     }
 
     pub fn all(
@@ -939,14 +947,15 @@ impl CheckArgs {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>, CheckResult)> {
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         timings.list_files = list_files_start.elapsed();
+        let handles = Handles::new(expanded_file_list);
         debug!(
             "Checking {} files (listing took {})",
-            expanded_file_list.len(),
+            handles.len(),
             Timings::show(timings.list_files),
         );
-        if expanded_file_list.is_empty() {
+        if handles.is_empty() {
             return Ok((
                 CommandExitStatus::Success,
                 Vec::new(),
@@ -958,7 +967,6 @@ impl CheckArgs {
         }
 
         let state = Forgetter::new(State::new(config_finder, thread_count), true);
-        let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
             state.as_ref().new_transaction(require_levels.default, None),
@@ -1059,7 +1067,7 @@ impl CheckArgs {
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder, thread_count);

@@ -1510,3 +1510,13 @@ def after_func() -> None: ...
 schedule(1000, after_func)
 "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3912
+testcase!(
+    test_callable_ellipsis_return,
+    r#"
+from typing import Callable, reveal_type
+def f(x: Callable[..., ...]):  # E: `...` is not a valid return type
+    reveal_type(x)  # E: revealed type: (...) -> Unknown
+"#,
+);

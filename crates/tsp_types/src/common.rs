@@ -155,6 +155,16 @@ impl GetTypeArg {
             GetTypeArg::Node(n) => n.range.start.clone(),
         }
     }
+
+    /// Extract the end position of the range. Together with `position()` this
+    /// recovers the full requested node range, which `getComputedType` uses to
+    /// distinguish a whole call expression from its callee identifier.
+    pub fn end_position(&self) -> tsp::Position {
+        match self {
+            GetTypeArg::Declaration { node, .. } => node.range.end.clone(),
+            GetTypeArg::Node(n) => n.range.end.clone(),
+        }
+    }
 }
 
 /// Parameters for getComputedType, getDeclaredType, and getExpectedType
@@ -180,6 +190,11 @@ impl GetTypeParams {
     /// Convenience: extract the start position from the arg's range.
     pub fn position(&self) -> tsp::Position {
         self.arg.position()
+    }
+
+    /// Convenience: extract the end position from the arg's range.
+    pub fn end_position(&self) -> tsp::Position {
+        self.arg.end_position()
     }
 }
 

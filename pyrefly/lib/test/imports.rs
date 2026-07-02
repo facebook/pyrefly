@@ -289,6 +289,82 @@ import foo
 "#,
 );
 
+fn env_main_guard() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+x = 1
+z = 0
+if __name__ == "__main__":
+    y = 2
+    z = 3
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_main_guard_not_exported,
+    env_main_guard(),
+    r#"
+from foo import x
+from foo import y  # E: Could not import `y` from `foo`
+"#,
+);
+
+testcase!(
+    test_main_guard_not_in_wildcard,
+    env_main_guard(),
+    r#"
+from foo import *
+x
+y  # E: Could not find name `y`
+"#,
+);
+
+// `z` is defined both at module level and inside the main guard. The
+// `main_guard_only &= in_main_guard` merge must keep it importable via both
+// direct and wildcard import. Regression guard against the `&=` becoming `=`.
+testcase!(
+    test_main_guard_merge_keeps_export,
+    env_main_guard(),
+    r#"
+from foo import z
+from foo import *
+z
+"#,
+);
+
+// `__all__` is defined at module level but mutated inside the main guard.
+// The guard-only `append`/`extend` mutations must not leak into the wildcard
+// surface, since they don't run at import time.
+fn env_main_guard_dunder_all_mutation() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+x = 1
+y = 2
+__all__ = ["x"]
+if __name__ == "__main__":
+    __all__.append("y")
+    __all__.extend(["y"])
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_main_guard_dunder_all_mutation_not_in_wildcard,
+    env_main_guard_dunder_all_mutation(),
+    r#"
+from foo import *
+x
+y  # E: Could not find name `y`
+"#,
+);
+
 fn env_relative_import_star() -> TestEnv {
     let mut t = TestEnv::new();
     t.add_with_path("foo", "foo/__init__.pyi", "from .bar import *");
@@ -471,6 +547,25 @@ testcase!(
     r#"
 from foo import missing_definition  # E: Could not import `missing_definition` from `foo`
 x = missing_definition
+"#,
+);
+
+testcase!(
+    test_export_all_wrongly_does_not_export_implicit_builtin,
+    TestEnv::one(
+        "foo",
+        r#"
+# At runtime, listing a name in `__all__` does not create a module attribute:
+# `from foo import len` and `from foo import *` both fail unless `len` is
+# explicitly bound in the module, e.g. with `from builtins import len`.
+__all__ = ["len"]  # E: Name `len` is listed in `__all__` but is not defined in the module
+len([])
+"#,
+    ),
+    r#"
+from typing import reveal_type
+from foo import len
+reveal_type(len)  # E: revealed type: Unknown
 "#,
 );
 
@@ -1066,6 +1161,27 @@ testcase!(
     env_extra_builtins(),
     r#"
 x: X = X()
+"#,
+);
+
+fn env_extra_builtins_shadows_builtin() -> TestEnv {
+    TestEnv::one_with_path(
+        "__builtins__",
+        "__builtins__.pyi",
+        r#"
+def abs(x: object) -> str: ...
+"#,
+    )
+}
+
+testcase!(
+    // A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
+    // resolves to the user's `__builtins__` definition, which shadows the stdlib one.
+    test_extra_builtins_shadows_builtin,
+    env_extra_builtins_shadows_builtin(),
+    r#"
+from typing import assert_type
+assert_type(abs(1), str)
 "#,
 );
 
@@ -2030,5 +2146,25 @@ import myproject.data.__files__ as data_schema_files
 
 def get_files():
     return data_schema_files
+"#,
+);
+
+fn env_special_export_package_reexport() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path("pkg", "pkg/__init__.py", "");
+    t.add_with_path(
+        "pkg.my_typing",
+        "pkg/my_typing.py",
+        "from typing import Annotated",
+    );
+    t
+}
+
+testcase!(
+    test_special_export_package_reexport_import,
+    env_special_export_package_reexport(),
+    r#"
+from pkg import my_typing as mt
+x: mt.Annotated[int, "metadata"] = 5
 "#,
 );

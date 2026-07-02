@@ -25,12 +25,18 @@ use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
+use crate::callable::ParamOverlay;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedIdentity;
+use crate::shaped_array::ShapedArrayShape;
+use crate::shaped_array::ShapedArrayShapeArgStyle;
+use crate::shaped_array::ShapedArraySyntax;
+use crate::shaped_array::ShapedArrayType;
+use crate::shaped_array::is_tuple_carrier_shape_middle;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
@@ -167,6 +173,9 @@ impl<'a> TypeDisplayContext<'a> {
 
     pub fn add(&mut self, t: &'a Type) {
         t.universe(&mut |t| {
+            if let Type::ShapedArray(shaped_array) = t {
+                self.add_qname(shaped_array.base_class.qname());
+            }
             if let Some(qname) = t.qname() {
                 self.add_qname(qname);
             }
@@ -339,6 +348,158 @@ impl<'a> TypeDisplayContext<'a> {
             self.fmt_targ(param, arg, output)?;
         }
         output.write_str("]")
+    }
+
+    fn fmt_shaped_array(
+        &self,
+        shaped_array: &ShapedArrayType,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        match shaped_array.syntax {
+            ShapedArraySyntax::Native => {
+                let (shape_idx, tuple_carrier) = match shaped_array.shape_arg_style {
+                    ShapedArrayShapeArgStyle::TypeVarTuple { index } => (index, false),
+                    ShapedArrayShapeArgStyle::TupleCarrier { index } => (index, true),
+                    ShapedArrayShapeArgStyle::Unknown => {
+                        output.write_qname(shaped_array.base_class.qname())?;
+                        if !shaped_array.is_shapeless() {
+                            output.write_str("[")?;
+                            output.write_str(&shaped_array.shape.to_string())?;
+                            output.write_str("]")?;
+                        }
+                        return Ok(());
+                    }
+                };
+                self.fmt_shaped_array_as_class(shaped_array, shape_idx, tuple_carrier, output)
+            }
+            ShapedArraySyntax::Jaxtyping => {
+                output.write_str("Shaped[")?;
+                output.write_qname(shaped_array.base_class.qname())?;
+                output.write_str(", \"")?;
+                output.write_str(&shaped_array.shape.fmt_jaxtyping())?;
+                output.write_str("\"]")
+            }
+        }
+    }
+
+    fn fmt_shaped_array_as_class(
+        &self,
+        shaped_array: &ShapedArrayType,
+        shape_idx: usize,
+        tuple_carrier: bool,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        let targs = shaped_array.base_class.targs();
+        let args = targs.as_slice();
+        args.get(shape_idx)
+            .expect("shape argument index should point to a class type argument");
+
+        output.write_qname(shaped_array.base_class.qname())?;
+        let display_count = targs.display_count().max(if shaped_array.is_shapeless() {
+            0
+        } else {
+            shape_idx + 1
+        });
+        if display_count == 0 {
+            return Ok(());
+        }
+
+        output.write_str("[")?;
+        for (i, (param, arg)) in targs.iter_paired().take(display_count).enumerate() {
+            if i > 0 {
+                output.write_str(", ")?;
+            }
+            if i == shape_idx {
+                if tuple_carrier {
+                    self.fmt_shape_as_tuple_carrier(shaped_array, output)?;
+                } else {
+                    self.fmt_shape_as_type_var_tuple(&shaped_array.shape, output)?;
+                }
+            } else {
+                self.fmt_targ(param, arg, output)?;
+            }
+        }
+        output.write_str("]")
+    }
+
+    fn fmt_shape_as_type_var_tuple(
+        &self,
+        shape: &ShapedArrayShape,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        match shape.as_tuple() {
+            Tuple::Concrete(dims) => {
+                if dims.is_empty() {
+                    output.write_str("()")
+                } else {
+                    self.fmt_type_sequence(dims.iter(), ", ", false, output)
+                }
+            }
+            Tuple::Unbounded(t) if t.is_any() => {
+                let unpacked_middle = Type::Unpack(Box::new(Type::any_tuple()));
+                self.fmt_helper_generic(&unpacked_middle, false, output)
+            }
+            Tuple::Unbounded(_) => {
+                unreachable!("shaped-array unbounded shapes must be tuple[Any, ...]")
+            }
+            Tuple::Unpacked(unpacked) => {
+                let (prefix, middle, suffix) = &**unpacked;
+                let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
+                self.fmt_type_sequence(
+                    prefix
+                        .iter()
+                        .chain(std::iter::once(&unpacked_middle))
+                        .chain(suffix.iter()),
+                    ", ",
+                    false,
+                    output,
+                )
+            }
+        }
+    }
+
+    fn fmt_shape_as_tuple_carrier(
+        &self,
+        shaped_array: &ShapedArrayType,
+        output: &mut impl TypeOutput,
+    ) -> fmt::Result {
+        if shaped_array.is_shapeless() {
+            return self.fmt_helper_generic(&Type::any_tuple(), false, output);
+        }
+        match shaped_array.shape.as_tuple() {
+            Tuple::Concrete(dims) => {
+                output.write_str("(")?;
+                self.fmt_type_sequence(dims.iter(), ", ", false, output)?;
+                if dims.len() == 1 {
+                    output.write_str(",")?;
+                }
+                output.write_str(")")
+            }
+            Tuple::Unbounded(_) => {
+                unreachable!("shaped-array unbounded shapes must be tuple[Any, ...]")
+            }
+            Tuple::Unpacked(unpacked) => {
+                let (prefix, middle, suffix) = &**unpacked;
+                if prefix.is_empty() && suffix.is_empty() && is_tuple_carrier_shape_middle(middle) {
+                    return self.fmt_helper_generic(middle, false, output);
+                }
+                output.write_str("(")?;
+                let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
+                self.fmt_type_sequence(
+                    prefix
+                        .iter()
+                        .chain(std::iter::once(&unpacked_middle))
+                        .chain(suffix.iter()),
+                    ", ",
+                    false,
+                    output,
+                )?;
+                if prefix.is_empty() && suffix.is_empty() {
+                    output.write_str(",")?;
+                }
+                output.write_str(")")
+            }
+        }
     }
 
     pub(crate) fn fmt_qname(&self, qname: &QName, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -560,7 +721,7 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
-            Type::ShapedArray(shaped_array) => output.write_str(&format!("{}", shaped_array)),
+            Type::ShapedArray(shaped_array) => self.fmt_shaped_array(shaped_array, output),
             Type::NNModule(module) => {
                 // Display as the class name (e.g., MaxPool2d)
                 self.fmt_helper_generic(&Type::ClassType(module.class.clone()), false, output)
@@ -585,6 +746,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_qname(t.qname())?;
                 output.write_str("]")
             }
+            Type::Sentinel(t) => output.write_qname(t.qname()),
             Type::TypeVarTuple(t) => {
                 let type_var_tuple_qname = self.stdlib.map(|s| s.type_var_tuple().qname());
                 output.write_builtin("TypeVarTuple", type_var_tuple_qname)?;
@@ -726,7 +888,11 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::ParamSpecValue(x) => {
                 output.write_str("[")?;
-                x.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))?;
+                x.fmt_with_type(
+                    output,
+                    &|t, o| self.fmt_helper_generic(t, false, o),
+                    &ParamOverlay::All,
+                )?;
                 output.write_str("]")
             }
             Type::BoundMethod(bm) => {
@@ -754,12 +920,14 @@ impl<'a> TypeDisplayContext<'a> {
                                 self.write_func_fqn(output, &func_name, &metadata.kind)?;
                                 // Strip the `self` parameter only in ProvideType mode;
                                 // hover/signature help should show the full signature.
-                                let effective_sig =
-                                    if self.lsp_display_mode == LspDisplayMode::ProvideType {
-                                        signature.strip_self_param()
-                                    } else {
-                                        signature.clone()
-                                    };
+                                let effective_sig = if self.lsp_display_mode
+                                    == LspDisplayMode::ProvideType
+                                    && let Some(stripped_signature) = signature.strip_first_param()
+                                {
+                                    stripped_signature
+                                } else {
+                                    signature.clone()
+                                };
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
                                         effective_sig
@@ -799,12 +967,14 @@ impl<'a> TypeDisplayContext<'a> {
                                         .map(|q| Fmt(|f| self.fmt_tparam(q, f))))
                                 )?;
                                 output.write_str("]")?;
-                                let effective_sig =
-                                    if self.lsp_display_mode == LspDisplayMode::ProvideType {
-                                        signature.strip_self_param()
-                                    } else {
-                                        signature.clone()
-                                    };
+                                let effective_sig = if self.lsp_display_mode
+                                    == LspDisplayMode::ProvideType
+                                    && let Some(stripped_signature) = signature.strip_first_param()
+                                {
+                                    stripped_signature
+                                } else {
+                                    signature.clone()
+                                };
                                 let _scope = self.push_forall_scope(tparams.iter());
                                 let result = match self.lsp_display_mode {
                                     LspDisplayMode::Hover => effective_sig
@@ -1381,6 +1551,7 @@ pub mod tests {
     use pyrefly_python::nesting_context::NestingContext;
     use ruff_python_ast::Identifier;
     use ruff_text_size::TextSize;
+    use starlark_map::smallset;
     use vec1::vec1;
 
     use super::*;
@@ -2646,5 +2817,77 @@ def overloaded_func[T](
         let parts = get_parts(&t);
 
         assert_part_has_location(&parts, "MyTypedDict", "mymodule", 90);
+    }
+
+    fn display_filtered_param_list(params: &ParamList, overlay: SmallSet<&str>) -> String {
+        let overlay = ParamOverlay::Subset(overlay.iter().map(Name::new).collect());
+        format!(
+            "{}",
+            Fmt(|f| {
+                let ctx = TypeDisplayContext::new(&[]);
+                let mut output = DisplayOutput::new(&ctx, f);
+                output.write_str("(")?;
+                params.fmt_with_type(
+                    &mut output,
+                    &|t: &Type, o: &mut DisplayOutput| o.write_str(&format!("{t}")),
+                    &overlay,
+                )?;
+                output.write_str(")")
+            })
+        )
+    }
+
+    #[test]
+    fn test_filter_pos_param_list() {
+        // (x: None, y: None)
+        let params = ParamList::new(vec![
+            Param::Pos(Name::new_static("x"), Type::None, Required::Required),
+            Param::Pos(Name::new_static("y"), Type::None, Required::Required),
+        ]);
+        let show_x = display_filtered_param_list(&params, smallset! {"x"});
+        assert_eq!(show_x, "(x: None, ...)");
+        let show_y = display_filtered_param_list(&params, smallset! {"y"});
+        assert_eq!(show_y, "(..., y: None)");
+    }
+
+    #[test]
+    fn test_filter_posonly_param_list() {
+        // (x: None, y: None, /)
+        let params = ParamList::new(vec![
+            Param::PosOnly(Some(Name::new_static("x")), Type::None, Required::Required),
+            Param::PosOnly(Some(Name::new_static("y")), Type::None, Required::Required),
+        ]);
+        let show_x = display_filtered_param_list(&params, smallset! {"x"});
+        assert_eq!(show_x, "(x: None, ..., /)");
+        let show_y = display_filtered_param_list(&params, smallset! {"y"});
+        assert_eq!(show_y, "(..., y: None, /)");
+    }
+
+    #[test]
+    fn test_filter_kwonly_param_list() {
+        // (*, x: None, y: None)
+        let params = ParamList::new(vec![
+            Param::KwOnly(Name::new_static("x"), Type::None, Required::Required),
+            Param::KwOnly(Name::new_static("y"), Type::None, Required::Required),
+        ]);
+        let show_x = display_filtered_param_list(&params, smallset! {"x"});
+        assert_eq!(show_x, "(*, x: None, ...)");
+        let show_y = display_filtered_param_list(&params, smallset! {"y"});
+        assert_eq!(show_y, "(*, ..., y: None)");
+    }
+
+    #[test]
+    fn test_filter_complex_param_list() {
+        // (w: None, /, x: None, y: None, *, z: None)
+        let params = ParamList::new(vec![
+            Param::PosOnly(Some(Name::new_static("w")), Type::None, Required::Required),
+            Param::Pos(Name::new_static("x"), Type::None, Required::Required),
+            Param::Pos(Name::new_static("y"), Type::None, Required::Required),
+            Param::KwOnly(Name::new_static("z"), Type::None, Required::Required),
+        ]);
+        let show_head_and_tail = display_filtered_param_list(&params, smallset! {"w", "z"});
+        assert_eq!(show_head_and_tail, "(w: None, /, ..., *, z: None)");
+        let show_middle = display_filtered_param_list(&params, smallset! {"x", "y"});
+        assert_eq!(show_middle, "(..., /, x: None, y: None, *, ...)");
     }
 }

@@ -856,9 +856,10 @@ impl ConfigFile {
     ) -> Vec<ImportLookupPathPart<'a>> {
         let mut result = vec![];
         if let Some(source_db) = &self.source_db {
-            result.push(ImportLookupPathPart::BuildSystem(
-                source_db.get_target(origin),
-            ));
+            let target = source_db
+                .as_live_source_database()
+                .and_then(|source_db| source_db.get_target(origin));
+            result.push(ImportLookupPathPart::BuildSystem(target));
         }
         result.push(ImportLookupPathPart::SearchPathFromArgs(
             &self.search_path_from_args,
@@ -1116,7 +1117,9 @@ impl ConfigFile {
         }
 
         for source_db in source_dbs {
-            result.extend(source_db.get_paths_to_watch());
+            if let Some(live_source_db) = source_db.as_live_source_database() {
+                result.extend(live_source_db.get_paths_to_watch());
+            }
         }
         result
     }
@@ -1144,6 +1147,10 @@ impl ConfigFile {
             let Some(source_db) = &config.source_db else {
                 continue;
             };
+            // Static source databases do not participate in live rebuild telemetry.
+            if source_db.as_live_source_database().is_none() {
+                continue;
+            }
             sourcedb_configs
                 .entry(source_db)
                 .or_default()
@@ -1170,13 +1177,17 @@ impl ConfigFile {
             telemetry.finish_task(event_telemetry, error);
         }
         for (source_db, configs_and_files) in sourcedb_configs {
+            let live_source_db = source_db
+                .as_live_source_database()
+                .expect("source_db was filtered to live source databases");
             let start = Instant::now();
             let all_files = configs_and_files
                 .iter()
                 .flat_map(|x| x.1.iter())
                 .map(|p| p.module_path_buf())
                 .collect::<SmallSet<_>>();
-            let (sourcedb_rebuild, instance_stats) = source_db.query_source_db(all_files, force);
+            let (sourcedb_rebuild, instance_stats) =
+                live_source_db.query_source_db(all_files, force);
             let changed = match sourcedb_rebuild {
                 Err(error) => {
                     log_telemetry(&telemetry, start, instance_stats, Some(&error));
@@ -1186,7 +1197,7 @@ impl ConfigFile {
                 }
                 Ok(r) => r,
             };
-            let generated_files = source_db.get_generated_files();
+            let generated_files = live_source_db.get_generated_files();
             if !generated_files.is_empty() {
                 let mut write = GENERATED_FILE_CONFIG_OVERRIDE.write();
                 // we don't need any specific config here, any config for this sourcedb will work
@@ -1216,6 +1227,10 @@ impl ConfigFile {
     pub fn configure(&mut self) -> Vec<ConfigError> {
         let mut configure_errors = Vec::new();
 
+        // Whether the user explicitly configured `site_package_path` (via config
+        // file or CLI flag). If not, we auto-discover a `typings/` directory below.
+        let site_package_path_set = self.python_environment.site_package_path.is_some();
+
         if self.interpreters.skip_interpreter_query {
             self.python_environment.set_empty_to_default();
         } else {
@@ -1239,6 +1254,25 @@ impl ConfigFile {
                     self.python_environment.set_empty_to_default();
                     configure_errors.push(error.context("While finding Python interpreter"));
                 }
+            }
+        }
+
+        // A `typings/` directory under the config root is always a default
+        // `site_package_path` entry (in addition to any interpreter-provided
+        // site-packages, which live in `interpreter_site_package_path`), unless
+        // the user explicitly set `site_package_path`. We resolve it relative to
+        // the config root here, rather than in `set_empty_to_default`, so the CLI
+        // and IDE agree regardless of the process's working directory and so it
+        // applies even when an interpreter query succeeds. A `Synthetic` config
+        // has no on-disk root to anchor `typings/` to, so we skip discovery
+        // rather than fall back to a CWD-relative path.
+        if !site_package_path_set && let Some(root) = self.source.root() {
+            let typings = root.join("typings");
+            if typings.exists() {
+                self.python_environment
+                    .site_package_path
+                    .get_or_insert_with(Vec::new)
+                    .push(typings);
             }
         }
 
@@ -2532,14 +2566,22 @@ output-format = "omit-errors"
         // `Warn`) avoids the surprise of switching presets changing
         // `min-severity` requirements.
         for kind in [
+            ErrorKind::BadClassDefinition,
+            ErrorKind::BadInstantiation,
+            ErrorKind::BadKeywordArgument,
+            ErrorKind::BadRaise,
+            ErrorKind::BadUnpacking,
             ErrorKind::DivisionByZero,
+            ErrorKind::InvalidAnnotation,
+            ErrorKind::InvalidLiteral,
+            ErrorKind::InvalidSuperCall,
             ErrorKind::InvalidSyntax,
             ErrorKind::MissingImport,
+            ErrorKind::NotAsync,
             ErrorKind::ParseError,
             ErrorKind::UnexpectedKeyword,
+            ErrorKind::UnexpectedPositionalArgument,
             ErrorKind::UnknownName,
-            ErrorKind::InvalidAnnotation,
-            ErrorKind::NotAsync,
             ErrorKind::UnusedCoroutine,
         ] {
             assert_eq!(
@@ -2552,8 +2594,14 @@ output-format = "omit-errors"
         // enumeration is covered by `test_preset_fields_propagate`.
         for kind in [
             ErrorKind::BadArgumentType,
+            ErrorKind::BadAssignment,
+            ErrorKind::BadReturn,
             ErrorKind::BadOverride,
+            ErrorKind::Deprecated,
+            ErrorKind::InvalidInheritance,
+            ErrorKind::MissingArgument,
             ErrorKind::MissingAttribute,
+            ErrorKind::MissingModuleAttribute,
             ErrorKind::NotCallable,
             ErrorKind::NotIterable,
             ErrorKind::RedundantCast,
@@ -2793,7 +2841,14 @@ output-format = "omit-errors"
         fs::write(&python_file, "").unwrap();
         let config = create_empty_file_and_parse_config(&root, ConfigFile::PYPROJECT_FILE_NAME);
         // We should still find Python files (commonly scripts and tests) outside src/.
-        assert_eq!(config.project_includes.files().unwrap(), vec![python_file]);
+        assert_eq!(
+            config
+                .project_includes
+                .files_iter()
+                .unwrap()
+                .collect::<Vec<_>>(),
+            vec![python_file]
+        );
         assert_eq!(
             config.search_path().cloned().collect::<Vec<_>>(),
             vec![src_dir]
@@ -3419,6 +3474,57 @@ output-format = "omit-errors"
 
         let handle = config.handle_from_module_path(ModulePath::filesystem(init));
         assert_eq!(handle.module(), ModuleName::from_str("fastapi"));
+    }
+
+    #[test]
+    fn test_typings_autodiscovered_relative_to_config_root() {
+        // With no explicit `site_package_path`, a `typings/` directory under the
+        // config root is auto-discovered and resolved relative to that root (not
+        // the process CWD, which is never the temp dir). This must hold on the
+        // default CLI path that queries an interpreter, so we leave
+        // `skip_interpreter_query` at its default of `false`.
+        let root = TempDir::new().unwrap();
+        let typings = root.path().join("typings");
+        fs::create_dir_all(&typings).unwrap();
+
+        let mut config = ConfigFile {
+            source: ConfigSource::File(root.path().join(ConfigFile::PYREFLY_FILE_NAME)),
+            ..Default::default()
+        };
+        config.configure();
+
+        assert!(
+            config.site_package_path().any(|p| p == &typings),
+            "expected auto-discovered typings dir {typings:?} in site_package_path, got {:?}",
+            config.site_package_path().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_typings_not_added_when_site_package_path_explicit() {
+        // An explicit `site_package_path` disables `typings/` auto-discovery,
+        // even when a `typings/` directory exists under the config root.
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("typings")).unwrap();
+        let explicit = root.path().join("stubs");
+
+        let mut config = ConfigFile {
+            source: ConfigSource::File(root.path().join(ConfigFile::PYREFLY_FILE_NAME)),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.python_environment.site_package_path = Some(vec![explicit.clone()]);
+        config.configure();
+
+        let paths = config.site_package_path().collect::<Vec<_>>();
+        assert!(paths.contains(&&explicit));
+        assert!(
+            !paths.iter().any(|p| p.ends_with("typings")),
+            "typings should not be auto-added when site_package_path is explicit, got {paths:?}",
+        );
     }
 
     #[test]

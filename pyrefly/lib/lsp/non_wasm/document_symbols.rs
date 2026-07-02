@@ -287,3 +287,42 @@ fn recurse_stmt_adding_symbols<'a>(
     };
     symbols.append(&mut recursed_symbols);
 }
+
+pub fn flatten_to_symbol_information(
+    symbols: Vec<DocumentSymbol>,
+    uri: &lsp_types::Url,
+) -> Vec<lsp_types::SymbolInformation> {
+    let mut results = Vec::new();
+    flatten_recursive(symbols, uri, None, &mut results);
+    results
+}
+
+fn flatten_recursive(
+    symbols: Vec<DocumentSymbol>,
+    uri: &lsp_types::Url,
+    container_name: Option<String>,
+    result: &mut Vec<lsp_types::SymbolInformation>,
+) {
+    for sym in symbols {
+        let children = sym.children.unwrap_or_default();
+        let qualified_name = match &container_name {
+            Some(parent) => format!("{}.{}", parent, sym.name),
+            None => sym.name.clone(),
+        };
+
+        #[allow(deprecated)]
+        result.push(lsp_types::SymbolInformation {
+            name: sym.name,
+            kind: sym.kind,
+            tags: sym.tags,
+            deprecated: sym.deprecated,
+            location: lsp_types::Location {
+                uri: uri.clone(),
+                range: sym.range,
+            },
+            container_name: container_name.clone(),
+        });
+
+        flatten_recursive(children, uri, Some(qualified_name), result);
+    }
+}

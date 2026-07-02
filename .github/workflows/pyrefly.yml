@@ -22,13 +22,16 @@ jobs:
             github_env: $env:GITHUB_ENV
     steps:
     - uses: actions/checkout@v6
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
     - name: set windows cargo home
       # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
       # by Cargo have long paths and will cause builds/tests to fail
       if: ${{ matrix.os == 'windows-latest' }}
       run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
     - name: install Scrut
-      run: cargo install scrut
+      run: cargo install scrut --locked
       # Scrut doesn't support Windows yet
       if: ${{ matrix.os != 'windows-latest' }}
     - name: set up rust cache
@@ -43,6 +46,8 @@ jobs:
     - run: cargo clippy --release
     - run: cargo build --release
     - run: cargo test --release
+    - name: Run torch stub tests
+      run: python tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --release
     - name: Run Scrut tests
       env:
         PYREFLY: ${{ github.workspace }}/target/release/pyrefly
@@ -50,8 +55,21 @@ jobs:
         JQ: jq
         TEST_PY: ${{ github.workspace }}/test.py
         PYREFLY_PY: ${{ github.workspace }}/pyrefly/python
-        TENSOR_SHAPES_ROOT: ${{ github.workspace }}/tensor-shapes
-        TENSOR_TEST_ROOT: ${{ github.workspace }}/test/tensor_shapes
-        JAXTYPING_TEST_ROOT: ${{ github.workspace }}/test/tensor_shapes
       run: env -u GITHUB_ACTIONS scrut test test
       if: ${{ matrix.os != 'windows-latest' }}
+    - name: Set up torch runtime test environment
+      shell: bash
+      run: |
+        python -m venv .tensor-shapes-venv
+        if [ -x .tensor-shapes-venv/bin/python ]; then
+          TENSOR_SHAPES_PYTHON=.tensor-shapes-venv/bin/python
+        else
+          TENSOR_SHAPES_PYTHON=.tensor-shapes-venv/Scripts/python.exe
+        fi
+        echo "TENSOR_SHAPES_PYTHON=$TENSOR_SHAPES_PYTHON" >> "$GITHUB_ENV"
+        "$TENSOR_SHAPES_PYTHON" -m pip install --upgrade pip
+        "$TENSOR_SHAPES_PYTHON" -m pip install torch
+    - name: Run torch runtime tests
+      shell: bash
+      run: |
+        "$TENSOR_SHAPES_PYTHON" tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py

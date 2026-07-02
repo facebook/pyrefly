@@ -432,6 +432,7 @@ pub(crate) fn type_to_structured(
         | Type::ParamSpec(_)
         | Type::TypeVarTuple(_)
         | Type::TypeForm(_)
+        | Type::Sentinel(_)
         | Type::ElementOfTypeVarTuple(_)
         | Type::ShapedArray(_)
         | Type::NNModule(_)

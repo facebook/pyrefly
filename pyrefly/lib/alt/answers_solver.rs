@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use fxhash::FxHashMap;
+use fxhash::FxHashSet;
 use pyrefly_graph::calculation::Calculation;
 use pyrefly_graph::calculation::ProposalResult;
 use pyrefly_graph::index::Idx;
@@ -54,9 +55,11 @@ use crate::alt::answers::OverloadedCallee;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
+use crate::alt::class::class_field::ClassField;
 use crate::alt::traits::Solve;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
+use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::Exported;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyExport;
@@ -1588,7 +1591,10 @@ pub struct ThreadState {
     partial_answers: RefCell<FxHashMap<(Idx<Key>, usize), Arc<TypeInfo>>>,
     /// Solve-time mapping from per-module lambda parameter IDs to the
     /// thread-local Var that represents that parameter in the current solve.
-    lambda_param_vars: RefCell<FxHashMap<(ModuleName, LambdaParamId), Var>>,
+    ///
+    /// The `ModulePath` is needed to distinguish the in-memory and on-disk
+    /// versions of the same module, which can coexist in the IDE (issue #3789).
+    lambda_param_vars: RefCell<FxHashMap<(ModuleName, ModulePath, LambdaParamId), Var>>,
     /// Active trace side-effect sink for the current calculation.
     /// Set before `K::solve`, taken after. `None` when tracing is disabled
     /// or between calculations. Saved sinks form a stack to handle recursive
@@ -1599,6 +1605,10 @@ pub struct ThreadState {
     /// is pushed here. When the nested call takes its sink, the previous
     /// one is restored.
     trace_sink_stack: RefCell<Vec<Option<TraceSideEffects>>>,
+    /// `(self_type, self_param)` pairs whose overload-self-type compatibility
+    /// check is currently in progress, used as a coinductive guard against
+    /// self-referential protocols. See `filter_overloads_by_self_type`.
+    overload_self_filter_stack: RefCell<FxHashSet<(Type, Type)>>,
 }
 
 impl ThreadState {
@@ -1611,6 +1621,7 @@ impl ThreadState {
             lambda_param_vars: RefCell::new(FxHashMap::default()),
             trace_sink: RefCell::new(None),
             trace_sink_stack: RefCell::new(Vec::new()),
+            overload_self_filter_stack: RefCell::new(FxHashSet::default()),
         }
     }
 
@@ -1870,14 +1881,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.thread_state
             .lambda_param_vars
             .borrow_mut()
-            .insert((self.module().name(), id), var);
+            .insert((self.module().name(), self.module().path().dupe(), id), var);
     }
 
     fn get_lambda_param_var(&self, id: LambdaParamId) -> Option<Var> {
         self.thread_state
             .lambda_param_vars
             .borrow()
-            .get(&(self.module().name(), id))
+            .get(&(self.module().name(), self.module().path().dupe(), id))
             .copied()
     }
 
@@ -1918,8 +1929,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Record an expected type trace.
     pub(crate) fn record_expected_type_trace(&self, loc: TextRange, ty: &Type) {
-        self.trace_state()
-            .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        // Guard on the trace sink before cloning: in a normal (non-tracing) check
+        // there is no sink installed, so the clone would be pure waste.
+        if self.current().tracing_enabled() {
+            self.trace_state()
+                .record_expected_type_trace(loc, Arc::new(ty.clone()));
+        }
     }
 
     /// Store a partial answer for inline first-use pinning.
@@ -1957,6 +1972,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .borrow()
             .get(&(def_idx, height))
             .cloned()
+    }
+
+    /// Mark an overload-self-type compatibility check `(self_type, self_param)` as in
+    /// progress. Returns `true` if it was already active, signaling a coinductive cycle
+    /// (a self-referential protocol). See `filter_overloads_by_self_type`.
+    pub(crate) fn enter_overload_self_filter(&self, key: (Type, Type)) -> bool {
+        !self
+            .thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .insert(key)
+    }
+
+    pub(crate) fn exit_overload_self_filter(&self, key: &(Type, Type)) {
+        self.thread_state
+            .overload_self_filter_stack
+            .borrow_mut()
+            .remove(key);
     }
 
     /// Given the target idx of a ForwardToFirstUse binding, find the NameAssign's
@@ -2749,6 +2782,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Vec::new()
         };
 
+        if exceeded_max_iterations {
+            // An *inferred* instance attribute whose type never converges is
+            // degenerately recursive (each iteration nests another container layer,
+            // e.g. `list[list[...]]`). Commit `Any` for those fields instead of the
+            // unrolled blowup, so it does not produce spurious downstream errors.
+            // Restricted to `DefinedInMethod` fields: annotated members and class-body
+            // type aliases (e.g. `type X = int | list[C.X]`) are intentional recursion
+            // whose errors must be preserved, not collapsed to `Any`.
+            let any_field: Arc<dyn Any + Send + Sync> =
+                Arc::new(Arc::new(ClassField::recursive(self.heap)));
+            for (calc_id, state) in scc.node_state.iter_mut() {
+                if let AnyIdx::KeyClassField(idx) = &calc_id.1
+                    && matches!(
+                        calc_id.0.get(*idx).definition,
+                        ClassFieldDefinition::DefinedInMethod { .. }
+                    )
+                    && let SccNodeState::Done { answer, .. } = state
+                {
+                    *answer = any_field.dupe();
+                }
+            }
+        }
+
         let did_commit = self.commit_final_answers(scc);
         if did_commit {
             for (calc_id, answer, previous) in &non_convergent_members {
@@ -3176,12 +3232,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if Self::type_contains_none(got) && !Self::type_contains_none(want) {
             let hint = match tcc().kind {
-                TypeCheckKind::ExplicitFunctionReturn => {
-                    format!(
-                        "The return type does not allow `None`. \
-                         Either handle the `None` case or change the return type to `{} | None`.",
+                TypeCheckKind::ExplicitFunctionReturn
+                | TypeCheckKind::AnnAssign
+                | TypeCheckKind::AnnotatedName(_)
+                    if !got.is_none() =>
+                {
+                    Some(format!(
+                        "Consider narrowing the value with an `is not None` check or changing the declared type to `{} | None`",
                         self.for_display(want.clone()),
-                    )
+                    ))
                 }
                 TypeCheckKind::ImplicitFunctionReturn(_) => {
                     // For implicit returns (missing return statement), the error message
@@ -3189,23 +3248,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // an explicit return" is already clear. Adding a None hint here is
                     // confusing because the user didn't explicitly return None.
                     // Skip the hint for implicit returns.
-                    builder.emit();
-                    return;
+                    None
                 }
-                TypeCheckKind::AnnAssign
-                | TypeCheckKind::AnnotatedName(_)
-                | TypeCheckKind::Attribute(_) => {
-                    format!(
-                        "The declared type does not allow `None`. \
-                         Either narrow with an `is not None` check or change the type to `{} | None`.",
-                        self.for_display(want.clone()),
-                    )
+                TypeCheckKind::Attribute(_)
+                | TypeCheckKind::CallArgument(..)
+                | TypeCheckKind::CallKwArgs(..)
+                | TypeCheckKind::CallUnpackKwArg(..)
+                | TypeCheckKind::CallVarArgs(..) => {
+                    if got.is_none() {
+                        // Skip the hint. Narrowing the value doesn't make sense if there's no
+                        // non-None part to narrow to, and changing the attribute or parameter type
+                        // is often unactionable, since the definition may be in third-party code.
+                        None
+                    } else {
+                        // We only suggest narrowing. Changing the attribute or parameter type is
+                        // often unactionable, since the definition may be in third-party code.
+                        Some("Consider narrowing the value with an `is not None` check".to_owned())
+                    }
                 }
-                _ => "The type includes `None` which is not accepted here. \
-                     Narrow the type with an `is not None` check."
-                    .to_owned(),
+                _ => Some(format!(
+                    "Consider changing the declared type to `{} | None`",
+                    self.for_display(want.clone())
+                )),
             };
-            builder = builder.with_detail(hint);
+            if let Some(hint) = hint {
+                builder = builder
+                    .with_detail(format!("The declared type does not allow `None`. {hint}."));
+            }
         }
         builder.emit();
     }

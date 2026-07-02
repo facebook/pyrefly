@@ -271,9 +271,9 @@ impl<'a> BindingsBuilder<'a> {
     /// Bind a special assignment where we do not want the usage tracking or placeholder var pinning
     /// used for normal assignments.
     ///
-    /// Used for legacy type variables and for `_Alias()` assignments in `typing` that
+    /// Used for legacy type variables, `_Alias()` assignments in `typing`, and sentinels, which
     /// we redirect to hard-coded alternative bindings.
-    fn bind_legacy_type_var_or_typing_alias(
+    fn bind_static_assignment(
         &mut self,
         name: &ExprName,
         make_binding: impl FnOnce(Option<Idx<KeyAnnotation>>) -> Binding,
@@ -334,7 +334,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
         }
-        self.bind_legacy_type_var_or_typing_alias(name, |ann| {
+        self.bind_static_assignment(name, |ann| {
             Binding::TypeVar(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
@@ -365,7 +365,7 @@ impl<'a> BindingsBuilder<'a> {
 
     fn assign_param_spec(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
-        self.bind_legacy_type_var_or_typing_alias(name, |ann| {
+        self.bind_static_assignment(name, |ann| {
             Binding::ParamSpec(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
@@ -376,10 +376,36 @@ impl<'a> BindingsBuilder<'a> {
 
     fn assign_type_var_tuple(&mut self, name: &ExprName, call: &mut ExprCall) {
         self.ensure_type_var_tuple_and_param_spec_args(call);
-        self.bind_legacy_type_var_or_typing_alias(name, |ann| {
+        self.bind_static_assignment(name, |ann| {
             Binding::TypeVarTuple(Box::new((
                 ann,
                 Ast::expr_name_identifier(name.clone()),
+                Box::new(call.clone()),
+            )))
+        })
+    }
+
+    fn assign_sentinel(&mut self, name: &ExprName, call: &mut ExprCall) {
+        // Sentinels are static types only; skip them for first-usage type inference.
+        let static_type_usage = &mut Usage::StaticTypeInformation {
+            is_annotation: false,
+        };
+        self.ensure_expr(&mut call.func, static_type_usage);
+        if let Some(expr) = call.arguments.args.iter_mut().next() {
+            self.ensure_expr(expr, static_type_usage);
+        }
+        for kw in call.arguments.keywords.iter_mut() {
+            self.ensure_expr(&mut kw.value, static_type_usage);
+        }
+        let nesting_context = self.scopes.nesting_context();
+        // Like legacy type var, Sentinel can only be created with a single Sentinel binding to a
+        // single variable (https://peps.python.org/pep-0661/#typing). Thus we bind it in the same
+        // way legacy type vars are bound.
+        self.bind_static_assignment(name, |ann| {
+            Binding::Sentinel(Box::new((
+                ann,
+                Ast::expr_name_identifier(name.clone()),
+                nesting_context,
                 Box::new(call.clone()),
             )))
         })
@@ -670,7 +696,7 @@ impl<'a> BindingsBuilder<'a> {
                 // assignments "as if" they were imports of the aliased name.
                 //
                 // For example, we treat `typing.List` as if it were an import of `builtins.list`.
-                self.bind_legacy_type_var_or_typing_alias(name, |_| {
+                self.bind_static_assignment(name, |_| {
                     Binding::Import(Box::new(ImportBinding {
                         module,
                         name: forward,
@@ -700,6 +726,10 @@ impl<'a> BindingsBuilder<'a> {
                             }
                             SpecialExport::TypeVarTuple => {
                                 self.assign_type_var_tuple(name, call);
+                                return;
+                            }
+                            SpecialExport::Sentinel | SpecialExport::BuiltinsSentinel => {
+                                self.assign_sentinel(name, call);
                                 return;
                             }
                             SpecialExport::Enum
@@ -797,6 +827,7 @@ impl<'a> BindingsBuilder<'a> {
                         &Ast::expr_name_identifier(name.clone()),
                         x.value,
                         None,
+                        true,
                     );
                 } else if let Expr::Call(call) = &mut *x.value
                     && matches!(call.arguments.args.first(), Some(Expr::StringLiteral(_)))
@@ -819,6 +850,7 @@ impl<'a> BindingsBuilder<'a> {
                                 &Ast::expr_name_identifier(name),
                                 value,
                                 None,
+                                true,
                             );
                         }
                         return;
@@ -885,6 +917,7 @@ impl<'a> BindingsBuilder<'a> {
                             &name,
                             value,
                             Some((&x.annotation, ann_idx)),
+                            true,
                         ),
                         None => self.bind_definition(
                             &name,

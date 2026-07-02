@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Not;
+use std::sync::OnceLock;
 
 use dupe::Dupe;
 use itertools::Either;
@@ -1242,7 +1243,7 @@ macro_rules! debug_println {
     };
 }
 
-fn has_toplevel_call(body: &[Stmt], callee_name: &'static str) -> bool {
+pub(crate) fn has_toplevel_call(body: &[Stmt], callee_name: &str) -> bool {
     body.iter().any(|stmt| match stmt {
         Stmt::Expr(stmt_expr) => match &*stmt_expr.value {
             Expr::Call(call) => match &*call.func {
@@ -4254,11 +4255,50 @@ impl<'a> CallGraphVisitor<'a> {
         }
     }
 
-    // Enable debug logs by adding `pysa_dump()` to the top level statements of the definition of interest
-    const DEBUG_FUNCTION_NAME: &'static str = "pysa_dump";
+    // `pysa_dump`/`PYSA_DUMP` trigger enables every Pysa phase. This file
+    // only builds the first-order call graph, so it also honors the call-graph
+    // specific `pysa_dump_call_graph`/`PYSA_DUMP_CALL_GRAPH` trigger.
+    const PYSA_DUMP_NAME: &'static str = "pysa_dump";
+    const PYSA_CALL_GRAPH_DUMP_NAME: &'static str = "pysa_dump_call_graph";
+
+    fn environment_enables_debug(&self) -> bool {
+        let Some(current_function) = &self.current_function else {
+            return false;
+        };
+
+        // Read both environment variables first. Computing the qualified name below requires a
+        // definition lookup (to find the defining class for methods), which is more
+        // expensive than the comparison, so skip it entirely when no trigger is set.
+        static PYSA_DUMP_ENV: OnceLock<Option<String>> = OnceLock::new();
+        let pysa_dump = PYSA_DUMP_ENV.get_or_init(|| std::env::var("PYSA_DUMP").ok());
+        static PYSA_DUMP_CALL_GRAPH_ENV: OnceLock<Option<String>> = OnceLock::new();
+        let pysa_dump_call_graph =
+            PYSA_DUMP_CALL_GRAPH_ENV.get_or_init(|| std::env::var("PYSA_DUMP_CALL_GRAPH").ok());
+        if pysa_dump.is_none() && pysa_dump_call_graph.is_none() {
+            return false;
+        }
+
+        let qualified_name = match self.get_base_definition(current_function).defining_class {
+            Some(class_ref) => format!(
+                "{}.{}",
+                class_ref.class.qname().module_qualified_name(),
+                current_function.function_name
+            ),
+            None => format!(
+                "{}.{}",
+                current_function.module_name.as_str(),
+                current_function.function_name
+            ),
+        };
+
+        pysa_dump.as_ref() == Some(&qualified_name)
+            || pysa_dump_call_graph.as_ref() == Some(&qualified_name)
+    }
 
     fn enter_debug_scope(&mut self, body: &[Stmt]) {
-        self.debug = has_toplevel_call(body, Self::DEBUG_FUNCTION_NAME);
+        self.debug = has_toplevel_call(body, Self::PYSA_DUMP_NAME)
+            || has_toplevel_call(body, Self::PYSA_CALL_GRAPH_DUMP_NAME)
+            || self.environment_enables_debug();
         self.debug_scopes.push(self.debug);
     }
 

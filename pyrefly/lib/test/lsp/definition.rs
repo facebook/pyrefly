@@ -3133,11 +3133,12 @@ Definition Result:
 }
 
 /// When importing a name from a non-Python module (e.g. a .thrift file),
-/// go-to-definition on the imported name should fall back to navigating
-/// to the module file itself.
+/// go-to-definition on the imported name should navigate to the actual
+/// symbol definition in the source file, not just the top of the file.
 #[test]
-fn non_python_module_import_fallback_test() {
-    let thrift_content = "";
+fn non_python_module_import_goto_symbol_test() {
+    let thrift_content =
+        "// This is a comment!\nstruct AggregatedAlertSpec {\n  1: string name\n}\n";
     let main_code = r#"
 from aggregation_rule.thrift import AggregatedAlertSpec
 #                                   ^
@@ -3155,7 +3156,6 @@ x = AggregatedAlertSpec
     let (state, handle) = test_env.to_state();
     let main_handle = handle("main");
 
-    // Test positions:
     // "from aggregation_rule.thrift import AggregatedAlertSpec"
     //                                      ^
     let import_name_pos = positions[0];
@@ -3180,12 +3180,21 @@ x = AggregatedAlertSpec
             .contains("aggregation_rule.thrift"),
         "should navigate to the .thrift file, got: {report}",
     );
-    assert_eq!(defs[0].range, TextRange::empty(TextSize::new(0)));
+    // The definition range should point to "AggregatedAlertSpec" (19 chars)
+    // in the thrift file at byte offset 7..26 (after "struct "), not just the
+    // start of the file.
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(29), TextSize::new(48)),
+        "should point to the symbol name, not the start of file. Got: {report}",
+    );
 
     // Test positions:
     // "from aggregation_rule.thrift import AggregatedAlertSpec"
     // "x = AggregatedAlertSpec
     //      ^
+    // For non-Python modules, go-to-definition on a name usage should jump
+    // through the import to the symbol in the source file.
     let use_name_pos = positions[1];
     let defs = state
         .transaction()
@@ -3201,8 +3210,17 @@ x = AggregatedAlertSpec
         "go-to-definition should return a non-empty result"
     );
     assert!(
-        defs[0].module.path().to_string().contains("main.py"),
-        "should navigate to the main.py import, got: {report}",
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(29), TextSize::new(48)),
+        "should point to the symbol name, not the start of file. Got: {report}",
     );
 }
 
@@ -3249,6 +3267,232 @@ x = thrift_mod.AggregatedAlertSpec
         "should navigate to the .thrift file, got: {report}",
     );
     assert_eq!(defs[0].range, TextRange::empty(TextSize::new(0)));
+}
+
+/// When accessing a nested attribute on a non-Python module
+/// (e.g. thrift_mod.MyEnum.VARIANT), go-to-definition on the member should
+/// navigate to the module source file via text search.
+#[test]
+fn non_python_module_nested_attribute_test() {
+    let thrift_content = "enum Targeting {\n  CUSTOM_AUDIENCES = 0,\n  INTERESTS = 1,\n}\n\nstruct Foo {\n  1: string INTERESTS;\n}\n";
+    let main_code = r#"
+import aggregation_rule.thrift as thrift_mod
+x = thrift_mod.Targeting.CUSTOM_AUDIENCES
+#                        ^
+y = thrift_mod.Targeting.INTERESTS
+#                        ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "aggregation_rule.thrift",
+        "aggregation_rule.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    // "thrift_mod.Targeting.CUSTOM_AUDIENCES"
+    //                       ^
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition should return a result for nested non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // "CUSTOM_AUDIENCES" appears at byte offset 19..35 in the thrift content
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(19), TextSize::new(35)),
+        "should point to CUSTOM_AUDIENCES in the .thrift file. Got: {report}",
+    );
+
+    // "thrift_mod.Targeting.INTERESTS"
+    //                       ^
+    // "INTERESTS" appears twice in the thrift content (as an enum value and
+    // a struct field name). find_symbol_range_in_text returns the first
+    // whole-word occurrence.
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[1])
+        .expect("go-to-definition should return a result for nested non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // First occurrence of "INTERESTS" is the enum value at byte offset 43..52
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(43), TextSize::new(52)),
+        "should point to first INTERESTS in the .thrift file. Got: {report}",
+    );
+}
+
+/// When a name is imported from a non-Python module via `from ... import Name`
+/// and used in attribute access (`Name.MEMBER`), go-to-definition on the
+/// attribute should navigate to the symbol in the non-Python source file.
+#[test]
+fn non_python_module_from_import_attribute_test() {
+    let thrift_content = "enum Targeting {\n  CUSTOM_AUDIENCES = 0,\n  INTERESTS = 1,\n}\n";
+    let main_code = r#"
+from aggregation_rule.thrift import Targeting
+x = Targeting.CUSTOM_AUDIENCES
+#             ^
+y = Targeting.INTERESTS
+#             ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "aggregation_rule.thrift",
+        "aggregation_rule.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    // "Targeting.CUSTOM_AUDIENCES"
+    //            ^
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition should return a result for from-imported non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // "CUSTOM_AUDIENCES" appears at byte offset 19..35 in the thrift content
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(19), TextSize::new(35)),
+        "should point to CUSTOM_AUDIENCES in the .thrift file. Got: {report}",
+    );
+
+    // "Targeting.INTERESTS"
+    //            ^
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[1])
+        .expect("go-to-definition should return a result for from-imported non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // "INTERESTS" appears at byte offset 43..52 in the thrift content
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(43), TextSize::new(52)),
+        "should point to INTERESTS in the .thrift file. Got: {report}",
+    );
+}
+
+/// When clicking on a filename component in a non-Python module import
+/// (e.g. `TranslationCheckConfig` in `from pkg.TranslationCheckConfig.thrift import XYZ`),
+/// go-to-definition should navigate to the file, not fail because the truncated
+/// module name `pkg.TranslationCheckConfig` doesn't resolve on its own.
+#[test]
+fn non_python_module_import_filename_component_test() {
+    let thrift_content = "struct Config {\n  1: string name\n}\n";
+    let main_code = r#"
+from translation.TranslationCheckConfig.thrift import Config
+#                 ^                      ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "translation.TranslationCheckConfig.thrift",
+        "translation/TranslationCheckConfig.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    // Clicking on `TranslationCheckConfig`
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition on filename component should navigate to the module file");
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("TranslationCheckConfig.thrift"),
+        "should navigate to the .thrift file, got: {}",
+        defs[0].module.path(),
+    );
+
+    // Clicking on `thrift` (the extension component) should also work
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[1])
+        .expect("go-to-definition on extension component should navigate to the module file");
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("TranslationCheckConfig.thrift"),
+        "should navigate to the .thrift file, got: {}",
+        defs[0].module.path(),
+    );
 }
 
 /// Go-to-definition on a __files__ directory import should fall back to

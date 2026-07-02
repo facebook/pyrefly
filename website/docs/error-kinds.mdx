@@ -64,7 +64,7 @@ This error arises when a function is called with the wrong number of arguments.
 def takes_three(one: int, two: int, three: int) -> complex:
   ...
 
-take_three(3, 2)  # Expected 1 more positional argument [bad-argument-count]
+takes_three(1, 2, 3, 4)  # Expected 3 positional arguments, got 4 [bad-argument-count]
 ```
 
 Note that `missing-argument` will be raised if pyrefly can identify that
@@ -885,6 +885,21 @@ class TD(TypedDict):
     x: Option[Self]
 ```
 
+## invalid-sentinel
+
+An error caused by incorrect definition of a Sentinel. A few examples:
+
+```python
+from typing_extensions import Sentinel
+
+# First argument passed to sentinel constructor isn't a string literal
+my_str: str = "MISSING"
+A = Sentinel(my_str)
+
+# Invalid arguments passed to sentinel constructor
+MISSING = Sentinel("MISSING", non_existent="")
+```
+
 ## invalid-super-call
 
 `super()` has [a few restrictions](https://docs.python.org/3/library/functions.html#super) on how it is called.
@@ -1687,10 +1702,6 @@ def valid_generator():
 
 Default severity: `warn`
 
-:::info
-This is a new error kind in *upcoming* Pyrefly version 1.1.0. It is not yet available in the current stable version.
-:::
-
 This warning is raised when a `case` pattern in a `match` statement can never match
 the subject because the subject's type is disjoint from the pattern's type.
 
@@ -1763,8 +1774,7 @@ For example, read-only and required `TypedDict` fields cannot be deleted.
 This error arises when attempting to perform an operation between values of two incompatible types.
 
 ```python
-if "hello" in 1:  # int doesn't support `in`!
-  ...
+x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-operation]
 ```
 
 ## untyped-import
@@ -1794,6 +1804,28 @@ async def bar():
 Default severity: `ignore`
 
 This error is raised when a `# pyrefly: ignore` comment is not used to suppress an error, and can be safely removed.
+
+## unused-type-ignore
+
+Default severity: `ignore`
+
+This error is raised when a `# type: ignore` comment is not used to suppress any error, and can be safely removed. This rule is distinct from `unused-ignore` so that projects using multiple type checkers can leave `# type: ignore` comments for other tools (e.g. mypy) without pyrefly flagging them. Enable this rule if your project uses pyrefly exclusively.
+
+## useless-overload-body
+
+Default severity: `warn`
+
+This warning is raised when an `@overload` function contains executable body logic.
+Overload bodies are never executed at runtime, so only placeholder bodies like `pass`, `...`,
+a docstring-only body, `raise NotImplementedError(...)`, or `return NotImplemented` are useful.
+
+```python
+from typing import overload
+
+@overload
+def parse(x: int) -> int:
+    return x + 1  # warning: executable logic in an overload body
+```
 
 ## variance-mismatch
 

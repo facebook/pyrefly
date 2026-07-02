@@ -345,6 +345,28 @@ mypy_path = "a:b,c"
     }
 
     #[test]
+    fn test_mypy_path_with_config_file_dir() -> anyhow::Result<()> {
+        // Airflow-style: `mypy_path` entries are written relative to the config
+        // file via `$MYPY_CONFIG_FILE_DIR`. They migrate to clean relative
+        // search paths so the resulting config stays portable.
+        let src = r#"[tool.mypy]
+mypy_path = [
+    "$MYPY_CONFIG_FILE_DIR/airflow-core/src",
+    "$MYPY_CONFIG_FILE_DIR/providers/amazon/src",
+]
+"#;
+        let cfg = parse_pyproject_config(src)?;
+        assert_eq!(
+            cfg.search_path_from_file,
+            vec![
+                PathBuf::from("airflow-core/src"),
+                PathBuf::from("providers/amazon/src"),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_exclude_str_or_list() -> anyhow::Result<()> {
         let src_str = r#"[tool.mypy]
 exclude = "test/|foo.py"

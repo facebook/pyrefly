@@ -350,16 +350,24 @@ impl Quantified {
         &self.restriction
     }
 
-    /// Display this type parameter with its bounds/constraints and default,
-    /// in the format used for type parameter lists (e.g. `T: int = str`).
-    pub fn display_with_bounds(&self) -> impl Display + '_ {
+    /// Display this type parameter name with the `*`/`**` kind prefix
+    /// (e.g. `*Ts` for TypeVarTuple, `**P` for ParamSpec).
+    pub fn display_name_with_prefix(&self) -> impl Display + '_ {
         Fmt(move |f| {
             if self.is_param_spec() {
                 write!(f, "**")?;
             } else if self.is_type_var_tuple() {
                 write!(f, "*")?;
             }
-            write!(f, "{}", self.name)?;
+            write!(f, "{}", self.name)
+        })
+    }
+
+    /// Display this type parameter with its bounds/constraints and default,
+    /// in the format used for type parameter lists (e.g. `T: int = str`).
+    pub fn display_with_bounds(&self) -> impl Display + '_ {
+        Fmt(move |f| {
+            write!(f, "{}", self.display_name_with_prefix())?;
             match self.restriction() {
                 Restriction::Bound(t) => write!(f, ": {}", t)?,
                 Restriction::Constraints(ts) => {

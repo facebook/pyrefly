@@ -37,6 +37,7 @@ use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
 use crate::shaped_array::ShapedArrayType;
 use crate::special_form::SpecialForm;
 use crate::tuple::Tuple;
@@ -135,6 +136,11 @@ impl TypeHeap {
     /// Create a `Type::None`.
     pub fn mk_none(&self) -> Type {
         Type::None
+    }
+
+    /// Create a `Type::Sentinel`.
+    pub fn mk_sentinel(&self, sentinel: Sentinel) -> Type {
+        Type::Sentinel(sentinel)
     }
 
     /// Create a `Type::Union` from members.

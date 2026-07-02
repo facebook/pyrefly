@@ -37,14 +37,15 @@ fn absolute_path_parser(s: &str) -> Result<PathBuf, String> {
     Ok(path.absolutize())
 }
 
-/// config overrides
+/// Environment and module-resolution overrides shared by all commands that
+/// load a Pyrefly config and resolve files (check, coverage, dump-config, etc.).
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone, Default)]
-pub struct ConfigOverrideArgs {
+pub struct EnvironmentArgs {
     /// A named collection of error severities and behavior settings that serves as the base configuration.
     /// Any explicit settings you specify override the preset.
     #[arg(short, long)]
-    preset: Option<Preset>,
+    pub(crate) preset: Option<Preset>,
 
     /// Configures Pyrefly to replace `project-excludes` fully rather than
     /// append whatever is in your configuration or passed by CLI to Pyrefly's
@@ -55,12 +56,12 @@ pub struct ConfigOverrideArgs {
         require_equals = true,
         num_args = 0..=1,
     )]
-    disable_project_excludes_heuristics: Option<bool>,
+    pub(crate) disable_project_excludes_heuristics: Option<bool>,
 
     /// The list of directories where imports are imported from, including
     /// type checked files.
     #[arg(long, value_parser = absolute_path_parser)]
-    search_path: Option<Vec<PathBuf>>,
+    pub(crate) search_path: Option<Vec<PathBuf>>,
 
     /// Disable Pyrefly default heuristics, specifically those around
     /// constructing a modified search path. Setting this flag will instruct
@@ -72,7 +73,7 @@ pub struct ConfigOverrideArgs {
         require_equals = true,
         num_args = 0..=1,
     )]
-    disable_search_path_heuristics: Option<bool>,
+    pub(crate) disable_search_path_heuristics: Option<bool>,
 
     /// Enable walk-up fallback search paths, where Pyrefly walks
     /// up from each importing file's directory to the config root to
@@ -83,30 +84,30 @@ pub struct ConfigOverrideArgs {
         require_equals = true,
         num_args = 0..=1,
     )]
-    enable_fallback_search_path: Option<bool>,
+    pub(crate) enable_fallback_search_path: Option<bool>,
 
     /// The Python version any `sys.version` checks should evaluate against.
     #[arg(long)]
-    python_version: Option<PythonVersion>,
+    pub(crate) python_version: Option<PythonVersion>,
 
     /// The platform any `sys.platform` checks should evaluate against.
     #[arg(long)]
-    python_platform: Option<PythonPlatform>,
+    pub(crate) python_platform: Option<PythonPlatform>,
 
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
     #[arg(long)]
-    site_package_path: Option<Vec<PathBuf>>,
+    pub(crate) site_package_path: Option<Vec<PathBuf>>,
 
     /// Use a specific Conda environment to query Python environment information,
     /// even if it isn't activated.
     #[arg(long, group = "env_source")]
-    conda_environment: Option<String>,
+    pub(crate) conda_environment: Option<String>,
 
     /// The path to a Python executable that will be queried for `python-version`
     /// `python-platform`, or `site-package-path` if any of the values are missing.
     #[arg(long, value_name = "EXE_PATH", group = "env_source")]
-    python_interpreter_path: Option<PathBuf>,
+    pub(crate) python_interpreter_path: Option<PathBuf>,
 
     /// The Python executable name available on your PATH that will be queried for your
     /// `python-version`, `python-platform`, or `site-package-path` if any of the values
@@ -115,16 +116,119 @@ pub struct ConfigOverrideArgs {
     /// machine, but want to use one other than the default.
     /// When this and `python-interpreter-path` are unset, we query for `python3` and `python`.
     #[arg(long, value_name = "COMMAND", group = "env_source")]
-    fallback_python_interpreter_name: Option<String>,
+    pub(crate) fallback_python_interpreter_name: Option<String>,
 
     /// Skip doing any automatic querying for `python-interpreter-path`,
     /// `fallback-python-interpreter-name`, or `conda-environment`
     #[arg(long, group = "env_source")]
-    skip_interpreter_query: bool,
+    pub(crate) skip_interpreter_query: bool,
 
     /// Override the bundled typeshed with a custom path.
     #[arg(long)]
-    typeshed_path: Option<PathBuf>,
+    pub(crate) typeshed_path: Option<PathBuf>,
+}
+
+impl EnvironmentArgs {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        fn validate_arg(arg_name: &str, paths: Option<&[PathBuf]>) -> anyhow::Result<()> {
+            if let Some(paths) = paths {
+                for path in paths {
+                    validate_path(path).with_context(|| format!("Invalid {arg_name}"))?;
+                }
+            }
+            Ok(())
+        }
+        validate_arg("--site-package-path", self.site_package_path.as_deref())?;
+        validate_arg("--search-path", self.search_path.as_deref())?;
+        Ok(())
+    }
+
+    pub fn preset(&self) -> Option<Preset> {
+        self.preset
+    }
+
+    pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
+        self.disable_project_excludes_heuristics
+    }
+
+    /// Apply environment-related overrides to the config. Called by
+    /// `ConfigOverrideArgs::override_config` and directly by commands
+    /// that only flatten `EnvironmentArgs`.
+    pub fn override_environment_config(&self, config: &mut ConfigFile) {
+        if let Some(x) = self.preset {
+            config.preset = Some(x);
+            config.synthesized_preset_reason = Some(SynthesizedPresetReason::UserOverride);
+        }
+        if let Some(x) = &self.python_platform {
+            config.python_environment.python_platform = Some(x.clone());
+        }
+        if let Some(x) = &self.python_version {
+            config.python_environment.python_version = Some(*x);
+        }
+        if let Some(x) = &self.search_path {
+            config.search_path_from_args = x.clone();
+        }
+        if let Some(x) = &self.disable_search_path_heuristics {
+            config.disable_search_path_heuristics = *x;
+        }
+        if let Some(x) = &self.enable_fallback_search_path {
+            config.enable_fallback_search_path = *x;
+        }
+        if let Some(x) = &self.disable_project_excludes_heuristics {
+            config.disable_project_excludes_heuristics = *x;
+        }
+        if let Some(x) = &self.site_package_path {
+            config.python_environment.site_package_path = Some(x.clone());
+        }
+        if self.skip_interpreter_query || config.interpreters.skip_interpreter_query {
+            config.interpreters.skip_interpreter_query = true;
+            config.interpreters.python_interpreter_path = None;
+            config.interpreters.fallback_python_interpreter_name = None;
+            config.interpreters.conda_environment = None;
+        }
+        if let Some(x) = &self.python_interpreter_path {
+            config.interpreters.python_interpreter_path = Some(ConfigOrigin::cli(x.clone()));
+            config.interpreters.fallback_python_interpreter_name = None;
+            config.interpreters.conda_environment = None;
+        }
+        if let Some(x) = &self.fallback_python_interpreter_name {
+            config.interpreters.fallback_python_interpreter_name =
+                Some(ConfigOrigin::cli(x.clone()));
+            config.interpreters.python_interpreter_path = None;
+            config.interpreters.conda_environment = None;
+        }
+        if let Some(conda_environment) = &self.conda_environment {
+            config.interpreters.conda_environment =
+                Some(ConfigOrigin::cli(conda_environment.clone()));
+            config.interpreters.python_interpreter_path = None;
+            config.interpreters.fallback_python_interpreter_name = None;
+        }
+        if let Some(x) = &self.typeshed_path {
+            config.typeshed_path = Some(x.clone());
+        }
+    }
+}
+
+/// Convert `EnvironmentArgs` to a full `ConfigOverrideArgs` with check-specific
+/// fields at their defaults. This lets commands that only use `EnvironmentArgs`
+/// pass their args to infrastructure that expects `ConfigOverrideArgs`.
+impl From<EnvironmentArgs> for ConfigOverrideArgs {
+    fn from(env: EnvironmentArgs) -> Self {
+        ConfigOverrideArgs {
+            environment: env,
+            ..Default::default()
+        }
+    }
+}
+
+/// Full config overrides for the `check` command: environment resolution
+/// plus type-checking behavior flags.
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Parser, Clone, Default)]
+pub struct ConfigOverrideArgs {
+    /// Environment and module-resolution overrides.
+    #[command(flatten)]
+    pub(crate) environment: EnvironmentArgs,
 
     /// Always replace specified imports with typing.Any, suppressing related import errors even if the module is found.
     #[arg(long)]
@@ -249,16 +353,7 @@ pub struct ConfigOverrideArgs {
 
 impl ConfigOverrideArgs {
     pub fn validate(&self) -> anyhow::Result<()> {
-        fn validate_arg(arg_name: &str, paths: Option<&[PathBuf]>) -> anyhow::Result<()> {
-            if let Some(paths) = paths {
-                for path in paths {
-                    validate_path(path).with_context(|| format!("Invalid {arg_name}"))?;
-                }
-            }
-            Ok(())
-        }
-        validate_arg("--site-package-path", self.site_package_path.as_deref())?;
-        validate_arg("--search-path", self.search_path.as_deref())?;
+        self.environment.validate()?;
         let ignored_errors = &self.ignore.iter().collect::<HashSet<_>>();
         let warn_errors = &self.warn.iter().collect::<HashSet<_>>();
         let error_errors = self.error.iter().collect::<HashSet<_>>();
@@ -314,62 +409,14 @@ impl ConfigOverrideArgs {
     }
 
     pub fn preset(&self) -> Option<Preset> {
-        self.preset
+        self.environment.preset
     }
 
     pub fn override_config(&self, mut config: ConfigFile) -> (ArcId<ConfigFile>, Vec<ConfigError>) {
-        if let Some(x) = self.preset {
-            config.preset = Some(x);
-            config.synthesized_preset_reason = Some(SynthesizedPresetReason::UserOverride);
-        }
-        if let Some(x) = &self.python_platform {
-            config.python_environment.python_platform = Some(x.clone());
-        }
-        if let Some(x) = &self.python_version {
-            config.python_environment.python_version = Some(*x);
-        }
-        if let Some(x) = &self.search_path {
-            config.search_path_from_args = x.clone();
-        }
-        if let Some(x) = &self.disable_search_path_heuristics {
-            config.disable_search_path_heuristics = *x;
-        }
-        if let Some(x) = &self.enable_fallback_search_path {
-            config.enable_fallback_search_path = *x;
-        }
-        if let Some(x) = &self.disable_project_excludes_heuristics {
-            config.disable_project_excludes_heuristics = *x;
-        }
-        if let Some(x) = &self.site_package_path {
-            config.python_environment.site_package_path = Some(x.clone());
-        }
+        // Apply environment-level overrides first
+        self.environment.override_environment_config(&mut config);
 
-        if self.skip_interpreter_query || config.interpreters.skip_interpreter_query {
-            config.interpreters.skip_interpreter_query = true;
-            config.interpreters.python_interpreter_path = None;
-            config.interpreters.fallback_python_interpreter_name = None;
-            config.interpreters.conda_environment = None;
-        }
-        if let Some(x) = &self.python_interpreter_path {
-            config.interpreters.python_interpreter_path = Some(ConfigOrigin::cli(x.clone()));
-            config.interpreters.fallback_python_interpreter_name = None;
-            config.interpreters.conda_environment = None;
-        }
-        if let Some(x) = &self.fallback_python_interpreter_name {
-            config.interpreters.fallback_python_interpreter_name =
-                Some(ConfigOrigin::cli(x.clone()));
-            config.interpreters.python_interpreter_path = None;
-            config.interpreters.conda_environment = None;
-        }
-        if let Some(conda_environment) = &self.conda_environment {
-            config.interpreters.conda_environment =
-                Some(ConfigOrigin::cli(conda_environment.clone()));
-            config.interpreters.python_interpreter_path = None;
-            config.interpreters.fallback_python_interpreter_name = None;
-        }
-        if let Some(x) = &self.typeshed_path {
-            config.typeshed_path = Some(x.clone());
-        }
+        // Then apply check-specific behavior overrides
         if let Some(x) = &self.use_ignore_files {
             config.use_ignore_files = *x;
         }
@@ -483,7 +530,7 @@ impl ConfigOverrideArgs {
     }
 
     pub fn disable_project_excludes_heuristics(&self) -> Option<bool> {
-        self.disable_project_excludes_heuristics
+        self.environment.disable_project_excludes_heuristics
     }
 
     /// Set the `untyped_def_behavior` override, but only if the user hasn't

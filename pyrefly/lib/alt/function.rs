@@ -540,6 +540,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else if flags.is_staticmethod {
             self_type = None;
         }
+
+        // The `self`/`cls` receiver of a method is supplied implicitly at call time, so a
+        // default value on it is unreachable and almost always a mistake (e.g. `def m(self=1)`).
+        // `self_type` is `Some` exactly when there is an implicit receiver (instance methods,
+        // classmethods including `__init_subclass__`/`__class_getitem__`, properties, and
+        // `__new__`); it is `None` for staticmethods and top-level functions. A variadic-only
+        // receiver lands in `vararg`, so `.first()` here correctly yields `None`.
+        // See https://github.com/facebook/pyrefly/issues/3729.
+        if self_type.is_some()
+            && let Some(first) = def
+                .parameters
+                .posonlyargs
+                .first()
+                .or_else(|| def.parameters.args.first())
+            && let Some(default) = &first.default
+        {
+            self.error(
+                errors,
+                default.range(),
+                ErrorKind::BadFunctionDefinition,
+                format!(
+                    "Parameter `{}` is the `self`/`cls` parameter and cannot have a default value",
+                    first.parameter.name
+                ),
+            );
+        }
+
         let FunctionParamsResult {
             params,
             paramspec,
@@ -651,7 +678,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .arc_clone_ty();
         // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
         let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
-        if !has_return_annotation {
+        if !has_return_annotation && !def.metadata.flags.has_no_type_check {
             self.error(
                 errors,
                 stmt.name.range(),
@@ -872,11 +899,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 Some(SpecialDecorator::UsesShapeDsl)
             }
+            Some(CalleeKind::Function(FunctionKind::DefinesAssertShape)) => {
+                Some(SpecialDecorator::DefinesAssertShape)
+            }
             Some(CalleeKind::Class(ClassKind::EnumNonmember)) => {
                 Some(SpecialDecorator::EnumNonmember)
             }
             Some(CalleeKind::Function(FunctionKind::AbstractMethod)) => {
                 Some(SpecialDecorator::AbstractMethod)
+            }
+            Some(CalleeKind::Function(FunctionKind::NoTypeCheck)) => {
+                Some(SpecialDecorator::NoTypeCheck)
             }
             Some(CalleeKind::Function(FunctionKind::DisjointBase)) => {
                 Some(SpecialDecorator::DisjointBase)
@@ -963,11 +996,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 flags.is_abstract_method = true;
                 true
             }
+            SpecialDecorator::NoTypeCheck => {
+                flags.has_no_type_check = true;
+                true
+            }
             SpecialDecorator::UsesShapeDsl => {
                 // The actual shape_transform flag is populated after the decorator
                 // loop in undecorated_function, where uses_shape_dsl_ir_name is
                 // available. Returning true here just filters the decorator out of
                 // the list so it doesn't go through the generic decorator pipeline.
+                true
+            }
+            SpecialDecorator::DefinesAssertShape => {
+                flags.is_assert_shape = true;
                 true
             }
             _ => false,
@@ -2027,11 +2068,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Set the return type to `Any` so that we check just the input signature.
             sig.ret = self.heap.mk_any_implicit();
             // Skip self/cls to avoid false positive overload errors on narrowed self types.
-            if has_self_param {
-                let mut owner = Owner::new();
-                if let Some((_, rest)) = sig.split_first_param(&mut owner) {
-                    sig = rest;
-                }
+            if has_self_param && let Some(rest) = sig.strip_first_param() {
+                sig = rest;
             }
             sig
         };
@@ -2331,14 +2369,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let mut owner = Owner::new();
         match func {
-            BoundMethodType::Function(func) => {
-                func.signature.split_first_param(&mut owner).map(|(_, c)| {
-                    self.heap.mk_function(Function {
-                        signature: c,
-                        metadata: func.metadata.clone(),
-                    })
+            BoundMethodType::Function(func) => func.signature.strip_first_param().map(|c| {
+                self.heap.mk_function(Function {
+                    signature: c,
+                    metadata: func.metadata.clone(),
                 })
-            }
+            }),
             BoundMethodType::Forall(forall) => forall
                 .body
                 .signature
@@ -2362,8 +2398,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .try_mapped_ref(|x| match x {
                     OverloadType::Function(f) => f
                         .signature
-                        .split_first_param(&mut owner)
-                        .map(|(_, c)| {
+                        .strip_first_param()
+                        .map(|c| {
                             OverloadType::Function(Function {
                                 signature: c,
                                 metadata: f.metadata.clone(),
@@ -2445,8 +2481,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Forallable::TypeAlias(_) => None,
             },
             Type::Callable(callable) => callable
-                .split_first_param(&mut owner)
-                .map(|(_, c)| self.heap.mk_callable_from(c)),
+                .strip_first_param()
+                .map(|c| self.heap.mk_callable_from(c)),
             // Function/Overload variants delegate to the shared implementation.
             Type::Function(func) => self.bind_bound_method_type(
                 &BoundMethodType::Function((**func).clone()),

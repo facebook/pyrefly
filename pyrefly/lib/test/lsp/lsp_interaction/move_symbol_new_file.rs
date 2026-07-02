@@ -74,10 +74,10 @@ fn has_edit(ops: &[DocumentChangeOperation], uri: &Url, expected_text: &str) -> 
         };
         edit.text_document.uri == *uri
             && edit.edits.iter().any(|edit| match edit {
-                lsp_types::OneOf::Left(TextEdit { new_text, .. }) => {
-                    new_text.replace("\r\n", "\n") == expected_text
-                }
-                lsp_types::OneOf::Right(_) => false,
+                lsp_types::TextEditOrAnnotatedOrSnippet::TextEdit(TextEdit {
+                    new_text, ..
+                }) => new_text.replace("\r\n", "\n") == expected_text,
+                _ => false,
             })
     })
 }

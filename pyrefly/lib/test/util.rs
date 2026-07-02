@@ -508,16 +508,9 @@ impl TestEnv {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(
-                    &config_file,
-                    name,
-                    None,
-                    None,
-                    &DirEntryCache::new(true),
-                    None,
-                )
-                .finding()
-                .unwrap(),
+                find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+                    .finding()
+                    .unwrap(),
                 config.dupe(),
             )
         })

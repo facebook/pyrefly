@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering;
 
 use itertools::Either;
 use itertools::Itertools;
+use pyrefly_python::qname::QName;
 use pyrefly_types::callable_residual::OverloadBranchProjection;
 use pyrefly_types::callable_residual::OverloadResidualIdentity;
 use pyrefly_types::dimension::ShapeError;
@@ -850,87 +851,56 @@ impl Solver {
             let query_var = query_var.or(Some(*x));
             let lock = self.variables.lock();
             if let Some(_guard) = lock.recurse(*x, recurser) {
-                match policy {
-                    VarExpansionPolicy::Force => {
+                let variable = lock.get(*x);
+                match &*variable {
+                    Variable::Answer(ty) => {
+                        *t = ty.clone();
+                        drop(variable);
+                        drop(lock);
+                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
+                    }
+                    Variable::ResidualAnswer { target_vars, ty } => {
+                        *t = self.residual_read_for_query_var(query_var, target_vars, ty);
+                        drop(variable);
+                        drop(lock);
+                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
+                    }
+                    Variable::Quantified {
+                        quantified: _,
+                        bounds,
+                    }
+                    | Variable::Unwrap(bounds)
+                        if policy == VarExpansionPolicy::ExpandWithBounds
+                            && let Some(bound) = self.solve_bounds(bounds.clone()) =>
+                    {
+                        *t = bound;
+                        drop(variable);
+                        drop(lock);
+                        self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
+                    }
+                    _ if policy == VarExpansionPolicy::Force => {
+                        drop(variable);
                         let mut e = lock.get_mut(*x);
-                        match &mut *e {
-                            Variable::Answer(ty) => {
-                                *t = ty.clone();
-                            }
-                            Variable::ResidualAnswer { target_vars, ty } => {
-                                *t = self.residual_read_for_query_var(query_var, target_vars, ty);
-                            }
-                            _ => {
-                                let ty = match &mut *e {
-                                    Variable::Quantified {
-                                        quantified: q,
-                                        bounds,
-                                    } => self
-                                        .solve_bounds(mem::take(bounds))
-                                        .unwrap_or_else(|| q.as_gradual_type()),
-                                    Variable::PartialQuantified(q) => q.as_gradual_type(),
-                                    Variable::Unwrap(bounds) => self
-                                        .solve_bounds(mem::take(bounds))
-                                        .unwrap_or_else(|| self.heap.mk_any_implicit()),
-                                    _ => self.heap.mk_any_implicit(),
-                                };
-                                *e = Variable::Answer(ty.clone());
-                                *t = ty;
-                            }
-                        }
+                        let ty = match &mut *e {
+                            Variable::Quantified {
+                                quantified: q,
+                                bounds,
+                            } => self
+                                .solve_bounds(mem::take(bounds))
+                                .unwrap_or_else(|| q.as_gradual_type()),
+                            Variable::PartialQuantified(q) => q.as_gradual_type(),
+                            Variable::Unwrap(bounds) => self
+                                .solve_bounds(mem::take(bounds))
+                                .unwrap_or_else(|| self.heap.mk_any_implicit()),
+                            _ => self.heap.mk_any_implicit(),
+                        };
+                        *e = Variable::Answer(ty.clone());
+                        *t = ty;
                         drop(e);
                         drop(lock);
                         self.resolve_vars_with_limit(t, limit - 1, policy, recurser, query_var);
                     }
-                    _ => {
-                        let variable = lock.get(*x);
-                        match &*variable {
-                            Variable::Answer(ty) => {
-                                *t = ty.clone();
-                                drop(variable);
-                                drop(lock);
-                                self.resolve_vars_with_limit(
-                                    t,
-                                    limit - 1,
-                                    policy,
-                                    recurser,
-                                    query_var,
-                                );
-                            }
-                            Variable::ResidualAnswer { target_vars, ty } => {
-                                *t = self.residual_read_for_query_var(query_var, target_vars, ty);
-                                drop(variable);
-                                drop(lock);
-                                self.resolve_vars_with_limit(
-                                    t,
-                                    limit - 1,
-                                    policy,
-                                    recurser,
-                                    query_var,
-                                );
-                            }
-                            Variable::Quantified {
-                                quantified: _,
-                                bounds,
-                            }
-                            | Variable::Unwrap(bounds)
-                                if policy == VarExpansionPolicy::ExpandWithBounds
-                                    && let Some(bound) = self.solve_bounds(bounds.clone()) =>
-                            {
-                                *t = bound;
-                                drop(variable);
-                                drop(lock);
-                                self.resolve_vars_with_limit(
-                                    t,
-                                    limit - 1,
-                                    policy,
-                                    recurser,
-                                    query_var,
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
+                    _ => {}
                 }
             } else {
                 *t = self.heap.mk_any_implicit();
@@ -1024,33 +994,14 @@ impl Solver {
                     .heap
                     .mk_tuple(simplify_tuples(mem::take(tuple), &self.heap));
             }
-            // Flatten Tensor[prefix, *tuple[...], suffix] after TypeVarTuple resolution
-            if let Type::ShapedArray(tensor) = x
-                && let ShapedArrayShape::Unpacked(unpacked) = &mut tensor.shape
-                && let Type::Tuple(tuple_variant) = &unpacked.1
-            {
-                let (prefix, _, suffix) = &**unpacked;
-                match tuple_variant {
-                    Tuple::Concrete(elements) => {
-                        let mut new_dims = prefix.clone();
-                        new_dims.extend(elements.clone());
-                        new_dims.extend(suffix.clone());
-                        tensor.shape = ShapedArrayShape::Concrete(new_dims);
-                    }
-                    Tuple::Unpacked(inner) => {
-                        let (tuple_prefix, tuple_middle, tuple_suffix) = &**inner;
-                        let mut new_prefix = prefix.clone();
-                        new_prefix.extend(tuple_prefix.clone());
-                        let mut new_suffix = tuple_suffix.clone();
-                        new_suffix.extend(suffix.clone());
-                        tensor.shape = ShapedArrayShape::Unpacked(Box::new((
-                            new_prefix,
-                            tuple_middle.clone(),
-                            new_suffix,
-                        )));
-                    }
-                    _ => {}
-                }
+            if let Type::ShapedArray(tensor) = x {
+                // Reuse tuple simplification for unpack flattening, then restore
+                // the shaped-array invariant that only `tuple[Any, ...]` is stored
+                // as a direct unbounded tuple.
+                tensor.shape = ShapedArrayShape::from_tuple(simplify_tuples(
+                    tensor.shape.as_tuple().clone(),
+                    &self.heap,
+                ));
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
             if let Type::Concatenate(ts, inner) = x
@@ -1684,14 +1635,44 @@ impl Solver {
                 return true;
             }
         };
-        bounds
-            .lower
-            .iter()
-            .all(|lower| is_subset(lower, solved_ty).is_ok())
-            && bounds
-                .upper
-                .iter()
-                .all(|upper| is_subset(solved_ty, upper).is_ok())
+        // The captured bounds may reference self-referential vars; sanitize them before testing
+        // compatibility so a degenerate cycle does not spuriously prune a valid branch.
+        bounds.lower.iter().all(|lower| {
+            let sanitized = self.sanitize_self_referential_vars(lower, solved_ty);
+            is_subset(sanitized.as_ref().unwrap_or(lower), solved_ty).is_ok()
+        }) && bounds.upper.iter().all(|upper| {
+            let sanitized = self.sanitize_self_referential_vars(upper, solved_ty);
+            is_subset(solved_ty, sanitized.as_ref().unwrap_or(upper)).is_ok()
+        })
+    }
+
+    /// Replace any placeholder var whose answer mentions the var itself with the solved type.
+    fn sanitize_self_referential_vars(&self, ty: &Type, solved_ty: &Type) -> Option<Type> {
+        let vars = ty.collect_maybe_placeholder_vars();
+        if vars.is_empty() {
+            return None;
+        }
+        let self_referential: Vec<Var> = {
+            let variables = self.variables.lock();
+            vars.into_iter()
+                .filter(|v| {
+                    matches!(&*variables.get(*v), Variable::Answer(answer)
+                        if answer.collect_maybe_placeholder_vars().contains(v))
+                })
+                .collect()
+        };
+        if self_referential.is_empty() {
+            return None;
+        }
+        let mut ty = ty.clone();
+        ty.transform_mut(&mut |inner| {
+            if let Type::Var(v) = inner
+                && self_referential.contains(v)
+            {
+                *inner = solved_ty.clone();
+            }
+        });
+        Some(ty)
     }
 
     fn quantified_name_for_var(
@@ -2649,6 +2630,10 @@ pub enum SubsetError {
     OpenTypedDict(Box<OpenTypedDictSubsetError>),
     /// Tensor shape check failed
     ShapedArrayShape(ShapeError),
+    /// We do not currently permit ShapedArray subtyping because there is no known use case and
+    /// it would complicate the shape comparison. This is not a fundamental limitation,
+    /// just a way to keep the complexity of an experimental feature lower.
+    ShapedArraySubtyping(QName, QName),
     /// An invariant was violated - used for cases that should be unreachable when - if there is ever a bug - we
     /// would prefer to not panic and get a text location for reproducing rather than just a crash report.
     /// Note: always use `ErrorCollector::internal_error` to log internal errors.
@@ -2684,6 +2669,9 @@ impl SubsetError {
             SubsetError::TypedDict(err) => Some(err.to_error_msg()),
             SubsetError::OpenTypedDict(err) => Some(err.to_error_msg()),
             SubsetError::ShapedArrayShape(err) => Some(err.to_string()),
+            SubsetError::ShapedArraySubtyping(got, want) => Some(format!(
+                "Pyrefly does not support subtyping relationships between shaped arrays `{got}` and `{want}` at this time. If you need this, consider filing an issue."
+            )),
             SubsetError::InternalError(msg) => Some(format!("Pyrefly internal error: {msg}")),
             SubsetError::TypeOfProtocolNeedsConcreteClass(want) => Some(format!(
                 "Only concrete classes may be assigned to `type[{want}]` because `{want}` is a protocol"
@@ -3126,7 +3114,16 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         if self.gas.stop() {
             return Err(SubsetError::Other);
         }
-        if matches!(got, Type::Materialization) {
+        // Normalize before var solving so decorator metadata does not get pinned as part of a type.
+        if let Type::KwCall(call) = got {
+            let res = self.is_subset_eq(&call.return_ty, want);
+            self.gas.restore();
+            return res;
+        } else if let Type::KwCall(call) = want {
+            let res = self.is_subset_eq(got, &call.return_ty);
+            self.gas.restore();
+            return res;
+        } else if matches!(got, Type::Materialization) {
             let res = self.is_subset_eq(
                 &self
                     .solver

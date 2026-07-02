@@ -12,7 +12,7 @@ pub trait Includes {
     /// Given a glob pattern, return the directories that can contain files that match the pattern.
     fn roots(&self) -> Vec<PathBuf>;
 
-    fn files(&self) -> anyhow::Result<Vec<PathBuf>>;
+    fn files_iter(&self) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf> + '_>>;
 
     fn covers(&self, path: &Path) -> bool;
 

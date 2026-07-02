@@ -892,3 +892,35 @@ class DecoratedBad(Left, Right): ...  # E: incompatible disjoint bases
 class CascadingFromDecoratedBad(DecoratedBad, Right): ...
 "#,
 );
+
+// `@dataclass(slots=True)` promotes a class to its own disjoint-base
+// representative only when synthesis produces a fresh slot name. A bare
+// `@dataclass` middle class must not re-credit its grandparent's slots.
+testcase!(
+    test_disjoint_base_dataclass_slots_through_bare_middle_class,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class A:
+    x: int
+
+@dataclass
+class B(A): ...
+
+@dataclass(slots=True)
+class CNoNew(B): ...
+
+@dataclass(slots=True)
+class CNew(B):
+    y: int
+
+class Other:
+    __slots__ = ("z",)
+
+# CNoNew inherits `A` as representative (no fresh slot synthesized).
+class MixNoNew(CNoNew, Other): ...  # E: incompatible disjoint bases `A`, `Other`
+# CNew synthesizes `y`, becoming its own representative.
+class MixNew(CNew, Other): ...  # E: incompatible disjoint bases `CNew`, `Other`
+"#,
+);

@@ -430,9 +430,7 @@ impl<'a> BindingsBuilder<'a> {
                 if self.scopes.is_definitely_unreachable() {
                     return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
                 }
-                let suggestion = self
-                    .scopes
-                    .suggest_similar_name(&name.id, name.range.start());
+                let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -755,6 +753,28 @@ impl<'a> BindingsBuilder<'a> {
                             &mut type_usage,
                         );
                     }
+                } else if self.scopes.has_future_annotations()
+                    && let Expr::Name(name) = &**value
+                    && let Some((class_object_idx, FlowStyle::ClassDef { .. })) =
+                        self.scopes.binding_idx_for_name(&name.id)
+                    && self.class_object_is_generic(class_object_idx)
+                    && !matches!(
+                        &**slice,
+                        // String-keyed class subscripts, such as Enum member lookup, are runtime
+                        // expressions even when future annotations are active.
+                        Expr::StringLiteral(_)
+                    )
+                {
+                    self.ensure_expr(&mut *value, usage);
+                    self.ensure_type_impl(
+                        &mut *slice,
+                        &mut None,
+                        false,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
                 } else {
                     self.ensure_expr(&mut *value, usage);
                     self.ensure_expr(&mut *slice, usage);
@@ -1204,6 +1224,13 @@ impl<'a> BindingsBuilder<'a> {
             Expr::StringLiteral(literal)
                 if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
             {
+                if literal.flags.prefix().is_raw() {
+                    self.error(
+                        literal.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "Raw string literals are not allowed in type expressions".to_owned(),
+                    );
+                }
                 match Ast::parse_type_literal(literal) {
                     Ok(expr) => {
                         *x = expr;
@@ -1397,9 +1424,13 @@ impl<'a> BindingsBuilder<'a> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
             self.ensure_expr(&mut x.expression, usage);
+            let trailing_name = Ast::decorator_trailing_name(&x.expression).map(Name::new);
             let k = self.insert_binding(
                 KeyDecorator(x.range),
-                BindingDecorator { expr: x.expression },
+                BindingDecorator {
+                    expr: x.expression,
+                    trailing_name,
+                },
             );
             decorator_keys.push(k);
         }

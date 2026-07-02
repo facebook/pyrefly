@@ -59,6 +59,7 @@ use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
 use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
@@ -858,6 +859,9 @@ pub enum Type {
     /// be immediately looked up for untyping (see `TypeAliasData::TypeAliasRef`), `UntypedAlias`
     /// stores a reference that is untyped once we actually look up the value.
     UntypedAlias(Box<TypeAliasData>),
+    // Sentinel types, documented here: https://docs.python.org/3.15/library/functions.html#sentinel
+    // First introduced in PEP 661: https://peps.python.org/pep-0661/
+    Sentinel(Sentinel),
     /// Represents the result of a super() call. The first ClassType is the point in the MRO that attribute lookup
     /// on the super instance should start at (*not* the class passed to the super() call), and the second
     /// ClassType is the second argument (implicit or explicit) to the super() call. For example, in:
@@ -919,6 +923,7 @@ impl Visit for Type {
             Type::Annotated(x, _metadata) => x.visit(f),
             Type::Unpack(x) => x.visit(f),
             Type::TypeVar(x) => x.visit(f),
+            Type::Sentinel(x) => x.visit(f),
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
@@ -975,6 +980,7 @@ impl VisitMut for Type {
             Type::Annotated(x, _metadata) => x.visit_mut(f),
             Type::Unpack(x) => x.visit_mut(f),
             Type::TypeVar(x) => x.visit_mut(f),
+            Type::Sentinel(x) => x.visit_mut(f),
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
@@ -1134,6 +1140,11 @@ impl Type {
 
     pub fn is_literal_string(&self) -> bool {
         self.lit_string_style().is_some()
+    }
+
+    /// A scalar type cannot decompose into a container element type.
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, Type::Literal(_) | Type::LiteralString(_) | Type::None)
     }
 
     /// If this type is a literal string (either `LiteralString` or a `Literal` string value),
@@ -1393,6 +1404,12 @@ impl Type {
             Type::Overload(overload) => overload.is_typeis(),
             _ => false,
         }
+    }
+
+    pub fn is_assert_shape(&self) -> bool {
+        self.visit_toplevel_func_metadata(&|meta| {
+            meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
+        })
     }
 
     pub fn is_none(&self) -> bool {
@@ -1865,9 +1882,19 @@ impl Type {
         self
     }
 
-    pub fn as_quantified(&self) -> Option<Quantified> {
+    /// If this type represents a (possibly narrowed) quantified (i.e., `Q`  or `Q & T`), returns
+    /// the quantified `Q` plus the type `T` it is narrowed to.
+    pub fn as_quantified(&self) -> Option<(&Quantified, Option<&Type>)> {
         match self {
-            Type::Quantified(q) => Some((**q).clone()),
+            Type::Quantified(q) => Some((q, None)),
+            Type::Intersect(x) => match x.0.as_slice() {
+                [Type::Quantified(q), t] | [t, Type::Quantified(q)]
+                    if !matches!(t, Type::Quantified(_)) =>
+                {
+                    Some((q, Some(t)))
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1919,6 +1946,7 @@ impl Type {
             Type::ParamSpec(t) => Some(t.qname()),
             Type::SelfType(cls) => Some(cls.qname()),
             Type::Literal(lit) if let Lit::Enum(e) = &lit.value => Some(e.class.qname()),
+            Type::Sentinel(s) => Some(s.qname()),
             _ => None,
         }
     }
@@ -1932,6 +1960,7 @@ impl Type {
             Type::Literal(lit) if let Lit::Str(x) = &lit.value => Some(!x.is_empty()),
             Type::Type(_) => Some(true),
             Type::None => Some(false),
+            Type::Sentinel(_) => Some(true),
             Type::Tuple(Tuple::Concrete(elements)) => Some(!elements.is_empty()),
             Type::Union(u) => {
                 let mut answer = None;

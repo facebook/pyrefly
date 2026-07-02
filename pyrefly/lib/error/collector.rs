@@ -327,6 +327,14 @@ impl ErrorBuilder<'_> {
         self
     }
 
+    /// Adds the errors from `collector` as detail lines.
+    pub fn with_errors_as_details(mut self, collector: ErrorCollector) -> Self {
+        for error in collector.errors.into_inner().iter() {
+            self.details.push(error.msg_header().to_owned());
+        }
+        self
+    }
+
     /// Add a secondary labeled span.
     pub fn with_annotation(mut self, range: TextRange, label: String) -> Self {
         if self.active {

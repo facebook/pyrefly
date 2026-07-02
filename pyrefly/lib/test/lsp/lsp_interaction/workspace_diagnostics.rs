@@ -609,7 +609,7 @@ fn test_did_close_no_stale_memory_path_errors() {
                             && params
                                 .diagnostics
                                 .iter()
-                                .any(|d| d.message.contains("memory path not found"))
+                                .any(|d| matches!(&d.message, lsp_types::DiagnosticMessage::String(s) if s.contains("memory path not found")))
                         {
                             return Some(Ok(true));
                         }
@@ -810,6 +810,75 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             },
         )
         .expect("Closed warning.py should return to only error-severity diagnostics");
+
+    interaction.shutdown().unwrap();
+}
+
+/// This test asserts that baselined errors are not downgraded to hint-severity
+/// if they belong to non-open workspace files.
+#[test]
+fn test_workspace_baseline_non_open_file_stays_error() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("baseline_hint_workspace");
+    let bad_py = root_path.join("bad.py");
+    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "baseline_hint_workspace".to_owned(),
+                Url::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    // Open clean.py to trigger project indexing, which discovers the non-open
+    // bad.py and publishes its workspace diagnostics.
+    interaction.client.did_open("clean.py");
+
+    interaction
+        .client
+        .expect_message(
+            "publishDiagnostics for non-open bad.py with both baseline errors at ERROR",
+            move |msg| {
+                let Message::Notification(n) = msg else {
+                    return None;
+                };
+                if n.method != PublishDiagnostics::METHOD {
+                    return None;
+                }
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(n.params).unwrap();
+                if params.uri.to_file_path().unwrap() != bad_py {
+                    return None;
+                }
+                let errors = params
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+                    .count();
+                let hints = params
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.severity == Some(DiagnosticSeverity::HINT))
+                    .count();
+                if params.diagnostics.len() == 2 && errors == 2 && hints == 0 {
+                    Some(Ok(()))
+                } else {
+                    Some(Err(crate::object_model::LspMessageError::Custom {
+                        description: format!(
+                            "Expected 2 ERROR and 0 HINT for non-open bad.py, got {errors} ERROR and {hints} HINT ({} total)",
+                            params.diagnostics.len()
+                        ),
+                    }))
+                }
+            },
+        )
+        .expect("Failed to receive workspace diagnostics for non-open bad.py");
 
     interaction.shutdown().unwrap();
 }

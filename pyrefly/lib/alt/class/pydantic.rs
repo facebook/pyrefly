@@ -12,12 +12,9 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::annotation::Annotation;
-use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::callable::Function;
 use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
-use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Required;
 use pyrefly_types::keywords::DataclassFieldKeywords;
 use pyrefly_types::lit_int::LitInt;
@@ -145,10 +142,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
         let root_param = Param::Pos(ROOT, root_model_type, root_requiredness);
         let params = vec![self.class_self_param(cls, false), root_param];
-        let ty = self.heap.mk_function(Function {
-            signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
-            metadata: FuncMetadata::method(cls, dunder::INIT),
-        });
+        let ty = self.synthesized_method(cls, dunder::INIT, params, self.heap.mk_none());
         ClassSynthesizedField::new(ty)
     }
 

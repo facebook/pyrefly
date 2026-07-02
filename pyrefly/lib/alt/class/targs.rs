@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Function;
+use pyrefly_util::display::commas_iter;
 use pyrefly_util::display::count;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::name::Name;
@@ -43,6 +44,19 @@ use crate::types::types::Forallable;
 use crate::types::types::TArgs;
 use crate::types::types::TParams;
 use crate::types::types::Type;
+
+/// Format a generic entity for implicit-any error messages, e.g.
+/// `` class `Foo[T, *Ts]` `` (or `` class `Foo` `` when there are no tparams).
+fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
+    if tparams.is_empty() {
+        format!("{noun} `{name}`")
+    } else {
+        format!(
+            "{noun} `{name}[{}]`",
+            commas_iter(|| tparams.iter().map(|t| t.display_name_with_prefix()))
+        )
+    }
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
@@ -193,13 +207,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        let tparams = self.get_class_tparams(cls);
+        let tparams_for_error = tparams.dupe();
         let targs = self.create_default_targs(
-            self.get_class_tparams(cls),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("class `{}`", cls.name()),
+                    format_generic_entity("class", cls.name(), &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -213,13 +229,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
+        let tparams = forall.tparams.dupe();
+        let tparams_for_error = tparams.dupe();
+        let alias_name = forall.body.name();
         let targs = self.create_default_targs(
-            forall.tparams.dupe(),
+            tparams,
             Some(&|tparam: &Quantified| {
                 Self::add_implicit_any_error(
                     errors,
                     range,
-                    format!("type alias `{}`", forall.body.name()),
+                    format_generic_entity("type alias", &alias_name, &tparams_for_error),
                     Some(tparam.name().as_str()),
                 );
             }),
@@ -610,6 +629,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         range,
                         ErrorKind::InvalidTypeVarTuple,
                         "`TypeVarTuple` must be unpacked".to_owned(),
+                    )
+                } else if matches!(arg, Type::Ellipsis) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        "`...` cannot be used for type parameter".to_owned(),
                     )
                 } else if arg.is_kind_param_spec() {
                     self.error(

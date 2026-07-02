@@ -86,6 +86,7 @@ use crate::binding::binding::AnyExportedKey;
 use crate::binding::binding::Exported;
 use crate::binding::binding::KeyAbstractClassCheck;
 use crate::binding::binding::KeyClassBaseType;
+use crate::binding::binding::KeyClassDisjointBase;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
 use crate::binding::binding::KeyClassMro;
@@ -311,6 +312,7 @@ impl ModuleDeps {
             | AnyExportedKey::KeyVariance(KeyVariance(c))
             | AnyExportedKey::KeyClassMetadata(KeyClassMetadata(c))
             | AnyExportedKey::KeyClassMro(KeyClassMro(c))
+            | AnyExportedKey::KeyClassDisjointBase(KeyClassDisjointBase(c))
             | AnyExportedKey::KeyAbstractClassCheck(KeyAbstractClassCheck(c))
             | AnyExportedKey::KeyClassSubscriptSymmetry(KeyClassSubscriptSymmetry(c)) => {
                 self.classes.insert(c);
@@ -1761,7 +1763,11 @@ impl<'a> Transaction<'a> {
     /// Look up the location of an exported name in a module.
     /// Follows re-exports (ExportLocation::OtherModule) to find the original definition.
     /// Returns the module and text range where the name is defined.
-    fn lookup_export_location(&self, handle: &Handle, name: &Name) -> Option<(Module, TextRange)> {
+    pub(crate) fn lookup_export_location(
+        &self,
+        handle: &Handle,
+        name: &Name,
+    ) -> Option<(Module, TextRange)> {
         let module_data = self.get_module(handle);
         let exports = self.lookup_export(module_data);
         let export_map = exports.exports(&self.lookup(module_data));
@@ -1845,10 +1851,7 @@ impl<'a> Transaction<'a> {
             .updated_loaders
             .ensure(loader, || match self.readable.loaders.get(loader) {
                 Some(v) => v.dupe(),
-                None => Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
+                None => Arc::new(LoaderFindCache::new(loader.dupe())),
             })
             .0
             .dupe()
@@ -2235,22 +2238,10 @@ impl<'a> Transaction<'a> {
     fn invalidate_find(&mut self) {
         let new_loaders = LockedMap::new();
         for loader in self.data.updated_loaders.keys() {
-            new_loaders.insert(
-                loader.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
         }
         for loader in self.readable.loaders.keys() {
-            new_loaders.insert(
-                loader.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
         }
         self.data.updated_loaders = new_loaders;
 
@@ -2310,13 +2301,7 @@ impl<'a> Transaction<'a> {
                 new_loaders.insert(c.dupe(), l.dupe());
             });
         configs.iter().for_each(|config| {
-            new_loaders.insert(
-                config.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    config.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
         });
         self.data.updated_loaders = new_loaders;
 
@@ -3219,19 +3204,10 @@ pub struct State {
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
-    dir_cache_enabled: bool,
 }
 
 impl State {
     pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
-        Self::new_with_options(config_finder, thread_count, false)
-    }
-
-    pub fn new_with_options(
-        config_finder: ConfigFinder,
-        thread_count: ThreadCount,
-        dir_cache_enabled: bool,
-    ) -> Self {
         Self {
             threads: ThreadPool::new(thread_count),
             uniques: UniqueFactory::new(),
@@ -3239,7 +3215,6 @@ impl State {
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),
-            dir_cache_enabled,
         }
     }
 
@@ -3247,8 +3222,13 @@ impl State {
         &self.config_finder
     }
 
-    pub fn dir_cache_enabled(&self) -> bool {
-        self.dir_cache_enabled
+    /// Run `op` on the state's thread pool, which has an increased stack size.
+    pub fn install<OP, R>(&self, op: OP) -> R
+    where
+        OP: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.threads.install(op)
     }
 
     fn get_config(&self, handle: &Handle) -> ArcId<ConfigFile> {

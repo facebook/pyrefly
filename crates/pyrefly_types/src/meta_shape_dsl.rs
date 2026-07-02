@@ -49,7 +49,9 @@ use crate::equality::TypeEqCtx;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::shaped_array::ShapedArrayShape;
+use crate::shaped_array::ShapedArrayShapeArgStyle;
 use crate::shaped_array::ShapedArrayType;
+use crate::shaped_array::shape_to_tuple_carrier_arg;
 use crate::tuple::Tuple;
 use crate::types::Type;
 
@@ -182,19 +184,13 @@ mod extract {
     /// support variadic shapes (e.g., slicing) can operate on them.
     pub fn shaped_array_shape(ty: &Type) -> Option<ShapedArrayShape> {
         match ty {
-            Type::ShapedArray(shaped_array) => match &shaped_array.shape {
-                ShapedArrayShape::Concrete(_) => Some(shaped_array.shape.clone()),
-                ShapedArrayShape::Unpacked(_) => {
-                    // Allow unpacked shapes through — the DSL evaluator handles
-                    // them via Val::Unpacked. Shapeless tensors (Unpacked with
-                    // any_tuple middle and empty prefix/suffix) still return None.
-                    if shaped_array.is_shapeless() {
-                        None
-                    } else {
-                        Some(shaped_array.shape.clone())
-                    }
+            Type::ShapedArray(shaped_array) => {
+                if shaped_array.is_shapeless() {
+                    None
+                } else {
+                    Some(shaped_array.shape.clone())
                 }
-            },
+            }
             Type::Union(union) => {
                 let mut shapes = union.members.iter().map(shaped_array_shape);
                 let first = shapes.next()??;
@@ -2602,15 +2598,20 @@ fn eval_dsl_expr(
         DslExpr::Shape(inner) => {
             let val = eval_dsl_expr(inner, env, fns, op_name)?;
             let shape = val.as_shape();
-            match shape {
-                ShapedArrayShape::Concrete(dims) => {
+            match shape.as_tuple() {
+                Tuple::Concrete(dims) => {
                     // Use dim_val to convert concrete Size(Literal(n)) to Val::Int(n)
                     // so comparisons against literal ints (e.g., `d != 1` in squeeze)
                     // work naturally.
                     let vals: Vec<Val> = dims.iter().map(|d| dim_val(d.clone())).collect();
                     Ok(Val::List(vals))
                 }
-                ShapedArrayShape::Unpacked(unpacked) => {
+                Tuple::Unbounded(_) => Ok(Val::Unpacked {
+                    prefix: Vec::new(),
+                    middle: Type::any_tuple(),
+                    suffix: Vec::new(),
+                }),
+                Tuple::Unpacked(unpacked) => {
                     let (prefix, middle, suffix) = &**unpacked;
                     Ok(Val::Unpacked {
                         prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
@@ -3226,7 +3227,21 @@ fn eval_dsl_body(
 /// Falls back to `ret_type` unchanged if it isn't a shaped-array type.
 fn inject_shape(shape: ShapedArrayShape, ret_type: &Type) -> Type {
     match ret_type {
-        Type::ShapedArray(t) => ShapedArrayType::new(t.base_class.clone(), shape).to_type(),
+        Type::ShapedArray(t) => {
+            let mut base_class = t.base_class.clone();
+            if let ShapedArrayShapeArgStyle::TupleCarrier { index } = t.shape_arg_style {
+                let carrier = base_class
+                    .targs_mut()
+                    .as_mut()
+                    .get_mut(index)
+                    .expect("shape argument index should point to a class type argument");
+                *carrier = shape_to_tuple_carrier_arg(&shape);
+            }
+            ShapedArrayType::new(base_class, shape)
+                .with_syntax(t.syntax)
+                .with_shape_arg_style(t.shape_arg_style)
+                .to_type()
+        }
         _ => ret_type.clone(),
     }
 }

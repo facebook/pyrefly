@@ -320,6 +320,67 @@ bad2: C[int] = C[float]()  # E:
 "#,
 );
 
+testcase!(
+    test_receiver_annotation_skipped_for_variance_inference,
+    r#"
+from typing import Callable
+
+class Container[T]:
+    def __init__(self, value: T):
+        self._value: T = value
+
+    def to_value_T(self: Container[T]) -> T:
+        return self._value
+
+check_covariant: Container[object] = Container[int](1)
+check_bad: Container[int] = Container[object](object())  # E:
+
+direct_call: int = Container.to_value_T(Container[int](1))
+direct_call_bad: str = Container.to_value_T(Container[int](1))  # E:
+
+class ReceiverAndValue[T]:
+    def put(self: ReceiverAndValue[T], value: T) -> None: ...
+
+receiver_ok: ReceiverAndValue[int] = ReceiverAndValue[object]()
+receiver_bad: ReceiverAndValue[object] = ReceiverAndValue[int]()  # E:
+
+class StaticInput[T]:
+    @staticmethod
+    def consume(value: T) -> None: ...
+
+static_ok: StaticInput[int] = StaticInput[object]()
+static_bad: StaticInput[object] = StaticInput[int]()  # E:
+
+class CallableField[T]:
+    callback: Callable[["CallableField[T]"], T]
+
+callable_field_bad: CallableField[object] = CallableField[int]()  # E:
+
+class PropertyGetter[T]:
+    @property
+    def value(self: PropertyGetter[T]) -> T: ...
+
+property_ok: PropertyGetter[object] = PropertyGetter[int]()
+property_bad: PropertyGetter[int] = PropertyGetter[object]()  # E:
+
+class PropertySetter[T]:
+    @property
+    def value(self: PropertySetter[T]) -> T: ...
+    @value.setter
+    def value(self: PropertySetter[T], value: T) -> None: ...
+
+property_setter_bad1: PropertySetter[object] = PropertySetter[int]()  # E:
+property_setter_bad2: PropertySetter[int] = PropertySetter[object]()  # E:
+
+class ClassGetter[T]:
+    @classmethod
+    def get(cls: type[ClassGetter[T]]) -> T: ...
+
+classmethod_ok: ClassGetter[object] = ClassGetter[int]()
+classmethod_bad: ClassGetter[int] = ClassGetter[object]()  # E:
+"#,
+);
+
 // Test variance inference with stdlib generic that has covariant type parameter
 testcase!(
     test_class_variance_with_mapping,

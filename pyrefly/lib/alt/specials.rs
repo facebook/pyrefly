@@ -245,7 +245,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(lit) => literals.push(lit.to_explicit_type()),
                 None => literals.push(self.heap.mk_literal_string(LitStyle::Explicit)),
             },
-            Expr::BytesLiteral(x) => literals.push(Lit::from_bytes_literal(x).to_explicit_type()),
+            Expr::BytesLiteral(x) => match Lit::from_bytes_literal(x) {
+                Some(lit) => literals.push(lit.to_explicit_type()),
+                None => literals.push(self.heap.mk_class_type(self.stdlib.bytes().clone())),
+            },
             Expr::BooleanLiteral(x) => {
                 literals.push(Lit::from_boolean_literal(x).to_explicit_type())
             }
@@ -421,11 +424,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap
                         .mk_type_of(self.heap.mk_callable_ellipsis(self.heap.mk_any_error()))
                 };
-                let ret = self.expr_untype(
-                    &arguments[1],
-                    TypeFormContext::TypeArgumentCallableReturn,
-                    errors,
-                );
+                let ret = if let Expr::EllipsisLiteral(_) = &arguments[1] {
+                    self.error(
+                        errors,
+                        arguments[1].range(),
+                        ErrorKind::InvalidAnnotation,
+                        "`...` is not a valid return type".to_owned(),
+                    );
+                    self.heap.mk_any_error()
+                } else {
+                    self.expr_untype(
+                        &arguments[1],
+                        TypeFormContext::TypeArgumentCallableReturn,
+                        errors,
+                    )
+                };
                 match &arguments[0] {
                     Expr::List(ExprList { elts, .. }) => {
                         match self.check_args_and_construct_tuple(elts, errors) {

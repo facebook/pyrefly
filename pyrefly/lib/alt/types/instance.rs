@@ -12,7 +12,10 @@ use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::simplify::intersect;
+use pyrefly_types::simplify::unions;
 use pyrefly_types::stdlib::Stdlib;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::TArgs;
@@ -121,7 +124,21 @@ impl<'a> Instance<'a> {
             InstanceKind::TypedDict => {
                 heap.mk_typed_dict(TypedDict::new(self.class.dupe(), self.targs.clone()))
             }
-            InstanceKind::TypeVar(q) => q.clone().to_type(heap),
+            InstanceKind::TypeVar(q) => {
+                let quantified_ty = q.clone().to_type(heap);
+                let ub = match q.restriction() {
+                    Restriction::Unrestricted => return quantified_ty,
+                    Restriction::Bound(b) => b.clone(),
+                    Restriction::Constraints(cs) => unions(cs.clone(), heap),
+                };
+                let instance_ty =
+                    heap.mk_class_type(ClassType::new(self.class.dupe(), self.targs.clone()));
+                if instance_ty == ub {
+                    quantified_ty
+                } else {
+                    intersect(vec![quantified_ty, instance_ty.clone()], instance_ty, heap)
+                }
+            }
             InstanceKind::SelfType => {
                 heap.mk_self_type(ClassType::new(self.class.dupe(), self.targs.clone()))
             }

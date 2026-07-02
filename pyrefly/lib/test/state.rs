@@ -16,8 +16,9 @@ use std::time::Duration;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
+use pyrefly_build::source_db::LiveSourceDatabase;
+use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::SourceDatabase;
-use pyrefly_build::source_db::Target;
 use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -27,12 +28,10 @@ use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::events::CategorizedEvents;
-use pyrefly_util::interned_path::InternedPath;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
-use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
-use pyrefly_util::watch_pattern::WatchPattern;
+use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
 use tempfile::TempDir;
 
@@ -41,6 +40,7 @@ use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
+use crate::lsp::non_wasm::server::resolve_export_location;
 use crate::module::finder::DirEntryCache;
 use crate::module::finder::find_import;
 use crate::state::load::FileContents;
@@ -75,14 +75,6 @@ impl MutableShapeExtensionsSourceDb {
 }
 
 impl SourceDatabase for MutableShapeExtensionsSourceDb {
-    fn modules_to_check(&self) -> Vec<Handle> {
-        vec![Handle::new(
-            ModuleName::from_str("main"),
-            ModulePath::memory(PathBuf::from("main.py")),
-            self.sys_info.dupe(),
-        )]
-    }
-
     fn may_contain_module(&self, module: ModuleName) -> bool {
         match module.as_str() {
             "shape_extensions" => *self.contains_shape_extensions.lock(),
@@ -119,24 +111,18 @@ impl SourceDatabase for MutableShapeExtensionsSourceDb {
         ))
     }
 
-    fn query_source_db(
-        &self,
-        _: SmallSet<InternedPath>,
-        _: bool,
-    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
-        (Ok(true), TelemetrySourceDbRebuildInstanceStats::default())
-    }
-
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern> {
-        SmallSet::new()
-    }
-
-    fn get_target(&self, _: Option<&Path>) -> Option<Target> {
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
         None
     }
+}
 
-    fn get_generated_files(&self) -> SmallSet<InternedPath> {
-        SmallSet::new()
+impl ModuleEnumerator for MutableShapeExtensionsSourceDb {
+    fn modules_to_check(&self) -> Vec<Handle> {
+        vec![Handle::new(
+            ModuleName::from_str("main"),
+            ModulePath::memory(PathBuf::from("main.py")),
+            self.sys_info.dupe(),
+        )]
     }
 }
 
@@ -165,16 +151,9 @@ else:
 
     let f = |name: &str, sys_info: &SysInfo| {
         let name = ModuleName::from_str(name);
-        let path = find_import(
-            &config_file,
-            name,
-            None,
-            None,
-            &DirEntryCache::new(true),
-            None,
-        )
-        .finding()
-        .unwrap();
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
 
@@ -192,6 +171,118 @@ else:
         .unwrap();
 }
 
+/// Regression for the TSP type converter's export-location resolution.
+///
+/// `convert_type_in_transaction` resolves an exported symbol's definition by
+/// demanding the target module's exports, which demands its `Stdlib` via
+/// `get_stdlib`. The target handle must inherit the *source* file's `SysInfo`
+/// (built through `import_handle`), because computing the queried type only
+/// populated `compute_stdlib` for the source's `SysInfo`. When the transaction
+/// holds more than one `SysInfo`, `get_stdlib` no longer short-circuits to its
+/// single entry and looks the `SysInfo` up by key — so a target handle carrying
+/// any other `SysInfo` would hit a missing `Stdlib` and panic.
+///
+/// This test reproduces the multi-`SysInfo` transaction and verifies the warm
+/// path: a target resolved via `import_handle` inherits the source `SysInfo`
+/// and its export location resolves without panicking.
+#[test]
+fn test_lookup_export_location_warm_with_multiple_sysinfos() {
+    let linux = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
+    let windows = SysInfo::new(PythonVersion::default(), PythonPlatform::windows());
+
+    let mut test_env = TestEnv::new();
+    test_env.add("lib", "CONST = 42\n");
+    // `main` does not import `lib`, so `lib` is never checked during the run and
+    // its exports must be demanded fresh — exercising the `get_stdlib` call.
+    test_env.add("main", "x = 1\n");
+    let config_file = test_env.config();
+    let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
+
+    let f = |name: &str, sys_info: &SysInfo| {
+        let name = ModuleName::from_str(name);
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
+        Handle::new(name, path, sys_info.dupe())
+    };
+
+    // Check `main` under BOTH sys_infos so the transaction's stdlib map has two
+    // entries and `get_stdlib`'s single-entry short-circuit no longer applies.
+    let handles = [f("main", &linux), f("main", &windows)];
+    let mut transaction = state.new_transaction(Require::Exports, None);
+    transaction.set_memory(test_env.get_memory());
+    transaction.run(&handles, Require::Everything, None);
+
+    // Resolve `lib.CONST` the way the converter does: build the target handle via
+    // `import_handle` from the source file. It must inherit the source `SysInfo`.
+    let source = f("main", &linux);
+    let target = transaction
+        .import_handle(&source, ModuleName::from_str("lib"), None)
+        .finding()
+        .unwrap();
+    assert_eq!(
+        target.sys_info(),
+        &linux,
+        "import_handle must inherit the source file's SysInfo"
+    );
+    let location = transaction.lookup_export_location(&target, &Name::new_static("CONST"));
+    assert!(
+        location.is_some(),
+        "expected to resolve the location of lib.CONST without panicking"
+    );
+}
+
+// Regression for the TSP `get_stdlib` panic (D107960810), exercising the actual
+// converter seam `resolve_export_location` rather than `lookup_export_location`
+// directly. Before the fix this re-derived the target handle from the module
+// path via the config (which defaults to `linux`); when the source file is
+// checked under other platforms, that `linux` Stdlib is never computed, so the
+// export lookup panicked in `get_stdlib` once the transaction held more than one
+// `SysInfo`. The fix reaches the target via `import_handle`, inheriting the
+// source's (warm) `SysInfo`, so resolution succeeds.
+#[test]
+fn test_resolve_export_location_inherits_source_sysinfo() {
+    // Two run platforms, both different from the config default (`linux`), so the
+    // config-derived handle's Stdlib is never computed and the single-entry
+    // shortcut in `get_stdlib` does not apply.
+    let windows = SysInfo::new(PythonVersion::default(), PythonPlatform::windows());
+    let mac = SysInfo::new(PythonVersion::default(), PythonPlatform::mac());
+
+    let mut test_env = TestEnv::new();
+    test_env.add("lib", "CONST = 42\n");
+    // `main` does not import `lib`, so `lib` is demanded fresh during resolution.
+    test_env.add("main", "x = 1\n");
+    let config_file = test_env.config();
+    let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
+
+    let f = |name: &str, sys_info: &SysInfo| {
+        let name = ModuleName::from_str(name);
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
+        Handle::new(name, path, sys_info.dupe())
+    };
+
+    let handles = [f("main", &windows), f("main", &mac)];
+    let mut transaction = state.new_transaction(Require::Exports, None);
+    transaction.set_memory(test_env.get_memory());
+    transaction.run(&handles, Require::Everything, None);
+
+    // Resolve `lib.CONST` from `main` (checked under `windows`). The fix inherits
+    // `windows`; the pre-fix code re-derives `linux` and panics in `get_stdlib`.
+    let source = f("main", &windows);
+    let location = resolve_export_location(
+        &transaction,
+        &source,
+        ModuleName::from_str("lib"),
+        &Name::new_static("CONST"),
+    );
+    assert!(
+        location.is_some(),
+        "expected lib.CONST to resolve against the source file's SysInfo"
+    );
+}
+
 #[test]
 fn test_cross_module_literal_promotion() {
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::linux());
@@ -205,16 +296,9 @@ fn test_cross_module_literal_promotion() {
     let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
     let f = |name: &str| {
         let name = ModuleName::from_str(name);
-        let path = find_import(
-            &config_file,
-            name,
-            None,
-            None,
-            &DirEntryCache::new(true),
-            None,
-        )
-        .finding()
-        .unwrap();
+        let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+            .finding()
+            .unwrap();
         Handle::new(name, path, sys_info.dupe())
     };
     let handles = [f("main")];
@@ -253,6 +337,7 @@ fn test_multiple_path() {
             ModulePath::memory(PathBuf::from(path)),
         );
     }
+    let handles = sourcedb.modules_to_check();
     config.source_db = Some(ArcId::new(Box::new(sourcedb)));
     config.configure();
     let config = ArcId::new(config);
@@ -261,7 +346,6 @@ fn test_multiple_path() {
         ConfigFinder::new_constant(config.clone()),
         TEST_THREAD_COUNT,
     );
-    let handles = config.source_db.as_ref().unwrap().modules_to_check();
     let mut transaction = state.new_transaction(Require::Exports, None);
     transaction.set_memory(FILES.map(|(_, path, contents)| {
         (

@@ -11,9 +11,11 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::visit::Visit;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Number::Int;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -82,13 +84,40 @@ pub(crate) fn inline_variable_code_actions(
     if value_text.contains('\n') {
         return None;
     }
-    let replacement = format!("({value_text})");
     let mut edits = Vec::new();
+    let always_needs_parens = matches!(
+        value_expr,
+        Expr::BoolOp(_)
+            | Expr::BinOp(_)
+            | Expr::Compare(_)
+            | Expr::UnaryOp(_)
+            | Expr::If(_)
+            | Expr::Lambda(_)
+            | Expr::Named(_)
+            | Expr::Generator(_)
+            | Expr::Tuple(_)
+            | Expr::Await(_)
+            | Expr::Yield(_)
+            | Expr::YieldFrom(_)
+    );
+
     for range in references {
         if range == def.definition_range {
             continue;
         }
-        edits.push((module_info.dupe(), range, replacement.clone()));
+        let covering_nodes = Ast::locate_node(ast.as_ref(), range.start());
+        let parent = covering_nodes.get(1);
+
+        let needs_parens_for_attribute_access =
+            matches!(parent, Some(AnyNodeRef::ExprAttribute(_)))
+                && matches!(value_expr, Expr::NumberLiteral(n) if matches!(n.value, Int(_)));
+
+        let replacement = if needs_parens_for_attribute_access || always_needs_parens {
+            format!("({value_text})")
+        } else {
+            value_text.to_owned()
+        };
+        edits.push((module_info.dupe(), range, replacement));
     }
     if edits.is_empty() {
         return None;

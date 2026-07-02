@@ -6,7 +6,6 @@
  */
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use configparser::ini::Ini;
 
@@ -67,14 +66,54 @@ pub fn get_bool_or_default(config: &Ini, section: &str, key: &str) -> bool {
         .unwrap_or_default()
 }
 
-/// Convert a colon or comma-separated string to a vector of PathBufs
-pub fn string_to_paths(value: &str) -> Vec<PathBuf> {
-    value
-        .split([',', ':'])
-        .map(|x| x.trim().to_owned())
-        .filter(|x| !x.is_empty())
-        .map(PathBuf::from)
-        .collect()
+/// Resolve mypy's `$MYPY_CONFIG_FILE_DIR` variable in a single migrated path.
+///
+/// `$MYPY_CONFIG_FILE_DIR` is mypy's reference to the directory containing the
+/// config file. Pyrefly resolves migrated relative paths against that same
+/// directory, so the variable is only meaningful as a *leading* reference to it:
+/// we strip it (and a following `/`) from the front, leaving a relative path
+/// that is absolutized against the config root later. The variable matches only
+/// when it is the whole entry or immediately followed by `/`, so a longer name
+/// that merely shares the prefix (e.g. `$MYPY_CONFIG_FILE_DIRECTORY/foo`) is left
+/// untouched. A bare `$MYPY_CONFIG_FILE_DIR` denotes the config directory itself
+/// and becomes `.` (which absolutizes back to that directory), not the empty
+/// string that downstream `is_empty` filters would silently drop. Apply this per
+/// path element, and only to the options mypy itself runs through `expand_path` —
+/// among those pyrefly migrates, `mypy_path`, `files`, and `python_executable` —
+/// never to `exclude` (a regex) or non-path options.
+///
+/// We strip a `/`, never a Windows `\`, on purpose. Pyrefly config paths use `/`
+/// as the sole separator for cross-platform portability (see `Glob` in
+/// `pyrefly_util::globs`), and mypy applies no separator normalization of its
+/// own — a `\` "works" only when mypy runs on Windows, where Python's path layer
+/// happens to accept it, and is broken on POSIX. So a portable, checked-in mypy
+/// config that uses `$MYPY_CONFIG_FILE_DIR` already writes `/`; honoring `\` here
+/// would only smuggle a separator that the rest of the migrated config rejects.
+///
+/// Deliberately minimal: a mid-path occurrence, the rare `${...}` form, `~`, and
+/// other environment variables are left as-is. Unlike mypy (which expands them
+/// per run) a migrated config is checked in, so they have no portable
+/// migration-time meaning.
+pub fn expand_config_file_dir(path: &str) -> String {
+    let rest = match path.strip_prefix("$MYPY_CONFIG_FILE_DIR") {
+        Some(rest) => rest,
+        None => return path.to_owned(),
+    };
+    // Match only when the variable is the whole entry or followed by `/`; a bare
+    // prefix on a longer name (`...DIRECTORY/foo`) is not the variable.
+    let relative = match rest {
+        "" => "",
+        _ => match rest.strip_prefix('/') {
+            Some(after) => after,
+            None => return path.to_owned(),
+        },
+    };
+    // An empty remainder is the config directory itself, i.e. `.`.
+    if relative.is_empty() {
+        ".".to_owned()
+    } else {
+        relative.to_owned()
+    }
 }
 
 #[derive(Default)]
@@ -212,5 +251,26 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
         None
     } else {
         Some(ErrorDisplayConfig::new(map))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_expand_config_file_dir() {
+        // Leading variable + `/`: strip it, leaving a config-relative path.
+        assert_eq!(expand_config_file_dir("$MYPY_CONFIG_FILE_DIR/src"), "src");
+        // No variable: passthrough untouched.
+        assert_eq!(expand_config_file_dir("src/lib"), "src/lib");
+        // Bare variable (with or without trailing `/`) is the config dir → `.`.
+        assert_eq!(expand_config_file_dir("$MYPY_CONFIG_FILE_DIR"), ".");
+        assert_eq!(expand_config_file_dir("$MYPY_CONFIG_FILE_DIR/"), ".");
+        // A longer name sharing the prefix is not the variable: leave it be.
+        assert_eq!(
+            expand_config_file_dir("$MYPY_CONFIG_FILE_DIRECTORY/foo"),
+            "$MYPY_CONFIG_FILE_DIRECTORY/foo"
+        );
     }
 }

@@ -20,6 +20,7 @@ use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
+use crate::query::IndexedTypeShapeKind;
 use crate::query::Query;
 use crate::query::TypeShape;
 use crate::test::util::init_test;
@@ -59,6 +60,27 @@ fn type_shape_values(types: Vec<(PythonASTRange, TypeShape)>) -> Vec<Value> {
         .into_iter()
         .map(|(_, type_shape)| serde_json::to_value(type_shape).unwrap())
         .collect()
+}
+
+fn indexed_shape_values(type_table: &[IndexedTypeShapeKind]) -> Vec<Value> {
+    type_table
+        .iter()
+        .map(|type_shape| serde_json::to_value(type_shape).unwrap())
+        .collect()
+}
+
+fn is_indexed_named_shape(shape: &Value, name: &str, args: &[usize]) -> bool {
+    is_named_shape(shape, name)
+        && shape
+            .get("args")
+            .and_then(Value::as_array)
+            .is_some_and(|actual_args| {
+                actual_args.len() == args.len()
+                    && actual_args
+                        .iter()
+                        .zip(args.iter())
+                        .all(|(actual, expected)| actual.as_u64() == Some(*expected as u64))
+            })
 }
 
 fn is_named_shape(shape: &Value, name: &str) -> bool {
@@ -275,6 +297,165 @@ value: Box[int] = Box()
                 && unspecified_type_arg_count(shape).is_none()
         }),
         "Expected instantiated `Box[int]` to omit unspecified type args:\n{shapes:#?}",
+    );
+}
+
+#[test]
+fn test_type_table_direct_conversion_includes_callable_union_optional_and_dedup() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"from typing import Callable
+
+f: Callable[[int, str], bool]
+x: int | str
+y: int | None
+first: list[int]
+second: list[int]
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let response = query
+        .get_type_table_in_file_with_timing(module_name, path)
+        .unwrap()
+        .0;
+    let table = indexed_shape_values(&response.type_table);
+
+    assert!(
+        response
+            .types
+            .iter()
+            .any(|located_type| located_type.display
+                == "(builtins.int, builtins.str) -> builtins.bool"),
+        "Expected callable top-level display in located refs:\n{:#?}",
+        response.types,
+    );
+    assert!(
+        table.iter().any(|shape| {
+            shape.get("kind").and_then(Value::as_str) == Some("callable")
+                && shape
+                    .get("params")
+                    .and_then(Value::as_array)
+                    .is_some_and(|params| params.len() == 2)
+                && shape.get("return_type").and_then(Value::as_u64).is_some()
+        }),
+        "Expected direct callable entry in type table:\n{table:#?}",
+    );
+
+    let int_index = table
+        .iter()
+        .position(|shape| is_indexed_named_shape(shape, "builtins.int", &[]))
+        .unwrap();
+    let str_index = table
+        .iter()
+        .position(|shape| is_indexed_named_shape(shape, "builtins.str", &[]))
+        .unwrap();
+    assert!(
+        table.iter().any(|shape| is_indexed_named_shape(
+            shape,
+            "typing.Union",
+            &[int_index, str_index]
+        )),
+        "Expected int | str to map to typing.Union with int and str args:\n{table:#?}",
+    );
+    assert!(
+        table
+            .iter()
+            .any(|shape| is_indexed_named_shape(shape, "typing.Optional", &[int_index])),
+        "Expected int | None to map to typing.Optional[int]:\n{table:#?}",
+    );
+
+    let list_int_entries = table
+        .iter()
+        .filter(|shape| is_indexed_named_shape(shape, "builtins.list", &[int_index]))
+        .count();
+    assert_eq!(
+        1, list_int_entries,
+        "Expected repeated list[int] annotations to share one structural table entry:\n{table:#?}",
+    );
+}
+
+/// Enum-member literals must carry the enum class's fully module-qualified name
+/// (`main.Color.RED`), not the bare class name (`Color.RED`), in the inline
+/// shape path — matching the module-qualified display string and the
+/// `ClassType` shape arm.
+#[test]
+fn test_type_shapes_qualify_enum_literal_members() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"import enum
+
+class Color(enum.Enum):
+    RED = 1
+    GREEN = 2
+
+c = Color.RED
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let shapes = type_shape_values(query.get_type_shapes_in_file(module_name, path).unwrap());
+    assert!(
+        shapes.iter().any(|shape| is_named_shape_with_args(
+            shape,
+            "typing.Literal",
+            &["main.Color.RED"]
+        )),
+        "Expected enum Literal to carry the fully module-qualified member name:\n{shapes:#?}",
+    );
+}
+
+/// Same invariant as `test_type_shapes_qualify_enum_literal_members`, but for
+/// the type-table (dedup) path that `/types_v2` actually serves — the path
+/// where the under-qualification bug originally hid.
+#[test]
+fn test_type_table_qualifies_enum_literal_members() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"import enum
+
+class Color(enum.Enum):
+    RED = 1
+    GREEN = 2
+
+c = Color.RED
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let response = query
+        .get_type_table_in_file_with_timing(module_name, path)
+        .unwrap()
+        .0;
+    let table = indexed_shape_values(&response.type_table);
+
+    let member_index = table
+        .iter()
+        .position(|shape| is_indexed_named_shape(shape, "main.Color.RED", &[]))
+        .expect("expected fully-qualified enum member leaf `main.Color.RED` in the type table");
+    assert!(
+        table
+            .iter()
+            .any(|shape| is_indexed_named_shape(shape, "typing.Literal", &[member_index])),
+        "Expected typing.Literal entry referencing the qualified enum member:\n{table:#?}",
     );
 }
 

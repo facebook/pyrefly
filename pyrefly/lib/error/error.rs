@@ -334,7 +334,7 @@ impl Error {
                 Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
             }),
             source: Some("Pyrefly".to_owned()),
-            message: self.msg().to_owned(),
+            message: self.msg().to_owned().into(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
             tags: if self.error_kind() == ErrorKind::Deprecated {

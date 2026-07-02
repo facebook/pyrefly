@@ -1,0 +1,7 @@
+search_path = [
+    "..",
+]
+
+python_version = "3.13"
+
+tensor-shapes = true

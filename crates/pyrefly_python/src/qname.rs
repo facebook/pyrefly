@@ -137,6 +137,18 @@ impl QName {
         write!(f, ".{}", self.name)
     }
 
+    /// The module-qualified dotted name (e.g. `module.Outer.Inner`), including
+    /// all enclosing classes but no location suffix.
+    pub fn module_qualified_name(&self) -> String {
+        struct Adapter<'a>(&'a QName);
+        impl Display for Adapter<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt_with_module(f)
+            }
+        }
+        Adapter(self).to_string()
+    }
+
     pub fn fmt_with_location(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.module_name())?;
         if !self.parent().is_toplevel() {

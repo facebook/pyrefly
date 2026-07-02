@@ -25,7 +25,7 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 
 pub mod alt;
-mod binding;
+pub mod binding;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub mod commands;

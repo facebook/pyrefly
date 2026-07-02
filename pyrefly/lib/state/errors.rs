@@ -22,9 +22,8 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::Stmt;
 use ruff_python_ast::visitor::Visitor;
-use ruff_python_ast::visitor::walk_stmt;
+use ruff_python_ast::visitor::walk_expr;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -160,19 +159,25 @@ pub fn find_containing_range(
     }
 }
 
-/// Extracts `(start_line, end_line)` ranges for *simple* statements (those
-/// without an indented suite, e.g. assignments, returns, expression statements,
-/// `del`, `assert`) that span more than one physical line via bracketed
-/// (parenthesized/implicit) line continuation.
+/// Extracts `(start_line, end_line)` line ranges for multi-line expressions
+/// where a suppression comment placed on the line *above* an interior line
+/// would be relocated by a formatter (e.g. Black) out of the bracketed group,
+/// so the checker would no longer associate it with the error. These are the
+/// conditional and operator expressions — ternaries (`a if c else b`), boolean
+/// operators (`a and b`), binary operators (`a + b`), and comparisons
+/// (`a < b`) — split across physical lines via bracketed continuation. Errors
+/// on a non-first line of such a range must be suppressed inline instead.
 ///
-/// Compound statements (`def`, `class`, `if`, `for`, `while`, `with`, `try`,
-/// `match`) are intentionally *not* recorded: their range covers an indented
-/// body, so a suppression placed above the header must not stand in for an
-/// error deep inside the body. We still recurse into them to find nested simple
-/// statements.
+/// Collection literals (dicts, lists, sets, tuples, comprehensions) are
+/// intentionally *not* recorded: each element sits on its own line, so a
+/// comment on the line above an element is stable under formatting and should
+/// be kept. We still recurse into them, so an operator expression used *as* an
+/// element (e.g. a multi-line ternary dict value) is still captured.
 ///
-/// The returned list is sorted by start line. Simple statements never nest, so
-/// the ranges are non-overlapping.
+/// The returned list is sorted by start line and non-overlapping: nested
+/// expressions (e.g. a binary operator inside a ternary) are merged into a
+/// single enclosing range, preserving the binary-search invariant of
+/// `find_containing_range`.
 pub fn sorted_bracketed_continuation_ranges(
     ast: &ModModule,
     module: &Module,
@@ -182,27 +187,21 @@ pub fn sorted_bracketed_continuation_ranges(
         ranges: Vec<(LineNumber, LineNumber)>,
     }
     impl<'a> Visitor<'a> for Collector<'a> {
-        fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            let is_compound = matches!(
-                stmt,
-                Stmt::FunctionDef(_)
-                    | Stmt::ClassDef(_)
-                    | Stmt::If(_)
-                    | Stmt::For(_)
-                    | Stmt::While(_)
-                    | Stmt::With(_)
-                    | Stmt::Try(_)
-                    | Stmt::Match(_)
-            );
-            if !is_compound {
-                let display = self.module.display_range(stmt.range());
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            // Conditional/operator expressions float an interior own-line
+            // comment when split across lines; collection literals do not.
+            if matches!(
+                expr,
+                Expr::If(_) | Expr::BoolOp(_) | Expr::BinOp(_) | Expr::Compare(_)
+            ) {
+                let display = self.module.display_range(expr.range());
                 let start = display.start.line_within_file();
                 let end = display.end.line_within_file();
                 if start != end {
                     self.ranges.push((start, end));
                 }
             }
-            walk_stmt(self, stmt);
+            walk_expr(self, expr);
         }
     }
     let mut collector = Collector {
@@ -211,7 +210,21 @@ pub fn sorted_bracketed_continuation_ranges(
     };
     collector.visit_body(&ast.body);
     collector.ranges.sort();
-    collector.ranges
+
+    // Merge overlapping/nested ranges so the result stays non-overlapping and
+    // sorted, as `find_containing_range` requires.
+    let mut merged: Vec<(LineNumber, LineNumber)> = Vec::new();
+    for (start, end) in collector.ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => {
+                if end > last.1 {
+                    last.1 = end;
+                }
+            }
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
 }
 
 /// Per-module multi-line ranges and ignore-all directives, computed after parsing.
@@ -299,6 +312,57 @@ impl Errors {
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
         }
         errors
+    }
+
+    /// Collect display errors for the language server, partitioned by whether or not they
+    /// appear in a baseline file. Returns `(normal, baselined)`.
+    ///
+    /// Each baseline is loaded once (cached per config) and resolved relative to its
+    /// config's source root, falling back to the baseline file's own directory.
+    pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
+        let collected = self.collect_errors();
+        let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
+            .loads
+            .iter()
+            .map(|(load, _, config)| (load.module_info.path(), config))
+            .collect();
+        let mut baseline_processors: SmallMap<usize, Option<BaselineProcessor>> = SmallMap::new();
+        let mut errors = collected;
+        let mut ordinary = Vec::new();
+
+        for error in errors.ordinary.drain(..) {
+            let Some(config) = config_by_path.get(&error.path()) else {
+                ordinary.push(error);
+                continue;
+            };
+            let Some(baseline_path) = config.baseline.as_deref() else {
+                ordinary.push(error);
+                continue;
+            };
+            let processor = baseline_processors.entry(config.id()).or_insert_with(|| {
+                let relative_to = config
+                    .source
+                    .root()
+                    .or_else(|| baseline_path.parent())
+                    .unwrap_or_else(|| Path::new(""));
+                BaselineProcessor::from_file(baseline_path, relative_to).ok()
+            });
+            if processor
+                .as_ref()
+                .is_some_and(|processor| processor.matches_baseline(&error))
+            {
+                errors.baseline.push(error);
+            } else {
+                ordinary.push(error);
+            }
+        }
+
+        ordinary.extend(unused.ordinary);
+        (
+            Self::merge_display_errors(ordinary, errors.directives),
+            Self::merge_display_errors(errors.baseline, Vec::new()),
+        )
     }
 
     pub fn collect_display_errors(&self) -> Vec<Error> {
@@ -434,7 +498,7 @@ impl Errors {
                         continue;
                     }
                     match tool {
-                        Tool::Pyrefly | Tool::Pyre => {}
+                        Tool::Pyrefly | Tool::Pyre | Tool::Type => {}
                         _ => continue,
                     }
 
@@ -461,6 +525,24 @@ impl Errors {
                             "Unused pyre-fixme comment".to_owned(),
                             Vec::new(),
                             ErrorKind::UnusedIgnore,
+                        ));
+                        continue;
+                    }
+
+                    // For `# type: ignore`, unused if no errors were suppressed on this line.
+                    if tool == Tool::Type {
+                        if !used_codes.is_empty() {
+                            continue; // type: ignore is used
+                        }
+                        let comment_line = supp.comment_line();
+                        let line_start = module.lined_buffer().line_start(comment_line);
+                        let range = TextRange::new(line_start, line_start + TextSize::new(1));
+                        unused_errors.push(Error::new(
+                            module.dupe(),
+                            range,
+                            "Unused `# type: ignore` comment".to_owned(),
+                            Vec::new(),
+                            ErrorKind::UnusedTypeIgnore,
                         ));
                         continue;
                     }
@@ -544,9 +626,7 @@ impl Errors {
         for error in unused_errors {
             if let Some(config) = config_by_path.get(&error.path()) {
                 let error_config = config.get_error_config(error.path().as_path());
-                let severity = error_config
-                    .display_config
-                    .severity(ErrorKind::UnusedIgnore);
+                let severity = error_config.display_config.severity(error.error_kind());
                 match severity {
                     Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
                     Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
@@ -747,6 +827,45 @@ def g() -> str:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 2);
+    }
+
+    #[test]
+    fn test_unused_type_ignore_no_error() {
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_used_type_ignore_suppresses_error() {
+        let contents = r#"
+def f() -> int:
+    return "hello"  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_unused_type_ignore_with_codes() {
+        // mypy-style codes are not pyrefly codes; treat as blanket ignore
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore[assignment]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
     }
 
     #[test]

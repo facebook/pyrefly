@@ -684,7 +684,8 @@ del c [0]
 }
 
 #[test]
-fn hover_over_getitem_without_space_doesnt_show_signature() {
+fn hover_over_getitem_without_space_shows_signature() {
+    // Regression test for https://github.com/facebook/pyrefly/issues/1838
     let code = r#"
 class Container:
     def __getitem__(self, idx: int) -> int: ...
@@ -694,23 +695,17 @@ c[0]
 #^ ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
-6 | c[0]
-     ^
-```python
-(variable) c: Container
-```
-
-6 | c[0]
-       ^
-```python
-(attribute) __getitem__: Literal[0]
-```
-"#
-        .trim(),
-        report.trim(),
+    // Hovering the base `c` still shows the variable.
+    assert!(
+        report.contains("(variable) c: Container"),
+        "Expected variable hover for base `c`, got: {report}"
+    );
+    // Hovering inside the brackets shows the dunder method, matching `c [0]`.
+    assert!(
+        report.contains(
+            "```python\n(method) __getitem__: def __getitem__(\n    self: Container,\n    idx: int\n) -> int: ...\n```"
+        ),
+        "Expected __getitem__ signature in hover, got: {report}"
     );
 }
 
@@ -990,6 +985,54 @@ Test docstring
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_imported_enum_shows_members() {
+    let code = r#"
+from http import HTTPStatus
+#                ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | from http import HTTPStatus
+                     ^
+```python
+(class) HTTPStatus: Literal[HTTPStatus.CONTINUE, HTTPStatus.SWITCHING_PROTOCOLS, HTTPStatus.PROCESSING, HTTPStatus.EARLY_HINTS, HTTPStatus.OK, HTTPStatus.CREATED, HTTPStatus.ACCEPTED, HTTPStatus.NON_AUTHORITATIVE_INFORMATION, HTTPStatus.NO_CONTENT, HTTPStatus.RESET_CONTENT, HTTPStatus.PARTIAL_CONTENT, HTTPStatus.MULTI_STATUS, HTTPStatus.ALREADY_REPORTED, HTTPStatus.IM_USED, HTTPStatus.MULTIPLE_CHOICES, HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND, HTTPStatus.SEE_OTHER, HTTPStatus.NOT_MODIFIED, HTTPStatus.USE_PROXY, HTTPStatus.TEMPORARY_REDIRECT, HTTPStatus.PERMANENT_REDIRECT, HTTPStatus.BAD_REQUEST, HTTPStatus.UNAUTHORIZED, HTTPStatus.PAYMENT_REQUIRED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.METHOD_NOT_ALLOWED, HTTPStatus.NOT_ACCEPTABLE, HTTPStatus.PROXY_AUTHENTICATION_REQUIRED, HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.CONFLICT, HTTPStatus.GONE, HTTPStatus.LENGTH_REQUIRED, HTTPStatus.PRECONDITION_FAILED, HTTPStatus.CONTENT_TOO_LARGE, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, HTTPStatus.URI_TOO_LONG, HTTPStatus.REQUEST_URI_TOO_LONG, HTTPStatus.UNSUPPORTED_MEDIA_TYPE, HTTPStatus.RANGE_NOT_SATISFIABLE, HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, HTTPStatus.EXPECTATION_FAILED, HTTPStatus.IM_A_TEAPOT, HTTPStatus.MISDIRECTED_REQUEST, HTTPStatus.UNPROCESSABLE_CONTENT, HTTPStatus.UNPROCESSABLE_ENTITY, HTTPStatus.LOCKED, HTTPStatus.FAILED_DEPENDENCY, HTTPStatus.TOO_EARLY, HTTPStatus.UPGRADE_REQUIRED, HTTPStatus.PRECONDITION_REQUIRED, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE, HTTPStatus.UNAVAILABLE_FOR_LEGAL_REASONS, HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.NOT_IMPLEMENTED, HTTPStatus.BAD_GATEWAY, HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.GATEWAY_TIMEOUT, HTTPStatus.HTTP_VERSION_NOT_SUPPORTED, HTTPStatus.VARIANT_ALSO_NEGOTIATES, HTTPStatus.INSUFFICIENT_STORAGE, HTTPStatus.LOOP_DETECTED, HTTPStatus.NOT_EXTENDED, HTTPStatus.NETWORK_AUTHENTICATION_REQUIRED]
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_imported_enum_call_shows_call() {
+    let code = r#"
+from http import HTTPStatus
+
+HTTPStatus(200)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) __new__") && report.contains("value: Any"),
+        "Expected enum call hover to show the call signature, got: {report}"
+    );
+    assert!(
+        !report.contains("Literal[HTTPStatus.CONTINUE"),
+        "Enum call hover should not show the member list, got: {report}"
     );
 }
 
@@ -1372,6 +1415,64 @@ Box[str]("hello")
     assert!(
         report.contains("Box[str]"),
         "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_covariant() {
+    let code = r#"
+class Foo[T]:
+#         ^
+    def foo(self) -> T: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Foo (covariant)"),
+        "Expected covariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_contravariant() {
+    let code = r#"
+class Sink[T]:
+#          ^
+    def consume(self, value: T) -> None: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Sink (contravariant)"),
+        "Expected contravariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_invariant() {
+    let code = r#"
+class Container[T]:
+#               ^
+    def get(self) -> T: ...
+    def set(self, value: T) -> None: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Container (invariant)"),
+        "Expected invariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_bivariant_as_invariant() {
+    // T is unused in the class body — bivariant, but displayed as invariant
+    let code = r#"
+class Phantom[T]:
+#             ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Phantom (invariant)"),
+        "Expected bivariant displayed as invariant, got: {report}"
     );
 }
 
