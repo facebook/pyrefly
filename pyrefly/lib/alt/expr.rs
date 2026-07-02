@@ -110,7 +110,6 @@ use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::facet::FacetKind;
 use crate::types::literal::Lit;
-use crate::types::literal::Literal;
 use crate::types::param_spec::ParamSpec;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
