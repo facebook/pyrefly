@@ -463,9 +463,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        // Note: the subset check here is too conservative when it comes to modeling runtime behavior
-        // we want to check if the bound_val is coercible to the annotation type at runtime.
-        // statically, this could be a challenge, which is why we go with this more conservative approach for now.
+        let field_ty = Self::pydantic_range_field_type(field_ty);
         for (bound_val, label) in [
             (&keywords.gt, "gt"),
             (&keywords.lt, "lt"),
@@ -473,7 +471,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             (&keywords.le, "le"),
         ] {
             let Some(val) = bound_val else { continue };
-            if !self.is_subset_eq(val, field_ty) {
+            if !self.is_pydantic_range_constraint_type_compatible(val, field_ty) {
                 self.error(
                     errors,
                     range,
@@ -487,6 +485,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         self.check_pydantic_range_default(field_name, keywords, range, errors);
+    }
+
+    fn pydantic_range_field_type(field_ty: &Type) -> &Type {
+        match field_ty {
+            Type::Annotated(inner, _) => Self::pydantic_range_field_type(inner),
+            _ => field_ty,
+        }
+    }
+
+    fn is_pydantic_range_constraint_type_compatible(&self, val: &Type, field_ty: &Type) -> bool {
+        let field_ty = Self::pydantic_range_field_type(field_ty);
+        if self.is_subset_eq(val, field_ty) {
+            return true;
+        }
+        match field_ty {
+            Type::Union(union) => union.members.iter().any(|member| {
+                !member.is_none() && self.is_pydantic_range_constraint_type_compatible(val, member)
+            }),
+            Type::ClassType(cls) if cls.has_qname("decimal", "Decimal") => {
+                self.is_pydantic_decimal_constraint_value(val)
+            }
+            _ => false,
+        }
+    }
+
+    fn is_pydantic_decimal_constraint_value(&self, val: &Type) -> bool {
+        matches!(
+            val.clone().promote_implicit_literals(self.stdlib),
+            Type::ClassType(cls)
+                if cls.is_builtin("int")
+                    || cls.is_builtin("float")
+                    || cls.has_qname("decimal", "Decimal")
+        )
     }
 
     fn check_pydantic_range_default(
