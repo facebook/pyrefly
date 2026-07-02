@@ -1135,6 +1135,12 @@ struct ImportUsage {
 struct VariableUsage {
     range: TextRange,
     used: bool,
+    /// When set, the variable is tracked for usage but never reported as unused.
+    /// Set for unpacking, multi-target, `for`, and `with` targets. These are
+    /// registered (rather than skipped) so their reads still get recorded, which
+    /// keeps the read-before-reassignment check correct across loop iterations.
+    /// Only plain `x = ...` single-name assignments are ever reported as unused.
+    allow_unused: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1909,7 +1915,7 @@ impl Scopes {
         variables
             .into_iter()
             .filter_map(|(name, usage)| {
-                if usage.used {
+                if usage.used || usage.allow_unused {
                     None
                 } else {
                     Some(UnusedVariable {
@@ -2520,7 +2526,7 @@ impl Scopes {
         }
     }
 
-    pub fn register_variable(&mut self, name: &Identifier) {
+    pub fn register_variable(&mut self, name: &Identifier, allow_unused: bool) {
         // Track variables in Module, Function, and Method scopes.
         // Module-level variables won't be reported as unused since they can be imported
         // by other modules, but function/method-level variables will be reported.
@@ -2531,6 +2537,14 @@ impl Scopes {
             // Don't track variables declared as `global` or `nonlocal` — they are
             // visible to other scopes and can't be considered locally unused.
             if self.is_mutable_capture(&name.id) {
+                return;
+            }
+            // A tracking-only registration must not overwrite an existing entry. A prior
+            // single-name `x = ...` may have already registered this name as reportable,
+            // and overwriting it here would wrongly suppress that report; the recorded
+            // `used` flag must also survive. Only tracking-only registrations bail here; a
+            // later single-name assignment is reportable and still overwrites this entry.
+            if allow_unused && self.current().variables.contains_key(&name.id) {
                 return;
             }
             // Preserve the `used` flag if the variable was already marked as used.
@@ -2547,6 +2561,7 @@ impl Scopes {
                 VariableUsage {
                     range: name.range,
                     used: was_used,
+                    allow_unused,
                 },
             );
         }

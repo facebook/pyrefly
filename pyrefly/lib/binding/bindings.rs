@@ -1803,7 +1803,7 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Option<Idx<KeyAnnotation>> {
         // Ignore imports and other items from unused variable detection
         if matches!(style, FlowStyle::Other) {
-            self.scopes.register_variable(name);
+            self.scopes.register_variable(name, false);
         }
         let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
         self.bind_name(&name.id, idx, style)
