@@ -366,6 +366,8 @@ pub enum ErrorKind {
     Unsupported,
     /// Attempting to `del` something that cannot be deleted
     UnsupportedDelete,
+    /// A dynamically created class has a base that cannot be statically resolved.
+    UnsupportedDynamicBase,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
     /// Import is missing an expected stubs package
@@ -501,6 +503,7 @@ impl ErrorKind {
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UnsupportedDynamicBase => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,

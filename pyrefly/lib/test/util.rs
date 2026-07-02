@@ -119,6 +119,7 @@ pub struct TestEnv {
     pytorch_efficiency_lint_error: bool,
     incompatible_comparison_error: bool,
     string_as_iterable_warning: bool,
+    unsupported_dynamic_base_error: bool,
     strict_callable_subtyping: bool,
     spec_compliant_overloads: bool,
     default_require_level: Require,
@@ -153,6 +154,7 @@ impl TestEnv {
             pytorch_efficiency_lint_error: false,
             incompatible_comparison_error: false,
             string_as_iterable_warning: false,
+            unsupported_dynamic_base_error: false,
             strict_callable_subtyping: false,
             spec_compliant_overloads: false,
             default_require_level: Require::Exports,
@@ -312,6 +314,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unsupported_dynamic_base_error(mut self) -> Self {
+        self.unsupported_dynamic_base_error = true;
+        self
+    }
+
     pub fn enable_strict_callable_subtyping(mut self) -> Self {
         self.strict_callable_subtyping = true;
         self
@@ -455,6 +462,9 @@ impl TestEnv {
         }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);
+        }
+        if self.unsupported_dynamic_base_error {
+            errors.set_error_severity(ErrorKind::UnsupportedDynamicBase, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
