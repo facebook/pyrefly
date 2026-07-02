@@ -571,17 +571,16 @@ re.compile("(")  # E: missing ), unterminated subpattern at position 0
 re.search("(", "")  # E: missing ), unterminated subpattern at position 0
 
 if m := re.search("(a)?(b)", ""):
-    assert_type(m.groups(), tuple[str | None, str])
-    assert_type(m.group(1), str | None)
-    assert_type(m.group(2), str)
+    assert_type(m.group(0), str)
+    assert_type(m[0], str)
 
 if m := re.search("(?P<foo>a)", ""):
-    assert_type(m.group("foo"), str)
     m.group("bar")  # E: No such group: 'bar'
+    m["bar"]  # E: No such group: 'bar'
 
 p = re.compile("(a)")
 if m := p.search(""):
-    assert_type(m.groups(), tuple[str])
+    assert_type(m.group(0), str)
 "#,
 );
 

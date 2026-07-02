@@ -1539,8 +1539,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if class_name.as_deref() == Some("Match") {
             return match function_name.as_str() {
-                "groups" => self.regex_match_groups_result(call, ret, errors),
-                "group" => self.regex_match_group_result(call, ret, errors),
+                "group" => {
+                    self.regex_validate_match_group_call(call, errors);
+                    ret
+                }
                 _ => ret,
             };
         }
@@ -1715,83 +1717,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    fn regex_match_anystr(&self, ty: &Type) -> Option<Type> {
-        match ty {
-            Type::Annotated(inner, _) => self.regex_match_anystr(inner),
-            Type::Union(union) => union
-                .members
-                .iter()
-                .find_map(|member| self.regex_match_anystr(member)),
-            Type::ClassType(cls) if cls.has_qname("re", "Match") => {
-                cls.targs().as_slice().first().cloned()
-            }
-            _ => None,
+    fn is_regex_match_type(&self, ty: &Type) -> bool {
+        matches!(ty, Type::ClassType(cls) if cls.has_qname("re", "Match"))
+    }
+
+    fn regex_validate_match_group_call(&self, call: &ExprCall, errors: &ErrorCollector) {
+        let Expr::Attribute(attr) = call.func.as_ref() else {
+            return;
+        };
+        let base_ty = self.expr_infer(&attr.value, errors);
+        let Some(groups) = self.regex_groups_from_type(&base_ty) else {
+            return;
+        };
+        for arg in &call.arguments.args {
+            self.regex_validate_group_key(&groups, arg, errors);
         }
     }
 
-    fn regex_match_groups_result(
-        &self,
-        call: &ExprCall,
-        ret: Type,
-        errors: &ErrorCollector,
-    ) -> Type {
-        let Expr::Attribute(attr) = call.func.as_ref() else {
-            return ret;
-        };
-        let base_ty = self.expr_infer(&attr.value, errors);
-        let Some(groups) = self.regex_groups_from_type(&base_ty) else {
-            return ret;
-        };
-        let Some(anystr) = self.regex_match_anystr(&base_ty) else {
-            return ret;
-        };
-        let default_ty = call
-            .arguments
-            .args
-            .first()
-            .map(|arg| self.expr_infer(arg, errors));
-        self.heap.mk_concrete_tuple(
-            groups
-                .into_iter()
-                .map(|group| {
-                    if group.required {
-                        anystr.clone()
-                    } else {
-                        self.union(anystr.clone(), default_ty.clone().unwrap_or(Type::None))
-                    }
-                })
-                .collect(),
-        )
-    }
-
-    fn regex_match_group_result(
-        &self,
-        call: &ExprCall,
-        ret: Type,
-        errors: &ErrorCollector,
-    ) -> Type {
-        let Expr::Attribute(attr) = call.func.as_ref() else {
-            return ret;
-        };
-        let base_ty = self.expr_infer(&attr.value, errors);
-        let Some(groups) = self.regex_groups_from_type(&base_ty) else {
-            return ret;
-        };
-        let Some(anystr) = self.regex_match_anystr(&base_ty) else {
-            return ret;
-        };
-        let Some(arg) = call.arguments.args.first() else {
-            return ret;
-        };
+    fn regex_validate_group_key(&self, groups: &[RegexGroup], arg: &Expr, errors: &ErrorCollector) {
         match self.regex_group_key(arg, errors) {
-            Some(RegexGroupKey::Int(0)) => anystr,
-            Some(RegexGroupKey::Int(index)) if index > 0 && index as usize <= groups.len() => {
-                if groups[index as usize - 1].required {
-                    anystr
-                } else {
-                    self.union(anystr, Type::None)
-                }
-            }
+            Some(RegexGroupKey::Int(0)) => {}
+            Some(RegexGroupKey::Int(index)) if index > 0 && index as usize <= groups.len() => {}
             Some(RegexGroupKey::Int(index)) => {
                 self.error(
                     errors,
@@ -1799,12 +1745,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorKind::Regex,
                     format!("No such group: {index}"),
                 );
-                self.heap.mk_any_error()
             }
             Some(RegexGroupKey::Str(name)) => {
                 match groups.iter().find(|group| group.name == Some(name.clone())) {
-                    Some(group) if group.required => anystr,
-                    Some(_) => self.union(anystr, Type::None),
+                    Some(_) => {}
                     None => {
                         self.error(
                             errors,
@@ -1812,11 +1756,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorKind::Regex,
                             format!("No such group: '{name}'"),
                         );
-                        self.heap.mk_any_error()
                     }
                 }
             }
-            None => ret,
+            None => {}
         }
     }
 
@@ -2827,6 +2770,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 base = x.1;
             }
             match base {
+                Type::Annotated(inner, metadata) => {
+                    let ret = self.subscript_infer_for_type_with_key_present(
+                        &inner,
+                        slice,
+                        range,
+                        errors,
+                        key_present,
+                    );
+                    if self.is_regex_match_type(&inner)
+                        && let Some(groups) = metadata
+                            .iter()
+                            .find_map(|ty| self.regex_metadata_to_groups(ty))
+                    {
+                        self.regex_validate_group_key(&groups, slice, errors);
+                    }
+                    ret
+                }
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
                         let tys = xs
