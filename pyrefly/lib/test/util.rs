@@ -118,6 +118,7 @@ pub struct TestEnv {
     not_required_key_access_error: bool,
     pytorch_efficiency_lint_error: bool,
     incompatible_comparison_error: bool,
+    unused_call_result_error: bool,
     string_as_iterable_warning: bool,
     strict_callable_subtyping: bool,
     spec_compliant_overloads: bool,
@@ -152,6 +153,7 @@ impl TestEnv {
             not_required_key_access_error: false,
             pytorch_efficiency_lint_error: false,
             incompatible_comparison_error: false,
+            unused_call_result_error: false,
             string_as_iterable_warning: false,
             strict_callable_subtyping: false,
             spec_compliant_overloads: false,
@@ -307,6 +309,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_unused_call_result_error(mut self) -> Self {
+        self.unused_call_result_error = true;
+        self
+    }
+
     pub fn enable_string_as_iterable_warning(mut self) -> Self {
         self.string_as_iterable_warning = true;
         self
@@ -452,6 +459,9 @@ impl TestEnv {
         }
         if self.incompatible_comparison_error {
             errors.set_error_severity(ErrorKind::IncompatibleComparison, Severity::Error);
+        }
+        if self.unused_call_result_error {
+            errors.set_error_severity(ErrorKind::UnusedCallResult, Severity::Error);
         }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);

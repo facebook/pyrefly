@@ -4338,6 +4338,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 "Result of async function call is unused. Did you forget to `await`?".to_owned()
             };
             self.error(errors, e.range(), ErrorKind::UnusedCoroutine, msg);
+        } else if matches!(e, Expr::Call(_))
+            && !result.is_none()
+            && !result.is_any()
+            && !result.is_never()
+            && !matches!(&result, Type::ClassType(cls) if self.extends_any(cls.class_object()))
+        {
+            self.error(
+                errors,
+                e.range(),
+                ErrorKind::UnusedCallResult,
+                format!(
+                    "Result of call expression is of type `{}` and is not used; \
+                     assign to `_` if this is intentional",
+                    result
+                ),
+            );
         }
         result
     }
