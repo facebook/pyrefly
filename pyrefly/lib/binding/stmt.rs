@@ -311,6 +311,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall) {
+        self.check_for_type_var_redefinition(&name.id, name.range);
         // Type var declarations are static types only; skip them for first-usage type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation {
             is_annotation: false,

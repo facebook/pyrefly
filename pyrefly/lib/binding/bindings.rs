@@ -1893,6 +1893,19 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    pub fn check_for_type_var_redefinition(&self, name: &Name, range: TextRange) {
+        let prev_idx = self.scopes.current_flow_idx(name);
+        if let Some(prev_idx) = prev_idx
+            && matches!(self.idx_to_binding(prev_idx), Some(Binding::TypeVar(..)))
+        {
+            self.error(
+                range,
+                ErrorKind::Redefinition,
+                format!("Cannot redefine existing TypeVar `{name}`"),
+            );
+        }
+    }
+
     fn check_for_imported_final_reassignment(&self, name: &Name, idx: Idx<Key>) {
         let prev_idx = self.scopes.current_flow_idx(name);
         if let Some(prev_idx) = prev_idx
