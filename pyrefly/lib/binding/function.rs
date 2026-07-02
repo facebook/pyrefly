@@ -612,6 +612,7 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
     ) -> (
         FunctionStubOrImpl,
+        bool,
         Option<PlaceholderBodyKind>,
         bool,
         Option<SelfAssignments>,
@@ -781,6 +782,7 @@ impl<'a> BindingsBuilder<'a> {
 
         (
             stub_or_impl,
+            body_is_ellipse,
             placeholder_body_kind,
             is_return_inferred,
             self_assignments,
@@ -896,19 +898,24 @@ impl<'a> BindingsBuilder<'a> {
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
-        let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
-            .function_body(
-                &mut x.parameters,
-                mem::take(&mut x.body),
-                &decorators,
-                x.range,
-                x.is_async,
-                return_ann_with_range,
-                &func_name,
-                parent,
-                undecorated_idx,
-                class_key,
-            );
+        let (
+            stub_or_impl,
+            has_ellipsis_body,
+            placeholder_body_kind,
+            is_return_inferred,
+            self_assignments,
+        ) = self.function_body(
+            &mut x.parameters,
+            mem::take(&mut x.body),
+            &decorators,
+            x.range,
+            x.is_async,
+            return_ann_with_range,
+            &func_name,
+            parent,
+            undecorated_idx,
+            class_key,
+        );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
@@ -922,6 +929,7 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: func_def_index,
                 def: FunctionDefData::new(x),
                 stub_or_impl,
+                has_ellipsis_body: has_ellipsis_body && self.type_checking_depth == 0,
                 placeholder_body_kind,
                 is_return_inferred,
                 class_key,
