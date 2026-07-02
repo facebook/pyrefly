@@ -2955,6 +2955,21 @@ impl<'a> Transaction<'a> {
                 _ => {}
             }
         }
+        if let Some(bindings) = self.get_bindings(handle) {
+            for unused in bindings.unused_variables() {
+                if unused.range.contains_range(range)
+                    && let Some(action) =
+                        quick_fixes::remove_unused_variable::remove_unused_variable_code_action(
+                            &module_info,
+                            &ast,
+                            unused.name.as_str(),
+                            unused.range,
+                        )
+                {
+                    other_actions.push(action);
+                }
+            }
+        }
 
         import_actions.sort();
 
