@@ -712,6 +712,11 @@ fn parse_functions(
         {
             let decorated = bindings.get(*x);
             let fun = bindings.get(decorated.undecorated_idx);
+            // Skip functions nested inside other functions, even when the name collides with an
+            // exported module-level function (gh-4018).
+            if fun.outer_funcs.is_some() {
+                continue;
+            }
             // Skip @type_check_only decorated functions.
             if has_type_check_only_decorator(&fun.decorators, bindings) {
                 continue;
@@ -745,10 +750,8 @@ fn parse_functions(
             let func_name = if let Some(class_key) = fun.class_key {
                 match bindings.get(class_key) {
                     BindingClass::ClassDef(cls) => {
-                        // Skip methods of function-nested and `del`eted classes
-                        if has_function_ancestor(&cls.parent)
-                            || is_deleted_class(module, bindings, cls)
-                        {
+                        // Skip methods of `del`eted classes
+                        if is_deleted_class(module, bindings, cls) {
                             continue;
                         }
                         // Skip private class methods (single-underscore prefix).
