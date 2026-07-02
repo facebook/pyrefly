@@ -152,6 +152,11 @@ fn has_function_ancestor(parent: &NestingContext) -> bool {
     }
 }
 
+/// True if the class's top-level binding was removed by a module-scope `del`.
+fn is_deleted_class(bindings: &Bindings, cls: &ClassBinding) -> bool {
+    cls.parent.is_toplevel() && bindings.module_deletes().contains(&cls.def.name.id)
+}
+
 /// Build a class's fully-qualified name: module prefix, nesting context, then class name. Returns
 /// e.g. `"pkg.mod.Outer.Inner"` for a nested class or `"pkg.mod.MyClass"` for a top-level one.
 fn class_fqn(
@@ -620,7 +625,7 @@ fn parse_instance_attrs(
             BindingClass::ClassDef(cls) => cls,
             BindingClass::FunctionalClassDef(..) => continue,
         };
-        if has_function_ancestor(&cls_binding.parent) {
+        if has_function_ancestor(&cls_binding.parent) || is_deleted_class(bindings, cls_binding) {
             continue;
         }
 
@@ -724,8 +729,8 @@ fn parse_functions(
             let func_name = if let Some(class_key) = fun.class_key {
                 match bindings.get(class_key) {
                     BindingClass::ClassDef(cls) => {
-                        // Skip methods of classes nested inside functions
-                        if has_function_ancestor(&cls.parent) {
+                        // Skip methods of function-nested and `del`eted classes
+                        if has_function_ancestor(&cls.parent) || is_deleted_class(bindings, cls) {
                             continue;
                         }
                         // Skip private class methods (single-underscore prefix).
@@ -1144,7 +1149,6 @@ fn parse_classes(
     tco_classes: &SmallSet<Idx<KeyClass>>,
 ) -> Vec<ReportClass> {
     let mut classes = Vec::new();
-    let deleted = bindings.module_deletes();
 
     // group method definitions by class
     let mut methods_by_class: HashMap<Idx<KeyClass>, Vec<Idx<KeyUndecoratedFunction>>> =
@@ -1179,8 +1183,7 @@ fn parse_classes(
         if has_function_ancestor(parent) {
             continue;
         }
-        // Skip top-level classes `del`eted at module scope.
-        if parent.is_toplevel() && deleted.contains(&name.id) {
+        if is_deleted_class(bindings, cls_binding) {
             continue;
         }
         let class_type = match answers.get_idx(class_idx) {
@@ -2567,6 +2570,13 @@ mod tests {
     fn test_report_del_module_level() {
         let report = build_module_report_for_test("del_module_level.py");
         compare_snapshot("del_module_level.expected.json", &report);
+    }
+
+    /// Methods and instance attrs of a `del`eted class must not appear either (issue #4021).
+    #[test]
+    fn test_report_del_class() {
+        let report = build_module_report_for_test("del_class.py");
+        compare_snapshot("del_class.expected.json", &report);
     }
 
     /// --module name override: symbol counts (n_functions vs n_methods) must
