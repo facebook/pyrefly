@@ -208,13 +208,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }) {
                 return None;
             }
-            if let Some(lit_enum) = enum_literal {
-                self.get_enum_literal_or_instance_attribute(lit_enum, metadata, &VALUE)
-                    .map(|attr| attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue))
+            let ty = if let Some(lit_enum) = enum_literal {
+                self.enum_value_lookup_on_member(class, lit_enum, enum_metadata)
             } else {
-                self.get_enum_or_instance_attribute(class, metadata, &VALUE)
-                    .map(|attr| attr.read_only_equivalent(ReadOnlyReason::EnumMemberValue))
-            }
+                self.enum_value_lookup_on_class(class, enum_metadata)
+            };
+            Some(ClassAttribute::read_only(
+                ty,
+                ReadOnlyReason::EnumMemberValue,
+            ))
         } else {
             None
         }
@@ -244,6 +246,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 self.heap.mk_any_implicit()
             };
+        }
+        if let Some(value_ty) = self.type_of_own_enum_value(enum_metadata) {
+            return value_ty;
         }
         let value_ty = self.enum_literal_to_value_type(lit_enum.clone(), enum_metadata.is_django);
         // Only preserve the literal type if its base class type matches the mixin exactly.
@@ -276,8 +281,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.heap.mk_any_implicit()
             };
         }
-        if let Some(mixed_in) = mixed_in {
-            return mixed_in;
+        if let Some(value_ty) = self.type_of_own_enum_value(enum_metadata) {
+            return value_ty;
         }
         // The `_value_` annotation on `enum.Enum` is `Any`; we can infer a better type.
         let enum_value_types: Vec<_> = self
@@ -285,15 +290,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .into_iter()
             .filter_map(|lit| {
                 if let Lit::Enum(lit_enum) = lit {
-                    let value_ty =
-                        self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django);
-                    if value_ty.is_implicit_literal() {
-                        Some(value_ty.promote_implicit_literals(self.stdlib))
-                    } else {
-                        Some(value_ty)
-                    }
+                    Some(self.enum_literal_to_value_type(*lit_enum, enum_metadata.is_django))
                 } else {
                     None
+                }
+            })
+            .collect();
+        if let Some(mixed_in) = mixed_in {
+            if enum_value_types.is_empty() {
+                return mixed_in;
+            }
+            let value_types = enum_value_types
+                .into_iter()
+                .map(|value_ty| {
+                    let promoted = value_ty.clone().promote_implicit_literals(self.stdlib);
+                    if promoted == mixed_in {
+                        value_ty
+                    } else {
+                        mixed_in.clone()
+                    }
+                })
+                .collect();
+            return self.unions(value_types);
+        }
+        let enum_value_types: Vec<_> = enum_value_types
+            .into_iter()
+            .map(|value_ty| {
+                if value_ty.is_implicit_literal() {
+                    value_ty.promote_implicit_literals(self.stdlib)
+                } else {
+                    value_ty
                 }
             })
             .collect();
@@ -462,6 +488,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// is only used to validate enum members, not to produce errors on invalid `_value_`
     fn type_of_enum_value(&self, enum_: &EnumMetadata) -> Option<Type> {
         let field = self.get_class_member(enum_.cls.class_object(), &VALUE)?;
+        if field.is_simple_instance_attribute() {
+            Some(field.ty())
+        } else {
+            None
+        }
+    }
+
+    fn type_of_own_enum_value(&self, enum_: &EnumMetadata) -> Option<Type> {
+        let field = self.get_field_from_current_class_only(enum_.cls.class_object(), &VALUE)?;
         if field.is_simple_instance_attribute() {
             Some(field.ty())
         } else {
