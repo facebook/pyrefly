@@ -2113,7 +2113,7 @@ impl Query {
                                 names.pop();
                             }
                         } else {
-                            // If we get here, either the name is undefined or it is is defined in `builtins`;
+                            // If we get here, either the name is undefined or it is defined in `builtins`;
                             // either way we can skip it.
                             break;
                         }
