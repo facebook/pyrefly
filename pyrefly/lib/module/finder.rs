@@ -154,7 +154,10 @@ fn timed_stat(timing: Option<&TransactionTimingCounters>, f: impl FnOnce() -> bo
 /// The cache lives inside `LoaderFindCache` and is never invalidated —
 /// file-change events cause `invalidate_find` to replace loaders in the state.
 pub struct DirEntryCache {
-    cache: LockedMap<PathBuf, Option<Arc<SmallMap<OsString, bool>>>>,
+    /// Cached directory listings: maps a directory to its entries (name -> is_dir).
+    entry_cache: LockedMap<PathBuf, Option<Arc<SmallMap<OsString, bool>>>>,
+    /// Cached `pkgutil.extend_path` namespace-package check, keyed by `__init__` path.
+    pkgutil_cache: LockedMap<PathBuf, bool>,
 }
 
 impl Debug for DirEntryCache {
@@ -166,8 +169,24 @@ impl Debug for DirEntryCache {
 impl DirEntryCache {
     pub fn new() -> Self {
         Self {
-            cache: LockedMap::new(),
+            entry_cache: LockedMap::new(),
+            pkgutil_cache: LockedMap::new(),
         }
+    }
+
+    /// Cached form of [`is_pkgutil_namespace`], keyed by `__init__` path.
+    fn is_pkgutil_namespace(
+        &self,
+        init_path: &Path,
+        timing: Option<&TransactionTimingCounters>,
+    ) -> bool {
+        let key = init_path.to_path_buf();
+        if let Some(cached) = self.pkgutil_cache.get(&key) {
+            return *cached;
+        }
+        let result = is_pkgutil_namespace(init_path, timing);
+        self.pkgutil_cache.insert(key, result);
+        result
     }
 
     pub fn file_exists(&self, path: &Path) -> bool {
@@ -193,12 +212,12 @@ impl DirEntryCache {
 
     fn get_entries(&self, dir: &Path) -> Option<Arc<SmallMap<OsString, bool>>> {
         let key = dir.to_path_buf();
-        if let Some(cached) = self.cache.get(&key) {
+        if let Some(cached) = self.entry_cache.get(&key) {
             return cached.clone();
         }
         let listing = Self::read_dir_entries(dir);
-        self.cache.insert(key.clone(), listing);
-        self.cache.get(&key).and_then(|v| v.clone())
+        self.entry_cache.insert(key.clone(), listing);
+        self.entry_cache.get(&key).and_then(|v| v.clone())
     }
 
     fn read_dir_entries(dir: &Path) -> Option<Arc<SmallMap<OsString, bool>>> {
@@ -383,7 +402,7 @@ fn find_one_part_in_root(
         for candidate_init_suffix in candidate_init_suffixes {
             let init_path = candidate_dir.join(candidate_init_suffix);
             if timed_stat(timing, || dir_cache.file_exists(&init_path)) {
-                if is_pkgutil_namespace(&init_path, timing) {
+                if dir_cache.is_pkgutil_namespace(&init_path, timing) {
                     return Some(FindResult::LegacyNamespacePackage(
                         init_path,
                         Vec1::new(candidate_dir),
