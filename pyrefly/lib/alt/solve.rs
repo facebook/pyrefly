@@ -3237,6 +3237,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let facet_chain = Self::extract_facet_from_op(op)
                 .and_then(|facets| self.resolve_facet_chain(facets.chain.clone()));
             let narrowed = self.narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors);
+            if narrowed.ty().is_never() {
+                return self.heap.mk_never();
+            }
             let mut remaining_ty = match &facet_chain {
                 Some(resolved_chain) => {
                     self.get_facet_chain_type(&narrowed, resolved_chain, *narrow_range)

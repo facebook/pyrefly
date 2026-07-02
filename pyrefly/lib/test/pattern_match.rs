@@ -275,6 +275,24 @@ def f(value: float | tuple[float, float]) -> None:
 );
 
 testcase!(
+    test_match_sequence_pattern_preserves_tuple_union_shape,
+    r#"
+def foo(b: bool) -> tuple[str, int] | tuple[int, str]:
+    if b:
+        return "foo", 1
+    else:
+        return 2, "bar"
+
+def bar(b: bool) -> int:
+    match foo(b):
+        case (str() as x, y):
+            return y
+        case (x, str() as y):
+            return x
+"#,
+);
+
+testcase!(
     test_match_sequence_star_pattern_narrows,
     r#"
 from typing import assert_never
