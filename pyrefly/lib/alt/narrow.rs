@@ -588,12 +588,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
                 if right.is_any() {
-                    // NOTE(grievejia): The most precise refinement would be `left`:
-                    // `isinstance(x, Any)` provides no concrete evidence about the type
-                    // of `x`, so keeping the original type is sound. In practice, that is
-                    // currently too strict for some primer projects. Refining to `Any` is
-                    // a gradual-typing compromise; we can revisit `left` in strict mode.
-                    right.clone()
+                    // An unknown class object (e.g. `type[Any]`) shouldn't widen the subject.
+                    l.clone()
                 } else {
                     // TODO: falling back to Never when the lhs is a union is a hack to get
                     // reasonable behavior in cases like this:
@@ -706,6 +702,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     continue;
                 }
                 if let Some((tparams, right)) = self.unwrap_class_info_target(&result, right) {
+                    if right.is_any() {
+                        continue;
+                    }
                     let (vs, right) = self
                         .solver()
                         .fresh_quantified(&tparams, right, self.uniques);
