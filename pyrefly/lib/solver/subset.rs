@@ -92,6 +92,18 @@ fn as_type_alias(ty: &Type) -> Option<&TypeAliasData> {
     }
 }
 
+fn has_regex_metadata(metadata: &[Type]) -> bool {
+    metadata.iter().any(|ty| {
+        let Type::Tuple(Tuple::Concrete(items)) = ty else {
+            return false;
+        };
+        let Some(Type::Literal(tag)) = items.first() else {
+            return false;
+        };
+        matches!(&tag.value, Lit::Str(tag) if tag.as_str() == "__pyrefly_regex_groups__")
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum TypedDictFieldId {
     Name(Name),
@@ -1779,6 +1791,14 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             }
             (_, Type::UntypedAlias(want_data)) => {
                 self.is_subset_eq(got, &self.type_order.untype_alias(want_data))
+            }
+            (Type::Annotated(inner, metadata), _)
+                if !matches!(want, Type::Type(_)) && has_regex_metadata(metadata) =>
+            {
+                self.is_subset_eq(inner, want)
+            }
+            (_, Type::Annotated(inner, metadata)) if has_regex_metadata(metadata) => {
+                self.is_subset_eq(got, inner)
             }
             (Type::Quantified(q), Type::Ellipsis) | (Type::Ellipsis, Type::Quantified(q))
                 if q.kind() == QuantifiedKind::ParamSpec =>
