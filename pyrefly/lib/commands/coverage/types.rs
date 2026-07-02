@@ -190,15 +190,8 @@ pub struct Function {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct IncompleteAttribute {
-    pub name: String,
-    pub declared_in: String,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ReportClass {
     pub name: String,
-    pub incomplete_attributes: Vec<IncompleteAttribute>,
     pub location: Location,
 }
 
