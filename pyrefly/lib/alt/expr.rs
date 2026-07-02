@@ -46,6 +46,7 @@ use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
+use ruff_python_ast::ConversionFlag;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
@@ -56,7 +57,10 @@ use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::ExprTuple;
+use ruff_python_ast::FStringPart;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::InterpolatedStringElement;
+use ruff_python_ast::InterpolatedStringElements;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
@@ -175,6 +179,14 @@ enum ExprExpectation<'a, 'b> {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FStringFormatPresentation {
+    Any,
+    Int,
+    Numeric,
+    IntOrStr,
+}
+
 impl<'a, 'b> ExprOptions<'a, 'b> {
     pub fn infer(errors: &'a ErrorCollector, hint: Option<HintRef<'a, 'b>>) -> Self {
         Self {
@@ -284,6 +296,316 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .key_to_idx_hashed_opt(Hashed::new(&anon_key))?;
         matches!(self.bindings().get(idx), Binding::ClassDef(..))
             .then(|| self.get_hashed(Hashed::new(&anon_key)).ty().clone())
+    }
+
+    fn fstring_infer_elements(
+        &self,
+        elements: &InterpolatedStringElements,
+        errors: &ErrorCollector,
+        all_literal_strings: &mut bool,
+    ) {
+        for element in elements {
+            match element {
+                InterpolatedStringElement::Literal(_) => {}
+                InterpolatedStringElement::Interpolation(interpolation) => {
+                    let expr_ty = self.expr_infer(&interpolation.expression, errors);
+                    if !expr_ty.is_literal_string() {
+                        *all_literal_strings = false;
+                    }
+                    if let Some(format_spec) = &interpolation.format_spec {
+                        if let Some(spec) = Self::literal_fstring_format_spec(&format_spec.elements)
+                        {
+                            self.check_fstring_format_spec(
+                                &expr_ty,
+                                &spec,
+                                interpolation.conversion,
+                                interpolation.range,
+                                errors,
+                            );
+                        }
+                        self.fstring_infer_elements(
+                            &format_spec.elements,
+                            errors,
+                            all_literal_strings,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn literal_fstring_format_spec(elements: &InterpolatedStringElements) -> Option<String> {
+        let mut spec = String::new();
+        for element in elements {
+            match element {
+                InterpolatedStringElement::Literal(literal) => spec.push_str(&literal.value),
+                InterpolatedStringElement::Interpolation(_) => return None,
+            }
+        }
+        Some(spec)
+    }
+
+    fn check_fstring_format_spec(
+        &self,
+        actual: &Type,
+        spec: &str,
+        conversion: ConversionFlag,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if spec.is_empty() {
+            return;
+        }
+        let converted;
+        let actual = if matches!(conversion, ConversionFlag::None) {
+            actual
+        } else {
+            converted = self.heap.mk_class_type(self.stdlib.str().clone());
+            &converted
+        };
+        match actual {
+            Type::Union(union) => {
+                for member in &union.members {
+                    self.check_fstring_format_spec_for_type(member, spec, range, errors);
+                }
+            }
+            _ => self.check_fstring_format_spec_for_type(actual, spec, range, errors),
+        }
+    }
+
+    fn check_fstring_format_spec_for_type(
+        &self,
+        actual: &Type,
+        spec: &str,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        if actual.is_any() || actual.is_error() || actual.is_never() {
+            return;
+        }
+        if self.check_datetime_fstring_format_spec(actual, spec, range, errors) {
+            return;
+        }
+        let valid_builtin = self.unions(vec![
+            self.heap.mk_class_type(self.stdlib.bytes().clone()),
+            self.heap.mk_class_type(self.stdlib.str().clone()),
+            self.heap.mk_class_type(self.stdlib.int().clone()),
+            self.heap.mk_class_type(self.stdlib.float().clone()),
+            self.heap.mk_class_type(self.stdlib.complex().clone()),
+        ]);
+        if self.is_subset_eq(actual, &valid_builtin) {
+            let presentation = match Self::parse_fstring_format_presentation(spec) {
+                Ok(presentation) => presentation,
+                Err(msg) => {
+                    errors
+                        .error_builder(range, ErrorKind::InvalidArgument, msg)
+                        .emit();
+                    return;
+                }
+            };
+            let expected = match presentation {
+                FStringFormatPresentation::Any => return,
+                FStringFormatPresentation::Int => {
+                    self.heap.mk_class_type(self.stdlib.int().clone())
+                }
+                FStringFormatPresentation::Numeric => self.unions(vec![
+                    self.heap.mk_class_type(self.stdlib.int().clone()),
+                    self.heap.mk_class_type(self.stdlib.float().clone()),
+                    self.heap.mk_class_type(self.stdlib.complex().clone()),
+                ]),
+                FStringFormatPresentation::IntOrStr => self.union(
+                    self.heap.mk_class_type(self.stdlib.int().clone()),
+                    self.heap.mk_class_type(self.stdlib.str().clone()),
+                ),
+            };
+            if !self.is_subset_eq(actual, &expected) {
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::BadArgumentType,
+                        format!(
+                            "Incompatible types in string interpolation (expression has type `{}`, placeholder has type `{}`)",
+                            self.for_display(actual.clone()),
+                            self.for_display(expected),
+                        ),
+                    )
+                    .emit();
+            }
+            return;
+        }
+        if self.type_has_custom_format(actual) {
+            return;
+        }
+        errors
+            .error_builder(
+                range,
+                ErrorKind::InvalidArgument,
+                format!(
+                    "The type `{}` doesn't support format specifiers",
+                    self.for_display(actual.clone()),
+                ),
+            )
+            .with_detail("Maybe you want to add `!s` to the conversion".to_owned())
+            .emit();
+    }
+
+    fn parse_fstring_format_presentation(spec: &str) -> Result<FStringFormatPresentation, String> {
+        let chars = spec.chars().collect::<Vec<_>>();
+        let mut i = 0;
+        if chars.len() >= 2 && matches!(chars[1], '<' | '>' | '=' | '^') {
+            i = 2;
+        } else if chars
+            .first()
+            .is_some_and(|c| matches!(c, '<' | '>' | '=' | '^'))
+        {
+            i = 1;
+        }
+        if chars.get(i).is_some_and(|c| matches!(c, '+' | '-' | ' ')) {
+            i += 1;
+        }
+        if chars.get(i) == Some(&'#') {
+            i += 1;
+        }
+        if chars.get(i) == Some(&'0') {
+            i += 1;
+        }
+        while chars.get(i).is_some_and(|c| c.is_ascii_digit()) {
+            i += 1;
+        }
+        if chars.get(i).is_some_and(|c| matches!(c, '_' | ',')) {
+            i += 1;
+        }
+        if chars.get(i) == Some(&'.') {
+            i += 1;
+            let precision_start = i;
+            while chars.get(i).is_some_and(|c| c.is_ascii_digit()) {
+                i += 1;
+            }
+            if i == precision_start {
+                return Err(format!("Unrecognized format specification `{spec}`"));
+            }
+        }
+        let presentation = match chars.get(i) {
+            None => return Ok(FStringFormatPresentation::Any),
+            Some(c) if i + 1 == chars.len() => *c,
+            _ => return Err(format!("Unrecognized format specification `{spec}`")),
+        };
+        match presentation {
+            's' => Ok(FStringFormatPresentation::Any),
+            'c' => Ok(FStringFormatPresentation::IntOrStr),
+            'b' | 'd' | 'o' | 'x' | 'X' => Ok(FStringFormatPresentation::Int),
+            'e' | 'E' | 'f' | 'F' | 'g' | 'G' | 'n' | '%' => Ok(FStringFormatPresentation::Numeric),
+            _ => Err(format!("Unrecognized format specification `{spec}`")),
+        }
+    }
+
+    fn check_datetime_fstring_format_spec(
+        &self,
+        actual: &Type,
+        spec: &str,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        let Some(cls) = self.type_class_for_fstring_format(actual) else {
+            return false;
+        };
+        if !self.has_superclass(cls.class_object(), self.stdlib.date().class_object()) {
+            return false;
+        }
+        let is_exact_datetime_type =
+            cls.has_qname("datetime", "date") || cls.has_qname("datetime", "datetime");
+        if !is_exact_datetime_type && self.class_defines_format(&cls) {
+            return false;
+        }
+        let mut percent = false;
+        let mut colon = false;
+        for char in spec.chars() {
+            if colon {
+                if char != 'z' {
+                    self.invalid_datetime_format_sequence(format!("%:{char}"), range, errors);
+                }
+                colon = false;
+                percent = false;
+                continue;
+            }
+            if char == '%' && !percent {
+                percent = true;
+                continue;
+            }
+            if percent {
+                if char == ':' {
+                    colon = true;
+                    continue;
+                }
+                if !"aAwdbBmyYHIpMSfzZjUWcxX%GuV".contains(char) {
+                    self.invalid_datetime_format_sequence(format!("%{char}"), range, errors);
+                }
+            }
+            percent = false;
+        }
+        if percent {
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::InvalidArgument,
+                    "Invalid trailing `%`, escape with `%%`".to_owned(),
+                )
+                .emit();
+        }
+        if colon {
+            errors
+                .error_builder(
+                    range,
+                    ErrorKind::InvalidArgument,
+                    "Invalid trailing `%:`, escape with `%%`".to_owned(),
+                )
+                .emit();
+        }
+        true
+    }
+
+    fn invalid_datetime_format_sequence(
+        &self,
+        sequence: String,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        errors
+            .error_builder(
+                range,
+                ErrorKind::InvalidArgument,
+                format!("Invalid format sequence `{sequence}`, escape with `%%`"),
+            )
+            .emit();
+    }
+
+    fn type_has_custom_format(&self, ty: &Type) -> bool {
+        self.type_class_for_fstring_format(ty)
+            .is_some_and(|cls| self.class_has_format(&cls))
+    }
+
+    fn class_has_format(&self, cls: &ClassType) -> bool {
+        self.class_defines_format(cls)
+            || self
+                .get_mro_for_class(cls.class_object())
+                .ancestors_no_object()
+                .iter()
+                .any(|ancestor| self.class_defines_format(ancestor))
+    }
+
+    fn class_defines_format(&self, cls: &ClassType) -> bool {
+        !cls.is_builtin("object")
+            && self
+                .get_field_from_current_class_only(cls.class_object(), &dunder::FORMAT)
+                .is_some()
+    }
+
+    fn type_class_for_fstring_format(&self, ty: &Type) -> Option<ClassType> {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.clone()),
+            Type::Literal(lit) => Some(lit.value.general_class_type(self.stdlib).clone()),
+            _ => None,
+        }
     }
 
     /// Infer a type for an expression, with an optional type hint that influences the inferred type.
@@ -735,12 +1057,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::FString(x) => {
                 let mut all_literal_strings = true;
-                x.visit(&mut |x| {
-                    let fstring_expr_ty = self.expr_infer(x, errors);
-                    if !fstring_expr_ty.is_literal_string() {
-                        all_literal_strings = false;
+                for part in x.value.iter() {
+                    match part {
+                        FStringPart::Literal(_) => {}
+                        FStringPart::FString(fstring) => {
+                            self.fstring_infer_elements(
+                                &fstring.elements,
+                                errors,
+                                &mut all_literal_strings,
+                            );
+                        }
                     }
-                });
+                }
                 match Lit::from_fstring(x) {
                     Some(lit) => lit.to_implicit_type(),
                     _ if all_literal_strings => self.heap.mk_literal_string(LitStyle::Implicit),

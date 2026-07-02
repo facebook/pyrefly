@@ -614,6 +614,33 @@ c = f"{arr['foo']}"  # E: Cannot index into `list[int]`
 );
 
 testcase!(
+    test_checked_fstrings,
+    r#"
+from datetime import date
+
+f"{None:0>2}"  # E: doesn't support format specifiers
+f"{date(1, 1, 1):%}"  # E: Invalid trailing `%`, escape with `%%`
+f"{'s':.2f}"  # E: Incompatible types in string interpolation
+
+i = 1
+f"{i:1}"
+f"{i:.1f}"
+s = "s"
+f"{s:1}"
+f"{s:.2}"
+dynamic_spec = ""
+f"{s:{dynamic_spec}}"
+f"{None!s:0>2}"
+
+class CustomFormat:
+    def __format__(self, format_spec: str) -> str:
+        return ""
+
+f"{CustomFormat():whatever}"
+"#,
+);
+
+testcase!(
     test_ternary_expression,
     r#"
 from typing import assert_type, Literal
