@@ -22,6 +22,7 @@ pub mod operators;
 pub mod overload;
 pub mod polars_specials;
 pub mod shape_flag;
+pub mod regex;
 pub mod singledispatch;
 pub mod solve;
 pub mod special_calls;
