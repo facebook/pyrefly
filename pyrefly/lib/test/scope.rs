@@ -1451,7 +1451,6 @@ def test_2(cond: bool):
 
 // https://github.com/facebook/pyrefly/issues/2930
 testcase!(
-    bug = "del in dead code should still make the variable local, hiding the outer binding",
     test_del_in_dead_code_makes_local,
     r#"
 x = 1
@@ -1459,7 +1458,7 @@ x = 1
 def f():
     # Even though the del is in unreachable code, Python's compiler
     # still marks x as local in f's scope.
-    print(x)
+    print(x)  # E: `x` is uninitialized
     if False:
         del x
 "#,

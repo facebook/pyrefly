@@ -1256,7 +1256,10 @@ impl<'a> BindingsBuilder<'a> {
     pub(crate) fn should_bind_unreachable_branches(&self) -> bool {
         matches!(
             self.module_info.path().details(),
-            ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
+            ModulePathDetails::FileSystem(_)
+                | ModulePathDetails::Memory(_)
+                | ModulePathDetails::BundledTypeshedThirdParty(_)
+                | ModulePathDetails::BundledThirdParty(_)
         ) && self.module_info.name() != ModuleName::builtins()
             && self.module_info.name() != ModuleName::extra_builtins()
     }
@@ -1932,8 +1935,7 @@ impl<'a> BindingsBuilder<'a> {
         self.check_for_type_alias_redefinition(name, idx);
         self.check_for_imported_final_reassignment(name, idx);
         let mut hashed_name = Hashed::new(name);
-        let allow_unreachable_defs =
-            self.errors_suppressed() && self.should_bind_unreachable_branches();
+        let allow_unreachable_defs = self.should_bind_unreachable_branches();
         let mut write_info = self.scopes.define_in_current_flow(
             hashed_name,
             idx,
