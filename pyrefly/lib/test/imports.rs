@@ -289,6 +289,22 @@ import foo
 "#,
 );
 
+#[test]
+fn test_broken_reexport_target_does_not_panic() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut env = TestEnv::new();
+    env.add_with_path("foo", "foo/__init__.py", "from target import x");
+    env.add_real_path("target", temp.path().join("target.py"));
+    env.add("main", "from foo import x");
+    let (state, handle) = env.to_state();
+    let errs = state
+        .transaction()
+        .get_errors([&handle("target"), &handle("main")])
+        .collect_errors()
+        .ordinary;
+    assert!(errs.iter().any(|err| err.msg().contains("Failed to load")));
+}
+
 fn env_main_guard() -> TestEnv {
     let mut t = TestEnv::new();
     t.add(
