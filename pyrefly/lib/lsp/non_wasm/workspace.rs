@@ -343,6 +343,30 @@ pub struct LspAnalysisConfig {
     pub show_hover_go_to_links: Option<bool>,
 }
 
+impl LspAnalysisConfig {
+    fn has_any_setting(self) -> bool {
+        self.diagnostic_mode.is_some()
+            || self.import_format.is_some()
+            || self.complete_function_parens.is_some()
+            || self.inlay_hints.is_some()
+            || self.show_hover_go_to_links.is_some()
+    }
+
+    fn overlay(self, overrides: Self) -> Self {
+        Self {
+            diagnostic_mode: overrides.diagnostic_mode.or(self.diagnostic_mode),
+            import_format: overrides.import_format.or(self.import_format),
+            complete_function_parens: overrides
+                .complete_function_parens
+                .or(self.complete_function_parens),
+            inlay_hints: overrides.inlay_hints.or(self.inlay_hints),
+            show_hover_go_to_links: overrides
+                .show_hover_go_to_links
+                .or(self.show_hover_go_to_links),
+        }
+    }
+}
+
 fn deserialize_analysis<'de, D>(deserializer: D) -> Result<Option<LspAnalysisConfig>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -515,12 +539,10 @@ impl Workspaces {
             Ok(x) => x,
         };
 
+        let mut analysis = config.analysis;
+
         if let Some(python_path) = config.python_path {
             self.update_pythonpath(modified, scope_uri, &python_path);
-        }
-
-        if let Some(analysis) = config.analysis {
-            self.update_ide_settings(modified, scope_uri, analysis);
         }
 
         if let Some(pyrefly) = config.pyrefly {
@@ -542,17 +564,25 @@ impl Workspaces {
             if let Some(diagnostic_mode) = pyrefly.diagnostic_mode {
                 self.update_diagnostic_mode(scope_uri, diagnostic_mode);
             }
+            let mut pyrefly_analysis = pyrefly
+                .analysis
+                .filter(|analysis| analysis.has_any_setting());
             if pyrefly.complete_function_parens.is_some() || pyrefly.import_format.is_some() {
-                let mut analysis = pyrefly.analysis.or(config.analysis).unwrap_or_default();
+                let mut analysis = pyrefly_analysis.unwrap_or_default();
                 if let Some(complete_function_parens) = pyrefly.complete_function_parens {
                     analysis.complete_function_parens = Some(complete_function_parens);
                 }
                 if let Some(import_format) = pyrefly.import_format {
                     analysis.import_format = Some(import_format);
                 }
-                self.update_ide_settings(modified, scope_uri, analysis);
-            } else if let Some(analysis) = pyrefly.analysis {
-                self.update_ide_settings(modified, scope_uri, analysis);
+                pyrefly_analysis = Some(analysis);
+            }
+            if let Some(pyrefly_analysis) = pyrefly_analysis {
+                analysis = Some(
+                    analysis
+                        .map(|analysis| analysis.overlay(pyrefly_analysis))
+                        .unwrap_or(pyrefly_analysis),
+                );
             }
             // Always write a definitive value for each of these three
             // settings — including `None` when absent — so that removing a
@@ -578,6 +608,10 @@ impl Workspaces {
             if let Some(config_path) = pyrefly.config_path {
                 self.update_workspace_config(modified, scope_uri, config_path);
             }
+        }
+
+        if let Some(analysis) = analysis {
+            self.update_ide_settings(modified, scope_uri, analysis);
         }
     }
 
