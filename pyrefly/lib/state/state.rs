@@ -2998,12 +2998,9 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        // The unwrap is safe because we must have said there were no exports,
-        // so no one can be trying to get at them
         let module_data = self
             .get_module(module, path, ModuleDep::Key(k.to_anykey()))
-            .finding()
-            .unwrap();
+            .finding()?;
         // Hold the span guard for the duration of the lookup so that a panic
         // inside `lookup_answer` still closes the span (keeping the per-thread
         // demand stack balanced on this worker for subsequent demands).
