@@ -2830,12 +2830,14 @@ impl<'a> Transaction<'a> {
                 }
             }
             match error.error_kind() {
-                ErrorKind::UnknownName if error_range.contains_range(range) => {
+                ErrorKind::UnknownName | ErrorKind::UnimportedDirective
+                    if error_range.contains_range(range) =>
+                {
                     let unknown_name = module_info.code_at(error_range);
-                    for (handle_to_import_from, export) in self
+                    let exports = self
                         .search_exports_exact(unknown_name, custom_thread_pool)
-                        .unwrap_or_default()
-                    {
+                        .unwrap_or_default();
+                    for (handle_to_import_from, export) in exports {
                         self.create_quickfix_action_for_export(
                             handle,
                             import_format,
