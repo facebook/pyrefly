@@ -1248,15 +1248,26 @@ impl<'a> Transaction<'a> {
     ///
     /// TSP prefers raw bound types of identifiers since it re-resolves declarations.
     pub fn get_computed_type_at_range(&self, handle: &Handle, range: TextRange) -> Option<Type> {
-        // Bare names need declaration-preserving lookup to avoid coercing
-        // overloaded functions into synthesized callables.
-        if range.is_empty()
-            || self.get_ast(handle).is_some_and(|module| {
-                Ast::locate_node(&module, range.start())
-                    .into_iter()
-                    .any(|node| node.range() == range && matches!(node, AnyNodeRef::ExprName(_)))
-            })
-        {
+        // Bare names and definition-name ranges need declaration-preserving
+        // lookup to avoid coercing overloaded functions into synthesized
+        // callables, and to preserve inferred returns for unannotated defs.
+        let is_identifier_name_range = !range.is_empty()
+            && self.identifier_at(handle, range.start()).is_some_and(
+                |IdentifierWithContext {
+                     identifier,
+                     context,
+                 }| {
+                    identifier.range == range
+                        && matches!(
+                            context,
+                            IdentifierContext::Expr(_)
+                                | IdentifierContext::FunctionDef { .. }
+                                | IdentifierContext::MethodDef { .. }
+                        )
+                },
+            );
+
+        if range.is_empty() || is_identifier_name_range {
             return self.get_type_at_preserving_declaration(handle, range.start());
         }
         self.get_type_trace(handle, range)

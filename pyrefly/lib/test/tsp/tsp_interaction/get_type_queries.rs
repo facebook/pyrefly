@@ -20,7 +20,26 @@ use crate::test::tsp::tsp_interaction::object_model::write_pyproject;
 fn setup_project(file_content: &str) -> (TspInteraction, String, i32) {
     let temp_dir = TempDir::new().unwrap();
     write_pyproject(temp_dir.path());
+    setup_project_in_dir(temp_dir, file_content)
+}
 
+fn setup_project_with_pyrefly_config(
+    file_content: &str,
+    pyrefly_config: &str,
+) -> (TspInteraction, String, i32) {
+    let temp_dir = TempDir::new().unwrap();
+    write_pyproject(temp_dir.path());
+
+    let pyproject = temp_dir.path().join("pyproject.toml");
+    let mut content = std::fs::read_to_string(&pyproject).unwrap();
+    content.push_str("\n[tool.pyrefly]\n");
+    content.push_str(pyrefly_config);
+    std::fs::write(pyproject, content).unwrap();
+
+    setup_project_in_dir(temp_dir, file_content)
+}
+
+fn setup_project_in_dir(temp_dir: TempDir, file_content: &str) -> (TspInteraction, String, i32) {
     let test_file = temp_dir.path().join("main.py");
     std::fs::write(&test_file, file_content).unwrap();
 
@@ -783,6 +802,53 @@ fn test_get_computed_type_function_has_return_type() {
         Some(TypeKind::Class as u64),
         "Expected return type to be Class"
     );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_definition_site_uses_inferred_return_type() {
+    let code = "\
+def plain():
+    return True
+
+class C:
+    def method(self):
+        return 1
+
+    @property
+    def ok(self):
+        return True
+
+plain
+";
+    let (mut tsp, file_uri, snapshot) = setup_project_with_pyrefly_config(
+        code,
+        "untyped-def-behavior = \"check-and-infer-return-type\"\n",
+    );
+
+    for (start_line, start_character, end_line, end_character, label) in [
+        (0, 4, 0, 9, "plain function definition"),
+        (4, 8, 4, 14, "method definition"),
+        (8, 8, 8, 10, "property getter definition"),
+        (11, 0, 11, 5, "plain function reference"),
+    ] {
+        let result = get_computed_type_range_ok(
+            &mut tsp,
+            &file_uri,
+            start_line,
+            start_character,
+            end_line,
+            end_character,
+            snapshot,
+        );
+        assert_kind(&result, TypeKind::Function);
+
+        let return_type = result
+            .get("returnType")
+            .unwrap_or_else(|| panic!("Expected returnType for {label}: {result}"));
+        assert_kind(return_type, TypeKind::Class);
+    }
 
     tsp.shutdown();
 }
