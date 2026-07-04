@@ -23,9 +23,12 @@
 //!  - `Tensor`/`NNModule` → TSP `ClassType` from their base class.
 //!  - `TypeAlias` → unwraps to the aliased type.
 //!  - `SpecialForm` → TSP `BuiltInType` with the form name.
-//!  - `Any`, `Never`, `None`, `Ellipsis` → TSP `BuiltInType`.
+//!  - `Any`, `Never`, `Ellipsis` → TSP `BuiltInType`.
 //!  - Solver-internal types → TSP `BuiltInType` with a representative name.
 //!
+//! Note: `None` is emitted as a `types.NoneType` `ClassType`, not as a
+//! `BuiltInType`, because `BuiltInType.name` is restricted to protocol
+//! sentinel names.
 //! All `Type` variants are explicitly handled; no types fall through to a
 //! generic `SynthesizedType` stub.
 
@@ -145,7 +148,7 @@ impl TypeConverter<'_> {
             // --- Built-in special types ---
             PyreflyType::Any(_) => builtin("any"),
             PyreflyType::Never(_) => builtin("never"),
-            PyreflyType::None => builtin("none"),
+            PyreflyType::None => self.types_class("NoneType", TypeFlags::INSTANCE),
             PyreflyType::Ellipsis => builtin("ellipsis"),
 
             // --- Class instances (int, str, list[int], user-defined classes, etc.) ---
@@ -660,6 +663,19 @@ impl TypeConverter<'_> {
         })
     }
 
+    /// Build a TSP `ClassType` whose declaration points at `types.<name>`.
+    fn types_class(&self, name: &str, flags: TypeFlags) -> TspType {
+        TspType::Class(TspClassType {
+            declaration: Declaration::Regular(self.types_class_declaration(name)),
+            flags,
+            id: next_id(),
+            kind: TypeKind::Class,
+            literal_value: None,
+            type_alias_info: None,
+            type_args: None,
+        })
+    }
+
     /// Build a class declaration for `typing.<name>`. Resolves the real source
     /// range via the export-location resolver; falls back to a zero range
     /// pointing at bundled `typing.pyi` when unavailable.
@@ -680,6 +696,28 @@ impl TypeConverter<'_> {
             };
         }
         make_typing_class_declaration(name)
+    }
+
+    /// Build a class declaration for `types.<name>`. Resolves the real source
+    /// range via the export-location resolver; falls back to a zero range
+    /// pointing at bundled `types.pyi` when unavailable.
+    fn types_class_declaration(&self, name: &str) -> RegularDeclaration {
+        let symbol = Name::new(name);
+        if let Some((module_path, lsp_range)) = self
+            .resolve_export
+            .and_then(|resolve| resolve(ModuleName::types(), &symbol))
+        {
+            return RegularDeclaration {
+                kind: DeclarationKind::Regular,
+                category: DeclarationCategory::Class,
+                name: Some(name.to_owned()),
+                node: Node {
+                    range: lsp_range_to_tsp(lsp_range),
+                    uri: path_to_uri(&module_path),
+                },
+            };
+        }
+        make_types_class_declaration(name)
     }
 
     /// Convert a pyrefly `Overload` to a TSP `OverloadedType`.
@@ -807,6 +845,21 @@ fn make_builtin_class_declaration(name: &str) -> RegularDeclaration {
 fn make_typing_class_declaration(name: &str) -> RegularDeclaration {
     let module_path =
         pyrefly_python::module_path::ModulePath::bundled_typeshed(PathBuf::from("typing.pyi"));
+    RegularDeclaration {
+        kind: DeclarationKind::Regular,
+        category: DeclarationCategory::Class,
+        name: Some(name.to_owned()),
+        node: Node {
+            range: zero_range(),
+            uri: path_to_uri(&module_path),
+        },
+    }
+}
+
+/// Build a declaration for a class in `types.pyi`.
+fn make_types_class_declaration(name: &str) -> RegularDeclaration {
+    let module_path =
+        pyrefly_python::module_path::ModulePath::bundled_typeshed(PathBuf::from("types.pyi"));
     RegularDeclaration {
         kind: DeclarationKind::Regular,
         category: DeclarationCategory::Class,
@@ -1043,8 +1096,20 @@ mod tests {
     fn test_convert_none() {
         let tsp = convert_type(&PyreflyType::None);
         match tsp {
-            TspType::BuiltInType(b) => assert_eq!(b.name, "none"),
-            other => panic!("expected BuiltInType, got {other:?}"),
+            TspType::Class(c) => {
+                assert!(c.flags.contains(TypeFlags::INSTANCE));
+                let Declaration::Regular(decl) = c.declaration else {
+                    panic!("expected RegularDeclaration");
+                };
+                assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                assert_eq!(decl.category, DeclarationCategory::Class);
+                assert!(
+                    decl.node.uri.contains("types.pyi"),
+                    "expected types URI, got {}",
+                    decl.node.uri
+                );
+            }
+            other => panic!("expected Class, got {other:?}"),
         }
     }
 
@@ -1062,8 +1127,8 @@ mod tests {
         let a = convert_type(&PyreflyType::None);
         let b = convert_type(&PyreflyType::Ellipsis);
         let id_a = match &a {
-            TspType::BuiltInType(b) => b.id,
-            _ => panic!("expected BuiltInType"),
+            TspType::Class(c) => c.id,
+            _ => panic!("expected Class"),
         };
         let id_b = match &b {
             TspType::BuiltInType(b) => b.id,
@@ -1140,10 +1205,15 @@ mod tests {
                 assert_eq!(u.kind, TypeKind::Union);
                 assert_eq!(u.flags, TypeFlags::NONE);
                 assert_eq!(u.sub_types.len(), 2);
-                // First member should be BuiltIn "none"
+                // First member should be `types.NoneType`.
                 match &u.sub_types[0] {
-                    TspType::BuiltInType(b) => assert_eq!(b.name, "none"),
-                    other => panic!("expected BuiltInType for first member, got {other:?}"),
+                    TspType::Class(c) => {
+                        let Declaration::Regular(decl) = &c.declaration else {
+                            panic!("expected RegularDeclaration");
+                        };
+                        assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                    }
+                    other => panic!("expected Class for first member, got {other:?}"),
                 }
                 // Second member should be BuiltIn "any"
                 match &u.sub_types[1] {
@@ -1663,14 +1733,27 @@ mod tests {
                 let specialized = f.specialized_types.expect("expected specialized_types");
                 assert_eq!(specialized.parameter_types.len(), 2);
                 match &specialized.parameter_types[0] {
-                    TspType::BuiltInType(b) => assert_eq!(b.name, "none"),
-                    other => panic!("expected BuiltInType, got {other:?}"),
+                    TspType::Class(c) => {
+                        let Declaration::Regular(decl) = &c.declaration else {
+                            panic!("expected RegularDeclaration");
+                        };
+                        assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                    }
+                    other => panic!("expected Class, got {other:?}"),
                 }
                 match &specialized.parameter_types[1] {
                     TspType::BuiltInType(b) => assert_eq!(b.name, "ellipsis"),
                     other => panic!("expected BuiltInType, got {other:?}"),
                 }
-                assert!(specialized.return_type.is_some());
+                match specialized.return_type.as_deref() {
+                    Some(TspType::Class(c)) => {
+                        let Declaration::Regular(decl) = &c.declaration else {
+                            panic!("expected RegularDeclaration");
+                        };
+                        assert_eq!(decl.name.as_deref(), Some("NoneType"));
+                    }
+                    other => panic!("expected NoneType Class return type, got {other:?}"),
+                }
             }
             other => panic!("expected Function, got {other:?}"),
         }
@@ -1700,12 +1783,19 @@ mod tests {
             },
         };
         let resolver = |module: ModuleName, name: &Name| {
-            assert_eq!(module, ModuleName::typing());
-            assert_eq!(name.as_str(), "overload");
-            Some((
-                ModulePath::filesystem(PathBuf::from("/typeshed/typing.pyi")),
-                range,
-            ))
+            if module == ModuleName::typing() && name.as_str() == "overload" {
+                return Some((
+                    ModulePath::filesystem(PathBuf::from("/typeshed/typing.pyi")),
+                    range,
+                ));
+            }
+            if module == ModuleName::types() && name.as_str() == "NoneType" {
+                return Some((
+                    ModulePath::filesystem(PathBuf::from("/typeshed/types.pyi")),
+                    range,
+                ));
+            }
+            panic!("unexpected export lookup for {module}.{name}");
         };
         match convert_type_with_resolvers(&ty, None, None, Some(&resolver)) {
             TspType::Function(f) => {

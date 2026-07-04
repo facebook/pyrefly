@@ -233,14 +233,15 @@ fn test_get_computed_type_string_is_class() {
 }
 
 #[test]
-fn test_get_computed_type_none_is_builtin() {
+fn test_get_computed_type_none_is_class() {
     let (mut tsp, file_uri, snapshot) = setup_project("x = None\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
-    assert_kind(&result, TypeKind::Builtin);
+    assert_kind(&result, TypeKind::Class);
 
-    let name = result.get("name").and_then(|v| v.as_str());
-    assert_eq!(name, Some("none"), "Expected builtin name 'none'");
+    let declaration = result.get("declaration").expect("Expected declaration");
+    let name = declaration.get("name").and_then(|v| v.as_str());
+    assert_eq!(name, Some("NoneType"), "Expected class name 'NoneType'");
 
     tsp.shutdown();
 }
