@@ -702,6 +702,14 @@ class Mapped[T]:
     def __delete__(self, instance) -> None: ...
     "#,
     );
+    env.add(
+        "sqlalchemy.sql.dml",
+        r#"
+class Update:
+    def where(self, *criteria: object) -> Update: ...
+    def values(self, **kwargs: object) -> Update: ...
+    "#,
+    );
     env.add_with_path(
         "sqlalchemy.orm.decl_api",
         "sqlalchemy/orm/decl_api.py",
@@ -715,7 +723,14 @@ from .base import Mapped as Mapped
 from .decl_api import DeclarativeBase as DeclarativeBase
     "#,
     );
-    env.add_with_path("sqlalchemy", "sqlalchemy/__init__.py", "");
+    env.add_with_path(
+        "sqlalchemy",
+        "sqlalchemy/__init__.py",
+        r#"
+from .sql.dml import Update as Update
+def update(table: object) -> Update: ...
+    "#,
+    );
     env
 }
 
@@ -757,6 +772,26 @@ class User(Base):
     name: Mapped[str]
     def __init__(self, name: str):
         self.name = name
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_mapped_fields,
+    sqlalchemy_mapped_env(),
+    r#"
+import sqlalchemy as sa
+from sqlalchemy.orm import DeclarativeBase, Mapped
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    id: Mapped[int]
+    name: Mapped[str]
+
+sa.update(User).where(User.id == 1).values(name="alice", id=1)
+sa.update(User).where(User.id == 1).values(name=0)  # E: `Literal[0]` is not assignable to field `name` with type `str`
+sa.update(User).where(User.id == 1).values(nam="alice")  # E: Unexpected SQLAlchemy update field `nam`
     "#,
 );
 
