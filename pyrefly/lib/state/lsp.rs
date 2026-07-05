@@ -504,14 +504,15 @@ pub(crate) struct IdentifierWithContext {
 enum ResolutionKind {
     /// Resolve through a binding key — a reference or a declaration.
     Key(Key),
+    /// Resolve through a binding key in a different module.
+    KeyInModule(Handle, Key),
     /// A directly-constructed type with no binding key. Only module identifiers.
     Type(Type),
+    /// The active parameter type at a call argument position.
+    ActiveCallArgument(TextSize),
     /// Member access (a computed expression, not a declaration): resolve via the
     /// recorded expression trace at this range, call-aware in callee position.
     Trace(TextRange),
-    /// The identifier has no type of its own — e.g. a keyword-argument label that
-    /// binds no parameter.
-    NoType,
 }
 
 #[derive(PartialEq, Eq)]
@@ -806,6 +807,29 @@ impl<'a> Transaction<'a> {
             ans.get_chosen_overload_trace_for_display(range)
         } else {
             ans.get_chosen_overload_trace(range)
+        }
+    }
+
+    fn get_active_call_argument_type_for_surface(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        for_display: bool,
+    ) -> Option<Type> {
+        let CallInfo {
+            callables,
+            chosen_overload_index,
+            active_argument,
+            ..
+        } = self.get_callables_from_call(handle, position)?;
+        let callable = callables.get(chosen_overload_index.unwrap_or(0)).cloned()?;
+        let params = Self::normalize_singleton_function_type_into_params(callable)?;
+        let arg_index = Self::active_parameter_index(&params, &active_argument)?;
+        let ty = params.get(arg_index)?.as_type().clone();
+        if for_display {
+            Some(self.get_answers(handle)?.solver().for_display(ty))
+        } else {
+            Some(ty)
         }
     }
 
@@ -1156,25 +1180,24 @@ impl<'a> Transaction<'a> {
             IdentifierContext::MutableCapture => {
                 ResolutionKind::Key(Key::MutableCapture(ShortIdentifier::new(identifier)))
             }
-            // A keyword name resolves to the matched parameter's declaration, so
-            // it reduces to a binding key like any other declaration. When no
-            // parameter matches it has no type of its own.
+            // A keyword name resolves to the matched parameter's declaration when
+            // possible; otherwise it falls back to the selected call signature.
             IdentifierContext::KeywordArgument(callee_kind) => self
-                .keyword_argument_key(handle, identifier, callee_kind)
-                .map_or(ResolutionKind::NoType, ResolutionKind::Key),
+                .keyword_argument_resolution(handle, identifier, callee_kind)
+                .unwrap_or(ResolutionKind::ActiveCallArgument(identifier.range.start())),
             // Member access is a computed expression, not a declaration.
             IdentifierContext::Attribute { range, .. } => ResolutionKind::Trace(*range),
         }
     }
 
-    /// The parameter declaration key a keyword-argument name resolves to, if it
-    /// matches a parameter of the (same-module) callee.
-    fn keyword_argument_key(
+    /// The parameter declaration a keyword-argument name resolves to, if it
+    /// matches a parameter of the callee.
+    fn keyword_argument_resolution(
         &self,
         handle: &Handle,
         identifier: &Identifier,
         callee_kind: &CalleeKind,
-    ) -> Option<Key> {
+    ) -> Option<ResolutionKind> {
         self.find_definition_for_keyword_argument(
             handle,
             identifier,
@@ -1189,8 +1212,16 @@ impl<'a> Transaction<'a> {
             if code_at_range != identifier.id.as_str() {
                 return None;
             }
+            let definition_handle = Handle::new(
+                item.module.name(),
+                item.module.path().dupe(),
+                handle.sys_info().dupe(),
+            );
             let id = Identifier::new(Name::new(code_at_range), item.definition_range);
-            Some(Key::Definition(ShortIdentifier::new(&id)))
+            Some(ResolutionKind::KeyInModule(
+                definition_handle,
+                Key::Definition(ShortIdentifier::new(&id)),
+            ))
         })
     }
 
@@ -1236,6 +1267,16 @@ impl<'a> Transaction<'a> {
     ) -> Option<Type> {
         match kind {
             ResolutionKind::Type(ty) => Some(ty),
+            ResolutionKind::ActiveCallArgument(position) => {
+                self.get_active_call_argument_type_for_surface(handle, position, for_display)
+            }
+            ResolutionKind::KeyInModule(handle, key) => {
+                let bindings = self.get_bindings(&handle)?;
+                if !bindings.is_valid_key(&key) {
+                    return None;
+                }
+                self.get_type_for_surface(&handle, &key, for_display)
+            }
             ResolutionKind::Key(key) => {
                 let bindings = self.get_bindings(handle)?;
                 if !bindings.is_valid_key(&key) {
@@ -1281,7 +1322,6 @@ impl<'a> Transaction<'a> {
                     self.get_type_trace_for_surface(handle, range, for_display)
                 }
             }
-            ResolutionKind::NoType => None,
         }
     }
 
@@ -1332,7 +1372,13 @@ impl<'a> Transaction<'a> {
         };
         let kind = self.classify_surface(handle, &identifier, &context);
         if identifier.range == range
-            && matches!(kind, ResolutionKind::Key(_) | ResolutionKind::Type(_))
+            && matches!(
+                &kind,
+                ResolutionKind::Key(_)
+                    | ResolutionKind::KeyInModule(_, _)
+                    | ResolutionKind::Type(_)
+                    | ResolutionKind::ActiveCallArgument(_)
+            )
         {
             self.type_from_resolution(
                 handle,
@@ -1393,18 +1439,8 @@ impl<'a> Transaction<'a> {
     pub fn get_expected_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         // Call-argument position: predict the active parameter's type from the
         // call signature. Works for not-yet-typed arguments and selects an overload.
-        if let Some(CallInfo {
-            callables,
-            chosen_overload_index,
-            active_argument,
-            ..
-        }) = self.get_callables_from_call(handle, position)
-            && let Some(callable) = callables.get(chosen_overload_index.unwrap_or(0)).cloned()
-            && let Some(params) = Self::normalize_singleton_function_type_into_params(callable)
-            && let Some(arg_index) = Self::active_parameter_index(&params, &active_argument)
-            && let Some(param) = params.get(arg_index)
-        {
-            return Some(param.as_type().clone());
+        if let Some(ty) = self.get_active_call_argument_type_for_surface(handle, position, false) {
+            return Some(ty);
         }
 
         let module = self.get_ast(handle)?;

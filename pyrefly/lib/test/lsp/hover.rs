@@ -603,6 +603,25 @@ foo(x=1, y=2)
 }
 
 #[test]
+fn hover_shows_type_for_imported_keyword_argument() {
+    let lib = r#"
+def foo(x: int, y: str) -> None: ...
+"#;
+    let code = r#"
+from lib import foo
+
+foo(x=1, y="hello")
+#        ^
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", code), ("lib", lib)], get_test_report);
+    assert!(
+        report.contains("y: str"),
+        "Expected keyword argument hover to show imported parameter type, got: {report}"
+    );
+}
+
+#[test]
 fn hover_returns_none_for_docstring_literals() {
     let code = r#"
 def foo():
