@@ -30,6 +30,96 @@ static INTERPRETER_ENV_REGISTRY: LazyLock<
     Mutex<SmallMap<PathBuf, Result<PythonEnvironment, String>>>,
 > = LazyLock::new(|| Mutex::new(SmallMap::new()));
 
+const INTERPRETER_ENV_SCRIPT: &str = r#"
+import json
+import os
+import sys
+import sysconfig
+from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
+
+platform = sys.platform
+v = sys.version_info
+version = '{}.{}.{}'.format(v.major, v.minor, v.micro)
+stdlib_paths = [p for p in [sysconfig.get_path('stdlib')] if p is not None]
+site_package_path = [
+    p
+    for p in sys.path
+    if p != ''
+    and '.zip' not in p
+    and not p.endswith('/lib-dynload')
+    and p not in stdlib_paths
+]
+
+def path_key(path):
+    return os.path.normcase(os.path.abspath(path))
+
+def add_existing_dir(paths, seen, path):
+    if not path:
+        return
+    try:
+        source = Path(path).resolve()
+    except (OSError, RuntimeError):
+        return
+    if not source.is_dir():
+        return
+    source_path = os.fspath(source)
+    key = path_key(source_path)
+    if key in seen:
+        return
+    seen.add(key)
+    paths.append(source_path)
+
+def direct_url_source_path(url):
+    parsed = urlparse(url)
+    if parsed.scheme != 'file':
+        return None
+    path = parsed.path
+    if parsed.netloc and parsed.netloc != 'localhost':
+        path = '//' + parsed.netloc + parsed.path
+    return url2pathname(path)
+
+seen = {path_key(p) for p in site_package_path}
+for site_packages in list(site_package_path):
+    try:
+        entries = os.scandir(site_packages)
+    except OSError:
+        continue
+    with entries:
+        for entry in entries:
+            try:
+                is_dist_info = (
+                    entry.name.endswith('.dist-info')
+                    and entry.is_dir(follow_symlinks=True)
+                )
+            except OSError:
+                continue
+            if not is_dist_info:
+                continue
+            try:
+                with open(os.path.join(entry.path, 'direct_url.json'), encoding='utf-8') as f:
+                    direct_url = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if not direct_url.get('dir_info', {}).get('editable'):
+                continue
+            source_path = direct_url_source_path(direct_url.get('url', ''))
+            add_existing_dir(site_package_path, seen, source_path)
+            add_existing_dir(
+                site_package_path,
+                seen,
+                os.path.join(source_path, 'src') if source_path else None,
+            )
+
+print(json.dumps({
+    'python_platform': platform,
+    'python_version': version,
+    'site_package_path': site_package_path,
+    'stdlib_paths': stdlib_paths,
+}))
+"#;
+
 /// Values representing the environment of the Python interpreter.
 /// These values are `None` by default, so we can tell if a config
 /// overrode them, or if we should query a Python interpreter for
@@ -129,19 +219,9 @@ impl PythonEnvironment {
             );
         }
 
-        let script = "\
-import json, sys, sysconfig
-platform = sys.platform
-v = sys.version_info
-version = '{}.{}.{}'.format(v.major, v.minor, v.micro)
-stdlib_paths = [p for p in [sysconfig.get_path('stdlib')] if p is not None]
-site_package_path = [p for p in sys.path if p != '' and '.zip' not in p and not p.endswith('/lib-dynload') and p not in stdlib_paths]
-print(json.dumps({'python_platform': platform, 'python_version': version, 'site_package_path': site_package_path, 'stdlib_paths': stdlib_paths}))
-";
-
         let mut command = Command::new(interpreter);
         command.arg("-c");
-        command.arg(script);
+        command.arg(INTERPRETER_ENV_SCRIPT);
 
         let python_info = command.output()?;
 
@@ -245,12 +325,25 @@ impl Display for PythonEnvironment {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
 
+    use crate::environment::interpreters::Interpreters;
     use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_python::sys_info::PythonVersion;
+    use serde_json::json;
 
     use super::*;
+
+    fn file_url(path: &std::path::Path) -> String {
+        let path = path.to_string_lossy().replace('\\', "/");
+        if cfg!(windows) {
+            format!("file:///{path}")
+        } else {
+            format!("file://{path}")
+        }
+    }
 
     #[test]
     fn test_display_includes_stdlib_path() {
@@ -299,5 +392,62 @@ mod tests {
             env1.interpreter_site_package_path,
             env2.interpreter_site_package_path
         );
+    }
+
+    #[test]
+    fn test_interpreter_query_adds_pep610_editable_source_paths() {
+        let Some(interpreter) = Interpreters::get_default_interpreter() else {
+            return;
+        };
+        let tempdir = tempfile::tempdir().unwrap();
+        let site_packages = tempdir.path().join("site-packages");
+        let editable_root = tempdir.path().join("editable-root");
+        let editable_src = editable_root.join("src");
+        let editable_dist_info = site_packages.join("editable_pkg-0.1.dist-info");
+        let non_editable_root = tempdir.path().join("non-editable-root");
+        let non_editable_dist_info = site_packages.join("non_editable_pkg-0.1.dist-info");
+
+        fs::create_dir_all(&editable_src).unwrap();
+        fs::create_dir_all(&editable_dist_info).unwrap();
+        fs::create_dir_all(&non_editable_root).unwrap();
+        fs::create_dir_all(&non_editable_dist_info).unwrap();
+        fs::write(
+            editable_dist_info.join("direct_url.json"),
+            json!({
+                "url": file_url(&editable_root),
+                "dir_info": {"editable": true},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            non_editable_dist_info.join("direct_url.json"),
+            json!({
+                "url": file_url(&non_editable_root),
+                "dir_info": {"editable": false},
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = Command::new(interpreter)
+            .arg("-c")
+            .arg(INTERPRETER_ENV_SCRIPT)
+            .env("PYTHONPATH", &site_packages)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "interpreter query failed:\nSTDOUT: {}\nSTDERR: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        let env: PythonEnvironment = serde_json::from_slice(&output.stdout).unwrap();
+        let paths = env.site_package_path.unwrap();
+        assert!(paths.contains(&site_packages));
+        assert!(paths.contains(&editable_root));
+        assert!(paths.contains(&editable_src));
+        assert!(!paths.contains(&non_editable_root));
     }
 }
