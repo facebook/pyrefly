@@ -19,6 +19,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -325,7 +326,7 @@ fn trace_export_origin(
     handle: &Handle,
     mut cur_name: Name,
     transaction: &Transaction,
-) -> Option<String> {
+) -> Option<(Handle, String)> {
     let mut seen = SmallSet::new();
     let mut cur_handle = handle.clone();
 
@@ -337,7 +338,7 @@ fn trace_export_origin(
 
         match transaction.get_exports(&cur_handle).get(&cur_name) {
             Some(ExportLocation::ThisModule(_)) | None => {
-                return Some(format!("{module_name}.{cur_name}"));
+                return Some((cur_handle, format!("{module_name}.{cur_name}")));
             }
             Some(ExportLocation::OtherModule(other_module, alias)) => {
                 if let Some(alias) = alias {
@@ -351,39 +352,118 @@ fn trace_export_origin(
     }
 }
 
+fn public_exported_names(handle: &Handle, transaction: &Transaction) -> Vec<Name> {
+    let exports_data = transaction.get_exports_data(handle);
+    let exports = transaction.get_exports(handle);
+
+    // prioritize `__all__` if present, otherwise local defs + `import x as x`
+    if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
+        all_iter.cloned().collect()
+    } else {
+        exports
+            .iter()
+            .filter_map(|(name, loc)| {
+                let is_local = matches!(loc, ExportLocation::ThisModule(_));
+                let is_reexport = exports_data.is_explicit_reexport(name);
+                (is_public_name(name.as_str()) && (is_local || is_reexport)).then_some(name.clone())
+            })
+            .collect()
+    }
+}
+
+fn same_handle(left: &Handle, right: &Handle) -> bool {
+    left.module() == right.module() && left.path() == right.path()
+}
+
+fn contains_handle(handles: &[Handle], candidate: &Handle) -> bool {
+    handles.iter().any(|handle| same_handle(handle, candidate))
+}
+
+fn is_project_reexport_origin(
+    public_handle: &Handle,
+    origin_handle: &Handle,
+    config_finder: &ConfigFinder,
+) -> bool {
+    if origin_handle.path().is_bundled()
+        || !matches!(
+            origin_handle.path().details(),
+            ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
+        )
+    {
+        return false;
+    }
+
+    let origin_path = origin_handle.path().as_path();
+    let config = config_finder.python_file(public_handle.module_kind(), public_handle.path());
+    if config
+        .site_package_path()
+        .any(|site_package| origin_path.starts_with(site_package))
+    {
+        return false;
+    }
+
+    if public_handle.module() == ModuleName::unknown() {
+        return public_handle
+            .path()
+            .as_path()
+            .parent()
+            .is_some_and(|parent| origin_path.starts_with(parent));
+    }
+
+    if let (Some(public_root), Some(origin_root)) = (
+        public_handle.path().root_of(public_handle.module()),
+        origin_handle.path().root_of(origin_handle.module()),
+    ) {
+        return public_root == origin_root;
+    }
+
+    config
+        .search_path()
+        .any(|search_root| origin_path.starts_with(search_root))
+}
+
+fn public_reexport_origin_handles(
+    handles: &[Handle],
+    transaction: &Transaction,
+    config_finder: &ConfigFinder,
+) -> Vec<Handle> {
+    let mut origin_handles = Vec::new();
+    for handle in handles.iter().filter(|h| is_public_module(h.module())) {
+        for name in public_exported_names(handle, transaction) {
+            if EXCLUDED_MODULE_DUNDERS.contains(&name.as_str()) {
+                continue;
+            }
+            let Some((origin_handle, _)) = trace_export_origin(handle, name, transaction) else {
+                continue;
+            };
+            if same_handle(handle, &origin_handle)
+                || contains_handle(handles, &origin_handle)
+                || contains_handle(&origin_handles, &origin_handle)
+                || !is_project_reexport_origin(handle, &origin_handle, config_finder)
+            {
+                continue;
+            }
+            origin_handles.push(origin_handle);
+        }
+    }
+    origin_handles
+}
+
 /// Collect origin FQNs of all publicly exported names across public modules.
 fn compute_public_fqns(handles: &[Handle], transaction: &Transaction) -> HashSet<String> {
     handles
         .iter()
         .filter(|h| is_public_module(h.module()))
         .flat_map(|handle| {
-            let exports_data = transaction.get_exports_data(handle);
-            let exports = transaction.get_exports(handle);
-
-            // prioritize `__all__` if present, otherwise local defs + `import x as x`
-            let names: Vec<Name> =
-                if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
-                    all_iter.cloned().collect()
-                } else {
-                    exports
-                        .iter()
-                        .filter_map(|(name, loc)| {
-                            let is_local = matches!(loc, ExportLocation::ThisModule(_));
-                            let is_reexport = exports_data.is_explicit_reexport(name);
-                            (is_public_name(name.as_str()) && (is_local || is_reexport))
-                                .then_some(name.clone())
-                        })
-                        .collect()
-                };
-
             // emit both the local FQN and the traced origin FQN so a file-scoped run matches
             // whichever module was requested
-            names
+            public_exported_names(handle, transaction)
                 .into_iter()
                 .filter(|n| !EXCLUDED_MODULE_DUNDERS.contains(&n.as_str()))
                 .flat_map(move |name| {
                     let local = format!("{}.{}", handle.module(), name);
-                    let origin = trace_export_origin(handle, name, transaction);
+                    let origin = trace_export_origin(handle, name, transaction)
+                        .map(|(_, origin_fqn)| origin_fqn);
                     std::iter::once(local).chain(origin)
                 })
         })
@@ -1658,10 +1738,28 @@ pub fn collect_module_reports(
     let mut module_reports: Vec<ModuleReport> = Vec::new();
     let mut errors: Vec<Error> = Vec::new();
     transaction.run(handles.as_slice(), Require::Everything, None);
-    let public_fqns = public_only.then(|| compute_public_fqns(&handles, transaction));
+    let mut report_handles = handles.clone();
+    let public_origin_handles = if public_only {
+        public_reexport_origin_handles(&handles, transaction, holder.as_ref().config_finder())
+    } else {
+        Vec::new()
+    };
+    let public_fqns = if public_only {
+        for origin_handle in public_origin_handles.iter().cloned() {
+            if !contains_handle(&report_handles, &origin_handle) {
+                report_handles.push(origin_handle);
+            }
+        }
+        if report_handles.len() != handles.len() {
+            transaction.run(report_handles.as_slice(), Require::Everything, None);
+        }
+        Some(compute_public_fqns(&handles, transaction))
+    } else {
+        None
+    };
 
     let shadowed = if prefer_stubs {
-        py_paths_shadowed_by_pyi(&handles)
+        py_paths_shadowed_by_pyi(&report_handles)
     } else {
         SmallSet::new()
     };
@@ -1669,12 +1767,12 @@ pub fn collect_module_reports(
     // Map each .pyi to its corresponding .py: first co-located,
     // then by module-name lookup in site-package-path.
     let pyi_to_py: HashMap<PathBuf, Handle> = if prefer_stubs {
-        let py_by_path: HashMap<PathBuf, &Handle> = handles
+        let py_by_path: HashMap<PathBuf, &Handle> = report_handles
             .iter()
             .filter(|h| !h.path().is_interface())
             .map(|h| (h.path().as_path().to_path_buf(), h))
             .collect();
-        let mut map: HashMap<PathBuf, Handle> = handles
+        let mut map: HashMap<PathBuf, Handle> = report_handles
             .iter()
             .filter(|h| h.path().is_interface())
             .filter_map(|h| {
@@ -1686,7 +1784,7 @@ pub fn collect_module_reports(
             .collect();
         // Fall back to site-package-path for stubs-only packages.
         let mut external_handles = Vec::new();
-        for h in handles.iter().filter(|h| h.path().is_interface()) {
+        for h in report_handles.iter().filter(|h| h.path().is_interface()) {
             let pyi_path = h.path().as_path().to_path_buf();
             if map.contains_key(&pyi_path) {
                 continue;
@@ -1728,7 +1826,7 @@ pub fn collect_module_reports(
 
         // gh-3632: skip files whose module name isn't importable (shadowed parent).
         let module = handle.module();
-        if module != ModuleName::unknown() {
+        if module != ModuleName::unknown() && !contains_handle(&public_origin_handles, handle) {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
             find_import_filtered(&config, module, None, None, &dir_cache, None).finding()?;
         }
@@ -1787,7 +1885,7 @@ pub fn collect_module_reports(
     };
     let collected: Vec<(ModuleReport, Vec<Error>)> = holder
         .as_ref()
-        .install(|| handles.par_iter().filter_map(collect_one).collect());
+        .install(|| report_handles.par_iter().filter_map(collect_one).collect());
     for (report, module_errors) in collected {
         module_reports.push(report);
         errors.extend(module_errors);
@@ -1814,11 +1912,18 @@ mod tests {
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_config::args::ConfigOverrideArgs;
+    use pyrefly_config::config::ConfigFile;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
+    use pyrefly_util::globs::FilteredGlobs;
+    use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 
     use super::*;
+    use crate::commands::config_finder::default_config_finder_with_overrides;
     use crate::state::require::Require;
     use crate::test::util::TestEnv;
 
@@ -2098,8 +2203,6 @@ mod tests {
     /// gh-3632: skip a file shadowed by a same-named module (it can't be imported).
     #[test]
     fn test_report_skips_unimportable_shadowed_module() {
-        use pyrefly_config::config::ConfigFile;
-
         let site = tempfile::TempDir::new().unwrap();
         let dir = site.path();
         std::fs::write(dir.join("lapack_lite.pyi"), "def f() -> int: ...\n").unwrap();
@@ -2119,6 +2222,74 @@ mod tests {
         };
         assert!(find("lapack_lite"), "real module importable");
         assert!(!find("lapack_lite.fortran"), "shadowed file skipped");
+    }
+
+    fn collect_public_reexport_sample(project_excludes: Vec<String>) -> Vec<ModuleReport> {
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let root = tempdir.path();
+        let package = root.join("foo");
+        std::fs::create_dir(&package).unwrap();
+        std::fs::write(
+            package.join("__init__.py"),
+            "from foo._something_private import bar\n__all__ = ['bar']\n",
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("_something_private.py"),
+            "def bar(a) -> None:\n    return None\n",
+        )
+        .unwrap();
+
+        let files_to_check = Globs::new(vec![package.display().to_string()]).unwrap();
+        let project_excludes = Globs::new_with_root(root, project_excludes).unwrap();
+        let roots = files_to_check.roots();
+        let files_to_check = Box::new(FilteredGlobs::new(
+            files_to_check,
+            project_excludes.clone(),
+            None,
+            HiddenDirFilter::RelativeTo(roots.clone()),
+        ));
+        let config_finder =
+            default_config_finder_with_overrides(ConfigOverrideArgs::default(), false, None);
+        if let Some(root) = roots.first() {
+            config_finder.directory(root);
+        }
+        let (reports, errors) = collect_module_reports(
+            files_to_check,
+            config_finder,
+            true,
+            None,
+            true,
+            None,
+            TEST_THREAD_COUNT,
+        )
+        .unwrap();
+        assert!(errors.is_empty());
+        reports
+    }
+
+    #[test]
+    fn test_public_only_keeps_project_excluded_public_reexport_origin() {
+        let reports = collect_public_reexport_sample(vec!["foo/_something_private.py".to_owned()]);
+        let private_report = reports
+            .iter()
+            .find(|report| report.name == "foo._something_private")
+            .expect("publicly re-exported origin should still be reported");
+
+        assert!(
+            private_report
+                .symbol_reports
+                .iter()
+                .any(|symbol| symbol.name() == "foo._something_private.bar")
+        );
+        assert!(private_report.coverage < 100.0);
+    }
+
+    #[test]
+    fn test_public_only_excludes_origin_when_public_reexport_is_excluded() {
+        let reports = collect_public_reexport_sample(vec!["foo/__init__.py".to_owned()]);
+
+        assert!(reports.is_empty());
     }
 
     /// When both test.py and test.pyi exist, the .py file is shadowed.
