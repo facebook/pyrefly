@@ -879,7 +879,7 @@ fn test_unused_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `os` is unused",
+                    "message": "Import `os` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 7},
                         "end": {"line": 6, "character": 9}
@@ -928,7 +928,7 @@ fn test_unused_from_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `Dict` is unused",
+                    "message": "Import `Dict` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 19},
                         "end": {"line": 6, "character": 23}
@@ -1613,7 +1613,7 @@ fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `boto3` is unused",
+                    "message": "Import `boto3` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 12}
@@ -1730,7 +1730,7 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
                 },
                 {
                     "code": "unused-import",
-                    "message": "Import `django` is unused",
+                    "message": "Import `django` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 13}

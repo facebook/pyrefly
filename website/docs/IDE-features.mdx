@@ -437,6 +437,9 @@ Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane
   preload="metadata"
 />
 
+Pyrefly also greys out unused imports and unused local variables directly in the editor. These are IDE-only hints and do not appear in the CLI.
+Because Pyrefly does not model import side effects, an import used only for its side effects, for example a plugin that registers accessors or methods on an existing class, such as `pyjanitor` extending `pandas.DataFrame`, may be greyed even though it is required at runtime. Thus the hint is "may be unused" rather than "is unused."
+
 ---
 
 ### [Semantic tokens](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens)
