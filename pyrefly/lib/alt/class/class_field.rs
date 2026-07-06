@@ -3440,7 +3440,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ..
             } => {
                 ty = self.normalize_attr_ty(ty);
-                if ambiguous {
+                if ambiguous && !matches!(cls, ClassBase::SelfType(_)) {
                     ClassAttribute::no_access(NoAccessReason::ClassAttributeIsGeneric(
                         cls.class_object().dupe(),
                     ))

@@ -702,6 +702,21 @@ C.x  # E: Generic attribute `x` of class `C` is not visible on the class
 );
 
 testcase!(
+    test_class_generic_attribute_lookup_on_self_type,
+    r#"
+from typing import assert_type
+
+class C[T]:
+    x: type[T]
+
+    @classmethod
+    def f(cls) -> type[T]:
+        assert_type(cls.x, type[T])
+        return cls.x
+"#,
+);
+
+testcase!(
     test_var_attribute,
     r#"
 from typing import assert_type
