@@ -4239,15 +4239,15 @@ def describe(color: Color) -> None:
 
 ## invalid-self-type
 
-This error occurs when `Self` is used in a context Pyrefly does not currently support.
+This error occurs when `Self` is used in a context where it is not allowed.
 
-For example, Pyrefly does not currently allow `Self` for `TypedDict`, so the
-following code would error:
+For example, `Self` is not allowed inside a `TypedDict`, so the following code
+errors:
 ```python
-from typing import *
+from typing import Optional, Self, TypedDict
 
 class TD(TypedDict):
-    x: Option[Self]
+    x: Optional[Self]  # error: `Self` is not allowed in a `TypedDict`
 ```
 
 ## invalid-sentinel
