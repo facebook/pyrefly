@@ -274,6 +274,13 @@ impl FindResult {
     /// are not compared.
     fn best_result(a: FindResult, b: FindResult) -> Self {
         match (&a, &b) {
+            // A concrete single-file module or compiled module from an earlier root beats any
+            // package from a later root. Python's sys.path semantics are first-match-wins
+            // regardless of whether the match is a file or a package directory.
+            (
+                FindResult::SingleFilePyModule(_) | FindResult::CompiledModule(_),
+                FindResult::RegularPackage(..) | FindResult::LegacyNamespacePackage(..),
+            ) => a,
             // RegularPackage and LegacyNamespacePackage (LNP) share the top tier: both carry a
             // concrete `__init__.py` and resolve to `FileSystem(init_path)`. Tying them lets
             // the prefer-`a` approach keep sys.path order ("first concrete-init wins") when
@@ -5362,6 +5369,51 @@ mod tests {
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
+        );
+    }
+
+    #[test]
+    fn test_single_file_in_earlier_root_beats_package_in_later_root() {
+        // Python's sys.path semantics are first-match-wins regardless of
+        // whether the match is a .py file or a package directory. When root0
+        // has `widget.py` and root1 has `widget/__init__.py`, resolving `widget`
+        // should return root0's `widget.py`.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "search_root0",
+                    vec![TestPath::file_with_contents(
+                        "widget.py",
+                        "class WidgetHandler: ...",
+                    )],
+                ),
+                TestPath::dir(
+                    "search_root1",
+                    vec![TestPath::dir("widget", vec![TestPath::file("__init__.py")])],
+                ),
+            ],
+        );
+        let roots = [root.join("search_root0"), root.join("search_root1")];
+
+        assert_eq!(
+            find_module(
+                ModuleName::from_str("widget"),
+                roots.iter(),
+                &mut vec![],
+                None,
+                None,
+                false,
+                &mut None,
+                &DirEntryCache::new(true),
+                None,
+            )
+            .unwrap(),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("search_root0/widget.py")
+            ))
         );
     }
 }

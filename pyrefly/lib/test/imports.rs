@@ -1767,6 +1767,37 @@ fn test_pkgutil_namespace_absorbs_implicit_namespace() {
 }
 
 // ----------------------------------------------------------------------------
+// Search-path ordering regression.
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_search_path_module_beats_later_package() {
+    // A .py module in search_path[0] must beat a package directory in
+    // search_path[1]. Python's sys.path semantics are first-match-wins
+    // regardless of whether the match is a .py file or a package.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::write(root.join("widget.py"), "class WidgetHandler: ...\n").unwrap();
+    std::fs::create_dir(root.join("widget_pkg")).unwrap();
+    std::fs::create_dir(root.join("widget_pkg/widget")).unwrap();
+    std::fs::write(root.join("widget_pkg/widget/__init__.py"), "").unwrap();
+
+    let mut env = TestEnv::new().with_site_package_paths(vec![
+        root.to_path_buf(),      // root/widget.py — should win
+        root.join("widget_pkg"), // root/widget_pkg/widget/__init__.py — should lose
+    ]);
+    // No error expected: widget.py from the first search path should be
+    // resolved, making WidgetHandler importable.
+    env.add_with_path("main", "main.py", "from widget import WidgetHandler\n");
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+// ----------------------------------------------------------------------------
 // Cross-module class rebind tests: importers should observe whichever class
 // the visible result chose. See `assign.rs` for the same-module regressions.
 // ----------------------------------------------------------------------------
