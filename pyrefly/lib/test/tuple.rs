@@ -483,6 +483,17 @@ def test(x: Iterable[int]) -> None:
 );
 
 testcase!(
+    test_tuple_constructor_preserves_fixed_length,
+    r#"
+from typing import assert_type
+def test(xs: tuple[int, int]) -> None:
+    ys: tuple[int, int] = tuple(xs)
+    assert_type(tuple(xs), tuple[int, int])
+    zs: tuple[int, int] = tuple(x for x in xs)  # E: `tuple[int, ...]` is not assignable to `tuple[int, int]`
+"#,
+);
+
+testcase!(
     test_tuple_constructor_concat,
     r#"
 from typing import assert_type, Iterable, Literal

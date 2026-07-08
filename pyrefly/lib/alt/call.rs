@@ -1075,8 +1075,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && ct.targs().as_slice().len() == 1
         {
             let targ = ct.targs().as_slice()[0].clone();
+            let ty = self
+                .tuple_constructor_arg_type(args, keywords)
+                .unwrap_or_else(|| self.heap.mk_unbounded_tuple(targ));
             ConstructedInstance {
-                ty: self.heap.mk_unbounded_tuple(targ),
+                ty,
                 matched_hint,
                 errors,
                 specialization_errors,
@@ -1242,6 +1245,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         } else {
             None
+        }
+    }
+
+    fn tuple_constructor_arg_type(
+        &self,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+    ) -> Option<Type> {
+        if !keywords.is_empty() {
+            return None;
+        }
+        let [CallArg::Arg(arg)] = args else {
+            return None;
+        };
+        let errors = self.error_collector();
+        self.tuple_constructor_arg_type_from_type(arg.infer(self, &errors))
+    }
+
+    fn tuple_constructor_arg_type_from_type(&self, ty: Type) -> Option<Type> {
+        match ty {
+            Type::Tuple(tuple) => Some(self.heap.mk_tuple(tuple)),
+            Type::ClassType(cls) => self.as_tuple(&cls).map(|tuple| self.heap.mk_tuple(tuple)),
+            Type::Union(union) => {
+                let mut members = Vec::with_capacity(union.members.len());
+                for member in union.members {
+                    members.push(self.tuple_constructor_arg_type_from_type(member)?);
+                }
+                Some(self.unions(members))
+            }
+            _ => None,
         }
     }
 
