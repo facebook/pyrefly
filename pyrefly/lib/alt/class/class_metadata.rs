@@ -9,7 +9,6 @@ use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
-use itertools::Either;
 use itertools::Itertools;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
@@ -28,6 +27,7 @@ use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
 use ruff_python_ast::Expr;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -138,11 +138,47 @@ pub(crate) struct TransformDataclass {
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+    fn extend_unpacked_class_keywords(
+        &self,
+        keyword: &Keyword,
+        keywords: &mut Vec<(Name, Annotation)>,
+        errors: &ErrorCollector,
+    ) {
+        let ty = self.expr_infer(&keyword.value, errors);
+        if let Type::TypedDict(typed_dict) = ty {
+            for (name, field) in self.typed_dict_fields(&typed_dict) {
+                keywords.push((name, Annotation::new_type(field.ty)));
+            }
+        } else if let Some((key, _)) = self.unwrap_mapping(&ty) {
+            if !self.is_subset_eq(&key, &self.heap.mk_class_type(self.stdlib.str().clone())) {
+                self.error(
+                    errors,
+                    keyword.value.range(),
+                    ErrorKind::BadUnpacking,
+                    format!(
+                        "Expected argument after ** to have `str` keys, got: {}",
+                        self.for_display(key)
+                    ),
+                );
+            }
+        } else {
+            self.error(
+                errors,
+                keyword.value.range(),
+                ErrorKind::BadUnpacking,
+                format!(
+                    "Expected argument after ** to be a mapping, got: {}",
+                    self.for_display(ty)
+                ),
+            );
+        }
+    }
+
     pub fn class_metadata_of(
         &self,
         cls: &Class,
         bases: &[BaseClass],
-        keywords: &[(Name, Expr)],
+        raw_keywords: &[Keyword],
         decorators: &[Idx<KeyDecorator>],
         is_new_type: bool,
         pydantic_config_dict: &PydanticConfigDict,
@@ -183,11 +219,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let bases_with_metadata = self.bases_with_metadata(parsed_results, is_new_type, errors);
 
         // Compute class keywords, including the metaclass.
-        let (metaclasses, keywords): (Vec<_>, Vec<(_, _)>) =
-            keywords.iter().partition_map(|(n, x)| match n.as_str() {
-                "metaclass" => Either::Left(x),
-                _ => Either::Right((n.clone(), self.expr_class_keyword(x, errors))),
-            });
+        let mut metaclasses = Vec::new();
+        let mut keywords = Vec::new();
+        for keyword in raw_keywords {
+            match &keyword.arg {
+                Some(name) if name.id == "metaclass" => metaclasses.push(&keyword.value),
+                Some(name) => keywords.push((
+                    name.id.clone(),
+                    self.expr_class_keyword(&keyword.value, errors),
+                )),
+                None => self.extend_unpacked_class_keywords(keyword, &mut keywords, errors),
+            }
+        }
 
         let base_metaclasses = bases_with_metadata
             .iter()

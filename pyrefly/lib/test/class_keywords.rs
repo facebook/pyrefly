@@ -52,6 +52,7 @@ fn test_look_up_class_keywords() {
     let (handle, state) = mk_state(
         r#"
 class A(foo=True): pass
+class B(**{"foo": True, "bar": 1}): pass
 "#,
     );
     assert_eq!(
@@ -59,6 +60,8 @@ class A(foo=True): pass
         vec![Lit::Bool(true).to_implicit_type()],
     );
     assert_eq!(get_class_keywords("A", "bar", &handle, &state), vec![]);
+    assert_eq!(get_class_keywords("B", "foo", &handle, &state).len(), 1);
+    assert_eq!(get_class_keywords("B", "bar", &handle, &state).len(), 1);
 }
 
 #[test]
@@ -155,10 +158,19 @@ f(C2[int])
 );
 
 testcase!(
-    test_illegal_unpacking,
+    test_class_keyword_unpacking,
     r#"
-def f() -> dict: ...
-class A(**f):  # E: Unpacking is not supported in class header
+from typing import Any
+
+meta: dict[str, Any] = {}
+class A(**meta, tag="A"):
+    pass
+
+class B(**1):  # E: Expected argument after ** to be a mapping, got: Literal[1]
+    pass
+
+bad_keys: dict[int, str] = {}
+class C(**bad_keys):  # E: Expected argument after ** to have `str` keys, got: int
     pass
     "#,
 );
