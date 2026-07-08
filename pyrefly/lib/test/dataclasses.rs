@@ -139,6 +139,29 @@ replace(f, z=3)  # E: Unexpected keyword argument `z`
 );
 
 testcase!(
+    test_copy_replace,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import copy
+from copy import replace
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Foo:
+    x: int
+    y: str
+
+f = Foo(1, "a")
+
+assert_type(copy.replace(f, x=2), Foo)
+replace(f, y="b")
+copy.replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `Foo.__replace__`
+replace(f, z=3)  # E: Unexpected keyword argument `z`
+    "#,
+);
+
+testcase!(
     test_replace_initvar_default,
     r#"
 from dataclasses import dataclass, field, InitVar, replace

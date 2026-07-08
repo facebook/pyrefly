@@ -1994,11 +1994,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // against attribute names, including `init=False` fields. Both require an attrs class.
                 Some(CalleeKind::Function(
                     kind @ (FunctionKind::DataclassReplace
+                    | FunctionKind::CopyReplace
                     | FunctionKind::AttrsEvolve
                     | FunctionKind::AttrsAssoc),
                 )) => {
                     let replace_kind = match kind {
-                        FunctionKind::DataclassReplace => ReplaceKind::Replace,
+                        FunctionKind::DataclassReplace | FunctionKind::CopyReplace => {
+                            ReplaceKind::Replace
+                        }
                         FunctionKind::AttrsEvolve => ReplaceKind::Evolve,
                         FunctionKind::AttrsAssoc => ReplaceKind::Assoc,
                         _ => unreachable!("guarded by the enclosing match arm"),
