@@ -7,6 +7,8 @@
 
 use std::fs;
 
+use lsp_types::SemanticTokens;
+use lsp_types::SemanticTokensLegend;
 use lsp_types::SemanticTokensResult;
 use lsp_types::Url;
 use lsp_types::request::SemanticTokensFullRequest;
@@ -16,6 +18,43 @@ use serde_json::json;
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::get_test_files_root;
+
+/// Decodes an LSP delta-encoded semantic token stream into `(type_name, token_text)` pairs.
+///
+/// The LSP semantic token format encodes positions as deltas relative to the
+/// previous token.  This helper resolves those deltas and slices the source text
+/// so callers can simply filter and assert on plain strings.
+fn decode_semantic_tokens(
+    tokens: &SemanticTokens,
+    legend: &SemanticTokensLegend,
+    source: &str,
+) -> Vec<(String, String)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut line = 0u32;
+    let mut col = 0u32;
+    let mut result = Vec::new();
+    for token in &tokens.data {
+        line += token.delta_line;
+        col = if token.delta_line == 0 {
+            col + token.delta_start
+        } else {
+            token.delta_start
+        };
+        let Some(token_type) = legend.token_types.get(token.token_type as usize) else {
+            continue;
+        };
+        let Some(&line_text) = lines.get(line as usize) else {
+            continue;
+        };
+        let start = col as usize;
+        let end = start + token.length as usize;
+        let Some(text) = line_text.get(start..end) else {
+            continue;
+        };
+        result.push((token_type.as_str().to_owned(), text.to_owned()));
+    }
+    result
+}
 
 #[test]
 fn semantic_tokens_import_submodule_alias() {
@@ -44,48 +83,16 @@ fn semantic_tokens_import_submodule_alias() {
         }))
         .expect_response_with(|response| match response {
             Some(SemanticTokensResult::Tokens(tokens)) => {
-                let mut line = 0u32;
-                let mut col = 0u32;
-                let mut pkg_tokens = 0;
-                let mut sub_tokens = 0;
-                let lines: Vec<&str> = main_text.lines().collect();
-                for token in tokens.data {
-                    let delta_line = token.delta_line;
-                    let delta_start = token.delta_start;
-                    let length = token.length;
-                    let token_type = token.token_type;
-
-                    line += delta_line;
-                    col = if delta_line == 0 {
-                        col + delta_start
-                    } else {
-                        delta_start
-                    };
-
-                    let line_text = match lines.get(line as usize) {
-                        Some(line_text) => *line_text,
-                        None => continue,
-                    };
-                    let start = col as usize;
-                    let end = start + length as usize;
-                    let text = match line_text.get(start..end) {
-                        Some(text) => text,
-                        None => continue,
-                    };
-                    let token_type = legend
-                        .token_types
-                        .get(token_type as usize)
-                        .map(|token_type| token_type.as_str())
-                        .unwrap_or_default();
-
-                    if text == "pkg" && token_type == "namespace" {
-                        pkg_tokens += 1;
-                    }
-                    if text == "sub" && token_type == "namespace" {
-                        sub_tokens += 1;
-                    }
-                }
-                pkg_tokens == 1 && sub_tokens == 2
+                let tokens = decode_semantic_tokens(&tokens, &legend, &main_text);
+                let pkg_count = tokens
+                    .iter()
+                    .filter(|(ty, text)| ty == "namespace" && text == "pkg")
+                    .count();
+                let sub_count = tokens
+                    .iter()
+                    .filter(|(ty, text)| ty == "namespace" && text == "sub")
+                    .count();
+                pkg_count == 1 && sub_count == 2
             }
             _ => false,
         })
@@ -116,46 +123,89 @@ logger.info("Hello %s %d", "world", 123)
         }))
         .expect_response_with(move |response| match response {
             Some(SemanticTokensResult::Tokens(tokens)) => {
-                let mut line = 0u32;
-                let mut col = 0u32;
-                let mut format_specifiers = 0;
-                let lines: Vec<&str> = text.lines().collect();
-                for token in tokens.data {
-                    let delta_line = token.delta_line;
-                    let delta_start = token.delta_start;
-                    let length = token.length;
-                    let token_type_idx = token.token_type;
+                let specifiers: Vec<_> = decode_semantic_tokens(&tokens, &legend, text)
+                    .into_iter()
+                    .filter(|(ty, _)| ty == "formatSpecifier")
+                    .map(|(_, text)| text)
+                    .collect();
+                specifiers == ["%s", "%d"]
+            }
+            _ => false,
+        })
+        .unwrap();
 
-                    line += delta_line;
-                    col = if delta_line == 0 {
-                        col + delta_start
-                    } else {
-                        delta_start
-                    };
+    interaction.shutdown().unwrap();
+}
 
-                    let line_text = match lines.get(line as usize) {
-                        Some(line_text) => *line_text,
-                        None => continue,
-                    };
-                    let start = col as usize;
-                    let end = start + length as usize;
-                    let token_text = match line_text.get(start..end) {
-                        Some(t) => t,
-                        None => continue,
-                    };
-                    let token_type = legend
-                        .token_types
-                        .get(token_type_idx as usize)
-                        .map(|t| t.as_str())
-                        .unwrap_or_default();
+/// `%%` is an escaped literal percent in Python printf-style formatting and must
+/// never be highlighted as a format specifier.  `%%%d` should produce exactly one
+/// token (`%d`) because the leading `%%` is the escape, not a specifier.
+#[test]
+fn semantic_tokens_format_specifier_escaped_percent() {
+    let interaction = LspInteraction::new();
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
 
-                    if token_type == "formatSpecifier" {
-                        if token_text == "%s" || token_text == "%d" {
-                            format_specifiers += 1;
-                        }
-                    }
-                }
-                format_specifiers == 2
+    let uri = Url::parse("untitled:Untitled-2").unwrap();
+    // "100%% done, item %d" — `%%` must produce no token; `%d` must produce one.
+    let text = r#"import logging
+logger = logging.getLogger()
+logger.info("100%% done, item %d", 42)
+"#;
+    interaction.client.did_open_uri(&uri, "python", text);
+
+    let legend = SemanticTokensLegends::lsp_semantic_token_legends();
+    interaction
+        .client
+        .send_request::<SemanticTokensFullRequest>(json!({
+            "textDocument": { "uri": uri.to_string() }
+        }))
+        .expect_response_with(move |response| match response {
+            Some(SemanticTokensResult::Tokens(tokens)) => {
+                let specifiers: Vec<_> = decode_semantic_tokens(&tokens, &legend, text)
+                    .into_iter()
+                    .filter(|(ty, _)| ty == "formatSpecifier")
+                    .map(|(_, text)| text)
+                    .collect();
+                // `%%` must not appear; only `%d` is a real specifier.
+                specifiers == ["%d"]
+            }
+            _ => false,
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn semantic_tokens_format_specifier_printf() {
+    let interaction = LspInteraction::new();
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let uri = Url::parse("untitled:Untitled-3").unwrap();
+    // String modulo operator (printf-style) formatting
+    let text = r#"
+msg = "Hello %s, you have %d messages" % ("Alice", 5)
+"#;
+    interaction.client.did_open_uri(&uri, "python", text);
+
+    let legend = SemanticTokensLegends::lsp_semantic_token_legends();
+    interaction
+        .client
+        .send_request::<SemanticTokensFullRequest>(json!({
+            "textDocument": { "uri": uri.to_string() }
+        }))
+        .expect_response_with(move |response| match response {
+            Some(SemanticTokensResult::Tokens(tokens)) => {
+                let specifiers: Vec<_> = decode_semantic_tokens(&tokens, &legend, text)
+                    .into_iter()
+                    .filter(|(ty, _)| ty == "formatSpecifier")
+                    .map(|(_, text)| text)
+                    .collect();
+                specifiers == ["%s", "%d"]
             }
             _ => false,
         })

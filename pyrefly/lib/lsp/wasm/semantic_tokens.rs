@@ -32,8 +32,6 @@ impl Transaction<'_> {
         let disabled_ranges = disabled_ranges_for_module(ast.as_ref(), *handle.sys_info());
         let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
 
-        let source = module_info.contents().as_str();
-
         if include_syntax_tokens && let Some(tokens) = parsed.tokens() {
             builder.process_syntax_tokens(&tokens);
         }
@@ -51,7 +49,6 @@ impl Transaction<'_> {
                         export.symbol_kind.map(|sk| (def_handle.module(), sk))
                     })
             },
-            source,
         );
 
         Some(legends.convert_tokens_into_lsp_semantic_tokens(
