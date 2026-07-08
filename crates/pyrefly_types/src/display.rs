@@ -2078,7 +2078,7 @@ pub mod tests {
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&tuple).to_string(),
-            "tuple[(hello: None, *, world: None) -> None]"
+            "tuple[(\n    hello: None,\n    *,\n    world: None\n) -> None]"
         );
     }
 
