@@ -12,6 +12,7 @@ use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::IgnoreAll;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::ignore::parse_ignore_all;
@@ -233,7 +234,7 @@ pub struct ModuleRanges {
     /// Multi-line string and backslash-continuation ranges.
     pub multi_line: Vec<(LineNumber, LineNumber)>,
     /// Top-level ignore-all directives (e.g. `# pyrefly: ignore-errors`).
-    pub ignore_all: SmallMap<Tool, LineNumber>,
+    pub ignore_all: SmallMap<Tool, IgnoreAll>,
 }
 
 impl ModuleRanges {

@@ -49,6 +49,37 @@ testcase!(
 );
 
 testcase!(
+    test_pyrefly_top_level_ignore_specific_kind,
+    r#"
+# pyrefly: ignore-errors[bad-assignment]
+x: int = "oops"
+def f() -> int:
+    return "oops"  # E: Returned type `Literal['oops']` is not assignable to declared return type `int`
+"#,
+);
+
+testcase!(
+    test_pyrefly_top_level_ignore_specific_kinds_one_line,
+    r#"
+# pyrefly: ignore-errors[bad-assignment, bad-return]
+x: int = "oops"
+def f() -> int:
+    return "oops"
+"#,
+);
+
+testcase!(
+    test_pyrefly_top_level_ignore_specific_kinds_multiline,
+    r#"
+# pyrefly: ignore-errors[bad-assignment]
+# pyrefly: ignore-errors[bad-return]
+x: int = "oops"
+def f() -> int:
+    return "oops"
+"#,
+);
+
+testcase!(
     test_pyrefly_top_level_ignore_wrong_same_line,
     r#"
 3 + "3" # pyrefly: ignore-errors # E:

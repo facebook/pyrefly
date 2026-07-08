@@ -459,11 +459,28 @@ fn is_in_multiline_string(
     }
 }
 
+/// A whole-file ignore directive parsed from the file's preamble.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoreAll {
+    /// The line where the directive for this tool first appears.
+    pub line: LineNumber,
+    /// The error kinds the directive suppresses. An empty list means *all*
+    /// errors. Non-empty lists only ever occur for `Tool::Pyrefly` (via
+    /// `# pyrefly: ignore-errors[kind, ...]`); the parser never records kinds
+    /// for other tools, so consumers can treat an empty list as "suppress all".
+    pub kinds: Vec<String>,
+}
+
 /// Parse top-level `ignore-errors` / `ignore-all-errors` / `type: ignore` directives.
 ///
 /// Scans the beginning of the file for comment-only lines (including blank lines
 /// and lines inside multiline strings like docstrings). Returns the map of tools
-/// with ignore-all directives and the line number where each directive appears.
+/// with ignore-all directives, where each directive records its line and the
+/// error kinds it suppresses (empty = all errors).
+///
+/// `# pyrefly: ignore-errors[kind, ...]` suppresses only the listed kinds for the
+/// whole file; multiple such lines accumulate. A bare `# pyrefly: ignore-errors`
+/// (or any other tool's directive) suppresses everything and overrides any kinds.
 ///
 /// After a docstring, only `ignore-errors` directives are recognized — bare
 /// `# type: ignore` is not, since it could plausibly be meant as a per-line
@@ -471,7 +488,27 @@ fn is_in_multiline_string(
 pub fn parse_ignore_all(
     code: &str,
     multiline_string_ranges: &[(LineNumber, LineNumber)],
-) -> SmallMap<Tool, LineNumber> {
+) -> SmallMap<Tool, IgnoreAll> {
+    // Record an ignore-all directive, merging with any earlier one for the same
+    // tool: empty `kinds` (suppress all) wins over specific kinds, and multiple
+    // specific-kind directives union together. The earliest line is kept.
+    fn record(
+        res: &mut SmallMap<Tool, IgnoreAll>,
+        tool: Tool,
+        line: LineNumber,
+        kinds: Vec<String>,
+    ) {
+        if let Some(existing) = res.get_mut(&tool) {
+            if kinds.is_empty() {
+                existing.kinds.clear();
+            } else if !existing.kinds.is_empty() {
+                existing.kinds.extend(kinds);
+            }
+        } else {
+            res.insert(tool, IgnoreAll { line, kinds });
+        }
+    }
+
     let mut res = SmallMap::new();
     let mut prev_ignore = None;
     let mut seen_docstring = false;
@@ -504,7 +541,7 @@ pub fn parse_ignore_all(
         if let Some((tool, prev_line)) = prev_ignore {
             // The previous `# type: ignore` was followed by another comment or
             // blank line, so it is a whole-file suppression.
-            res.entry(tool).or_insert(prev_line);
+            record(&mut res, tool, prev_line, Vec::new());
             prev_ignore = None;
         }
 
@@ -514,11 +551,25 @@ pub fn parse_ignore_all(
         }
         lex.trim_start();
         if lex.starts_with("pyre-ignore-all-errors") {
-            res.entry(Tool::Pyre).or_insert(line);
+            record(&mut res, Tool::Pyre, line, Vec::new());
         } else if let Some(tool) = lex.starts_with_tool() {
             lex.trim_start();
-            if lex.starts_with("ignore-errors") && lex.blank() {
-                res.entry(tool).or_insert(line);
+            if lex.starts_with("ignore-errors") {
+                lex.trim_start();
+                if lex.blank() {
+                    // Bare `ignore-errors`: suppress every error for this tool.
+                    record(&mut res, tool, line, Vec::new());
+                } else if tool == Tool::Pyrefly
+                    && lex.starts_with("[")
+                    && let Some((inside, after)) = lex.rest().split_once(']')
+                    && after.trim().is_empty()
+                {
+                    // `# pyrefly: ignore-errors[kind, ...]`: suppress only the
+                    // listed kinds. Other tools don't support kind lists, so the
+                    // directive is ignored for them (matching prior behavior).
+                    let kinds = inside.split(',').map(|x| x.trim().to_owned()).collect();
+                    record(&mut res, tool, line, kinds);
+                }
             } else if !seen_docstring && lex.starts_with("ignore") && lex.blank() {
                 // After a docstring, bare `# type: ignore` is not recognized
                 // as an ignore-all directive.
@@ -700,14 +751,12 @@ x = """
     #[test]
     fn test_parse_ignore_all() {
         fn f(x: &str, ignores: &[(Tool, u32)]) {
-            assert_eq!(
-                parse_ignore_all(x, &[]),
-                ignores
-                    .iter()
-                    .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
-                    .collect(),
-                "{x:?}"
-            );
+            let got: Vec<(Tool, u32)> = parse_ignore_all(x, &[])
+                .into_iter()
+                .map(|(tool, ig)| (tool, ig.line.get()))
+                .collect();
+            let want: Vec<(Tool, u32)> = ignores.to_vec();
+            assert_eq!(got, want, "{x:?}");
         }
 
         f("# pyrefly: ignore-errors\nx = 5", &[(Tool::Pyrefly, 1)]);
@@ -739,16 +788,69 @@ x = """
     }
 
     #[test]
+    fn test_parse_ignore_all_with_codes() {
+        fn f(x: &str, ignores: &[(Tool, u32, &[&str])]) {
+            let got: Vec<(Tool, u32, Vec<String>)> = parse_ignore_all(x, &[])
+                .into_iter()
+                .map(|(tool, ig)| (tool, ig.line.get(), ig.kinds))
+                .collect();
+            let want: Vec<(Tool, u32, Vec<String>)> = ignores
+                .iter()
+                .map(|(tool, line, kinds)| {
+                    (
+                        *tool,
+                        *line,
+                        kinds.iter().map(|k| (*k).to_owned()).collect(),
+                    )
+                })
+                .collect();
+            assert_eq!(got, want, "{x:?}");
+        }
+
+        // A single kind suppresses just that kind for the whole file.
+        f(
+            "# pyrefly: ignore-errors[bad-return]\nx = 5",
+            &[(Tool::Pyrefly, 1, &["bad-return"])],
+        );
+        // Comma-separated kinds on one line.
+        f(
+            "# pyrefly: ignore-errors[implicit-any-parameter, implicit-any-type-argument]\nx = 5",
+            &[(
+                Tool::Pyrefly,
+                1,
+                &["implicit-any-parameter", "implicit-any-type-argument"],
+            )],
+        );
+        // One kind per line accumulates into a single directive.
+        f(
+            "# pyrefly: ignore-errors[a]\n# pyrefly: ignore-errors[b]\nx = 5",
+            &[(Tool::Pyrefly, 1, &["a", "b"])],
+        );
+        // A bare `ignore-errors` overrides kinds: suppress everything.
+        f(
+            "# pyrefly: ignore-errors[a]\n# pyrefly: ignore-errors\nx = 5",
+            &[(Tool::Pyrefly, 1, &[])],
+        );
+        f(
+            "# pyrefly: ignore-errors\n# pyrefly: ignore-errors[a]\nx = 5",
+            &[(Tool::Pyrefly, 1, &[])],
+        );
+        // Only pyrefly honors kind lists; for other tools the bracketed form is
+        // not recognized as a directive at all.
+        f("# mypy: ignore-errors[a]\nx = 5", &[]);
+        // Trailing junk after the bracket invalidates the directive.
+        f("# pyrefly: ignore-errors[a] because\nx = 5", &[]);
+    }
+
+    #[test]
     fn test_parse_ignore_all_with_docstring() {
         fn f(x: &str, ranges: &[(LineNumber, LineNumber)], ignores: &[(Tool, u32)]) {
-            assert_eq!(
-                parse_ignore_all(x, ranges),
-                ignores
-                    .iter()
-                    .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
-                    .collect(),
-                "{x:?}"
-            );
+            let got: Vec<(Tool, u32)> = parse_ignore_all(x, ranges)
+                .into_iter()
+                .map(|(tool, ig)| (tool, ig.line.get()))
+                .collect();
+            let want: Vec<(Tool, u32)> = ignores.to_vec();
+            assert_eq!(got, want, "{x:?}");
         }
 
         // ignore-errors after a docstring should work
