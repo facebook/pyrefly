@@ -376,6 +376,20 @@ def bad_gen() -> Generator[int, None, str]:
   return 2  # should be a str!
 ```
 
+## bad-singledispatch-register
+
+A `functools.singledispatch` implementation is registered with a dispatch type that is not a subtype of the fallback function's first parameter. Since that parameter defines the function's declared domain, the registration is outside it and can never be dispatched to through type-correct calls (often meaning the fallback was annotated too narrowly).
+
+```python
+from functools import singledispatch
+
+@singledispatch
+def f(arg: int) -> None: ...
+
+@f.register
+def _(arg: str) -> None: ...  # bad-singledispatch-register: `str` is not a subtype of `int`
+```
+
 ## bad-specialization
 
 "Specialization" refers to instantiating a generic type with a concrete type.
