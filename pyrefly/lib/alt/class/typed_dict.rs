@@ -71,6 +71,8 @@ const DEFAULT_PARAM: Name = Name::new_static("default");
 const UPDATE_METHOD: Name = Name::new_static("update");
 const ITEMS_METHOD: Name = Name::new_static("items");
 const VALUES_METHOD: Name = Name::new_static("values");
+const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
+const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_dict_items_against_typed_dict(
@@ -923,12 +925,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_typed_dict_synthesized_fields(&self, cls: &Class) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let td = metadata.typed_dict_metadata()?;
+        let keys_type = self.heap.mk_class_type(
+            self.stdlib
+                .frozenset(self.heap.mk_class_type(self.stdlib.str().clone())),
+        );
         let mut fields = smallmap! {
             dunder::INIT => self.get_typed_dict_init(cls, &td.fields),
             ITEMS_METHOD => self.get_typed_dict_items(cls, &td.fields),
             GET_METHOD => self.get_typed_dict_get(cls, &td.fields),
             UPDATE_METHOD => self.get_typed_dict_update(cls, &td.fields),
             VALUES_METHOD => self.get_typed_dict_values(cls, &td.fields),
+            REQUIRED_KEYS => ClassSynthesizedField::new_classvar(keys_type.clone()),
+            OPTIONAL_KEYS => ClassSynthesizedField::new_classvar(keys_type),
         };
         if let Some(m) = self.get_typed_dict_clear(cls, &td.fields) {
             fields.insert(CLEAR_METHOD, m);
