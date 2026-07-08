@@ -586,6 +586,7 @@ fn class_mro(bindings: &Bindings, answers: &Answers, class: &Class) -> Arc<Class
 }
 
 /// Slots for `field_name` from the nearest base class annotating it in `class_idx`'s MRO (gh-3997).
+/// Nearest annotating base wins; unannotated bases don't count.
 fn inherited_annotation_slots(
     bindings: &Bindings,
     answers: &Answers,
