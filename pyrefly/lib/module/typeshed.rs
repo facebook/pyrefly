@@ -78,18 +78,46 @@ impl BundledStub for BundledTypeshedStdlib {
                 Some(path) => vec![path],
                 None => Vec::new(),
             };
-            let error_overrides = HashMap::from([
-                // The stdlib is full of deliberately incorrect overrides, so ignore them
-                (ErrorKind::BadOverride, Severity::Ignore),
-                (ErrorKind::BadOverrideParamName, Severity::Ignore),
-                // The stdlib has variance violations in typing.pyi, so ignore them
-                (ErrorKind::InvalidVariance, Severity::Ignore),
-            ]);
-            let config_file =
-                create_bundled_stub_config(Some(search_paths), Some(error_overrides), Some(true));
+            let config_file = create_bundled_stub_config(
+                Some(search_paths),
+                Some(stdlib_error_overrides()),
+                Some(true),
+            );
             ArcId::new(config_file)
         });
         CONFIG.dupe()
+    }
+}
+
+/// The stdlib is full of deliberately incorrect overrides and variance violations
+/// (e.g. in `typing.pyi`), so silence those error kinds when type-checking it.
+fn stdlib_error_overrides() -> HashMap<ErrorKind, Severity> {
+    HashMap::from([
+        (ErrorKind::BadOverride, Severity::Ignore),
+        (ErrorKind::BadOverrideParamName, Severity::Ignore),
+        (ErrorKind::InvalidVariance, Severity::Ignore),
+    ])
+}
+
+/// Loader config used to resolve and type-check the stdlib.
+///
+/// With no `typeshed_path`, the bundled stdlib snapshot is used. When a
+/// `typeshed_path` is configured, the returned config carries it so that the
+/// normal finder branch resolves stdlib modules out of `<typeshed_path>/stdlib`
+/// and never falls back to the bundled snapshot — making a configured typeshed a
+/// complete replacement for Pyrefly's bundled stdlib, just like third-party stubs.
+pub fn stdlib_config(typeshed_path: Option<&Path>) -> ArcId<ConfigFile> {
+    match typeshed_path {
+        None => BundledTypeshedStdlib::config(),
+        Some(typeshed_path) => {
+            // `typeshed_path` is already absolute (read from an
+            // already-configured `ConfigFile`), so it needs no further
+            // absolutization after `create_bundled_stub_config` configures.
+            let mut config_file =
+                create_bundled_stub_config(None, Some(stdlib_error_overrides()), Some(true));
+            config_file.typeshed_path = Some(typeshed_path.to_path_buf());
+            ArcId::new(config_file)
+        }
     }
 }
 

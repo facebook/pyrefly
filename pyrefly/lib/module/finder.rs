@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::io::Read;
@@ -20,6 +21,7 @@ use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::suggest::best_suggestion;
 use regex::Regex;
@@ -1151,14 +1153,79 @@ fn find_extra_extension_module<'a>(
     None
 }
 
+/// Per-typeshed cache of the immediate subdirectories of `<typeshed>/stubs`. Each
+/// subdirectory is a typeshed-style stub distribution (`stubs/Markdown/`,
+/// `stubs/pandas-stubs/`, ...), and we treat each of them as its own search root,
+/// mirroring typeshed's third-party layout.
+static CUSTOM_TYPESHED_STUB_PKG_DIRS: LazyLock<Mutex<HashMap<PathBuf, Arc<Vec<PathBuf>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn custom_typeshed_stub_pkg_dirs(typeshed_root: &Path) -> Arc<Vec<PathBuf>> {
+    let stubs_root = typeshed_root.join("stubs");
+    let mut cache = CUSTOM_TYPESHED_STUB_PKG_DIRS.lock();
+    if let Some(cached) = cache.get(&stubs_root) {
+        return cached.clone();
+    }
+    let pkgs: Vec<PathBuf> = std::fs::read_dir(&stubs_root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() { Some(path) } else { None }
+        })
+        .collect();
+    let arc = Arc::new(pkgs);
+    cache.insert(stubs_root, arc.clone());
+    arc
+}
+
+fn find_in_custom_typeshed_stubs(
+    typeshed_root: &Path,
+    module: ModuleName,
+    style_filter: Option<ModuleStyle>,
+) -> Option<FindingOrError<ModulePath>> {
+    let pkg_dirs = custom_typeshed_stub_pkg_dirs(typeshed_root);
+    if pkg_dirs.is_empty() {
+        return None;
+    }
+    // Namespaces and phantom-paths discovered while scanning typeshed stubs are
+    // discarded: typeshed stub packages aren't expected to form namespace packages
+    // and they are not surfaced to the outer `find_import_internal` loop anyway.
+    let mut namespaces_found = Vec::new();
+    let mut phantom_paths: Option<&mut Vec<PathBuf>> = None;
+    let dir_cache = DirEntryCache::new(false);
+    find_module(
+        module,
+        pkg_dirs.iter(),
+        &mut namespaces_found,
+        style_filter,
+        None,
+        false,
+        &mut phantom_paths,
+        &dir_cache,
+        None,
+    )
+}
+
 /// This function will find either third party typeshed stubs or other third party stubs
 /// Here a decision is being made to prioritize typeshed stubs over other third party stubs that are bundled.
 /// Since we run the typeshed update script with a more regular cadence, it is more likely that
 /// these stubs will be more up to date.
 fn find_third_party_stub(
+    config: &ConfigFile,
     module: ModuleName,
     style_filter: Option<ModuleStyle>,
 ) -> Option<FindingOrError<ModulePath>> {
+    // A configured `typeshed_path` fully replaces Pyrefly's bundled stubs: third-party
+    // stubs are resolved only from `<typeshed_path>/stubs`, and a miss returns `None`
+    // so that later `find_import_internal` stages (site-packages, ...) take over. We
+    // never fall back to the bundled typeshed/Meta stubs.
+    if let Some(custom_typeshed_path) = &config.typeshed_path {
+        return find_in_custom_typeshed_stubs(custom_typeshed_path, module, style_filter);
+    }
+
     let third_party_typeshed_stub = if matches!(style_filter, Some(ModuleStyle::Interface) | None) {
         typeshed_third_party().map_or_else(
             |err| {
@@ -1223,7 +1290,7 @@ pub fn find_import_internal(
 ) -> FindingOrError<ModulePath> {
     let mut namespaces_found = vec![];
     let origin = origin.map(|p| p.as_path());
-    let typeshed_third_party_result = find_third_party_stub(module, style_filter);
+    let typeshed_third_party_result = find_third_party_stub(config, module, style_filter);
     let typeshed_third_party_stub = typeshed_third_party_result.clone();
     let from_real_config_file = config.from_real_config_file();
 
@@ -1273,7 +1340,8 @@ pub fn find_import_internal(
         )
     {
         path
-    } else if matches!(style_filter, Some(ModuleStyle::Interface) | None)
+    } else if config.typeshed_path.is_none()
+        && matches!(style_filter, Some(ModuleStyle::Interface) | None)
         && let Some(path) = typeshed().map_or_else(
             |err| {
                 Some(FindingOrError::Error(FindError::missing_import(
@@ -1283,6 +1351,9 @@ pub fn find_import_internal(
             |ts| ts.find(module).map(FindingOrError::new_finding),
         )
     {
+        // Skip the bundled typeshed stdlib entirely when the user pointed us at their
+        // own typeshed: a configured `typeshed_path` is consulted above and must never
+        // fall back to Pyrefly's bundled stubs.
         path
     } else if !config.disable_search_path_heuristics
         && let Some(path) = find_module(
@@ -4429,7 +4500,8 @@ mod tests {
     fn test_find_third_party_stub_prioritizes_typeshed_over_bundled() {
         // 'requests' exists in typeshed third party stubs, so it should
         // return BundledTypeshedThirdParty (typeshed is prioritized over other bundled stubs)
-        let result = find_third_party_stub(ModuleName::from_str("requests"), None);
+        let config = get_config(ConfigSource::Synthetic);
+        let result = find_third_party_stub(&config, ModuleName::from_str("requests"), None);
         assert!(result.is_some(), "Should find 'requests' stub");
 
         if let Some(FindingOrError::Finding(finding)) = result {
@@ -4450,7 +4522,8 @@ mod tests {
     fn test_find_third_party_stub_returns_bundled_when_not_in_typeshed() {
         // 'conans' exists only in BundledThirdParty (from third_party/stubs/conans-stubs),
         // not in typeshed, so it should return BundledThirdParty
-        let result = find_third_party_stub(ModuleName::from_str("conans"), None);
+        let config = get_config(ConfigSource::Synthetic);
+        let result = find_third_party_stub(&config, ModuleName::from_str("conans"), None);
         assert!(result.is_some(), "Should find 'conans' stub");
 
         if let Some(FindingOrError::Finding(finding)) = result {
@@ -4464,6 +4537,62 @@ mod tests {
             );
         } else {
             panic!("Expected Finding result for 'conans', got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_find_third_party_stub_skips_bundled_when_typeshed_path_set() {
+        // `conans` (Meta-bundled) and `requests` (bundled typeshed) both resolve via
+        // the bundled stubs by default. Once `typeshed_path` points at an empty custom
+        // typeshed, neither bundled source is consulted, so both must miss.
+        let mut config = get_config(ConfigSource::Synthetic);
+        assert!(
+            find_third_party_stub(&config, ModuleName::from_str("conans"), None).is_some(),
+            "Sanity check: 'conans' resolves via bundled by default"
+        );
+        assert!(
+            find_third_party_stub(&config, ModuleName::from_str("requests"), None).is_some(),
+            "Sanity check: 'requests' resolves via bundled typeshed by default"
+        );
+
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        std::fs::create_dir_all(tmp.path().join("stubs")).expect("create empty stubs dir");
+        config.typeshed_path = Some(tmp.path().to_path_buf());
+        assert!(
+            find_third_party_stub(&config, ModuleName::from_str("conans"), None).is_none(),
+            "Bundled Meta stubs must be skipped when typeshed_path is set"
+        );
+        assert!(
+            find_third_party_stub(&config, ModuleName::from_str("requests"), None).is_none(),
+            "Bundled typeshed third-party stubs must also be skipped when typeshed_path is set"
+        );
+    }
+
+    #[test]
+    fn test_find_third_party_stub_prefers_custom_typeshed() {
+        // Build a typeshed-style directory on disk with one stub package and verify
+        // that `config.typeshed_path` makes Pyrefly resolve modules out of it instead
+        // of falling through to the bundled typeshed/third-party stubs.
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let stubs_root = tmp.path().join("stubs");
+        let pkg = stubs_root.join("custom_pkg");
+        std::fs::create_dir_all(pkg.join("custom_pkg")).expect("create pkg dirs");
+        std::fs::write(pkg.join("custom_pkg/__init__.pyi"), "X: int = 0\n").expect("write stub");
+
+        let mut config = get_config(ConfigSource::Synthetic);
+        config.typeshed_path = Some(tmp.path().to_path_buf());
+
+        let result = find_third_party_stub(&config, ModuleName::from_str("custom_pkg"), None)
+            .expect("custom typeshed lookup hits");
+        match result {
+            FindingOrError::Finding(finding) => {
+                assert!(
+                    matches!(finding.finding.details(), ModulePathDetails::FileSystem(_)),
+                    "Expected FileSystem path for custom typeshed, got: {:?}",
+                    finding.finding.details()
+                );
+            }
+            other => panic!("Expected Finding from custom typeshed, got: {:?}", other),
         }
     }
 

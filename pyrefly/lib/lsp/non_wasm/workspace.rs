@@ -85,6 +85,11 @@ pub struct Workspace {
     pub stream_diagnostics: Option<bool>,
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub workspace_config: Option<PathBuf>,
+    /// Custom typeshed override supplied over LSP. Equivalent to the
+    /// `typeshed_path` field of a `pyrefly.toml`, but settable via
+    /// `initializationOptions`/`workspace/configuration` so editor integrations
+    /// can point Pyrefly at their own typeshed without writing a config file.
+    pub typeshed_path: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -172,6 +177,13 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                     // skip interpreter query because we already have the interpreter from the workspace
                     config.interpreters.skip_interpreter_query = true;
                 }
+                // Workspace-level `typeshed_path` from LSP overrides the bundled typeshed
+                // but defers to an explicit value already set by a config file the user owns.
+                if let Some(typeshed_path) = w.typeshed_path.clone()
+                    && config.typeshed_path.is_none()
+                {
+                    config.typeshed_path = Some(typeshed_path);
+                }
             })
         };
 
@@ -252,6 +264,10 @@ struct PyreflyClientConfig {
     disabled_language_services: Option<DisabledLanguageServices>,
     stream_diagnostics: Option<bool>,
     config_path: Option<PathBuf>,
+    /// Override the bundled typeshed with a custom path. Equivalent to the
+    /// `typeshed_path` field of a `pyrefly.toml`, but settable over the LSP
+    /// `initializationOptions`/`workspace/configuration` channel.
+    typeshed_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -544,6 +560,7 @@ impl Workspaces {
             // so a partial `did_change_configuration` touching some other
             // key won't pay for a needless recheck.
             self.update_display_type_errors(modified, scope_uri, pyrefly.display_type_errors);
+            self.update_typeshed_path(modified, scope_uri, pyrefly.typeshed_path);
             self.update_type_checking_mode(
                 modified,
                 scope_uri,
@@ -656,6 +673,37 @@ impl Workspaces {
     }
 
     /// Update displayTypeErrors setting for scope_uri, None if default workspace
+    /// Update [`Workspace::typeshed_path`] for `scope_uri`, or the default workspace
+    /// when `scope_uri` is `None`. `modified` is set only when the value actually
+    /// changes, so a partial payload re-stating the current value doesn't trigger a
+    /// spurious recheck.
+    fn update_typeshed_path(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        typeshed_path: Option<PathBuf>,
+    ) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&path)
+                    && workspace.typeshed_path != typeshed_path
+                {
+                    *modified = true;
+                    workspace.typeshed_path = typeshed_path;
+                }
+            }
+            None => {
+                let mut default = self.default.write();
+                if default.typeshed_path != typeshed_path {
+                    *modified = true;
+                    default.typeshed_path = typeshed_path;
+                }
+            }
+        }
+    }
+
     fn update_display_type_errors(
         &self,
         modified: &mut bool,
@@ -1091,6 +1139,37 @@ mod tests {
         ));
         assert_eq!(config.python_path, Some("/usr/bin/python3".to_owned()));
         assert!(config.pyrefly.is_some());
+    }
+
+    #[test]
+    fn test_pyrefly_typeshed_path_parsed_from_lsp_config() {
+        let lsp_config: LspConfig = serde_json::from_value(json!({
+            "pyrefly": { "typeshedPath": "/path/to/custom/typeshed" }
+        }))
+        .expect("LspConfig should parse");
+        assert_eq!(
+            lsp_config.pyrefly.expect("pyrefly section").typeshed_path,
+            Some(PathBuf::from("/path/to/custom/typeshed"))
+        );
+    }
+
+    #[test]
+    fn test_pyrefly_typeshed_path_applied_to_default_workspace() {
+        let workspaces = Workspaces::new(Workspace::new(), &[]);
+        let mut modified = false;
+        workspaces.apply_client_configuration(
+            &mut modified,
+            &None,
+            json!({ "pyrefly": { "typeshedPath": "/path/to/custom/typeshed" } }),
+        );
+        assert!(
+            modified,
+            "applying typeshed_path should mark workspace modified"
+        );
+        assert_eq!(
+            workspaces.default.read().typeshed_path,
+            Some(PathBuf::from("/path/to/custom/typeshed"))
+        );
     }
 
     /// Legacy `displayTypeErrors` maps onto the two new axes:
