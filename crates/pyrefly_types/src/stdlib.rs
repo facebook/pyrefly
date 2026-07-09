@@ -79,6 +79,7 @@ pub struct Stdlib {
     mapping: StdlibResult<(Class, Arc<TParams>)>,
     set: StdlibResult<(Class, Arc<TParams>)>,
     tuple: StdlibResult<(Class, Arc<TParams>)>,
+    enumerate: StdlibResult<(Class, Arc<TParams>)>,
     iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterable: StdlibResult<(Class, Arc<TParams>)>,
     async_iterator: StdlibResult<(Class, Arc<TParams>)>,
@@ -240,6 +241,7 @@ impl Stdlib {
             dict_values: lookup_generic(collections_abc, "dict_values", 2),
             set: lookup_generic(builtins, "set", 1),
             tuple: lookup_generic(builtins, "tuple", 1),
+            enumerate: lookup_generic(builtins, "enumerate", 1),
             builtins_type: lookup_concrete(builtins, "type"),
             ellipsis_type: version
                 .at_least(3, 10)
@@ -452,6 +454,10 @@ impl Stdlib {
 
     pub fn tuple(&self, x: Type) -> ClassType {
         Self::apply(&self.tuple, vec![x])
+    }
+
+    pub fn enumerate(&self, x: Type) -> ClassType {
+        Self::apply(&self.enumerate, vec![x])
     }
 
     pub fn list(&self, x: Type) -> ClassType {

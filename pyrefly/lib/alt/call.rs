@@ -49,6 +49,8 @@ use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::error::context::TypeCheckContext;
+use crate::error::context::TypeCheckKind;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
@@ -2115,6 +2117,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let arg_ty = self.expr_infer(&x.arguments.args[0], errors);
                     self.type_of(arg_ty)
                 }
+                _ if Self::is_builtin_enumerate(ty) && let Some(ret) = self.call_builtin_enumerate(x, errors) => ret,
                 // Decorators can be applied in two ways:
                 //   - (common, idiomatic) via `@decorator`:
                 //     @staticmethod
@@ -2179,6 +2182,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .args
                 .iter()
                 .all(|e| !matches!(e, Expr::Starred(_)))
+    }
+
+    fn is_builtin_enumerate(ty: &Type) -> bool {
+        if matches!(ty, Type::ClassDef(cls) if cls.is_builtin("enumerate")) {
+            return true;
+        }
+        let Some(CalleeKind::Function(FunctionKind::Def(func))) = ty.callee_kind() else {
+            return false;
+        };
+        func.module.name().as_str() == "builtins"
+            && func.cls.is_none()
+            && func.name.as_str() == "enumerate"
+    }
+
+    fn call_builtin_enumerate(&self, x: &ExprCall, errors: &ErrorCollector) -> Option<Type> {
+        if !x.arguments.keywords.is_empty()
+            || !(1..=2).contains(&x.arguments.args.len())
+            || x.arguments
+                .args
+                .iter()
+                .any(|arg| matches!(arg, Expr::Starred(_)))
+        {
+            return None;
+        }
+        let int_ty = self.heap.mk_class_type(self.stdlib.int().clone());
+        if let Some(start) = x.arguments.args.get(1) {
+            let start_ty = self.expr_infer(start, errors);
+            self.check_type(&start_ty, &int_ty, start.range(), errors, &|| {
+                TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                    Some(Name::new_static("start")),
+                    None,
+                ))
+            });
+        }
+        let iterable = self.expr_infer(&x.arguments.args[0], errors);
+        let value = self.get_produced_type(self.iterate(
+            &iterable,
+            x.arguments.args[0].range(),
+            errors,
+            None,
+        ));
+        Some(self.heap.mk_class_type(self.stdlib.enumerate(value)))
     }
 }
 
