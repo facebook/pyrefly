@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.352f850c.js" defer="defer"></script>
-<script src="/assets/js/main.57e15025.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.4a266935.js" defer="defer"></script>
+<script src="/assets/js/main.3a2026f7.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -113,6 +113,9 @@
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="pythonanalysiscompletefunctionparens"><code>python.analysis.completeFunctionParens</code><a href="#pythonanalysiscompletefunctionparens" class="hash-link" aria-label="Direct link to pythonanalysiscompletefunctionparens" title="Direct link to pythonanalysiscompletefunctionparens">​</a></h4>
 <p><strong>Type:</strong> boolean   <strong>Default:</strong> <code>false</code></p>
 <p>Automatically insert parentheses when completing a function or method.</p>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="pythonanalysisautoimportcompletions"><code>python.analysis.autoImportCompletions</code><a href="#pythonanalysisautoimportcompletions" class="hash-link" aria-label="Direct link to pythonanalysisautoimportcompletions" title="Direct link to pythonanalysisautoimportcompletions">​</a></h4>
+<p><strong>Type:</strong> boolean   <strong>Default:</strong> <code>true</code></p>
+<p>Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement. Set to <code>false</code> to only complete symbols that are already in scope.</p>
 <h4 class="anchor anchorWithStickyNavbar_LWe7" id="pyreflylsppath"><code>pyrefly.lspPath</code><a href="#pyreflylsppath" class="hash-link" aria-label="Direct link to pyreflylsppath" title="Direct link to pyreflylsppath">​</a></h4>
 <p><strong>Type:</strong> string   <strong>Default:</strong> <code>&quot;&quot;</code></p>
 <p>If your platform is not supported, you can build pyrefly from source and specify the binary path with this setting.</p>

@@ -675,6 +675,12 @@ Controls whether hover tooltips include "Go to definition" and "Go to type defin
 
 Automatically insert parentheses when completing a function or method.
 
+#### `python.analysis.autoImportCompletions`
+
+**Type:** boolean &nbsp; **Default:** `true`
+
+Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement. Set to `false` to only complete symbols that are already in scope.
+
 #### `pyrefly.lspPath`
 
 **Type:** string &nbsp; **Default:** `""`
@@ -5345,6 +5351,12 @@ def bar() -> int:
 `}
   />
 </pre>
+
+To ignore one error type across a file, add the error code to the file-level comment:
+
+```python
+# pyrefly: ignore-errors[bad-assignment]
+```
 
 Pyrefly can automatically suppress all type errors in your project by running:
 
