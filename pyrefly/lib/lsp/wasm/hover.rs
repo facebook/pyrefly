@@ -14,6 +14,7 @@ use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
+use lsp_types::Range;
 use lsp_types::Url;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
@@ -75,6 +76,7 @@ pub struct HoverValue {
     pub kind: Option<SymbolKind>,
     pub name: Option<String>,
     pub type_: Type,
+    pub range: Option<Range>,
     pub docstring: Option<Docstring>,
     pub parameter_doc: Option<(String, String)>,
     pub type_sources: Vec<String>,
@@ -291,7 +293,7 @@ impl HoverValue {
                     symbol_def_formatted
                 ),
             }),
-            range: None,
+            range: self.range,
         }
     }
 }
@@ -398,6 +400,22 @@ fn position_is_in_docstring(
         false
     }
     body_contains_docstring(ast.body.as_slice(), position)
+}
+
+fn bool_op_hover_range_at(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Range> {
+    let ast = transaction.get_ast(handle)?;
+    let module = transaction.get_module_info(handle)?;
+    let node = Ast::locate_node(&ast, position)
+        .into_iter()
+        .find(|node| node.as_expr_ref().is_some())?;
+    match node {
+        AnyNodeRef::ExprBoolOp(bool_op) => Some(module.to_lsp_range(bool_op.range())),
+        _ => None,
+    }
 }
 
 /// If we can't determine a symbol name via go-to-definition, fall back to what the
@@ -746,6 +764,7 @@ pub fn get_hover(
         .subscript_operator_type_at(handle, position)
         .or_else(|| transaction.get_type_at_for_display(handle, position))
         .or_else(|| transaction.operator_type_at(handle, position))?;
+    let range = bool_op_hover_range_at(transaction, handle, position);
 
     // Helper function to check if we're hovering over a callee and get its range
     let find_callee_range_at_position = || -> Option<TextRange> {
@@ -886,6 +905,7 @@ pub fn get_hover(
             kind,
             name,
             type_,
+            range,
             docstring,
             parameter_doc,
             type_sources: type_sources_for_hover(transaction, handle, position),
