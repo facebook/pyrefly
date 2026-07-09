@@ -53,7 +53,6 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
-use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -113,6 +112,7 @@ pub(crate) enum CalleeKind {
     Unknown,
 }
 
+/// The receiver type, method name, and call surface for an operator dunder.
 struct OperatorDunder {
     base_type: Type,
     dunder_name: Name,
@@ -129,10 +129,6 @@ fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
 
 fn default_true() -> bool {
     true
-}
-
-fn position_in_augassign_operator(augassign: &StmtAugAssign, position: TextSize) -> bool {
-    position > augassign.target.range().end() && position < augassign.value.range().start()
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -2043,7 +2039,6 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
-        position: TextSize,
     ) -> Result<Option<OperatorDunder>, EmptyResponseReason> {
         // Look up the type of an expression, distinguishing "no answers"
         // from "answers available but no type trace for this range."
@@ -2106,9 +2101,6 @@ impl<'a> Transaction<'a> {
                     }))
                 }
                 AnyNodeRef::StmtAugAssign(augassign) => {
-                    if !position_in_augassign_operator(augassign, position) {
-                        return None;
-                    }
                     let dunder_name = Name::new_static(augassign.op.in_place_dunder());
                     Some(
                         type_at(augassign.target.range()).map(|left_type| OperatorDunder {
@@ -2205,9 +2197,7 @@ impl<'a> Transaction<'a> {
         }
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
-        let dunder = self
-            .find_operator_dunder(handle, &covering_nodes, position)
-            .ok()??;
+        let dunder = self.find_operator_dunder(handle, &covering_nodes).ok()??;
         self.get_chosen_overload_trace_for_surface(handle, dunder.range, true)
     }
 
@@ -2218,10 +2208,9 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
-        position: TextSize,
         preference: FindPreference,
     ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
-        let Some(dunder) = self.find_operator_dunder(handle, covering_nodes, position)? else {
+        let Some(dunder) = self.find_operator_dunder(handle, covering_nodes)? else {
             return Ok(None);
         };
         let OperatorDunder {
@@ -2758,12 +2747,9 @@ impl<'a> Transaction<'a> {
                     };
                 }
                 // Fall back to operator handling
-                if let Some(defs) = self.find_definition_for_operator(
-                    handle,
-                    &covering_nodes,
-                    position,
-                    preference,
-                )? {
+                if let Some(defs) =
+                    self.find_definition_for_operator(handle, &covering_nodes, preference)?
+                {
                     return Ok(defs);
                 }
                 let found = covering_nodes

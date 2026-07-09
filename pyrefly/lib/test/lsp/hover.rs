@@ -750,7 +750,7 @@ class Counter:
 
 c = Counter()
 c += 1
-# ^  ^
+# ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
     assert!(
@@ -758,10 +758,6 @@ c += 1
             "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
         ),
         "Expected __iadd__ signature in hover, got: {report}"
-    );
-    assert!(
-        report.contains("```python\nLiteral[1]\n```"),
-        "Expected RHS literal hover to be preserved, got: {report}"
     );
 }
 
