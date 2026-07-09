@@ -193,7 +193,11 @@ fn symlink_target(path: &Path) -> Option<PathBuf> {
     if target.is_absolute() {
         Some(target)
     } else {
-        Some(path.parent().expect("symlink path should have a parent").join(target))
+        Some(
+            path.parent()
+                .expect("symlink path should have a parent")
+                .join(target),
+        )
     }
 }
 
@@ -692,10 +696,7 @@ fn find_one_part_prefix<'a>(
                             let init_path = path.join(candidate_init_suffix);
                             if init_path.is_file() {
                                 let result = if is_pkgutil_namespace(&init_path, None) {
-                                    FindResult::legacy_namespace_package(
-                                        init_path,
-                                        path.clone(),
-                                    )
+                                    FindResult::legacy_namespace_package(init_path, path.clone())
                                 } else {
                                     FindResult::regular_package(init_path, path.clone())
                                 };
