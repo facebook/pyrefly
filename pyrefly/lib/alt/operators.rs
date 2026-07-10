@@ -740,9 +740,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.distribute_over_union(left, |left| {
             self.distribute_over_union(right, |right| {
                 match (left, right) {
-                    // If either operand is Any, the comparison result is Any.
-                    // This mirrors the same check in binop_infer.
-                    (Type::Any(style), _) => style.propagate(),
+                    // Membership against a known container still calls its `__contains__`
+                    // method and produces `bool`, even when the item is Any.
+                    (Type::Any(style), _) if !matches!(op, CmpOp::In | CmpOp::NotIn) => {
+                        style.propagate()
+                    }
                     (_, Type::Any(style)) => style.propagate(),
                     // If the RHS of a containment check isn't a quantified, it may contain a
                     // nested quantified that on_quantifieds would fail to detect.

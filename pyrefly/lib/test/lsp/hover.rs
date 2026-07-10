@@ -1426,6 +1426,25 @@ c = Container()
 }
 
 #[test]
+fn hover_over_in_operator_with_unknown_left_operand_shows_contains_dunder() {
+    let code = r#"
+languages: list[str] = []
+
+def supported_language(lang):
+    if lang in languages:
+#           ^
+        return lang
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) __contains__:")
+            && report.contains("self: list[str]")
+            && report.contains(") -> bool"),
+        "Expected hover to show list.__contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_constructor_with_arguments() {
     let code = r#"
 class Person:
