@@ -826,6 +826,33 @@ def f(x: E) -> None:
 }
 
 #[test]
+fn hover_on_match_wildcard_uses_compound_subject_type() {
+    let code = r#"
+class Box:
+    attr: str
+
+def f(obj: Box, xs: list[int], i: int) -> None:
+    match obj.attr:
+        case _:
+#            ^
+            pass
+    match xs[i]:
+        case _:
+#            ^
+            pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("```python\nstr\n```"),
+        "Expected attribute subject type in hover, got: {report}"
+    );
+    assert!(
+        report.contains("```python\nint\n```"),
+        "Expected subscript subject type in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_string_with_hash_character() {
     let code = r#"
 x = "hello # world"  # pyrefly: ignore
