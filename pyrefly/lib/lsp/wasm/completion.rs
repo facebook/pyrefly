@@ -641,7 +641,7 @@ impl Transaction<'_> {
             if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
                 return;
             }
-            for (handle_to_import_from, name, export) in self
+            for (handle_to_import_from, name, import_name, export) in self
                 .search_exports_fuzzy(identifier_text, custom_thread_pool)
                 .unwrap_or_default()
             {
@@ -658,7 +658,8 @@ impl Transaction<'_> {
                         self.config_finder(),
                         handle.dupe(),
                         handle_to_import_from,
-                        &name,
+                        import_name.as_str(),
+                        (import_name.as_str() != name).then_some(name.as_str()),
                         import_format,
                     );
                     let import_text_edit = TextEdit {
@@ -676,7 +677,7 @@ impl Transaction<'_> {
                     || is_deprecated_stdlib_alias(
                         handle.sys_info().version(),
                         &imported_module,
-                        &name,
+                        import_name.as_str(),
                     );
 
                 completions.push(RankedCompletion {

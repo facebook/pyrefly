@@ -2542,6 +2542,37 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_aliased_import_uses_original_name() {
+    let code = r#"
+x: MyM
+#     ^
+"#;
+    let files = [
+        ("main", code),
+        ("model", "class MyModel: pass\n"),
+        ("alias_user", "from model import MyModel as MyModelAlias\n"),
+    ];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let autoimport = state
+        .transaction()
+        .completion(handle, position, ImportFormat::Absolute, true, None)
+        .into_iter()
+        .find(|item| item.label == "MyModelAlias")
+        .expect("expected MyModelAlias to be in completions");
+
+    assert_eq!(
+        autoimport.detail.as_deref(),
+        Some("from model import MyModel as MyModelAlias\n")
+    );
+    assert_eq!(
+        autoimport.additional_text_edits.unwrap()[0].new_text,
+        "from model import MyModel as MyModelAlias\n"
+    );
+}
+
+#[test]
 fn autoimport_prefers_shorter_module() {
     let code = r#"
 T = Thing
