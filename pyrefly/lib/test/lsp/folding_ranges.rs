@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::FoldingRangeKind;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::folding::FoldKind;
 use serde::Serialize;
 
 use crate::state::state::State;
@@ -34,11 +34,11 @@ fn get_folding_ranges_report(state: &State, handle: &Handle) -> String {
             FoldingRangeInfo {
                 start_line: range.start.line,
                 end_line: range.end.line,
-                kind: kind.map(|k| match k {
-                    FoldingRangeKind::Comment => "comment".to_owned(),
-                    FoldingRangeKind::Imports => "imports".to_owned(),
-                    FoldingRangeKind::Region => "region".to_owned(),
-                }),
+                kind: match kind {
+                    FoldKind::Code => None,
+                    FoldKind::Comment => Some("comment".to_owned()),
+                    FoldKind::CommentSection | FoldKind::Region => Some("region".to_owned()),
+                },
             }
         })
         .collect();
@@ -863,6 +863,40 @@ z = 3
   {
     "start_line": 19,
     "end_line": 22,
+    "kind": "region"
+  }
+]"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn folding_ranges_for_explicit_regions() {
+    let code = r#"#region Outer
+x = 1
+# region Inner
+y = 2
+# endregion
+z = 3
+#endregion
+"#;
+
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_folding_ranges_report);
+
+    assert_eq!(
+        r#"# main.py
+
+[
+  {
+    "start_line": 0,
+    "end_line": 7,
+    "kind": "region"
+  },
+  {
+    "start_line": 2,
+    "end_line": 5,
     "kind": "region"
   }
 ]"#

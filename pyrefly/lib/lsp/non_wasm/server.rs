@@ -213,6 +213,7 @@ use pyrefly_config::config::ConfigSource;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::folding::FoldKind;
 use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
@@ -5459,10 +5460,16 @@ impl Server {
                     {
                         return None;
                     }
-                    // Filter out comment section folding ranges (Region) unless enabled
-                    if !self.comment_folding_ranges && kind == Some(FoldingRangeKind::Region) {
+                    if !self.comment_folding_ranges && kind == FoldKind::CommentSection {
                         return None;
                     }
+                    let kind = match kind {
+                        FoldKind::Code => None,
+                        FoldKind::Comment => Some(FoldingRangeKind::Comment),
+                        FoldKind::CommentSection | FoldKind::Region => {
+                            Some(FoldingRangeKind::Region)
+                        }
+                    };
                     let lsp_range = module.to_lsp_range(range);
                     if lsp_range.start.line >= lsp_range.end.line {
                         return None;
