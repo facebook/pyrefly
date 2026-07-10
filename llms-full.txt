@@ -437,6 +437,10 @@ Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane
   preload="metadata"
 />
 
+Pyrefly also greys out unused imports and unused local variables directly in the editor. These are IDE-only hints and do not appear in the CLI.
+
+Because Pyrefly does not model import side effects, an import used only for its side effects  (for example a plugin that registers accessors or methods on an existing class, such as `pyjanitor` extending `pandas.DataFrame`) may be greyed even though it is required at runtime.
+
 ---
 
 ### [Semantic tokens](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens)
@@ -7850,16 +7854,16 @@ if TYPE_CHECKING:
     from shape_extensions import Dim
 ```
 
-### Option 2: `shape_extensions.TypeVar` (runtime-compatible)
+### Option 2: `shape_extensions.SymVar` (runtime-compatible)
 
 If you need annotations to evaluate at runtime (e.g., for runtime shape
 validation or keeping `assert_type` in production code), import
 `shape_extensions` directly. The package patches
 `torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
-syntax at runtime without crashing. It also provides a `TypeVar` that
+syntax at runtime without crashing. It also provides a `SymVar` that
 supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
 
-Use old-style generics with `shape_extensions.TypeVar`:
+Use old-style generics with `shape_extensions.SymVar`:
 
 ```python
 from typing import assert_type
@@ -7867,10 +7871,10 @@ from typing import assert_type
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import Dim, TypeVar
+from shape_extensions import Dim, SymVar
 
-N = TypeVar("N")
-M = TypeVar("M")
+N = SymVar("N")
+M = SymVar("M")
 
 class Linear(nn.Module):
     def __init__(self, n: Dim[N], m: Dim[M]):
@@ -8536,8 +8540,8 @@ import TabItem from '@theme/TabItem';
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
 hints in your IDE. If you want `assert_type` for runtime regression guards,
-see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionstypevar-runtime-compatible)
-for the `shape_extensions.TypeVar` import style, which requires old-style
+see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionssymvar-runtime-compatible)
+for the `shape_extensions.SymVar` import style, which requires old-style
 generics.
 :::
 

@@ -97,16 +97,16 @@ if TYPE_CHECKING:
     from shape_extensions import Dim
 ```
 
-### Option 2: `shape_extensions.TypeVar` (runtime-compatible)
+### Option 2: `shape_extensions.SymVar` (runtime-compatible)
 
 If you need annotations to evaluate at runtime (e.g., for runtime shape
 validation or keeping `assert_type` in production code), import
 `shape_extensions` directly. The package patches
 `torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
-syntax at runtime without crashing. It also provides a `TypeVar` that
+syntax at runtime without crashing. It also provides a `SymVar` that
 supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
 
-Use old-style generics with `shape_extensions.TypeVar`:
+Use old-style generics with `shape_extensions.SymVar`:
 
 ```python
 from typing import assert_type
@@ -114,10 +114,10 @@ from typing import assert_type
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import Dim, TypeVar
+from shape_extensions import Dim, SymVar
 
-N = TypeVar("N")
-M = TypeVar("M")
+N = SymVar("N")
+M = SymVar("M")
 
 class Linear(nn.Module):
     def __init__(self, n: Dim[N], m: Dim[M]):

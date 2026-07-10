@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.4a266935.js" defer="defer"></script>
-<script src="/assets/js/main.3a2026f7.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.b1f4268f.js" defer="defer"></script>
+<script src="/assets/js/main.bb829f17.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -148,6 +148,8 @@
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="diagnostics"><a href="https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_publishDiagnostics" target="_blank" rel="noopener noreferrer">Diagnostics</a><a href="#diagnostics" class="hash-link" aria-label="Direct link to diagnostics" title="Direct link to diagnostics">​</a></h3>
 <p>Type errors and warnings from Pyrefly’s checker appear in the diagnostics pane (&quot;Problems&quot; pane in VSCode).</p>
 <video src="/videos/diagnostics.mp4" width="720" muted="" loop="" autoplay="" playsinline="" preload="metadata"></video>
+<p>Pyrefly also greys out unused imports and unused local variables directly in the editor. These are IDE-only hints and do not appear in the CLI.</p>
+<p>Because Pyrefly does not model import side effects, an import used only for its side effects  (for example a plugin that registers accessors or methods on an existing class, such as <code>pyjanitor</code> extending <code>pandas.DataFrame</code>) may be greyed even though it is required at runtime.</p>
 <hr>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="semantic-tokens"><a href="https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_semanticTokens" target="_blank" rel="noopener noreferrer">Semantic tokens</a><a href="#semantic-tokens" class="hash-link" aria-label="Direct link to semantic-tokens" title="Direct link to semantic-tokens">​</a></h3>
 <p>Rich syntax highlighting based on token type and origin.</p>
