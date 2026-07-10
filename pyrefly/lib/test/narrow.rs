@@ -108,6 +108,59 @@ def f(x: str | None):
 );
 
 testcase!(
+    test_final_bool_unreachable_if_branch,
+    r#"
+from typing import Final, Literal, reveal_type
+asdf: Final = False
+if asdf:
+    foo = 1
+else:
+    foo = 2
+reveal_type(foo)  # E: revealed type: Literal[2]
+"#,
+);
+
+testcase!(
+    test_final_bool_unreachable_else_branch,
+    r#"
+from typing import Final, Literal, reveal_type
+flag: Final = True
+if flag:
+    bar = 1
+else:
+    bar = 2
+reveal_type(bar)  # E: revealed type: Literal[1]
+"#,
+);
+
+// Regression test: when a function's trailing statement is an `if` gated by a
+// `Final` bool constant, the implicit-return scan (`function_last_expressions`)
+// must prune the same branch the binding traversal prunes. Otherwise it records
+// a `LastStmt` inside the pruned branch whose binding is never created, and we
+// panic at solve time with "key lacking binding".
+testcase!(
+    test_final_bool_if_branch_implicit_return_no_panic,
+    r#"
+from typing import Final
+FLAG_FALSE: Final = False
+FLAG_TRUE: Final = True
+def prune_if() -> None:
+    if FLAG_FALSE:
+        print("pruned")
+    else:
+        print("kept")
+def prune_else() -> None:
+    if FLAG_TRUE:
+        print("kept")
+    else:
+        print("pruned")
+def prune_if_no_else() -> None:
+    if FLAG_FALSE:
+        print("pruned and last")
+"#,
+);
+
+testcase!(
     test_is_subtype,
     r#"
 from typing import assert_type
