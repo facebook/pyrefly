@@ -53,6 +53,7 @@ use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_with::skip_serializing_none;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -1679,19 +1680,159 @@ impl ConfigFile {
         (config, errors)
     }
 
-    fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
-        toml::from_str::<ConfigFile>(config_str).map_err(|err| anyhow::Error::msg(err.to_string()))
+    pub fn parse_config(config_str: &str) -> anyhow::Result<ConfigFile> {
+        parse_toml_document::<ConfigFile>(config_str)
     }
 
     /// Parse a pyproject.toml file. Returns a tuple of:
     /// - `Option<ConfigFile>`: the pyrefly config, if `[tool.pyrefly]` was present
     /// - `bool`: whether Python tool sections like `[tool.ruff]` were detected
     fn parse_pyproject_toml(config_str: &str) -> anyhow::Result<(Option<ConfigFile>, bool)> {
-        let pyproject = toml::from_str::<PyProject>(config_str)
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        let pyproject = parse_toml_document::<PyProject>(config_str)?;
         let has_python_tools = pyproject.has_python_tools();
         Ok((pyproject.pyrefly(), has_python_tools))
     }
+}
+
+fn parse_toml_document<T: DeserializeOwned>(config_str: &str) -> anyhow::Result<T> {
+    toml_edit::de::from_str::<T>(config_str)
+        .map_err(|err| toml_error_with_adjusted_span(config_str, err))
+}
+
+fn toml_error_with_adjusted_span(config_str: &str, err: toml_edit::de::Error) -> anyhow::Error {
+    let original_span = err.span();
+    let adjusted_span = toml_error_key_span(config_str, &err)
+        .or_else(|| toml_error_value_span(config_str, &err))
+        .filter(|span| original_span.as_ref() != Some(span));
+    match adjusted_span {
+        Some(span) => anyhow::Error::new(TomlErrorWithAdjustedSpan {
+            input: config_str.to_owned(),
+            message: err.message().to_owned(),
+            span,
+        }),
+        None => anyhow::Error::new(err),
+    }
+}
+
+#[derive(Debug)]
+struct TomlErrorWithAdjustedSpan {
+    input: String,
+    message: String,
+    span: std::ops::Range<usize>,
+}
+
+impl std::error::Error for TomlErrorWithAdjustedSpan {}
+
+impl Display for TomlErrorWithAdjustedSpan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let start = self.span.start.min(self.input.len());
+        let line_start = self.input[..start]
+            .rfind('\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        let line_end = self.input[line_start..]
+            .find('\n')
+            .map(|idx| line_start + idx)
+            .unwrap_or(self.input.len());
+        let line_num = self.input[..line_start]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1;
+        let column = self.input[line_start..start].chars().count();
+        let col_num = column + 1;
+        let content = &self.input[line_start..line_end];
+        let highlight_end = self.span.end.min(line_end);
+        let highlight_len = self.input[start..highlight_end].chars().count().max(1);
+        let gutter = line_num.to_string().len();
+
+        writeln!(f, "TOML parse error at line {line_num}, column {col_num}")?;
+        for _ in 0..=gutter {
+            write!(f, " ")?;
+        }
+        writeln!(f, "|")?;
+        writeln!(f, "{line_num} | {content}")?;
+        for _ in 0..=gutter {
+            write!(f, " ")?;
+        }
+        write!(f, "|")?;
+        for _ in 0..=column {
+            write!(f, " ")?;
+        }
+        for _ in 0..highlight_len {
+            write!(f, "^")?;
+        }
+        writeln!(f)?;
+        writeln!(f, "{}", self.message)
+    }
+}
+
+pub fn toml_error_span(err: &anyhow::Error) -> Option<std::ops::Range<usize>> {
+    err.downcast_ref::<TomlErrorWithAdjustedSpan>()
+        .map(|err| err.span.clone())
+        .or_else(|| {
+            err.downcast_ref::<toml_edit::de::Error>()
+                .and_then(toml_edit::de::Error::span)
+        })
+        .or_else(|| {
+            err.downcast_ref::<toml::de::Error>()
+                .and_then(toml::de::Error::span)
+        })
+}
+
+fn toml_error_key_span(
+    config_str: &str,
+    err: &toml_edit::de::Error,
+) -> Option<std::ops::Range<usize>> {
+    let key_path = toml_error_key_path(err)?;
+    let document = toml_edit::Document::parse(config_str).ok()?;
+    (0..key_path.len())
+        .find_map(|idx| toml_item_span_for_key_path(document.as_table(), &key_path[idx..]))
+}
+
+fn toml_error_key_path(err: &toml_edit::de::Error) -> Option<Vec<String>> {
+    let mut err_without_input = err.clone();
+    err_without_input.set_input(None);
+    err_without_input.to_string().lines().find_map(|line| {
+        line.strip_prefix("in `")
+            .and_then(|line| line.strip_suffix('`'))
+            .map(|line| line.split('.').map(str::to_owned).collect())
+    })
+}
+
+fn toml_item_span_for_key_path(
+    table: &toml_edit::Table,
+    key_path: &[String],
+) -> Option<std::ops::Range<usize>> {
+    let (first_key, rest) = key_path.split_first()?;
+    let mut item = table.get(first_key.as_str())?;
+    for key in rest {
+        item = item.as_table_like()?.get(key.as_str())?;
+    }
+    item.span()
+}
+
+fn toml_error_value_span(
+    config_str: &str,
+    err: &toml_edit::de::Error,
+) -> Option<std::ops::Range<usize>> {
+    let invalid_string = invalid_string_value(err.message())?;
+    let document = toml_edit::Document::parse(config_str).ok()?;
+    document
+        .as_table()
+        .get_values()
+        .into_iter()
+        .find_map(|(_, value)| {
+            (value.as_str() == Some(invalid_string))
+                .then(|| value.span())
+                .flatten()
+        })
+}
+
+fn invalid_string_value(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("invalid type: string \"")?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
 }
 
 impl Display for ConfigFile {
@@ -2307,6 +2448,26 @@ mod tests {
                  ";
         let err = ConfigFile::parse_config(config_str).unwrap_err();
         assert!(err.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn test_toml_parse_error_keeps_original_span() {
+        let config_str = "preset = \"strict\"\npytorch-efficiency-lints = \"true\"\n";
+        let err = ConfigFile::parse_config(config_str).unwrap_err();
+        let value_start = config_str.find("\"true\"").unwrap();
+        assert_eq!(
+            toml_error_span(&err),
+            Some(value_start..value_start + "\"true\"".len())
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("line 2"),
+            "expected TOML parse error to point to line 2, got: {msg}"
+        );
+        assert!(
+            msg.contains("pytorch-efficiency-lints = \"true\""),
+            "expected TOML parse error to include the invalid value line, got: {msg}"
+        );
     }
 
     #[test]

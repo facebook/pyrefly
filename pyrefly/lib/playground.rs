@@ -41,6 +41,7 @@ use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
+use crate::config::config::toml_error_span;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::lsp::wasm::hover::get_hover;
@@ -161,6 +162,37 @@ impl Range {
             },
         })
     }
+}
+
+fn byte_offset_to_line_column(contents: &str, offset: usize) -> (i32, i32) {
+    let offset = offset.min(contents.len());
+    let mut line = 1;
+    let mut line_start = 0;
+    for (idx, ch) in contents.char_indices() {
+        if idx >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            line_start = idx + ch.len_utf8();
+        }
+    }
+    let column = contents[line_start..offset].chars().count() as i32 + 1;
+    (line, column)
+}
+
+fn toml_parse_error_range(contents: &str, err: &anyhow::Error) -> (i32, i32, i32, i32) {
+    let Some(span) = toml_error_span(err) else {
+        return (1, 1, 1, 1);
+    };
+    let start = span.start.min(contents.len());
+    let end = span.end.min(contents.len()).max(start);
+    let (start_line, start_col) = byte_offset_to_line_column(contents, start);
+    let (end_line, mut end_col) = byte_offset_to_line_column(contents, end);
+    if start_line == end_line && end_col <= start_col {
+        end_col = start_col + 1;
+    }
+    (start_line, start_col, end_line, end_col)
 }
 
 #[derive(Serialize, Clone)]
@@ -296,15 +328,17 @@ impl Playground {
         // Parse configuration if present in the in-memory files
         let mut parsed_config: Option<ConfigFile> = None;
         if let Some(cfg_str) = files.get("pyrefly.toml") {
-            match toml::from_str::<ConfigFile>(cfg_str) {
+            match ConfigFile::parse_config(cfg_str) {
                 Ok(cfg) => parsed_config = Some(cfg),
                 Err(err) => {
+                    let (start_line, start_col, end_line, end_col) =
+                        toml_parse_error_range(cfg_str, &err);
                     // Attach a diagnostic to pyrefly.toml on parse/validation failure
                     self.config_diagnostics.push(Diagnostic {
-                        start_line: 1,
-                        start_col: 1,
-                        end_line: 1,
-                        end_col: 1,
+                        start_line,
+                        start_col,
+                        end_line,
+                        end_col,
                         message_header: "TOML parse error".to_owned(),
                         message_details: err.to_string(),
                         kind: "parse-error".to_owned(),
@@ -970,6 +1004,28 @@ mod tests {
             !state.handles.contains_key("pyrefly.toml"),
             "Config file should not be a module"
         );
+    }
+
+    #[test]
+    fn test_config_toml_parse_error_range() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("main.py".to_owned(), String::new());
+        files.insert(
+            "pyrefly.toml".to_owned(),
+            "preset = \"strict\"\npytorch-efficiency-lints = \"true\"\n".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+
+        let diagnostic = state
+            .get_errors()
+            .into_iter()
+            .find(|error| error.filename == "pyrefly.toml")
+            .expect("expected a pyrefly.toml parse diagnostic");
+        assert_eq!(diagnostic.message_header, "TOML parse error");
+        assert_eq!(diagnostic.start_line, 2);
+        assert_eq!(diagnostic.start_col, 28);
     }
 
     #[test]
