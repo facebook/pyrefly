@@ -11,6 +11,7 @@ use itertools::Itertools;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionResponse;
+use lsp_types::Documentation;
 use lsp_types::InsertTextFormat;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
@@ -59,6 +60,37 @@ fn test_completion_basic() {
         .client
         .completion("foo.py", 11, 1)
         .expect_completion_response_with(|list| list.items.iter().any(|item| item.label == "Bar"))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn completion_attribute_prefers_py_docstring_over_pyi() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+
+    let file = "attributes_of_py_docstrings/src.py";
+    interaction.client.did_open(file);
+    interaction
+        .client
+        .completion(file, 9, 10)
+        .expect_completion_response_with(|list| {
+            list.items.iter().any(|item| {
+                item.label == "x"
+                    && matches!(
+                        &item.documentation,
+                        Some(Documentation::MarkupContent(content))
+                            if content
+                                .value
+                                .contains("Docstring coming from the .py implementation.")
+                    )
+            })
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();
