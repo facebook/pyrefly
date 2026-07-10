@@ -156,6 +156,8 @@ pub enum OutputFormat {
     #[default]
     /// Full, verbose text output
     FullText,
+    /// Full, verbose text output followed by GitHub Actions workflow commands
+    FullTextWithGithub,
     /// JSON output
     Json,
     /// Emit GitHub Actions workflow commands
@@ -2180,6 +2182,13 @@ output-format = "omit-errors"
         let config_str = r#"output-format = "junit-xml""#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(config.output_format, Some(OutputFormat::JunitXml));
+    }
+
+    #[test]
+    fn test_output_format_full_text_with_github_config_parsing() {
+        let config_str = r#"output-format = "full-text-with-github""#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.output_format, Some(OutputFormat::FullTextWithGithub));
     }
 
     #[test]

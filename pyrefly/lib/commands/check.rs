@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use anstream::ColorChoice;
 use anstream::eprintln;
 use anstream::stderr;
 use anstream::stdout;
@@ -431,6 +432,9 @@ fn write_errors_to_file(
     match format {
         OutputFormat::MinText => write_error_text_to_file(path, relative_to, errors, false),
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
+        OutputFormat::FullTextWithGithub => {
+            write_error_full_text_with_github_to_file(path, relative_to, errors)
+        }
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
@@ -446,6 +450,9 @@ pub(crate) fn write_errors_to_console(
     match format {
         OutputFormat::MinText => write_error_text_to_console(relative_to, errors, false),
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
+        OutputFormat::FullTextWithGithub => {
+            write_error_full_text_with_github_to_console(relative_to, errors)
+        }
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
@@ -560,6 +567,42 @@ fn write_error_github_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<(
 
 fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
     buffered_write_error_github(stdout(), errors)
+}
+
+fn write_error_full_text_with_github(
+    writer: impl Write,
+    color_choice: ColorChoice,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    {
+        let mut renderer = ErrorRenderer::new(&mut writer, color_choice);
+        for error in errors {
+            renderer.write(error, relative_to, true)?;
+        }
+        renderer.flush()?;
+    }
+    write_error_github(&mut writer, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_full_text_with_github_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    write_error_full_text_with_github(File::create(path)?, ColorChoice::Never, relative_to, errors)
+}
+
+fn write_error_full_text_with_github_to_console(
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    write_error_full_text_with_github(stdout.lock(), color_choice, relative_to, errors)
 }
 
 /// True for characters allowed by the XML 1.0 `Char` production. Everything else
@@ -1597,6 +1640,18 @@ mod tests {
         let mut buf = Vec::new();
         write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("::error file=/repo/foo.py"));
+        assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn full_text_with_github_output_format_writes_both() {
+        let errors = vec![sample_error("bad".into())];
+        let mut buf = Vec::new();
+        write_error_full_text_with_github(&mut buf, ColorChoice::Never, Path::new("/"), &errors)
+            .unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("ERROR bad [bad-assignment]"));
         assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
     }
