@@ -867,6 +867,39 @@ impl<'a> Transaction<'a> {
         None
     }
 
+    fn type_from_match_wildcard_at_impl(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        for_display: bool,
+    ) -> Option<Type> {
+        let module = self.get_ast(handle)?;
+        let covering_nodes = Ast::locate_node(&module, position);
+        let is_wildcard = covering_nodes
+            .iter()
+            .any(|node| matches!(node, AnyNodeRef::PatternMatchAs(pattern) if pattern.name.is_none() && pattern.pattern.is_none()));
+        if !is_wildcard {
+            return None;
+        }
+        let case_range = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::MatchCase(case) => Some(case.range),
+            _ => None,
+        })?;
+        let subject_start = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::StmtMatch(stmt_match) => Some(stmt_match.subject.range().start()),
+            _ => None,
+        })?;
+        let key = Key::PatternNarrow(case_range);
+        if self
+            .get_bindings(handle)
+            .is_some_and(|bindings| bindings.is_valid_key(&key))
+        {
+            self.get_type_for_surface(handle, &key, for_display)
+        } else {
+            self.get_type_at_impl(handle, subject_start, for_display)
+        }
+    }
+
     pub(crate) fn identifier_at(
         &self,
         handle: &Handle,
@@ -1159,7 +1192,11 @@ impl<'a> Transaction<'a> {
             context,
         }) = self.identifier_at(handle, position)
         else {
-            return self.type_from_expression_at_impl(handle, position, false, for_display);
+            return self
+                .type_from_match_wildcard_at_impl(handle, position, for_display)
+                .or_else(|| {
+                    self.type_from_expression_at_impl(handle, position, false, for_display)
+                });
         };
         let kind = self.classify_surface(handle, &identifier, &context);
         self.type_from_resolution(
