@@ -88,6 +88,30 @@ xyz = [foo.meth]
 }
 
 #[test]
+fn hover_on_overloaded_method_call_shows_implementation_docstring() {
+    let code = r#"
+from typing import overload
+
+class Foo:
+    @overload
+    def bar(self, x: int) -> int: ...
+    @overload
+    def bar(self, x: str) -> str: ...
+    def bar(self, x: int | str) -> int | str:
+        """Hello."""
+        return x
+
+Foo().bar(1)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Hello."),
+        "Expected implementation docstring in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_union_method_call_shows_method_signature() {
     let code = r#"
 class A:
