@@ -28,6 +28,7 @@ import {
 } from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
 import {registerCodeLensCommands} from './codeLens';
+import {registerHoverProvider} from './hover';
 import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
@@ -126,6 +127,9 @@ export async function activate(context: ExtensionContext) {
   const rawInitialisationOptions = JSON.parse(
     JSON.stringify(vscode.workspace.getConfiguration('pyrefly') ?? {}),
   );
+  // Proposed APIs are omitted at runtime when the editor has not granted access.
+  // In that case, let vscode-languageclient register the ordinary LSP hover provider.
+  const supportsHoverVerbosity = vscode.VerboseHover !== undefined;
 
   // Opt into the V2 wire shape for the typeErrorDisplayStatus request.
   // An older binary that doesn't know V2 still returns its V1 bare
@@ -138,6 +142,7 @@ export async function activate(context: ExtensionContext) {
     pyrefly: {
       ...((rawInitialisationOptions as any).pyrefly ?? {}),
       typeErrorDisplayStatusVersion: TYPE_ERROR_DISPLAY_STATUS_VERSION,
+      customHoverProvider: supportsHoverVerbosity,
     },
   };
 
@@ -194,6 +199,9 @@ export async function activate(context: ExtensionContext) {
     serverOptions,
     clientOptions,
   );
+  if (supportsHoverVerbosity) {
+    registerHoverProvider(context, () => client);
+  }
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {

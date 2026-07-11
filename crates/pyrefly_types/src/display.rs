@@ -1520,8 +1520,20 @@ impl Type {
         fallback_name: Option<&str>,
         mode: LspDisplayMode,
     ) -> String {
+        self.as_lsp_string_with_fallback_name_and_expanded_unions(fallback_name, mode, false)
+    }
+
+    pub fn as_lsp_string_with_fallback_name_and_expanded_unions(
+        &self,
+        fallback_name: Option<&str>,
+        mode: LspDisplayMode,
+        expand_unions: bool,
+    ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_lsp_display_mode(mode);
+        if expand_unions {
+            c.always_display_expanded_unions();
+        }
         let rendered = c.display(self).to_string();
         if let Some(name) = fallback_name
             && self.is_toplevel_callable()
