@@ -540,8 +540,10 @@ Umbrella error code for cases where Pyrefly infers an implicit `Any`. Suppressin
 Most concrete diagnostics are emitted under one of the more specific sub-kinds:
 - [`implicit-any-attribute`](#implicit-any-attribute)
 - [`implicit-any-empty-container`](#implicit-any-empty-container)
+- [`implicit-any-lambda`](#implicit-any-lambda)
 - [`implicit-any-parameter`](#implicit-any-parameter)
 - [`implicit-any-type-argument`](#implicit-any-type-argument)
+- [`implicit-any-variable`](#implicit-any-variable)
 
 ## implicit-any-attribute
 
@@ -583,16 +585,29 @@ x: list[int] = []
 x = [1, 2, 3]
 ```
 
+## implicit-any-lambda
+
+Default severity: `ignore`
+
+A lambda whose parameter or return type cannot be inferred is treated as an implicit `Any`, hiding type errors in its body and at its call sites.
+
+When the lambda is used in a typed context (e.g. assigned to a `Callable` or passed to a function that expects one), the parameters are inferred from that context and no error is reported.
+
+```python
+f = lambda x: x  # error: implicit-any-lambda
+
+from typing import Callable
+g: Callable[[int], int] = lambda x: x  # OK: `x` is inferred as `int` from context
+```
+
 ## implicit-any-parameter
 
 Default severity: `ignore`
 
 A function parameter has no type annotation, so Pyrefly treats it as `Any`. Add an annotation. The `self` and `cls` parameters of methods are excluded from this check.
 
-This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
-
 ```python
-def f(x):  # implicit-any-parameter — `x` has type `Any`
+def f(x):
     return x + 1
 
 # Fix:
@@ -615,6 +630,22 @@ def f(xs: list) -> tuple:  # implicit-any-type-argument on both `list` and `tupl
 # Fix:
 def f(xs: list[int]) -> tuple[int, ...]:
     return tuple(xs)
+```
+
+## implicit-any-variable
+
+Default severity: `ignore`
+
+A variable assigned a value of unknown type without an explicit annotation is inferred as an implicit `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
+
+This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+y = untyped(1)  # the type of `y` is unknown [implicit-any-variable]
+y2: int = untyped(1)  # OK: `y2` is explicitly annotated
 ```
 
 ## implicit-import
@@ -1841,6 +1872,37 @@ This error arises when attempting to perform an operation between values of two 
 
 ```python
 x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-operation]
+```
+
+## untyped-class-decorator
+
+Default severity: `ignore`
+
+A class decorator whose own type is `Any` may modify the class in unexpected ways.
+
+```python
+from typing import Any
+
+my_decorator: Any = lambda cls: cls
+
+@my_decorator  # `my_decorator` is `Any`, so the type of `A` is lost [untyped-class-decorator]
+class A: ...
+```
+
+## untyped-function-decorator
+
+Default severity: `ignore`
+
+A function or method decorator whose own type is `Any` obscures the decorated function's type.
+
+```python
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+@my_decorator  # `my_decorator` is `Any`, so the type of `g` is lost [untyped-function-decorator]
+def g() -> int:
+    return 1
 ```
 
 ## untyped-import
