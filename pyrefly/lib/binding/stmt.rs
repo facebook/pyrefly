@@ -73,6 +73,7 @@ use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::ExcludedNonePair;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
@@ -1640,6 +1641,7 @@ impl<'a> BindingsBuilder<'a> {
                     // The solver decides from the declarations in each test whether this suite is
                     // dead. An environment-independent test that is always true also makes every
                     // suite below it dead.
+                    let excluded_none_pair = test.as_ref().and_then(ExcludedNonePair::from_test);
                     let this_test = test.map(|test| {
                         self.insert_binding(
                             Key::BranchTest(test.range()),
@@ -1691,6 +1693,9 @@ impl<'a> BindingsBuilder<'a> {
                         contains_environment_test_with_no_else = true;
                     }
                     self.finish_branch();
+                    if let Some(pair) = excluded_none_pair {
+                        self.scopes.exclude_none_pair_in_fork_base(pair);
+                    }
                     if this_branch_chosen == Some(true) {
                         // Choosing an environment-independent branch kills every later suite
                         // in every environment. Choosing an environment-dependent one only
@@ -1842,6 +1847,10 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
                 let body_may_raise = self.scopes.exit_with();
+                if body_may_raise || contexts.len() > 1 {
+                    // Suppression can bypass guards after an earlier write or exception.
+                    self.scopes.clear_excluded_none_pairs();
+                }
                 // An exception raised in the body may be suppressed by the context
                 // manager, in which case control flow resumes after the `with`. That
                 // depends on the type of `__exit__`, so defer the decision to solving.
@@ -1931,6 +1940,8 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.mark_flow_termination(TerminationKind::Raise);
             }
             Stmt::Try(x) => {
+                // Handlers can observe writes made before an exception, not just entry values.
+                self.scopes.clear_excluded_none_pairs();
                 self.start_fork_and_branch(x.range);
 
                 // We branch before the body, conservatively assuming that any statement can fail

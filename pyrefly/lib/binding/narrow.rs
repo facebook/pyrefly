@@ -491,6 +491,19 @@ impl NarrowingSubject {
 }
 
 impl NarrowOp {
+    /// Return a `None` expression if this operation proves the bare name is `None`.
+    fn is_none_expr(&self) -> Option<&Expr> {
+        match self {
+            Self::Atomic(None, AtomicNarrowOp::Is(expr))
+                if matches!(expr, Expr::NoneLiteral(_)) =>
+            {
+                Some(expr)
+            }
+            Self::And(ops) => ops.iter().find_map(Self::is_none_expr),
+            _ => None,
+        }
+    }
+
     /// Produce a Python-like snippet for hover display.
     ///
     /// `base_name` is the variable being narrowed. `snippet` converts a
@@ -757,6 +770,103 @@ impl NarrowOp {
 
 #[derive(Clone, Debug, Default)]
 pub struct NarrowOps(pub SmallMap<Name, (NarrowOp, TextRange)>);
+
+/// A canonical pair of distinct names that cannot both be `None`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExcludedNonePair([Name; 2]);
+
+impl ExcludedNonePair {
+    /// Extract the relationship implied when exactly `x is None and y is None` is false.
+    pub fn from_test(test: &Expr) -> Option<Self> {
+        let Expr::BoolOp(ExprBoolOp {
+            op: BoolOp::And,
+            values,
+            ..
+        }) = test
+        else {
+            return None;
+        };
+        let [first, second] = values.as_slice() else {
+            return None;
+        };
+        let none_name = |expr: &Expr| {
+            if let Expr::Compare(ExprCompare { ops, operands, .. }) = expr
+                && matches!(&ops[..], [CmpOp::Is])
+                && let [Expr::Name(name), Expr::NoneLiteral(_)] = &operands[..]
+            {
+                Some(name.id.clone())
+            } else {
+                None
+            }
+        };
+        let mut names = [none_name(first)?, none_name(second)?];
+        names.sort_unstable();
+        (names[0] != names[1]).then_some(Self(names))
+    }
+}
+
+/// Relations apply to the current sequential values of their names. Writes invalidate
+/// affected pairs, merges intersect all incoming paths, and loop entry and exception
+/// boundaries discard relationships that can become stale.
+#[derive(Clone, Debug, Default)]
+pub struct ExcludedNonePairs(Vec<ExcludedNonePair>);
+
+impl ExcludedNonePairs {
+    /// Record a pair without duplicating an existing relationship.
+    pub fn insert(&mut self, pair: ExcludedNonePair) {
+        if !self.0.contains(&pair) {
+            self.0.push(pair);
+        }
+    }
+
+    /// Remove relationships that depend on the previous value of `name`.
+    pub fn invalidate(&mut self, name: &Name) {
+        self.0.retain(|pair| !pair.0.contains(name));
+    }
+
+    /// Retain only the relationships that hold on every incoming path.
+    pub fn intersection<'a>(mut paths: impl Iterator<Item = &'a Self>) -> Self {
+        let Some(first) = paths.next() else {
+            return Self::default();
+        };
+        let mut result = first.clone();
+        for path in paths {
+            result.0.retain(|pair| path.0.contains(pair));
+        }
+        result
+    }
+
+    /// Build only additional operations implied by existing pairs and `None` narrows.
+    pub fn implied_narrows(&self, narrow_ops: &NarrowOps) -> NarrowOps {
+        let mut implied = NarrowOps::new();
+        if self.0.is_empty() {
+            return implied;
+        }
+        for (name, (op, range)) in narrow_ops.0.iter() {
+            let Some(none_expr) = op.is_none_expr() else {
+                continue;
+            };
+            for ExcludedNonePair([first, second]) in &self.0 {
+                let peer = if first == name {
+                    second
+                } else if second == name {
+                    first
+                } else {
+                    continue;
+                };
+                if !narrow_ops.0.contains_key(peer) {
+                    implied.0.entry(peer.clone()).or_insert_with(|| {
+                        (
+                            NarrowOp::Atomic(None, AtomicNarrowOp::IsNot(none_expr.clone())),
+                            *range,
+                        )
+                    });
+                }
+            }
+        }
+        implied
+    }
+}
 
 impl NarrowOps {
     pub fn new() -> Self {

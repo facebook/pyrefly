@@ -74,6 +74,8 @@ use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::InitializedInFlow;
 use crate::binding::expr::Usage;
 use crate::binding::function::SelfAssignments;
+use crate::binding::narrow::ExcludedNonePair;
+use crate::binding::narrow::ExcludedNonePairs;
 use crate::binding::narrow::NarrowOps;
 use crate::export::definitions::Definition;
 use crate::export::definitions::DefinitionStyle;
@@ -645,6 +647,8 @@ impl TerminationKind {
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
     info: SmallMap<Name, FlowInfo>,
+    /// Pairs for which the current flow excludes both values being `None`.
+    excluded_none_pairs: ExcludedNonePairs,
     // Have we seen control flow terminate?
     //
     // We continue to analyze the rest of the code after a flow terminates, but
@@ -669,6 +673,25 @@ pub struct Flow {
 }
 
 impl Flow {
+    /// Replace a value and invalidate all relationships that depend on its previous value.
+    fn define_value(
+        &mut self,
+        name: Hashed<&Name>,
+        idx: Idx<Key>,
+        style: FlowStyle,
+        in_loop: bool,
+    ) {
+        self.excluded_none_pairs.invalidate(name.key());
+        match self.info.entry_hashed(name.cloned()) {
+            Entry::Vacant(e) => {
+                e.insert(FlowInfo::new_value(idx, style));
+            }
+            Entry::Occupied(mut e) => {
+                *e.get_mut() = e.get().updated_value(idx, style, in_loop);
+            }
+        }
+    }
+
     fn get_info(&self, name: &Name) -> Option<&FlowInfo> {
         self.info.get(name)
     }
@@ -2510,6 +2533,27 @@ impl Scopes {
         }
     }
 
+    /// Return the relationships that hold in the current flow.
+    pub fn excluded_none_pairs(&self) -> &ExcludedNonePairs {
+        &self.current().flow.excluded_none_pairs
+    }
+
+    /// Discard sequential relationships across paths with unknown intervening writes.
+    pub fn clear_excluded_none_pairs(&mut self) {
+        self.current_mut().flow.excluded_none_pairs = ExcludedNonePairs::default();
+    }
+
+    /// Record a false test's relationship for subsequent clauses and implicit fall-through.
+    pub fn exclude_none_pair_in_fork_base(&mut self, pair: ExcludedNonePair) {
+        self.current_mut()
+            .forks
+            .last_mut()
+            .expect("a false branch test belongs to an active fork")
+            .base
+            .excluded_none_pairs
+            .insert(pair);
+    }
+
     /// Track the binding from assigning a name in the current flow. Here "define" means:
     /// - any operation that actually binds a value at runtime (e.g. `x = 5`,
     ///   `x := 5`, `for x in ...`)
@@ -2527,14 +2571,9 @@ impl Scopes {
         style: FlowStyle,
     ) -> Option<NameWriteInfo> {
         let in_loop = self.loop_depth() != 0;
-        match self.current_mut().flow.info.entry_hashed(name.cloned()) {
-            Entry::Vacant(e) => {
-                e.insert(FlowInfo::new_value(idx, style));
-            }
-            Entry::Occupied(mut e) => {
-                *e.get_mut() = e.get().updated_value(idx, style, in_loop);
-            }
-        }
+        self.current_mut()
+            .flow
+            .define_value(name, idx, style, in_loop);
         let static_info = self.current().stat.0.get_hashed(name)?;
         Some(static_info.as_name_write_info())
     }
@@ -2590,14 +2629,10 @@ impl Scopes {
         for i in (0..len - 1).rev() {
             if !matches!(self.scopes[i].scope.kind, ScopeKind::Comprehension { .. }) {
                 let in_loop = !self.scopes[i].scope.loops.is_empty();
-                match self.scopes[i].scope.flow.info.entry_hashed(name.cloned()) {
-                    Entry::Vacant(e) => {
-                        e.insert(FlowInfo::new_value(idx, style));
-                    }
-                    Entry::Occupied(mut e) => {
-                        *e.get_mut() = e.get().updated_value(idx, style, in_loop);
-                    }
-                }
+                self.scopes[i]
+                    .scope
+                    .flow
+                    .define_value(name, idx, style, in_loop);
                 // The enclosing scope's static table can lack the name, for example in a
                 // lambda (its static table holds only its parameters) or a parameter
                 // default. Then there is no write info.
@@ -2614,6 +2649,7 @@ impl Scopes {
     /// uninitialized local errors but keep using our best guess for the type.
     pub fn mark_as_deleted(&mut self, name: &Name) {
         let scope = self.current_mut();
+        scope.flow.excluded_none_pairs.invalidate(name);
         if let Some(value) = scope.flow.get_value_mut(name) {
             value.style = FlowStyle::Uninitialized;
         }
@@ -2673,6 +2709,13 @@ impl Scopes {
             .last_mut()
             .expect("propagate_new_flow_entries_to_fork_base called outside of a fork");
         propagate_new_flow_entries(&scope.flow.info, &mut fork.base.info);
+        fork.base.excluded_none_pairs = ExcludedNonePairs::intersection(
+            [
+                &fork.base.excluded_none_pairs,
+                &scope.flow.excluded_none_pairs,
+            ]
+            .into_iter(),
+        );
     }
 
     /// Copy walrus-defined names from the current flow into the innermost
@@ -4484,6 +4527,12 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
 
+        let excluded_none_pairs = ExcludedNonePairs::intersection(
+            flows.iter().map(|flow| &flow.excluded_none_pairs).chain(
+                matches!(merge_style, MergeStyle::Loop).then_some(&base.excluded_none_pairs),
+            ),
+        );
+
         // Create a MergeItem for each flow being merged and each name appearing in any flow.
         let flow_infos: Vec<SmallMap<Name, FlowInfo>> = flows.into_iter().map(|f| f.info).collect();
         let mut merge_items: SmallMap<Name, MergeItem> = SmallMap::with_capacity(all_names.len());
@@ -4521,6 +4570,7 @@ impl<'a> BindingsBuilder<'a> {
         // The resulting flow has terminated only if all branches had terminated.
         let flow = Flow {
             info: merged_flow_infos,
+            excluded_none_pairs,
             has_terminated,
             terminated_by_raise: has_terminated && any_terminated_by_raise,
             is_definitely_unreachable: all_are_unreachable,
@@ -4537,6 +4587,8 @@ impl<'a> BindingsBuilder<'a> {
         range: TextRange,
         exclude_names: &SmallSet<Name>,
     ) -> Flow {
+        // Sequential facts do not establish invariants across loop backedges.
+        flow.excluded_none_pairs = ExcludedNonePairs::default();
         for (name, info) in flow.info.iter_mut() {
             if exclude_names.contains(name) {
                 continue;
