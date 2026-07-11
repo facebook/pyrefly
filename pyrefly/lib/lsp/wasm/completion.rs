@@ -39,6 +39,7 @@ use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::attr::AttrInfo;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
@@ -518,8 +519,12 @@ impl Transaction<'_> {
         {
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
+                let binding = bindings.get(idx);
                 let label = match key {
                     Key::Definition(id) => module_info.code_at(id.range()),
+                    Key::Import(import) if matches!(binding, Binding::Module(_)) => {
+                        import.0.as_str()
+                    }
                     Key::Anywhere(x, ..) => &x.0,
                     _ => continue,
                 };
@@ -530,7 +535,6 @@ impl Transaction<'_> {
                 {
                     continue;
                 }
-                let binding = bindings.get(idx);
                 let ty = self.get_type(handle, key);
                 let export_info = self.key_to_export(handle, key, FindPreference::default());
 

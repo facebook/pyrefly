@@ -2324,6 +2324,65 @@ T = spio
 }
 
 #[test]
+fn autoimport_does_not_duplicate_existing_module_import() {
+    let code = r#"
+import json
+
+jso
+#  ^
+"#;
+    let files = [("main", code), ("json", "def dumps(value): ...\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let json = completions
+        .iter()
+        .filter(|item| item.label == "json")
+        .collect::<Vec<_>>();
+    assert_eq!(json.len(), 1, "expected one completion for imported module");
+    assert!(
+        json[0].additional_text_edits.is_none(),
+        "existing module import should not produce another import edit"
+    );
+}
+
+#[test]
+fn autoimport_does_not_duplicate_existing_module_import_after_another_import() {
+    let code = r#"
+import os
+import json
+
+jso
+#  ^
+"#;
+    let files = [
+        ("main", code),
+        ("os", "name = 'posix'\n"),
+        ("json", "def dumps(value): ...\n"),
+    ];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let json = completions
+        .iter()
+        .filter(|item| item.label == "json")
+        .collect::<Vec<_>>();
+    assert_eq!(json.len(), 1, "expected one completion for imported module");
+    assert!(
+        json[0].additional_text_edits.is_none(),
+        "existing module import should not produce another import edit"
+    );
+}
+
+#[test]
 fn autoimport_common_alias_bypasses_min_char_threshold() {
     let code = r#"
 T = np
