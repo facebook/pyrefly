@@ -578,6 +578,7 @@ fn class_hover_display(
         _ => None,
     }?;
     constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    constructor = solver.for_display(constructor);
     Some(constructor.as_lsp_string_with_fallback_name(name_for_display, LspDisplayMode::Hover))
 }
 
