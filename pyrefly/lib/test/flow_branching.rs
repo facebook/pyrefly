@@ -216,6 +216,36 @@ def f(x):
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3374
+testcase!(
+    test_narrow_after_terminating_conjunction,
+    r#"
+from datetime import date
+from typing import assert_type
+
+def f(x: float | None, y: date | None, z: date) -> float:
+    if x is None and y is None:
+        raise ValueError()
+    if x is None:
+        assert_type(y, date)
+        return (y - z).days / 365.25
+    return x
+
+def reverse(x: float | None, y: date | None) -> None:
+    if x is None and y is None:
+        raise ValueError()
+    if y is None:
+        assert_type(x, float)
+
+def reassigned(x: float | None, y: date | None) -> None:
+    if x is None and y is None:
+        raise ValueError()
+    x = None
+    if x is None:
+        assert_type(y, date | None)
+"#,
+);
+
 // Regression test to ensure we don't forget to create loop recursion
 // bindings when the loop has early termination.
 testcase!(
