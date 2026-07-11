@@ -440,6 +440,9 @@ pub(crate) enum IdentifierContext {
         /// ex: For `from ... import x`, the name is `x`. For `from ... import x as y`, the name is `y`.
         name_after_import: Identifier,
     },
+    /// An identifier introduced as a local import alias.
+    /// ex: `y` in `import x as y` or `from x import z as y`.
+    AliasDefinition,
     /// An identifier appeared as the name of a function.
     /// ex: `x` in `def x(...): ...`
     FunctionDef { docstring_range: Option<TextRange> },
@@ -479,6 +482,7 @@ impl IdentifierContext {
                 }
                 | IdentifierContext::ImportedModule { .. }
                 | IdentifierContext::ImportedName { .. }
+                | IdentifierContext::AliasDefinition
                 | IdentifierContext::FunctionDef { .. }
                 | IdentifierContext::MethodDef { .. }
                 | IdentifierContext::ClassDef { .. }
@@ -569,6 +573,13 @@ impl IdentifierWithContext {
                 dots,
                 name_after_import,
             },
+        }
+    }
+
+    fn from_alias_definition(id: &Identifier) -> Self {
+        Self {
+            identifier: id.clone(),
+            context: IdentifierContext::AliasDefinition,
         }
     }
 
@@ -900,7 +911,17 @@ impl<'a> Transaction<'a> {
                 _,
             ) => {
                 // `import id` or `import ... as id`
-                Some(IdentifierWithContext::from_stmt_import(id, alias))
+                Some(
+                    if alias
+                        .asname
+                        .as_ref()
+                        .is_some_and(|asname| asname.range() == id.range())
+                    {
+                        IdentifierWithContext::from_alias_definition(id)
+                    } else {
+                        IdentifierWithContext::from_stmt_import(id, alias)
+                    },
+                )
             }
             (
                 Some(AnyNodeRef::Identifier(id)),
@@ -921,11 +942,17 @@ impl<'a> Transaction<'a> {
                 _,
             ) => {
                 // `from ... import id`
-                Some(IdentifierWithContext::from_stmt_import_from_name(
-                    id,
-                    alias,
-                    import_from,
-                ))
+                Some(
+                    if alias
+                        .asname
+                        .as_ref()
+                        .is_some_and(|asname| asname.range() == id.range())
+                    {
+                        IdentifierWithContext::from_alias_definition(id)
+                    } else {
+                        IdentifierWithContext::from_stmt_import_from_name(id, alias, import_from)
+                    },
+                )
             }
             (
                 Some(AnyNodeRef::Identifier(id)),
@@ -1104,6 +1131,9 @@ impl<'a> Transaction<'a> {
             IdentifierContext::ImportedName {
                 name_after_import, ..
             } => ResolutionKind::Key(Key::Definition(ShortIdentifier::new(name_after_import))),
+            IdentifierContext::AliasDefinition => {
+                ResolutionKind::Key(Key::Definition(ShortIdentifier::new(identifier)))
+            }
             IdentifierContext::FunctionDef { .. }
             | IdentifierContext::MethodDef { .. }
             | IdentifierContext::ClassDef { .. }
@@ -2544,6 +2574,16 @@ impl<'a> Transaction<'a> {
                     }),
                 }
             }
+            Some(IdentifierWithContext {
+                identifier,
+                context: IdentifierContext::AliasDefinition,
+            }) => match self.find_definition_for_name_def(handle, &identifier, preference)? {
+                Some(item) => Ok(vec1![item]),
+                None => Err(EmptyResponseReason::DefinitionNotFound {
+                    name: identifier.id.to_string(),
+                    context: DefinitionContext::NameDef,
+                }),
+            },
             Some(IdentifierWithContext {
                 identifier,
                 context: IdentifierContext::MethodDef { docstring_range },

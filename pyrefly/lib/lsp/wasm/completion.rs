@@ -1038,6 +1038,10 @@ impl Transaction<'_> {
             .and_then(Self::identifier_from_covering_nodes)
         {
             Some(IdentifierWithContext {
+                context: IdentifierContext::AliasDefinition,
+                ..
+            }) => return (Vec::new(), false),
+            Some(IdentifierWithContext {
                 identifier,
                 context:
                     IdentifierContext::ImportedName {
