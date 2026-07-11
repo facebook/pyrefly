@@ -86,6 +86,7 @@ use crate::binding::binding::TypeAliasRefBinding;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
+use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
 use crate::binding::pytest::PytestBindingInfo;
@@ -2077,15 +2078,36 @@ impl<'a> BindingsBuilder<'a> {
         use_location: NarrowUseLocation,
         usage: &Usage,
     ) {
-        for (name, (op, op_range)) in narrow_ops.0.iter_hashed() {
+        let mut ops: Vec<_> = narrow_ops
+            .0
+            .iter()
+            .map(|(name, (op, range))| (name.clone(), op.clone(), *range))
+            .collect();
+        let mut implied_names = SmallSet::new();
+        for (name, (op, range)) in narrow_ops.0.iter() {
+            if let Some(none_expr) = op.is_none_expr() {
+                for peer in self.scopes.excluded_none_peers(name) {
+                    if narrow_ops.0.contains_key(&peer) || !implied_names.insert(peer.clone()) {
+                        continue;
+                    }
+                    ops.push((
+                        peer,
+                        NarrowOp::Atomic(None, AtomicNarrowOp::IsNot(none_expr.clone())),
+                        *range,
+                    ));
+                }
+            }
+        }
+        for (name, op, op_range) in ops {
+            let name = Hashed::new(&name);
             // Narrowing operations should not pin partial types, but they also
             // should not permanently block pinning. Leave the first-use state
             // as Undetermined so a subsequent non-narrowing read can still pin.
             let mut narrowing_usage = Usage::non_pinning_value_from(usage);
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 let narrowed_idx = self.insert_binding(
-                    Key::Narrow(Box::new((name.into_key().clone(), *op_range, use_location))),
-                    Binding::Narrow(initial_idx, Box::new(op.clone()), use_location),
+                    Key::Narrow(Box::new((name.into_key().clone(), op_range, use_location))),
+                    Binding::Narrow(initial_idx, Box::new(op), use_location),
                 );
                 self.scopes.narrow_in_current_flow(name, narrowed_idx);
             }

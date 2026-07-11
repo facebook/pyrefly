@@ -570,6 +570,8 @@ impl Static {
 #[derive(Default, Clone, Debug)]
 pub struct Flow {
     info: SmallMap<Name, FlowInfo>,
+    /// Pairs for which the current flow excludes both values being `None`.
+    excluded_none_pairs: Vec<(Name, Name)>,
     // Have we seen control flow terminate?
     //
     // We continue to analyze the rest of the code after a flow terminates, but
@@ -2147,6 +2149,31 @@ impl Scopes {
         }
     }
 
+    /// Return names that cannot be `None` when `name` is `None` in the current flow.
+    pub fn excluded_none_peers(&self, name: &Name) -> Vec<Name> {
+        self.current()
+            .flow
+            .excluded_none_pairs
+            .iter()
+            .filter_map(|(first, second)| {
+                if first == name {
+                    Some(second.clone())
+                } else if second == name {
+                    Some(first.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn add_excluded_none_pair(&mut self, pair: (Name, Name)) {
+        let pairs = &mut self.current_mut().flow.excluded_none_pairs;
+        if !pairs.contains(&pair) && !pairs.contains(&(pair.1.clone(), pair.0.clone())) {
+            pairs.push(pair);
+        }
+    }
+
     /// Track the binding from assigning a name in the current flow. Here "define" means:
     /// - any operation that actually binds a value at runtime (e.g. `x = 5`,
     ///   `x := 5`, `for x in ...`)
@@ -2164,6 +2191,10 @@ impl Scopes {
         style: FlowStyle,
     ) -> Option<NameWriteInfo> {
         let in_loop = self.loop_depth() != 0;
+        self.current_mut()
+            .flow
+            .excluded_none_pairs
+            .retain(|(first, second)| first != *name.key() && second != *name.key());
         match self.current_mut().flow.info.entry_hashed(name.cloned()) {
             Entry::Vacant(e) => {
                 e.insert(FlowInfo::new_value(idx, style));
@@ -3787,6 +3818,23 @@ impl<'a> BindingsBuilder<'a> {
             }
         }
 
+        let excluded_none_pairs = flows
+            .first()
+            .map(|first| {
+                first
+                    .excluded_none_pairs
+                    .iter()
+                    .filter(|pair| {
+                        flows
+                            .iter()
+                            .skip(1)
+                            .all(|flow| flow.excluded_none_pairs.contains(pair))
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Create a MergeItem for each flow being merged and each name appearing in any flow.
         let flow_infos: Vec<SmallMap<Name, FlowInfo>> = flows.into_iter().map(|f| f.info).collect();
         let mut merge_items: SmallMap<Name, MergeItem> = SmallMap::with_capacity(all_names.len());
@@ -3826,6 +3874,7 @@ impl<'a> BindingsBuilder<'a> {
         // The resulting flow has terminated only if all branches had terminated.
         let flow = Flow {
             info: merged_flow_infos,
+            excluded_none_pairs,
             has_terminated,
             is_definitely_unreachable: all_are_unreachable,
             last_stmt_expr: None,
@@ -4020,6 +4069,9 @@ impl<'a> BindingsBuilder<'a> {
             "A branch is started - did you forget to call `finish_branch`?"
         );
         let branches = fork.branches;
+        let excluded_none_pair = negated_prev_ops_if_nonexhaustive
+            .filter(|_| branches.iter().all(|flow| flow.has_terminated))
+            .and_then(|ops| ops.excluded_none_pair());
         if let Some(negated_prev_ops) = negated_prev_ops_if_nonexhaustive {
             self.scopes.current_mut().flow = fork.base.clone();
             self.bind_narrow_ops(
@@ -4043,6 +4095,9 @@ impl<'a> BindingsBuilder<'a> {
                     MergeStyle::Exclusive
                 },
             );
+        }
+        if let Some(pair) = excluded_none_pair {
+            self.scopes.add_excluded_none_pair(pair);
         }
     }
 
