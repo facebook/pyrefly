@@ -266,7 +266,6 @@ pub(crate) fn insert_import_edit(
     handle_to_insert_import: Handle,
     handle_to_import_from: Handle,
     export_name: &str,
-    import_as: Option<&str>,
     import_format: ImportFormat,
 ) -> ImportEdit {
     let use_absolute_import = match import_format {
@@ -280,7 +279,6 @@ pub(crate) fn insert_import_edit(
         handle_to_insert_import,
         handle_to_import_from,
         export_name,
-        import_as,
         use_absolute_import,
     )
 }
@@ -338,7 +336,6 @@ pub(crate) fn insert_import_edit_with_forced_import_format(
     handle_to_insert_import: Handle,
     handle_to_import_from: Handle,
     export_name: &str,
-    import_as: Option<&str>,
     use_absolute_import: bool,
 ) -> ImportEdit {
     let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
@@ -356,12 +353,8 @@ pub(crate) fn insert_import_edit_with_forced_import_format(
     } else {
         handle_to_import_from.module()
     };
-    let import_name = match import_as {
-        Some(alias) => format!("{export_name} as {alias}"),
-        None => export_name.to_owned(),
-    };
     let display_text = format!(
-        "from {} import {import_name}",
+        "from {} import {export_name}",
         module_name_to_import.as_str(),
     );
     let insert_text = format!("{display_text}\n",);

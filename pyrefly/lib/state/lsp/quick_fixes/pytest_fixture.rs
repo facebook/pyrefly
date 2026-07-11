@@ -287,7 +287,6 @@ fn import_edits_for_type(
             handle.dupe(),
             handle_to_import_from,
             qname.id().as_str(),
-            None,
             import_format,
         );
         let position = import_edit.range.start();

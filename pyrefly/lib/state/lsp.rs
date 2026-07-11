@@ -829,7 +829,6 @@ impl<'a> Transaction<'a> {
             handle.dupe(),
             parent_handle,
             submodule_name,
-            None,
             import_format,
         );
         // Return the whole edit so callers can use `display_text` for human-facing
@@ -3123,7 +3122,6 @@ impl<'a> Transaction<'a> {
             handle.dupe(),
             handle_to_import_from,
             "override",
-            None,
             import_format,
         );
         Some((module_info.dupe(), edit.range, edit.insert_text))
@@ -3207,7 +3205,6 @@ impl<'a> Transaction<'a> {
             handle.dupe(),
             handle_to_import_from.dupe(),
             import_name.as_str(),
-            (import_name.as_str() != unknown_name).then_some(unknown_name),
             import_format,
         );
         let range = import_edit.range;
@@ -4190,12 +4187,19 @@ impl<'a> Transaction<'a> {
                 let name = Name::new(name);
                 match exports.get(&name) {
                     Some(location) => {
-                        if let Some((canonical_handle, import_name, export)) =
+                        if let Some((canonical_handle, canonical_name, export)) =
                             self.export_from_location(handle, &name, location)
                         {
+                            // A renamed export is importable by that name from the module
+                            // exposing the alias, not from the module defining the original.
+                            let import_from = if canonical_name == name {
+                                canonical_handle.dupe()
+                            } else {
+                                handle.dupe()
+                            };
                             let mut results =
-                                vec![(canonical_handle.dupe(), import_name, export.clone())];
-                            if canonical_handle != *handle
+                                vec![(import_from.dupe(), name.clone(), export.clone())];
+                            if import_from != *handle
                                 && (Self::should_include_reexport(handle, &canonical_handle, &name)
                                     || (exports_data.is_explicit_reexport(&name)
                                         && Self::allows_explicit_reexport(handle)))
@@ -4224,25 +4228,29 @@ impl<'a> Transaction<'a> {
         &self,
         pattern: &str,
         custom_thread_pool: Option<&ThreadPool>,
-    ) -> Result<Vec<(Handle, String, Name, Export)>, Cancelled> {
+    ) -> Result<Vec<(Handle, Handle, Name, Export)>, Cancelled> {
         let mut res = self.search_exports(
             |handle, exports_data, exports| {
                 let matcher = SkimMatcherV2::default().smart_case();
                 let mut results = Vec::new();
                 for (name, location) in exports.iter() {
-                    let name_str = name.as_str();
-                    if let Some(score) = matcher.fuzzy_match(name_str, pattern)
-                        && let Some((canonical_handle, import_name, export)) =
+                    if let Some(score) = matcher.fuzzy_match(name.as_str(), pattern)
+                        && let Some((canonical_handle, canonical_name, export)) =
                             self.export_from_location(handle, name, location)
                     {
+                        let import_from = if canonical_name == *name {
+                            canonical_handle.dupe()
+                        } else {
+                            handle.dupe()
+                        };
                         results.push((
                             score,
                             canonical_handle.dupe(),
-                            name_str.to_owned(),
-                            import_name,
+                            import_from.dupe(),
+                            name.clone(),
                             export.clone(),
                         ));
-                        if canonical_handle != *handle
+                        if import_from != *handle
                             && (Self::should_include_reexport(handle, &canonical_handle, name)
                                 || (exports_data.is_explicit_reexport(name)
                                     && Self::allows_explicit_reexport(handle)))
@@ -4256,7 +4264,7 @@ impl<'a> Transaction<'a> {
                             results.push((
                                 score,
                                 handle.dupe(),
-                                name_str.to_owned(),
+                                handle.dupe(),
                                 name.clone(),
                                 reexport,
                             ));
@@ -4268,8 +4276,9 @@ impl<'a> Transaction<'a> {
             custom_thread_pool,
         )?;
         res.sort_by_key(|(score, _, _, _, _)| Reverse(*score));
-        Ok(res
-            .into_map(|(_, handle, name, import_name, export)| (handle, name, import_name, export)))
+        Ok(res.into_map(|(_, definition, import_from, name, export)| {
+            (definition, import_from, name, export)
+        }))
     }
 }
 

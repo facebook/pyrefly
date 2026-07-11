@@ -238,7 +238,6 @@ fn build_module_member_consumer_import_updates(
             rdep_handle.dupe(),
             target_handle.dupe(),
             member_name,
-            None,
             import_format,
         );
         let new_module_text = import_edit.module_name;
@@ -568,7 +567,6 @@ fn build_import_edit(
         handle.dupe(),
         target_handle.dupe(),
         member_name,
-        None,
         import_format,
     );
     Some((
