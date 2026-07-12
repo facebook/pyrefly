@@ -128,9 +128,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return instance.to_type(self.heap);
         }
-        let e = self.get_enum_from_class(instance.class).unwrap();
+        self.get_enum_from_class(instance.class)
+            .expect("enum subtraction requires an enum class");
         // Enums derived from enum.Flag cannot be treated as a union of their members
-        if e.is_flag {
+        if self.has_superclass(instance.class, self.stdlib.enum_flag().class_object()) {
             return instance.to_type(self.heap);
         }
         self.unions(
@@ -2080,9 +2081,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_flag_enum(&self, cls: &ClassType) -> bool {
-        self.get_metadata_for_class(cls.class_object())
-            .enum_metadata()
-            .is_some_and(|meta| meta.is_flag)
+        self.get_enum_from_class(cls.class_object()).is_some()
+            && self.has_superclass(cls.class_object(), self.stdlib.enum_flag().class_object())
     }
 
     pub(crate) fn with_type_for_exhaustiveness_check(&self, info: Arc<TypeInfo>) -> TypeInfo {

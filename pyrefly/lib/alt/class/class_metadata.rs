@@ -917,14 +917,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.get_class_fields(base)
                         .is_some_and(|f| f.contains(&Name::new_static("_value_")))
                 }),
-                is_flag: bases_with_metadata.iter().any(|(base, _)| {
-                    self.is_subset_eq(
-                        &self
-                            .heap
-                            .mk_class_type(self.promote_nontypeddict_silently_to_classtype(base)),
-                        &self.heap.mk_class_type(self.stdlib.enum_flag().clone()),
-                    )
-                }),
                 is_django,
             })
         } else {
