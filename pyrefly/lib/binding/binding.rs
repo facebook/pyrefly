@@ -894,6 +894,8 @@ pub enum Key {
     BoundName(ShortIdentifier),
     /// I am an expression that does not have a simple name but needs its type inferred.
     Anon(TextRange),
+    /// I am the assigned value for a structurally invalid assignment target.
+    InvalidTarget(TextRange),
     /// I am a narrowing operation created by a pattern in a match statement
     PatternNarrow(TextRange),
     /// I am an expression that appears in a statement. The range for this key is the range of the expr itself, which is different than the range of the stmt expr.
@@ -955,6 +957,7 @@ impl Ranged for Key {
             Self::ReturnType(x) => x.range(),
             Self::BoundName(x) => x.range(),
             Self::Anon(r) => *r,
+            Self::InvalidTarget(r) => *r,
             Self::StmtExpr(r) => *r,
             Self::ContextExpr(r) => *r,
             Self::Phi(x) => x.1,
@@ -984,6 +987,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::FacetAssign(x) => write!(f, "Key::FacetAssign({})", short(x)),
             Self::BoundName(x) => write!(f, "Key::BoundName({})", short(x)),
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
+            Self::InvalidTarget(r) => write!(f, "Key::InvalidTarget({})", ctx.display(r)),
             Self::StmtExpr(r) => write!(f, "Key::StmtExpr({})", ctx.display(r)),
             Self::ContextExpr(r) => write!(f, "Key::ContextExpr({})", ctx.display(r)),
             Self::Phi(x) => write!(f, "Key::Phi({} {})", x.0, ctx.display(&x.1)),

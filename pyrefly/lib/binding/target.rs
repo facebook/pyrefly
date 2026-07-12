@@ -352,7 +352,9 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
                 // Make sure the RHS is properly bound, so that we can report errors there.
-                let mut user = self.declare_current_idx(Key::Anon(illegal_target.range()));
+                // `ensure_expr` may itself create a `Key::Anon` for this range (for example,
+                // functional NamedTuple syntax recovered as an invalid `for` target).
+                let mut user = self.declare_current_idx(Key::InvalidTarget(illegal_target.range()));
                 if ensure_assigned && let Some(assigned) = &mut assigned {
                     self.ensure_expr(assigned, user.usage());
                 }
