@@ -56,6 +56,7 @@ struct CalledOverload<'f> {
     func: &'f TargetWithTParams<Function>,
     res: Type,
     ctor_targs: Option<TArgs>,
+    arg_errors: ErrorCollector,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
     /// Maps each argument's source range to the parameter it was matched against.
@@ -291,6 +292,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     func: arity_closest_overload.unwrap().0,
                     res: self.heap.mk_any_error(),
                     ctor_targs: None,
+                    arg_errors: self.error_collector(),
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
                     argmap: ArgMap::new(),
@@ -316,7 +318,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Step 3: perform argument type expansion.
                 let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
                 let owner = Owner::new();
-                'outer: while !matched && let Some(arg_lists) = args_expander.expand(errors, &owner)
+                let expansion_errors = self.error_collector();
+                'outer: while !matched
+                    && let Some(arg_lists) = args_expander.expand(&expansion_errors, &owner)
                 {
                     // Expand by one argument (for example, try splitting up union types), and try the call with each
                     // resulting arguments list.
@@ -352,6 +356,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ctor_targs,
                             argmap,
                             res: self.unions(matched_overloads.into_map(|o| o.res)),
+                            arg_errors: self.error_collector(),
                             call_errors: self.error_collector(),
                             specialization_errors,
                         };
@@ -414,6 +419,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 error_builder.with_context(context).emit();
             }
+            errors.extend(closest_overload.arg_errors);
             errors.extend(closest_overload.call_errors);
             if let Ok(specialization_errors) =
                 Vec1::try_from_vec(closest_overload.specialization_errors)
@@ -720,7 +726,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 args,
                 keywords,
                 arguments_range,
-                errors,
                 None, // don't use the hint yet, it shouldn't influence overload selection
                 ctor_targs,
             );
@@ -744,6 +749,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // If there are multiple overloads, use steps 4-6 here to select one:
             // https://typing.python.org/en/latest/spec/overload.html#overload-call-evaluation.
             let spec_compliant = self.solver().spec_compliant_overloads;
+            let selection_errors = self.error_collector();
             if matched_overloads.len() > 1 {
                 // Step 4: if any arguments supply an unknown number of args and at least one
                 // overload has a corresponding variadic parameter, eliminate overloads without
@@ -765,7 +771,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 let nkeywords_unknown = keywords.iter().any(|kw| {
-                    kw.arg.is_none() && !matches!(kw.value.infer(self, errors), Type::TypedDict(_))
+                    kw.arg.is_none()
+                        && !matches!(kw.value.infer(self, &selection_errors), Type::TypedDict(_))
                 });
                 if nkeywords_unknown {
                     let has_kwargs = |o: &CalledOverload<'_>| {
@@ -809,7 +816,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let materialized_args = args.map(|arg| {
                     let (materialized_arg, arg_changed) = if should_materialize(arg.range()) {
-                        arg.materialize(self, errors, &owner)
+                        arg.materialize(self, &selection_errors, &owner)
                     } else {
                         (arg.clone(), false)
                     };
@@ -818,7 +825,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 });
                 let materialized_keywords = keywords.map(|kw| {
                     let (materialized_kw, kw_changed) = if should_materialize(kw.range()) {
-                        kw.materialize(self, errors, &owner)
+                        kw.materialize(self, &selection_errors, &owner)
                     } else {
                         (kw.clone(), false)
                     };
@@ -842,7 +849,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &materialized_args,
                                 &materialized_keywords,
                                 arguments_range,
-                                errors,
                                 None, // don't use the hint yet, it shouldn't influence overload selection
                                 &None,
                             );
@@ -874,7 +880,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     args,
                     keywords,
                     arguments_range,
-                    &self.error_collector(),
                     hint,
                     ctor_targs,
                 );
@@ -999,7 +1004,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &[CallArg],
         keywords: &[CallKeyword],
         arguments_range: TextRange,
-        errors: &ErrorCollector,
         hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
     ) -> CalledOverload<'c> {
@@ -1010,6 +1014,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
+        let arg_errors = self.error_collector();
         let call_errors = self.error_collector();
         let (res, specialization_errors, argmap) = self.callable_infer(
             callable.1.signature.clone(),
@@ -1020,7 +1025,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             args,
             keywords,
             arguments_range,
-            errors,
+            &arg_errors,
             &call_errors,
             // We intentionally drop the context here, as arg errors don't need it,
             // and if there are any call errors, we'll log a "No matching overloads"
@@ -1034,6 +1039,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             func: callable,
             res,
             ctor_targs: overload_ctor_targs,
+            arg_errors,
             call_errors,
             specialization_errors,
             argmap,
