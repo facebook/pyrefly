@@ -933,7 +933,6 @@ class A:
 );
 
 testcase!(
-    bug = "We currently create separate narrows for modules that may contain legacy type variables, we need to merge them",
     test_multiple_possible_legacy_tparams,
     TestEnv::one(
         "foo",
@@ -943,22 +942,16 @@ testcase!(
 from typing import Generic, assert_type
 import foo
 
-# Here, the `foo.C` possible-legacy-tparam binding is the one that winds up in scope, we
-# lose track of the `foo.T` one. It probably doesn't matter very much since we at least
-# understand the signature correctly.
 def f(x: foo.T, y: foo.C) -> foo.T:
-    z: foo.T = x  # E: Type variable `T` is not in scope  # E: `T` is not assignable to `TypeVar[T]`
-    return z  # E: Returned type `TypeVar[T]` is not assignable to declared return type `T
+    z: foo.T = x
+    return z
 assert_type(f(1, foo.C()), int)
 
-# The same thing happens here, but it's a much bigger problem because now we forget
-# about the type variable identity for the entire class body, so the signatures come out
-# wrong.
 class MyList(Generic[foo.T], list[tuple[foo.C, foo.T]]):
-    def my_append(self, c: foo.C, t: foo.T):  # E: Type variable `T` is not in scope
-        self.append((c, t))  # E: Argument `tuple[C, TypeVar[T]]` is not assignable to parameter `object` with type `tuple[C, T]` in function `list.append`
+    def my_append(self, c: foo.C, t: foo.T):
+        self.append((c, t))
 my_list: MyList[int] = MyList()
-my_list.my_append(foo.C(), 5)  # E: Argument `Literal[5]` is not assignable to parameter `t` with type `TypeVar[T]` in function `MyList.my_append`
+my_list.my_append(foo.C(), 5)
     "#,
 );
 

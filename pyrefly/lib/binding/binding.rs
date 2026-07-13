@@ -49,6 +49,7 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_set::SmallSet;
+use thin_vec::ThinVec;
 use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
@@ -926,7 +927,7 @@ pub enum Key {
     ///
     /// The resulting type may not actually involve a legacy type param, since it may turn out I am
     /// some other kind of type.
-    PossibleLegacyTParam(TextRange),
+    PossibleLegacyTParam(Box<(TextRange, TextRange)>),
     /// A `del` statement. It is a `Binding` associated with a the type `Any` because `del` defines a name in scope,
     /// so we need to provide a `Key` for any reads of that name in the edge case where there is no other definition
     ///
@@ -965,7 +966,7 @@ impl Ranged for Key {
             Self::UsageLink(r) => *r,
             Self::YieldLink(r) => *r,
             Self::Delete(r) => *r,
-            Self::PossibleLegacyTParam(r) => *r,
+            Self::PossibleLegacyTParam(x) => x.0,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
         }
@@ -1005,8 +1006,13 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::UsageLink(r) => write!(f, "Key::UsageLink({})", ctx.display(r)),
             Self::YieldLink(r) => write!(f, "Key::YieldLink({})", ctx.display(r)),
             Self::Delete(r) => write!(f, "Key::Delete({})", ctx.display(r)),
-            Self::PossibleLegacyTParam(r) => {
-                write!(f, "Key::PossibleLegacyTParam({})", ctx.display(r))
+            Self::PossibleLegacyTParam(x) => {
+                write!(
+                    f,
+                    "Key::PossibleLegacyTParam({}, scope={})",
+                    ctx.display(&x.0),
+                    ctx.display(&x.1)
+                )
             }
             Self::PatternNarrow(r) => write!(f, "Key::PatternNarrow({})", ctx.display(r)),
             Self::Exhaustive(kind, r) => {
@@ -2337,7 +2343,7 @@ pub enum Binding {
     /// The TextRange is optional and controls whether to produce an error
     /// saying there are scoped type parameters for this function / class, and
     /// therefore the use of legacy type parameters is invalid.
-    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, Option<TextRange>),
+    PossibleLegacyTParam(ThinVec<Idx<KeyLegacyTypeParam>>, Option<TextRange>),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2525,8 +2531,15 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeParameter(tp) => {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
-            Self::PossibleLegacyTParam(k, _) => {
-                write!(f, "PossibleLegacyTParam({})", ctx.display(*k))
+            Self::PossibleLegacyTParam(keys, _) => {
+                write!(f, "PossibleLegacyTParam([")?;
+                for (i, &k) in keys.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(k))?;
+                }
+                write!(f, "])")
             }
             Self::AnnotatedType(k1, k2) => {
                 write!(

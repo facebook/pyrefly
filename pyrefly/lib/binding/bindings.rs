@@ -1799,10 +1799,11 @@ impl<'a> BindingsBuilder<'a> {
             // intercept_lookup which wraps them in PossibleLegacyTParam.
             // By finalize time we can follow through to the original
             // binding to check whether it's actually a type alias.
-            Binding::PossibleLegacyTParam(tparam_idx, _)
-                if let Some(legacy_binding) = self.idx_to_binding(*tparam_idx) =>
-            {
-                self.follow_to_type_alias(legacy_binding.idx())
+            Binding::PossibleLegacyTParam(tparam_indices, _) => {
+                tparam_indices.iter().find_map(|tparam_idx| {
+                    let legacy_binding = self.idx_to_binding(*tparam_idx)?;
+                    self.follow_to_type_alias(legacy_binding.idx())
+                })
             }
             _ => None,
         }
@@ -2166,8 +2167,8 @@ impl LegacyTParamId {
     /// Note that the range here is not the range of the full `LegacyTParamId`, but
     /// just of the name being bound (which in the `Attr` case is just the base
     /// rather than the entire identifier).
-    fn as_possible_legacy_tparam_key(&self) -> Key {
-        Key::PossibleLegacyTParam(self.as_identifier().range)
+    fn as_possible_legacy_tparam_key(&self, scope_range: TextRange) -> Key {
+        Key::PossibleLegacyTParam(Box::new((self.as_identifier().range, scope_range)))
     }
 
     /// Get the key used to track this potential legacy tparam in the `legacy_tparams` map.
@@ -2363,18 +2364,21 @@ impl<'a> BindingsBuilder<'a> {
         // Short circuit if there are too many forwards - it may mean there's a cycle.
         let mut original_binding = self.idx_to_binding(original_idx);
         let mut gas = Gas::new(100);
-        while let Some(
-            Binding::Forward(fwd_idx)
-            | Binding::PromoteForward(fwd_idx)
-            | Binding::ForwardToFirstUse(fwd_idx)
-            | Binding::Phi(JoinStyle::NarrowOf(fwd_idx), _),
-        ) = original_binding
-        {
+        loop {
             if gas.stop() {
                 return None;
-            } else {
-                original_idx = *fwd_idx;
-                original_binding = self.idx_to_binding(original_idx);
+            }
+            match original_binding {
+                Some(
+                    Binding::Forward(fwd_idx)
+                    | Binding::PromoteForward(fwd_idx)
+                    | Binding::ForwardToFirstUse(fwd_idx)
+                    | Binding::Phi(JoinStyle::NarrowOf(fwd_idx), _),
+                ) => {
+                    original_idx = *fwd_idx;
+                    original_binding = self.idx_to_binding(original_idx);
+                }
+                _ => break,
             }
         }
         Some((original_idx, original_binding))
@@ -2392,22 +2396,62 @@ impl<'a> BindingsBuilder<'a> {
         has_scoped_type_params: bool,
     ) -> Option<PossibleTParam> {
         let (original_idx, original_binding) = self.get_original_binding(original_idx)?;
-        // If we found a potential legacy type variable, first insert the key / binding pair
-        // for the raw lookup, then insert another key / binding pair for the
-        // `CheckLegacyTypeParam`, and return the `Idx<Key>`.
         let tparam_idx = Self::make_legacy_tparam(&id, original_binding, original_idx)
             .map(|(k, v)| self.insert_binding(k, v))?;
-        let idx = self.insert_binding(
-            id.as_possible_legacy_tparam_key(),
-            Binding::PossibleLegacyTParam(
-                tparam_idx,
-                if has_scoped_type_params {
-                    Some(id.range())
-                } else {
-                    None
-                },
-            ),
-        );
+
+        let scope_range = self.scopes.current_scope_range();
+        let key = match &id {
+            LegacyTParamId::Name(_) => id.as_possible_legacy_tparam_key(scope_range),
+            LegacyTParamId::Attr(..) => {
+                let original_range = self.table.get::<Key>().0.idx_to_key(original_idx).range();
+                Key::PossibleLegacyTParam(Box::new((original_range, scope_range)))
+            }
+        };
+        let existing_idx = self.table.get::<Key>().0.key_to_idx(&key);
+        let idx = if let Some(existing_idx) = existing_idx {
+            let entry = self.table.get_mut::<Key>();
+            if let Some(binding) = entry.1.get_mut(existing_idx) {
+                match binding {
+                    Binding::PossibleLegacyTParam(tparams, _) => {
+                        if !tparams.contains(&tparam_idx) {
+                            tparams.push(tparam_idx);
+                        }
+                    }
+                    _ => unreachable!("Expected Binding::PossibleLegacyTParam"),
+                }
+                existing_idx
+            } else {
+                let mut tparams = ThinVec::new();
+                tparams.push(tparam_idx);
+                entry.1.insert(
+                    existing_idx,
+                    Binding::PossibleLegacyTParam(
+                        tparams,
+                        if has_scoped_type_params {
+                            Some(id.range())
+                        } else {
+                            None
+                        },
+                    ),
+                );
+                existing_idx
+            }
+        } else {
+            let mut tparams = ThinVec::new();
+            tparams.push(tparam_idx);
+            self.insert_binding(
+                key,
+                Binding::PossibleLegacyTParam(
+                    tparams,
+                    if has_scoped_type_params {
+                        Some(id.range())
+                    } else {
+                        None
+                    },
+                ),
+            )
+        };
+
         Some(PossibleTParam {
             id,
             idx,
@@ -2472,8 +2516,12 @@ impl<'a> BindingsBuilder<'a> {
         for entry in legacy_tparams.legacy_tparams.values() {
             match entry {
                 TParamLookupResult::MaybeTParam(possible_tparam) => {
-                    self.scopes
-                        .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+                    let key = self.table.get::<Key>().0.idx_to_key(possible_tparam.idx);
+                    let range = key.range();
+                    self.scopes.add_possible_legacy_tparam(
+                        possible_tparam.id.as_identifier().id.clone(),
+                        range,
+                    );
                 }
                 _ => {}
             }

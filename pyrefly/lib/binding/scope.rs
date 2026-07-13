@@ -279,11 +279,12 @@ impl MutableCapture {
         &self,
         name: &Name,
         kind: MutableCaptureKind,
+        scope_range: TextRange,
     ) -> Result<Key, MutableCaptureError> {
         match &self.original {
             Result::Ok(static_info) => {
                 if self.kind == kind {
-                    Ok(static_info.as_key(name))
+                    Ok(static_info.as_key(name, scope_range))
                 } else {
                     // TODO(stroxler): this error isn't quite right but preserves existing behavior
                     Err(MutableCaptureError::AssignedBeforeNonlocal)
@@ -355,7 +356,7 @@ impl StaticInfo {
         self.style.annotation()
     }
 
-    fn as_key(&self, name: &Name) -> Key {
+    fn as_key(&self, name: &Name, scope_range: TextRange) -> Key {
         let short_identifier = || {
             ShortIdentifier::new(&Identifier {
                 node_index: AtomicNodeIndex::default(),
@@ -372,7 +373,9 @@ impl StaticInfo {
             }
             StaticStyle::ImplicitGlobal => Key::ImplicitGlobal(Box::new(name.clone())),
             StaticStyle::SingleDef(..) => Key::Definition(short_identifier()),
-            StaticStyle::PossibleLegacyTParam => Key::PossibleLegacyTParam(self.range),
+            StaticStyle::PossibleLegacyTParam => {
+                Key::PossibleLegacyTParam(Box::new((self.range, scope_range)))
+            }
         }
     }
 
@@ -1440,7 +1443,11 @@ impl ScopeTreeNode {
             }
         }
         for (name, info) in &self.scope.stat.0 {
-            if let Some(key) = table.types.0.key_to_idx(&info.as_key(name)) {
+            if let Some(key) = table
+                .types
+                .0
+                .key_to_idx(&info.as_key(name, self.scope.range))
+            {
                 visitor(key);
             }
         }
@@ -2565,12 +2572,12 @@ impl Scopes {
     /// of the scope, but only for static type lookups, and might potentially
     /// intercept the raw runtime value of a pre-PEP-695 legacy type variable
     /// to turn it into a quantified type parameter.
-    pub fn add_possible_legacy_tparam(&mut self, name: &Identifier) {
+    pub fn add_possible_legacy_tparam(&mut self, name: Name, range: TextRange) {
         self.current_mut().stat.upsert(
-            Hashed::new(name.id.clone()),
-            name.range,
+            Hashed::new(name),
+            range,
             StaticStyle::PossibleLegacyTParam,
-            name.range,
+            range,
         )
     }
 
@@ -3151,7 +3158,7 @@ impl Scopes {
                     return None;
                 }
 
-                let forward_ref_key = static_info.as_key(name.into_key());
+                let forward_ref_key = static_info.as_key(name.into_key(), scope.range);
                 return Some(NameReadInfo::Anywhere {
                     key: forward_ref_key,
                     // If we look up static info from the a non-barrier scope because we didn't find
@@ -3262,7 +3269,8 @@ impl Scopes {
                 style: StaticStyle::MutableCapture(capture),
                 ..
             }) => {
-                let key = capture.key_or_error(name.into_key(), kind)?;
+                let key =
+                    capture.key_or_error(name.into_key(), kind, self.current_scope_range())?;
                 let implicit_builtin_module = capture
                     .original
                     .as_ref()
@@ -3309,7 +3317,7 @@ impl ScopeTrace {
                         Exportable::Initialized(*key, None)
                     }
                 }
-                None => Exportable::Uninitialized(static_info.as_key(name.into_key())),
+                None => Exportable::Uninitialized(static_info.as_key(name.into_key(), scope.range)),
             };
             exportables.insert_hashed(name.owned(), exportable);
         }
