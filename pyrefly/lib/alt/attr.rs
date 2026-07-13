@@ -2096,6 +2096,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.apply_getattr_fallback(attr_name, direct_lookup_result)
     }
 
+    /// Whether accessing `attr_name` on the package `module_name` should resolve to the
+    /// directly-imported same-named submodule, shadowing any package export of that name.
+    ///
+    /// A directly-imported submodule normally shadows the package namespace, because the import
+    /// system binds the submodule onto its package *after* the package's `__init__` toplevel has
+    /// executed. The exception is when `__init__` re-exports the same-named symbol *from* the
+    /// same-named submodule (e.g. unittest's `from .main import main as main`, where
+    /// `main = TestProgram`): the `from .main` loads the submodule as a side effect of
+    /// `__init__`, so it is already in `sys.modules` and the subsequent `main = ...` binding
+    /// wins; a later `import pkg.main` in user code is then a no-op for the attribute. The
+    /// re-export must originate from the same-named submodule for this to hold: a re-export
+    /// sourced from a *different* module (`from .other import main as main`) does not trigger
+    /// that side-effect load, so the directly-imported submodule still shadows it — even when
+    /// `__init__` also happens to import the submodule via an unrelated statement.
+    /// See https://github.com/facebook/pyrefly/issues/322
+    fn direct_submodule_shadows_export(
+        &self,
+        submodule: &ModuleType,
+        module_name: ModuleName,
+        attr_name: &Name,
+    ) -> bool {
+        submodule.is_submodules_imported_directly()
+            && self.exports.reexport_source(module_name, attr_name)
+                != Some(module_name.append(attr_name))
+    }
+
     fn get_module_attr(&self, module: &ModuleType, attr_name: &Name) -> Option<Attribute> {
         // `module_name` could refer to a package, in which case we need to check if
         // `module_name.attr_name`:
@@ -2110,11 +2136,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // would always bind the submodule name `attr_name` to the namespace of `module_name` *after* the module
         // toplevel of `module_name` has been executed.
         let submodule = module.push_part(attr_name.clone());
-        if submodule.is_submodules_imported_directly() {
+        let module_name = ModuleName::from_parts(module.parts());
+
+        if self.direct_submodule_shadows_export(&submodule, module_name, attr_name) {
             return Some(Attribute::simple(submodule.to_type(self.heap)));
         }
-
-        let module_name = ModuleName::from_parts(module.parts());
 
         match self.exports.module_exists(module_name) {
             FindingOrError::Finding(_) => (),
@@ -2915,10 +2941,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         // Check for submodule access first (takes precedence over exports, same as get_module_attr).
         // This handles cases like `a.b.c` where `import a.b.c` was used - accessing `b` on `a`
-        // should resolve to the submodule `a.b`, not look for an export named `b` in `a`.
+        // should resolve to the submodule `a.b`, not look for an export named `b` in `a`. The
+        // `direct_submodule_shadows_export` exception (a re-export from the same-named submodule
+        // wins over the submodule binding) applies here identically.
         if let Some(attr_name) = expected_attribute_name {
             let submodule = module.push_part(attr_name.clone());
-            if submodule.is_submodules_imported_directly() {
+            let module_name = ModuleName::from_parts(module.parts());
+            if self.direct_submodule_shadows_export(&submodule, module_name, attr_name) {
                 res.push(AttrInfo {
                     name: attr_name.clone(),
                     ty: None,
@@ -2943,7 +2972,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         definition: AttrDefinition::PartiallyResolvedImportedModuleAttribute {
                             module_name,
                         },
-                        is_reexport: self.exports.is_reexport(module_name, name),
+                        is_reexport: self.exports.reexport_source(module_name, name).is_some(),
                     });
                 }
             }
@@ -2956,7 +2985,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         definition: AttrDefinition::PartiallyResolvedImportedModuleAttribute {
                             module_name,
                         },
-                        is_reexport: self.exports.is_reexport(module_name, name),
+                        is_reexport: self.exports.reexport_source(module_name, name).is_some(),
                     }));
                 }
             }

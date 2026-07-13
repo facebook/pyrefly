@@ -2055,7 +2055,7 @@ fn test_class_deprecation_metadata_change_invalidates() {
 
 /// Test that when an export changes from direct definition to re-export, dependents are invalidated.
 ///
-/// This tests the `is_reexport` metadata dependency. When an export changes from being
+/// This tests the `reexport_source` metadata dependency. When an export changes from being
 /// defined in this module to being re-exported from another module, dependents should
 /// be recomputed.
 #[test]

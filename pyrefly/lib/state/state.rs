@@ -186,7 +186,7 @@ pub struct ModuleChanges(pub ModuleDeps);
 
 // A single dependency, passed during lookup. Can be merged into ModuleDeps.
 //
-// The metadata-flavored lookups (`is_special_export`, `is_reexport`,
+// The metadata-flavored lookups (`is_special_export`, `reexport_source`,
 // `get_deprecated`, `is_final`, `docstring_range`,
 // `is_submodule_imported_implicitly`) all record "depends on the
 // metadata of this name" and funnel into the same `ModuleDeps` slot.
@@ -208,8 +208,8 @@ pub enum ModuleDep {
     NameMetadata(Name),
     /// `LookupExport::is_special_export`.
     IsSpecialExport(Name),
-    /// `LookupExport::is_reexport`.
-    IsReexport(Name),
+    /// `LookupExport::reexport_source`.
+    ReexportSource(Name),
     /// `LookupExport::get_deprecated`.
     GetDeprecated(Name),
     /// `LookupExport::export_origin`.
@@ -329,7 +329,7 @@ impl ModuleDeps {
             }
             ModuleDep::NameMetadata(name)
             | ModuleDep::IsSpecialExport(name)
-            | ModuleDep::IsReexport(name)
+            | ModuleDep::ReexportSource(name)
             | ModuleDep::GetDeprecated(name)
             | ModuleDep::ExportOrigin(name)
             | ModuleDep::DocstringRange(name)
@@ -426,7 +426,7 @@ impl ModuleDep {
             ModuleDep::NameExists(_) => "export_exists",
             ModuleDep::NameMetadata(_) => "name_metadata",
             ModuleDep::IsSpecialExport(_) => "is_special_export",
-            ModuleDep::IsReexport(_) => "is_reexport",
+            ModuleDep::ReexportSource(_) => "reexport_source",
             ModuleDep::GetDeprecated(_) => "get_deprecated",
             ModuleDep::ExportOrigin(_) => "export_origin",
             ModuleDep::DocstringRange(_) => "docstring_range",
@@ -2868,18 +2868,16 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         )?
     }
 
-    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool {
+    fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName> {
         self.with_exports(
             module,
-            |exports, lookup| {
-                matches!(
-                    exports.exports(lookup).get(name),
-                    Some(ExportLocation::OtherModule(..))
-                )
+            |exports, lookup| match exports.exports(lookup).get(name) {
+                Some(ExportLocation::OtherModule(other_module, _)) => Some(*other_module),
+                _ => None,
             },
-            ModuleDep::IsReexport(name.clone()),
+            ModuleDep::ReexportSource(name.clone()),
         )
-        .unwrap_or(false)
+        .flatten()
     }
 
     fn is_special_export(&self, mut module: ModuleName, name: &Name) -> Option<SpecialExport> {
