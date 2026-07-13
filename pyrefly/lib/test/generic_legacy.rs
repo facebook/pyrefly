@@ -955,6 +955,23 @@ my_list.my_append(foo.C(), 5)
     "#,
 );
 
+testcase!(
+    test_multiple_actual_legacy_tparams_from_same_module,
+    TestEnv::one(
+        "foo",
+        "from typing import TypeVar\nT = TypeVar('T')\nU = TypeVar('U')"
+    ),
+    r#"
+from typing import assert_type
+import foo
+
+def f(x: foo.T, y: foo.U) -> tuple[foo.T, foo.U]:
+    return (x, y)
+
+assert_type(f(1, "hello"), tuple[int, str])
+    "#,
+);
+
 fn env_with_package() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path("pkg", "pkg/__init__.py", "");

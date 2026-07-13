@@ -4913,11 +4913,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range_if_scoped_params_exist: &Option<TextRange>,
         errors: &ErrorCollector,
     ) -> TypeInfo {
-        if keys.is_empty() {
-            return TypeInfo::of_ty(Type::Any(AnyStyle::Implicit));
-        }
-
-        let first_key = keys[0];
+        let first_key = *keys
+            .first()
+            .expect("PossibleLegacyTParam bindings must always have at least one key");
         match self.bindings().get(first_key) {
             BindingLegacyTypeParam::ParamKeyed(_) => {
                 let ty = match &*self.get_idx(first_key) {
