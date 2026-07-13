@@ -93,6 +93,44 @@ impl MatchSubject {
     }
 }
 
+/// Whether a sequence pattern is a catch-all against a literal-tuple subject of
+/// known arity. Ruff's `Pattern::is_irrefutable` only recognizes wildcards, bare
+/// captures, and `or` patterns; it can't tell that a sequence pattern always
+/// matches a fixed-length tuple subject. But `match x, y:` always builds a
+/// 2-tuple, so `case _, _:` (or `case a, b:`, `case a, *rest:`, ...) is a
+/// catch-all: it matches whenever every sub-pattern is irrefutable and the
+/// pattern's length is compatible with the subject's arity.
+fn sequence_pattern_covers_tuple(pattern: &Pattern, tuple_arity: Option<usize>) -> bool {
+    let Some(arity) = tuple_arity else {
+        return false;
+    };
+    let Pattern::MatchSequence(seq) = pattern else {
+        return false;
+    };
+    // A `*rest` / `*_` star element always matches the remaining elements, so it
+    // is irrefutable in this context even though `is_irrefutable` does not
+    // classify it as such.
+    if !seq
+        .patterns
+        .iter()
+        .all(|p| matches!(p, Pattern::MatchStar(_)) || p.is_irrefutable() || p.is_wildcard())
+    {
+        return false;
+    }
+    let num_non_star = seq
+        .patterns
+        .iter()
+        .filter(|p| !matches!(p, Pattern::MatchStar(_)))
+        .count();
+    // A `*rest` absorbs any extra elements, so it matches any tuple with at
+    // least `num_non_star` elements; without one, the lengths must match exactly.
+    if num_non_star != seq.patterns.len() {
+        num_non_star <= arity
+    } else {
+        num_non_star == arity
+    }
+}
+
 #[derive(Debug, Default)]
 struct PatternNarrowOps {
     scope: NarrowOps,
@@ -644,6 +682,15 @@ impl<'a> BindingsBuilder<'a> {
                 },
             }
         };
+        // A literal-tuple subject with no unpacking has a statically-known arity,
+        // which lets us recognize sequence patterns that are catch-alls (see
+        // `sequence_pattern_covers_tuple`). Starred elements make the arity dynamic.
+        let tuple_subject_arity = match &*x.subject {
+            Expr::Tuple(t) if !t.elts.iter().any(|e| matches!(e, Expr::Starred(_))) => {
+                Some(t.elts.len())
+            }
+            _ => None,
+        };
         let mut exhaustive = false;
         self.start_fork(x.range);
         // Type narrowing operations that are carried over from one case to the next. For example, in:
@@ -665,7 +712,12 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } = case;
             self.start_branch();
-            let case_is_irrefutable = pattern.is_wildcard() || pattern.is_irrefutable();
+            // A guard makes even an irrefutable pattern refutable, so it can't
+            // establish exhaustiveness on its own.
+            let case_is_irrefutable = pattern.is_wildcard()
+                || pattern.is_irrefutable()
+                || (guard.is_none()
+                    && sequence_pattern_covers_tuple(&pattern, tuple_subject_arity));
             if case_is_irrefutable {
                 exhaustive = true;
             }

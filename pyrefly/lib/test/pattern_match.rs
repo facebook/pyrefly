@@ -1447,7 +1447,6 @@ def example(a: list[int] | None, b: list[int] | None) -> list[int]:
 
 // https://github.com/facebook/pyrefly/issues/2932
 testcase!(
-    bug = "variables assigned in every non-raising match arm are still reported as possibly-unbound after the match",
     test_match_false_positive_unbound_name,
     r#"
 from typing import assert_type
@@ -1463,7 +1462,63 @@ def test(x: int | None, y: int | None) -> None:
             v = n // 3
         case _, _:
             raise ValueError
-    assert_type(u, int)  # E: `u` may be uninitialized
-    assert_type(v, int)  # E: `v` may be uninitialized
+    assert_type(u, int)
+    assert_type(v, int)
+"#,
+);
+
+// A guard on the catch-all sequence arm makes it refutable, so it cannot
+// establish exhaustiveness and the fall-through remains reachable.
+testcase!(
+    test_match_tuple_guarded_catch_all_not_exhaustive,
+    r#"
+def test(x: int | None, y: int | None) -> None:
+    match x, y:
+        case int(m), int(n):
+            u = m + n
+        case _, _ if x is None:
+            u = 0
+    print(u)  # E: `u` may be uninitialized
+"#,
+);
+
+// A sequence pattern whose length is incompatible with the tuple subject's
+// arity is not a catch-all, so the match stays non-exhaustive.
+testcase!(
+    test_match_tuple_arity_mismatch_not_exhaustive,
+    r#"
+def test(x: int | None, y: int | None) -> None:
+    match x, y:
+        case a, b, c:
+            u = 1
+    print(u)  # E: `u` may be uninitialized
+"#,
+);
+
+// The literal-tuple arity path only applies to literal-tuple subjects. A
+// variable of tuple type has no statically-known arity here, but the match is
+// still correctly seen as exhaustive via type narrowing of the subject, so no
+// false positive is reported.
+testcase!(
+    test_match_tuple_variable_subject_exhaustive,
+    r#"
+def test(t: tuple[int, int]) -> None:
+    match t:
+        case _, _:
+            u = 1
+    print(u)
+"#,
+);
+
+// A `*rest` element absorbs the remaining elements, so `case a, *rest:` covers
+// any tuple with at least one element and is a catch-all for the 2-tuple.
+testcase!(
+    test_match_tuple_star_rest_exhaustive,
+    r#"
+def test(x: int | None, y: int | None) -> None:
+    match x, y:
+        case a, *rest:
+            u = 1
+    print(u)
 "#,
 );
