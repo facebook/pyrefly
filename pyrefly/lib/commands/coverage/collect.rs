@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -322,24 +323,23 @@ const EXCLUDED_MODULE_DUNDERS: &[&str] = &[
     "__spec__",
 ];
 
-/// Walk re-exports to the defining module's FQN, `None` on cycle/miss.
+/// Walk re-exports to the defining module's handle and name, `None` on cycle/miss.
 fn trace_export_origin(
     handle: &Handle,
     mut cur_name: Name,
     transaction: &Transaction,
-) -> Option<String> {
+) -> Option<(Handle, Name)> {
     let mut seen = SmallSet::new();
     let mut cur_handle = handle.clone();
 
     loop {
-        let module_name = cur_handle.module();
-        if !seen.insert((module_name, cur_name.clone())) {
+        if !seen.insert((cur_handle.module(), cur_name.clone())) {
             return None;
         }
 
         match transaction.get_exports(&cur_handle).get(&cur_name) {
             Some(ExportLocation::ThisModule(_)) => {
-                return Some(format!("{module_name}.{cur_name}"));
+                return Some((cur_handle, cur_name));
             }
             None => return None,
             Some(ExportLocation::OtherModule(other_module, alias)) => {
@@ -354,43 +354,51 @@ fn trace_export_origin(
     }
 }
 
-/// Collect origin FQNs of all publicly exported names across public modules.
-fn compute_public_fqns(handles: &[Handle], transaction: &Transaction) -> HashSet<String> {
-    handles
-        .iter()
-        .filter(|h| is_public_module(h.module()))
-        .flat_map(|handle| {
-            let exports_data = transaction.get_exports_data(handle);
-            let exports = transaction.get_exports(handle);
+/// Collect origin FQNs of all publicly exported names across public modules, plus the deduped
+/// handles of cross-module re-export origins.
+fn compute_public_fqns(
+    handles: &[Handle],
+    transaction: &Transaction,
+) -> (HashSet<String>, SmallSet<Handle>) {
+    let mut fqns = HashSet::new();
+    let mut origins = SmallSet::new();
+    for handle in handles.iter().filter(|h| is_public_module(h.module())) {
+        let exports_data = transaction.get_exports_data(handle);
+        let exports = transaction.get_exports(handle);
 
-            // prioritize `__all__` if present, otherwise local defs + `import x as x`
-            let names: Vec<Name> =
-                if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
-                    all_iter.cloned().collect()
-                } else {
-                    exports
-                        .iter()
-                        .filter_map(|(name, loc)| {
-                            let is_local = matches!(loc, ExportLocation::ThisModule(_));
-                            let is_reexport = exports_data.is_explicit_reexport(name);
-                            (is_public_name(name.as_str()) && (is_local || is_reexport))
-                                .then_some(name.clone())
-                        })
-                        .collect()
-                };
+        // prioritize `__all__` if present, otherwise local defs + `import x as x`
+        let names: Vec<Name> =
+            if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
+                all_iter.cloned().collect()
+            } else {
+                exports
+                    .iter()
+                    .filter_map(|(name, loc)| {
+                        let is_local = matches!(loc, ExportLocation::ThisModule(_));
+                        let is_reexport = exports_data.is_explicit_reexport(name);
+                        (is_public_name(name.as_str()) && (is_local || is_reexport))
+                            .then_some(name.clone())
+                    })
+                    .collect()
+            };
 
-            // emit both the local FQN and the traced origin FQN so a file-scoped run matches
-            // whichever module was requested
-            names
-                .into_iter()
-                .filter(|n| !EXCLUDED_MODULE_DUNDERS.contains(&n.as_str()))
-                .flat_map(move |name| {
-                    let local = format!("{}.{}", handle.module(), name);
-                    let origin = trace_export_origin(handle, name, transaction);
-                    std::iter::once(local).chain(origin)
-                })
-        })
-        .collect()
+        // collect both the local and traced origin FQN so a file-scoped run matches the module
+        for name in names {
+            if EXCLUDED_MODULE_DUNDERS.contains(&name.as_str()) {
+                continue;
+            }
+            fqns.insert(format!("{}.{}", handle.module(), name));
+            if let Some((origin_handle, origin_name)) =
+                trace_export_origin(handle, name, transaction)
+            {
+                fqns.insert(format!("{}.{}", origin_handle.module(), origin_name));
+                if origin_handle != *handle {
+                    origins.insert(origin_handle);
+                }
+            }
+        }
+    }
+    (fqns, origins)
 }
 
 /// Retain only publicly reachable symbols and recalculate aggregates.
@@ -1710,7 +1718,7 @@ pub fn collect_module_reports(
                 .is_some()
         }
     };
-    let targets: Vec<Handle> = handles
+    let mut targets: Vec<Handle> = handles
         .iter()
         .filter(|h| !shadowed.contains(h.path().as_path()) && importable(h))
         .cloned()
@@ -1746,7 +1754,38 @@ pub fn collect_module_reports(
     // Later lazy computation must not fire the hook.
     transaction.set_solutions_hook(None);
 
-    let public_fqns = public_only.then(|| compute_public_fqns(&handles, transaction));
+    // gh-4034: a symbol re-exported from a public module stays counted even when
+    // `--project-excludes` drops its defining file; collect such origins in a 2nd pass.
+    let public_fqns = public_only.then(|| {
+        let (fqns, origins) = compute_public_fqns(&handles, transaction);
+        // Dedupe by path and module name so an origin that discovery already covers
+        // (e.g. an excluded .pyi of a discovered .py) isn't reported twice.
+        let mut seen_paths: HashSet<&Path> = handles.iter().map(|h| h.path().as_path()).collect();
+        let mut seen_modules: HashSet<ModuleName> = handles.iter().map(|h| h.module()).collect();
+        let extras: Vec<Handle> = origins
+            .iter()
+            .filter(|h| {
+                let path = h.path().as_path();
+                seen_paths.insert(path)
+                    && seen_modules.insert(h.module())
+                    && files_to_check.covers_ignoring_excludes(path)
+                    && !config_finder
+                        .python_file(h.module_kind(), h.path())
+                        .site_package_path()
+                        .any(|sp| path.starts_with(sp))
+            })
+            .cloned()
+            .collect();
+        if !extras.is_empty() {
+            // `Everything` retains bindings/answers so the extras can be collected after the run
+            transaction.run(&extras, Require::Everything, None);
+            collected.lock().extend(extras.iter().filter_map(|handle| {
+                ModuleSymbols::collect(transaction, handle, false).map(|s| (handle.dupe(), s))
+            }));
+            targets.extend(extras);
+        }
+        fqns
+    });
 
     let mut module_reports: Vec<ModuleReport> = Vec::new();
     let mut errors: Vec<Error> = Vec::new();
@@ -1826,8 +1865,14 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
+    use pyrefly_util::globs::FilteredGlobs;
+    use pyrefly_util::globs::Globs;
+    use pyrefly_util::globs::HiddenDirFilter;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+    use tempfile::TempDir;
 
     use super::*;
+    use crate::commands::config_finder::default_config_finder;
     use crate::state::require::Require;
     use crate::test::util::TestEnv;
 
@@ -2832,7 +2877,9 @@ def g(x: int) -> int:
 
     #[test]
     fn test_compute_public_fqns() {
-        let compute = |modules: &[(&str, &str, &str)], handle_names: &[&str]| -> HashSet<String> {
+        let compute = |modules: &[(&str, &str, &str)],
+                       handle_names: &[&str]|
+         -> (HashSet<String>, HashSet<String>) {
             let mut env = TestEnv::new();
             for &(name, path, source) in modules {
                 env.add_with_path(name, path, source);
@@ -2841,12 +2888,14 @@ def g(x: int) -> int:
             let (state, handle_fn) = env.to_state();
             let transaction = state.transaction();
             let handles: Vec<_> = handle_names.iter().map(|n| handle_fn(n)).collect();
-            compute_public_fqns(&handles, &transaction)
+            let (fqns, origins) = compute_public_fqns(&handles, &transaction);
+            let origins = origins.iter().map(|h| h.module().to_string()).collect();
+            (fqns, origins)
         };
 
         // Re-export from a private module keeps both the local alias and the
         // traced origin, so reports covering either module stay non-empty.
-        let fqns = compute(
+        let (fqns, origins) = compute(
             &[
                 (
                     "pkg",
@@ -2863,9 +2912,10 @@ def g(x: int) -> int:
         );
         assert!(fqns.contains("pkg.Foo"));
         assert!(fqns.contains("pkg._internal.Foo"));
+        assert_eq!(origins, HashSet::from(["pkg._internal".to_owned()]));
 
         // Without __all__, non-underscore local names are exported
-        let fqns = compute(
+        let (fqns, _) = compute(
             &[(
                 "pkg",
                 "pkg/__init__.py",
@@ -2877,7 +2927,7 @@ def g(x: int) -> int:
         assert!(!fqns.contains("pkg._private"));
 
         // Regular imports (not `import x as x`) are not re-exports
-        let fqns = compute(
+        let (fqns, origins) = compute(
             &[
                 (
                     "pkg",
@@ -2894,9 +2944,10 @@ def g(x: int) -> int:
         );
         assert!(fqns.contains("pkg.local_fn"));
         assert!(!fqns.contains("pkg._internal.helper"));
+        assert_eq!(origins, HashSet::new());
 
         // `import x as x` is an implicit re-export when there is no __all__
-        let fqns = compute(
+        let (fqns, _) = compute(
             &[
                 (
                     "pkg",
@@ -2914,7 +2965,7 @@ def g(x: int) -> int:
         assert!(fqns.contains("pkg._internal.helper"));
 
         // __all__ takes precedence over `import x as x`
-        let fqns = compute(
+        let (fqns, _) = compute(
             &[
                 (
                     "pkg",
@@ -2940,7 +2991,7 @@ def g(x: int) -> int:
 
         // A re-export of a name its origin module doesn't define keeps the
         // local FQN but traces to no origin (github.com/facebook/pyrefly/issues/4025)
-        let fqns = compute(
+        let (fqns, origins) = compute(
             &[
                 (
                     "pkg",
@@ -2953,6 +3004,75 @@ def g(x: int) -> int:
         );
         assert!(fqns.contains("pkg.ghost"));
         assert!(!fqns.contains("pkg._internal.ghost"));
+        assert_eq!(origins, HashSet::new());
+    }
+
+    /// gh-4034: --project-excludes must not drop symbols of non-excluded public module re-exports.
+    #[test]
+    fn test_project_excludes_public_reexport() {
+        const FILES: [(&str, &str); 2] = [
+            (
+                "__init__.py",
+                "from foo._private import bar\n__all__ = ['bar']",
+            ),
+            ("_private.py", "def bar(a) -> None: ..."),
+        ];
+
+        // Returns foo._private's report, if any (never two).
+        let collect_private = |files: &[(&str, &str)], exclude: &str, public_only: bool| {
+            let dir = TempDir::new().unwrap();
+            let foo = dir.path().join("foo");
+            std::fs::create_dir(&foo).unwrap();
+            // Without a config, discovered files get unknown module names.
+            std::fs::write(dir.path().join("pyrefly.toml"), "search-path = ['.']").unwrap();
+            for &(name, source) in files {
+                std::fs::write(foo.join(name), source).unwrap();
+            }
+            let globs = FilteredGlobs::new(
+                Globs::new(vec![foo.display().to_string()]).unwrap(),
+                Globs::new(vec![foo.join(exclude).display().to_string()]).unwrap(),
+                None,
+                HiddenDirFilter::Disabled,
+            );
+            let (reports, _) = collect_module_reports(
+                Box::new(globs),
+                default_config_finder(None),
+                false,
+                None,
+                public_only,
+                None,
+                TEST_THREAD_COUNT,
+            )
+            .unwrap();
+            let mut private: Vec<_> = reports
+                .into_iter()
+                .filter(|r| r.name == "foo._private")
+                .collect();
+            assert!(private.len() <= 1);
+            private.pop()
+        };
+
+        // The excluded module's report keeps exactly its publicly re-exported symbol.
+        let private = collect_private(&FILES, FILES[1].0, true).unwrap();
+        let names: Vec<&str> = private
+            .symbol_reports
+            .iter()
+            .map(SymbolReport::name)
+            .collect();
+        assert_eq!(names, vec!["foo._private.bar"]);
+        assert_eq!((private.slots.n_typable, private.slots.n_typed), (2, 1));
+
+        // Without a public re-export the excluded module stays excluded.
+        let plain_import = [("__init__.py", "from foo._private import bar"), FILES[1]];
+        assert!(collect_private(&plain_import, FILES[1].0, true).is_none());
+
+        // Outside --public-only, excludes are respected unconditionally.
+        assert!(collect_private(&FILES, FILES[1].0, false).is_none());
+
+        // An excluded .pyi twin resolves as the origin (stubs win) but must not report twice.
+        let twins = [FILES[0], FILES[1], ("_private.pyi", FILES[1].1)];
+        let private = collect_private(&twins, twins[2].0, true).unwrap();
+        assert!(private.path.ends_with(FILES[1].0));
     }
 
     /// Dataclass and NamedTuple fields are IMPLICIT; methods on those classes count normally.
