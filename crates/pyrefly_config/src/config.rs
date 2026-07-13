@@ -1031,15 +1031,9 @@ impl ConfigFile {
         })
     }
 
+    /// Create a `Handle` for the given path, deriving its module name from the search paths,
+    /// falling back to `self.fallback_search_path` and finally `__unknown__`.
     pub fn handle_from_module_path(&self, module_path: ModulePath) -> Handle {
-        self.handle_from_module_path_with_fallback(module_path, &FallbackSearchPath::Empty)
-    }
-
-    pub fn handle_from_module_path_with_fallback(
-        &self,
-        module_path: ModulePath,
-        fallback_search_path: &FallbackSearchPath,
-    ) -> Handle {
         match &self
             .source_db
             .as_ref()
@@ -1053,30 +1047,19 @@ impl ConfigFile {
                 // root resolve from the site-package prefix, not from the
                 // heuristic project root, while still letting explicit search
                 // paths override when the user has configured them.
-                let all_paths: Vec<&PathBuf> = self
+                let search_paths = self
                     .explicit_search_path()
                     .chain(self.site_package_path())
-                    .chain(self.heuristic_search_path())
-                    .collect();
-                let module_kind = if fallback_search_path.is_empty() {
-                    let name = ModuleName::from_path(
-                        module_path.as_path(),
-                        all_paths.iter().copied(),
-                        &self.extra_file_extensions,
-                    )
-                    .unwrap_or_else(ModuleName::unknown);
-                    ModuleNameWithKind::guaranteed(name)
-                } else {
-                    let fallback_paths =
-                        fallback_search_path.for_directory(Some(module_path.as_path()));
-                    ModuleName::from_path_with_fallback(
-                        module_path.as_path(),
-                        all_paths.iter().copied(),
-                        fallback_paths.iter(),
-                        &self.extra_file_extensions,
-                    )
-                    .unwrap_or(ModuleNameWithKind::guaranteed(ModuleName::unknown()))
-                };
+                    .chain(self.heuristic_search_path());
+                let path = module_path.as_path();
+                let fallback_paths = self.fallback_search_path.for_directory(Some(path));
+                let module_kind = ModuleName::from_path_with_fallback(
+                    path,
+                    search_paths,
+                    fallback_paths.iter(),
+                    &self.extra_file_extensions,
+                )
+                .unwrap_or(ModuleNameWithKind::guaranteed(ModuleName::unknown()));
                 Handle::from_with_module_name_kind(module_kind, module_path, self.get_sys_info())
             }
         }
