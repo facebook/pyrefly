@@ -18,13 +18,13 @@
 # - [x] MobileNetV2._forward_impl
 # - [x] MobileNetV2.forward
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Dim, SymVar
     from torch import Tensor
 
 
@@ -38,7 +38,7 @@ def _make_divisible(v: float, divisor: int, min_value: int | None = None) -> int
     return new_value
 
 
-class InvertedResidual[Inp, Oup, ER, S](nn.Module):
+class InvertedResidual[Inp: SymVar, Oup: SymVar, ER: SymVar, S: SymVar](nn.Module):
     """MobileNetV2 inverted residual block.
 
     Restructured from nn.Sequential(*layers) to individual nn.Sequential
@@ -90,28 +90,30 @@ class InvertedResidual[Inp, Oup, ER, S](nn.Module):
         self.out_channels = oup
         self._is_cn: bool = stride > 1
 
-    def forward[B, H, W](self, x: Tensor[B, Inp, H, W]) -> Tensor[B, Oup, H, W]:
-        out: Tensor[B, Inp * ER, H, W]
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, x: Tensor[[B, Inp, H, W]]
+    ) -> Tensor[[B, Oup, H, W]]:
+        out: Tensor[[B, Inp * ER, H, W]]
         if self.expand_ratio != 1:
             out = self.expand(x)
         else:
             out = x  # type: ignore[assignment]  # conditional: Inp*ER == Inp when ER==1
-        assert_type(out, Tensor[B, Inp * ER, H, W])
+        assert_type(out, Tensor[[B, Inp * ER, H, W]])
         out2 = self.dw(out)
-        assert_type(out2, Tensor[B, Inp * ER, H, W])
+        assert_type(out2, Tensor[[B, Inp * ER, H, W]])
         out3 = self.project(out2)
-        assert_type(out3, Tensor[B, Oup, H, W])
+        assert_type(out3, Tensor[[B, Oup, H, W]])
         if self.use_res_connect:
             return x + out3  # type: ignore[return-value]  # conditional: Inp==Oup
         return out3
 
 
-class MobileNetV2[NC: Dim[Any] = 1000, LC: Dim[Any] = 1280](nn.Module):
+class MobileNetV2[NC: SymVar = 1000, LC: SymVar = 1280](nn.Module):
     """MobileNet V2 main class.
 
     Bridge dim LC (last_channel) connects the untracked feature extractor
     (built via nn.Sequential(*list)) to the typed classifier, recovering
-    Tensor[B, NC] at the output.
+    Tensor[[B, NC]] at the output.
     """
 
     def __init__(
@@ -199,7 +201,9 @@ class MobileNetV2[NC: Dim[Any] = 1000, LC: Dim[Any] = 1280](nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)  # type: ignore[arg-type]
 
-    def _forward_impl[B, H, W](self, x: Tensor[B, 3, H, W]) -> Tensor[B, NC]:
+    def _forward_impl[B: SymVar, H: SymVar, W: SymVar](
+        self, x: Tensor[[B, 3, H, W]]
+    ) -> Tensor[[B, NC]]:
         feat = self.features(x)
         assert_type(feat, Tensor)  # Sequential(*list) — bare
         pooled = nn.functional.adaptive_avg_pool2d(feat, (1, 1))
@@ -207,23 +211,25 @@ class MobileNetV2[NC: Dim[Any] = 1000, LC: Dim[Any] = 1280](nn.Module):
         flat = torch.flatten(pooled, 1)
         assert_type(flat, Tensor)  # input bare — upstream contagion
         # annotation fallback: classifier is Sequential(Dropout, Linear[LC, NC])
-        out: Tensor[B, NC] = self.classifier(flat)
-        assert_type(out, Tensor[B, NC])
+        out: Tensor[[B, NC]] = self.classifier(flat)
+        assert_type(out, Tensor[[B, NC]])
         return out
 
-    def forward[B, H, W](self, x: Tensor[B, 3, H, W]) -> Tensor[B, NC]:
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, x: Tensor[[B, 3, H, W]]
+    ) -> Tensor[[B, NC]]:
         return self._forward_impl(x)
 
 
 def test_inverted_residual() -> None:
     block = InvertedResidual(32, 64, stride=1, expand_ratio=6)
-    x: Tensor[1, 32, 112, 112] = torch.randn(1, 32, 112, 112)
+    x: Tensor[[1, 32, 112, 112]] = torch.randn(1, 32, 112, 112)
     out = block(x)
-    assert_type(out, Tensor[1, 64, 112, 112])
+    assert_type(out, Tensor[[1, 64, 112, 112]])
 
 
 def test_mobilenetv2() -> None:
     model = MobileNetV2(num_classes=1000)
-    x: Tensor[1, 3, 224, 224] = torch.randn(1, 3, 224, 224)
+    x: Tensor[[1, 3, 224, 224]] = torch.randn(1, 3, 224, 224)
     out = model(x)
-    assert_type(out, Tensor[1, 1000])
+    assert_type(out, Tensor[[1, 1000]])

@@ -29,9 +29,9 @@ Port notes:
     speaker embeddings from variable-length utterances with sliding windows.
 - LSTMWithoutProjection: uses multi-layer LSTM and extracts hidden[-1] (last
     layer hidden state). Our LSTM stub returns (output, h_n, c_n) where h_n is
-    Tensor[NumLayers, B, Hidden]. Indexing h_n[-1] to get last layer is
+    Tensor[[NumLayers, B, Hidden]]. Indexing h_n[-1] to get last layer is
     unrefined (negative indexing on first dim). The output is annotated as bare
-    Tensor and narrowed to Tensor[B, ProjDim] at the call site.
+    Tensor and narrowed to Tensor[[B, ProjDim]] at the call site.
 - SpeakerEncoder supports both use_lstm_with_projection=True (stacked
     LSTMWithProjection layers) and False (single LSTMWithoutProjection).
 - nn.LSTM uses num_directions=1 (unidirectional) with batch_first=True.
@@ -54,7 +54,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Dim, SymVar
     from torch import Tensor
 
 
@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class LSTMWithProjection[InSize, Hidden, Proj](nn.Module):
+class LSTMWithProjection[InSize: SymVar, Hidden: SymVar, Proj: SymVar](nn.Module):
     """LSTM followed by linear projection.
 
     (B, T, InSize) → LSTM → (B, T, Hidden) → Linear → (B, T, Proj)
@@ -79,10 +79,12 @@ class LSTMWithProjection[InSize, Hidden, Proj](nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
         self.linear = nn.Linear(hidden_size, proj_size, bias=False)
 
-    def forward[B, T](self, x: Tensor[B, T, InSize]) -> Tensor[B, T, Proj]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, InSize]]
+    ) -> Tensor[[B, T, Proj]]:
         self.lstm.flatten_parameters()
         o, _h_n, _c_n = self.lstm(x)
-        assert_type(o, Tensor[B, T, Hidden])
+        assert_type(o, Tensor[[B, T, Hidden]])
         return self.linear(o)
 
 
@@ -91,7 +93,7 @@ class LSTMWithProjection[InSize, Hidden, Proj](nn.Module):
 # ============================================================================
 
 
-class LSTMWithoutProjection[InSize, Hidden, Proj](nn.Module):
+class LSTMWithoutProjection[InSize: SymVar, Hidden: SymVar, Proj: SymVar](nn.Module):
     """Multi-layer LSTM that extracts last layer's hidden state, then projects.
 
     Original: tts_angular/model.py LSTMWithoutProjection class.
@@ -117,7 +119,9 @@ class LSTMWithoutProjection[InSize, Hidden, Proj](nn.Module):
         self.linear = nn.Linear(lstm_dim, proj_dim)
         self.relu = nn.ReLU()
 
-    def forward[B, T](self, x: Tensor[B, T, InSize]) -> Tensor[B, Proj]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, InSize]]
+    ) -> Tensor[[B, Proj]]:
         self.lstm.flatten_parameters()
         _output, h_n, _c_n = self.lstm(x)
         # h_n: (num_layers, B, Hidden) — h_n[-1] returns unrefined (negative
@@ -132,7 +136,7 @@ class LSTMWithoutProjection[InSize, Hidden, Proj](nn.Module):
 # ============================================================================
 
 
-class SpeakerEncoder[InDim, ProjDim](nn.Module):
+class SpeakerEncoder[InDim: SymVar, ProjDim: SymVar](nn.Module):
     """Speaker verification encoder.
 
     Two modes (original: tts_angular/model.py SpeakerEncoder):
@@ -174,20 +178,22 @@ class SpeakerEncoder[InDim, ProjDim](nn.Module):
                 input_dim, lstm_dim, proj_dim, num_lstm_layers
             )
 
-    def forward[B, T](self, x: Tensor[B, T, InDim]) -> Tensor[B, ProjDim]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, InDim]]
+    ) -> Tensor[[B, ProjDim]]:
         if self.use_lstm_with_projection:
             # First layer: (B, T, InDim) → (B, T, ProjDim)
             first: LSTMWithProjection[InDim, Any, ProjDim] = self.network[0]
             h = first(x)
-            assert_type(h, Tensor[B, T, ProjDim])
+            assert_type(h, Tensor[[B, T, ProjDim]])
             # Remaining layers: (B, T, ProjDim) → (B, T, ProjDim)
             for i in range(1, len(self.network)):
                 layer: LSTMWithProjection[ProjDim, Any, ProjDim] = self.network[i]
                 h = layer(h)
-            assert_type(h, Tensor[B, T, ProjDim])
+            assert_type(h, Tensor[[B, T, ProjDim]])
             # Take last timestep and L2-normalize
             last = h[:, -1]
-            assert_type(last, Tensor[B, ProjDim])
+            assert_type(last, Tensor[[B, ProjDim]])
             return F.normalize(last, p=2, dim=1)
         else:
             # LSTMWithoutProjection already extracts last hidden state
@@ -281,7 +287,7 @@ class AngleProtoLoss(nn.Module):
 # ============================================================================
 
 
-def compute_embedding[ProjDim](
+def compute_embedding[ProjDim: SymVar](
     encoder: SpeakerEncoder[Any, ProjDim],
     utterance: Tensor,
     num_eval: int = 10,
@@ -327,7 +333,7 @@ def compute_embedding[ProjDim](
     return embeddings.mean(dim=0)  # (ProjDim,)
 
 
-def batch_compute_embedding[ProjDim](
+def batch_compute_embedding[ProjDim: SymVar](
     encoder: SpeakerEncoder[Any, ProjDim],
     utterances: list[Tensor],
     num_eval: int = 10,
@@ -361,41 +367,41 @@ def batch_compute_embedding[ProjDim](
 def test_lstm_with_projection():
     """Test single LSTM + projection layer."""
     layer = LSTMWithProjection(40, 768, 256)
-    x: Tensor[8, 100, 40] = torch.randn(8, 100, 40)
+    x: Tensor[[8, 100, 40]] = torch.randn(8, 100, 40)
     out = layer(x)
-    assert_type(out, Tensor[8, 100, 256])
+    assert_type(out, Tensor[[8, 100, 256]])
 
 
 def test_lstm_with_projection_identity_dims():
     """Test when input_size == proj_size (used for layers 2..N)."""
     layer = LSTMWithProjection(256, 768, 256)
-    x: Tensor[4, 50, 256] = torch.randn(4, 50, 256)
+    x: Tensor[[4, 50, 256]] = torch.randn(4, 50, 256)
     out = layer(x)
-    assert_type(out, Tensor[4, 50, 256])
+    assert_type(out, Tensor[[4, 50, 256]])
 
 
 def test_speaker_encoder():
     """Test full speaker encoder: mel features → speaker embedding."""
     enc = SpeakerEncoder(40, 256, lstm_dim=768, num_lstm_layers=3)
-    x: Tensor[8, 100, 40] = torch.randn(8, 100, 40)
+    x: Tensor[[8, 100, 40]] = torch.randn(8, 100, 40)
     out = enc(x)
-    assert_type(out, Tensor[8, 256])
+    assert_type(out, Tensor[[8, 256]])
 
 
 def test_speaker_encoder_different_dims():
     """Test with different input/projection dimensions."""
     enc = SpeakerEncoder(80, 128, lstm_dim=512, num_lstm_layers=2)
-    x: Tensor[4, 200, 80] = torch.randn(4, 200, 80)
+    x: Tensor[[4, 200, 80]] = torch.randn(4, 200, 80)
     out = enc(x)
-    assert_type(out, Tensor[4, 128])
+    assert_type(out, Tensor[[4, 128]])
 
 
 def test_lstm_without_projection():
     """Test LSTMWithoutProjection: multi-layer LSTM → hidden[-1] → Linear → ReLU."""
     layer = LSTMWithoutProjection(40, 768, 256, num_lstm_layers=3)
-    x: Tensor[8, 100, 40] = torch.randn(8, 100, 40)
+    x: Tensor[[8, 100, 40]] = torch.randn(8, 100, 40)
     out = layer(x)
-    assert_type(out, Tensor[8, 256])
+    assert_type(out, Tensor[[8, 256]])
 
 
 def test_speaker_encoder_without_projection():
@@ -403,6 +409,6 @@ def test_speaker_encoder_without_projection():
     enc = SpeakerEncoder(
         40, 256, lstm_dim=768, num_lstm_layers=3, use_lstm_with_projection=False
     )
-    x: Tensor[8, 100, 40] = torch.randn(8, 100, 40)
+    x: Tensor[[8, 100, 40]] = torch.randn(8, 100, 40)
     out = enc(x)
-    assert_type(out, Tensor[8, 256])
+    assert_type(out, Tensor[[8, 256]])

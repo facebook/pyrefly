@@ -114,7 +114,7 @@ testcase!(
 from typing_extensions import Sentinel
 
 A = Sentinel("A")
-B: A = Sentinel("B")  # E: `Sentinel` is not assignable to `A`
+B: A = Sentinel("B")  # E: `sentinel` is not assignable to `A`
     "#,
 );
 
@@ -214,13 +214,13 @@ MISSING.__name__
 );
 
 testcase!(
-    test_typeshed_sentinel_3_14_no_dunder_name,
+    test_typeshed_sentinel_3_14_has_dunder_name,
     TestEnv::new().with_version(PythonVersion::new(3, 14, 0)),
     r#"
 from typing_extensions import Sentinel
 
 MISSING = Sentinel("MISSING")
-MISSING.__name__  # E: Object of class `Sentinel` has no attribute `__name__`
+MISSING.__name__
     "#,
 );
 

@@ -11,6 +11,8 @@ including bare Dim, Dim[Any], or passed to functions with type parameters.
 
 from typing import Any, assert_type, TYPE_CHECKING
 
+from shape_extensions import SymVar
+
 if TYPE_CHECKING:
     from shape_extensions import Dim
 
@@ -20,7 +22,7 @@ symint_explicit_any: Dim[Any] = 4
 assert_type(symint_explicit_any, Dim[Any])
 
 
-def accept_and_return_symint[N](s: Dim[N]) -> Dim[N]:
+def accept_and_return_symint[N: SymVar](s: Dim[N]) -> Dim[N]:
     return s
 
 

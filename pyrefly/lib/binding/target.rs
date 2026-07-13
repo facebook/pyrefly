@@ -142,7 +142,8 @@ impl<'a> BindingsBuilder<'a> {
     /// as defined downstream.
     fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
         let name = Hashed::new(&identifier.id);
-        let name_is_defined = match self.look_up_name_for_read(name, &Usage::Narrowing(None)) {
+        let usage = Usage::NonPinningValue(None);
+        let name_is_defined = match self.look_up_name_for_read(name, &usage) {
             NameReadInfo::Flow { .. } | NameReadInfo::Anywhere { .. } => true,
             // This helper only runs after attribute/subscript assignment targets. If the base is an
             // implicit builtin, binding the assigned expression has already materialized it. A still
@@ -765,6 +766,7 @@ impl<'a> BindingsBuilder<'a> {
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
+                is_class_body_assignment: self.scopes.in_class_body(),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,

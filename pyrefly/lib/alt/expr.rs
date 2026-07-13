@@ -51,6 +51,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
+use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprStarred;
@@ -77,6 +78,7 @@ use crate::alt::callable::CallArg;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::solve::TypeFormContext;
+use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
@@ -90,6 +92,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::solver::solver::CallContext;
+use crate::types::callable::DefaultValue;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -118,6 +121,30 @@ pub enum TypeOrExpr<'a> {
     /// Bundles a `Type` with a `TextRange`, allowing us to give good errors.
     Type(&'a Type, TextRange),
     Expr(&'a Expr),
+}
+
+/// Where a dimension expression appears, which controls whether a plain
+/// `TypeVar` is accepted. Shape arithmetic (e.g. `N + 1`) needs the
+/// symbolic-integer semantics of a `SymVar`, so an operand of an arithmetic
+/// expression must be a `SymVar`; a dimension used on its own accepts any type
+/// variable kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DimensionExprContext {
+    /// A dimension written directly, e.g. the `N` in `Tensor[N, 3]`. Any type
+    /// variable kind is allowed.
+    Bare,
+    /// An operand of shape arithmetic, e.g. the `N` in `Tensor[N + 1]`. Only a
+    /// `SymVar` is allowed; a plain `TypeVar` is rejected.
+    Arithmetic,
+}
+
+impl DimensionExprContext {
+    fn error_context(self) -> &'static str {
+        match self {
+            Self::Bare => "as a shape dimension",
+            Self::Arithmetic => "in shape arithmetic",
+        }
+    }
 }
 
 impl Ranged for TypeOrExpr<'_> {
@@ -452,7 +479,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     Vec::new()
                 };
-                self.callable_infer_with_hint(
+                let param_default_tys: Vec<Option<Type>> = match &lambda.parameters {
+                    Some(parameters) => parameters
+                        .iter_non_variadic_params()
+                        .map(|p| p.default.as_deref().map(|d| self.expr_infer(d, errors)))
+                        .collect(),
+                    None => Vec::new(),
+                };
+                let callable = self.callable_infer_with_hint(
                     hint,
                     errors,
                     |cur_hint, callable_errors| {
@@ -463,22 +497,48 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let return_hint =
                             cur_hint.and_then(|hint| self.decompose_lambda(hint, &param_vars));
 
-                        let mut params: Vec<Param> = if let Some(parameters) = &lambda.parameters {
-                            param_vars
-                                .into_iter()
-                                .zip(parameters.iter_non_variadic_params())
-                                .map(|((name, var), param)| {
-                                    let required = if param.default.is_some() {
-                                        Required::Optional(None)
-                                    } else {
-                                        Required::Required
-                                    };
-                                    Param::Pos(name.clone(), self.solver().force_var(var), required)
-                                })
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
+                        // For each parameter that has a default value but whose Var is not
+                        // constrained by a contextual hint, constrain the Var to the
+                        // (promoted) type of the default.
+                        for ((_, var), default_ty) in param_vars.iter().zip(&param_default_tys) {
+                            if let Some(default_ty) = default_ty
+                                && matches!(self.solver().expand_unwrap(*var), Type::Var(_))
+                            {
+                                let mut resolved = default_ty.clone();
+                                self.solver().expand_with_bounds(&mut resolved);
+                                let promoted = resolved
+                                    .with_literal_style(LitStyle::Implicit)
+                                    .promote_implicit_literals(self.stdlib);
+                                // A `None` default almost always denotes an optional value,
+                                // so infer `Any | None` to keep the parameter permissive
+                                // rather than strictly `None`.
+                                let inferred = if promoted.is_none() {
+                                    self.union(self.heap.mk_any_implicit(), promoted)
+                                } else {
+                                    promoted
+                                };
+                                let _ = self.is_subset_eq(&inferred, &var.to_type(self.heap));
+                            }
+                        }
+
+                        let mut params: Vec<Param> = param_vars
+                            .into_iter()
+                            .zip(&param_default_tys)
+                            .map(|((name, var), default_ty)| {
+                                let ty = self.solver().force_var(var);
+                                let required = match default_ty {
+                                    Some(default_ty) => {
+                                        Required::Optional(Some(DefaultValue::new(
+                                            default_ty
+                                                .clone()
+                                                .with_literal_style(LitStyle::Explicit),
+                                        )))
+                                    }
+                                    None => Required::Required,
+                                };
+                                Param::Pos(name.clone(), ty, required)
+                            })
+                            .collect();
                         if let Some(parameters) = &lambda.parameters {
                             params.extend(parameters.vararg.iter().map(|x| {
                                 let var = self.solver().fresh_unwrap(self.uniques);
@@ -535,7 +595,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.heap.mk_callable(params, ret)
                     },
                     |callable| callable,
-                )
+                );
+                if let Type::Callable(c) = &callable {
+                    let is_implicit_any = |t: &Type| matches!(t, Type::Any(AnyStyle::Implicit));
+                    // Collect the AST parameters in the same order the callable's params
+                    // were built above (non-variadic, then vararg, then kwarg), so we can
+                    // point each error at the specific parameter by name and range.
+                    let mut ast_params: Vec<(&Name, TextRange)> = Vec::new();
+                    if let Some(parameters) = &lambda.parameters {
+                        for p in parameters.iter_non_variadic_params() {
+                            ast_params.push((&p.name().id, p.name().range()));
+                        }
+                        if let Some(vararg) = &parameters.vararg {
+                            ast_params.push((&vararg.name.id, vararg.name.range()));
+                        }
+                        if let Some(kwarg) = &parameters.kwarg {
+                            ast_params.push((&kwarg.name.id, kwarg.name.range()));
+                        }
+                    }
+                    if let Params::List(params) = &c.params {
+                        for (param, (name, range)) in params.items().iter().zip(&ast_params) {
+                            if is_implicit_any(param.as_type()) {
+                                self.error(
+                                    errors,
+                                    *range,
+                                    ErrorKind::ImplicitAnyLambda,
+                                    format!("Type of lambda parameter `{name}` is unknown"),
+                                );
+                            }
+                        }
+                    }
+                    if is_implicit_any(&c.ret) {
+                        self.error(
+                            errors,
+                            lambda.body.range(),
+                            ErrorKind::ImplicitAnyLambda,
+                            "Return type of lambda is unknown".to_owned(),
+                        );
+                    }
+                }
+                callable
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
             Expr::List(x) => self.infer_with_decomposed_hint(
@@ -2022,8 +2121,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         name: Identifier,
         x: &ExprCall,
+        kind: QuantifiedKind,
         errors: &ErrorCollector,
     ) -> TypeVar {
+        let construct = kind.to_string();
         let mut arg_name = false;
         let mut restriction = None;
         let mut default = None;
@@ -2037,7 +2138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         x.range,
                         ErrorKind::InvalidTypeVar,
                         format!(
-                            "TypeVar must be assigned to a variable named `{}`",
+                            "{construct} must be assigned to a variable named `{}`",
                             lit.value.to_str()
                         ),
                     );
@@ -2047,7 +2148,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                     arg.range(),
                     ErrorKind::InvalidTypeVar,
-                    "Expected first argument of TypeVar to be a string literal".to_owned(),
+                    format!("Expected first argument of {construct} to be a string literal"),
                 );
             }
         };
@@ -2091,7 +2192,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 kw.range,
                                 ErrorKind::InvalidTypeVar,
-                                "TypeVar cannot have both constraints and bound".to_owned(),
+                                format!("{construct} cannot have both constraints and bound"),
                             );
                             restriction = Some(Restriction::Unrestricted);
                         } else {
@@ -2100,7 +2201,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     "default" => {
                         default = Some((
-                            self.expr_untype(&kw.value, TypeFormContext::TypeVarDefault, errors),
+                            self.expr_untype(
+                                &kw.value,
+                                TypeFormContext::quantified_kind_default(kind),
+                                errors,
+                            ),
                             kw.value.range(),
                         ))
                     }
@@ -2126,7 +2231,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                             kw.range,
                             ErrorKind::InvalidTypeVar,
-                            format!("Unexpected keyword argument `{}` to TypeVar", id.id),
+                            format!("Unexpected keyword argument `{}` to {construct}", id.id),
                         );
                     }
                 },
@@ -2135,7 +2240,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         kw.range,
                         ErrorKind::InvalidTypeVar,
-                        "Cannot pass unpacked keyword arguments to TypeVar".to_owned(),
+                        format!("Cannot pass unpacked keyword arguments to {construct}"),
                     );
                 }
             }
@@ -2158,7 +2263,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 x.range,
                 ErrorKind::InvalidTypeVar,
                 format!(
-                    "Expected at least 2 constraints in TypeVar `{}`, got {}",
+                    "Expected at least 2 constraints in {construct} `{}`, got {}",
                     name.id,
                     cs.len(),
                 ),
@@ -2170,7 +2275,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some((default_ty, default_range)) = default {
             default_value = Some(self.validate_type_var_default(
                 &name.id,
-                QuantifiedKind::TypeVar,
+                kind,
                 &default_ty,
                 default_range,
                 &restriction,
@@ -2180,9 +2285,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         let variance = variance.unwrap_or(PreInferenceVariance::Invariant);
 
-        TypeVar::new(
+        TypeVar::new_with_kind(
             name,
             self.module().dupe(),
+            kind,
             restriction,
             default_value,
             variance,
@@ -2499,8 +2605,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match base {
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
-                        let tys = xs
-                            .map(|x| self.expr_untype(x, TypeFormContext::TypeArgument, errors));
+                        let tys =
+                            self.parse_type_args_for_tparams(xs, forall.tparams.as_vec(), errors);
                         self.specialize_forall(*forall, tys, range, errors)
                     } else {
                         let name = forall.body.name();
@@ -2544,9 +2650,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Type::ClassDef(ref cls) if self.is_shaped_array_class(cls) => {
                     Type::type_of(self.parse_registered_shaped_array_type(cls, xs, range, errors))
                 }
+                Type::ClassDef(ref cls) if self.is_size_tuple_class(cls) => {
+                    self.parse_size_tuple_type(xs, errors)
+                }
                 // Dim type parsing: Dim[3], Dim[N], Dim[N+1] syntax
                 Type::ClassDef(ref cls) if self.is_symint_class(cls) => {
                     self.parse_symint_type(xs, range, errors)
+                }
+                Type::ClassDef(ref cls)
+                    if cls.has_toplevel_qname("shape_extensions", "ProxyMethod") =>
+                {
+                    self.proxy_method_subscript_infer(cls, xs, range, errors)
                 }
                 Type::ClassDef(ref cls)
                     if let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = slice
@@ -3090,9 +3204,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_pytorch_tensor_type(ty: &Type) -> bool {
+        fn is_torch_tensor_class(cls: &ClassType) -> bool {
+            let module = cls.class_object().module_name();
+            let module = module.as_str();
+            cls.name().as_str() == "Tensor" && matches!(module, "torch" | "torch._tensor")
+        }
+
         match ty {
-            Type::ClassType(cls) => cls.has_qname("torch", "Tensor"),
-            Type::ShapedArray(shaped_array) => shaped_array.base_class.has_qname("torch", "Tensor"),
+            Type::ClassType(cls) => is_torch_tensor_class(cls),
+            Type::ShapedArray(shaped_array) => is_torch_tensor_class(&shaped_array.base_class),
             _ => false,
         }
     }
@@ -3119,23 +3239,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .as_slice()
             .get(shape_idx)
             .expect("class type should have an argument for each type parameter");
-        // The shape parameter is either a `TypeVarTuple` (variadic-segment mode)
-        // or a regular `TypeVar` that carries the shape as a single tuple.
         match shape_param.kind() {
-            QuantifiedKind::TypeVarTuple => {
-                // In TypeVarTuple mode the argument is always stored as a tuple
-                // carrier. Project it back to an internal shape, normalizing
-                // malformed or unbounded carriers to shapeless.
-                ShapedArrayType::from_tuple_carrier_or_shapeless(cls.clone(), shape_arg)
-                    .with_shape_arg_style(ShapedArrayShapeArgStyle::TypeVarTuple {
-                        index: shape_idx,
-                    })
-            }
-            QuantifiedKind::TypeVar => {
-                // In TypeVar mode the argument is a single tuple carrier. Raw
-                // carriers like `S` project to an unpacked shape with `S` as
-                // the variadic middle, so normal dimension binding can solve
-                // them just like TypeVarTuple-shaped arrays.
+            QuantifiedKind::TypeVar | QuantifiedKind::SymVar => {
                 match tuple_carrier_to_shape(shape_arg) {
                     Some(shape) => ShapedArrayType::new(cls.clone(), shape).with_shape_arg_style(
                         ShapedArrayShapeArgStyle::TupleCarrier { index: shape_idx },
@@ -3145,6 +3250,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ),
                 }
             }
+            QuantifiedKind::TypeVarTuple => unreachable!(
+                "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+            ),
             QuantifiedKind::ParamSpec => {
                 unreachable!("shaped-array metadata validation rejects ParamSpec shape parameters")
             }
@@ -3168,9 +3276,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> ShapedArrayType {
         match self.shaped_array_shape_for_class_type(&tensor.base_class) {
             Some(shape_param) => match shape_param.kind() {
-                QuantifiedKind::TypeVar => {
-                    // Tuple-carrier mode: rewrite *only* the registered shape argument
-                    // to the new carrier, leaving every other class argument intact.
+                QuantifiedKind::TypeVar | QuantifiedKind::SymVar => {
                     let shape_idx = self
                         .get_class_tparams(tensor.base_class.class_object())
                         .iter()
@@ -3190,12 +3296,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         shape_arg_style: tensor.shape_arg_style,
                     }
                 }
-                QuantifiedKind::TypeVarTuple => ShapedArrayType {
-                    base_class: tensor.base_class.clone(),
-                    shape,
-                    syntax: tensor.syntax,
-                    shape_arg_style: tensor.shape_arg_style,
-                },
+                QuantifiedKind::TypeVarTuple => unreachable!(
+                    "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+                ),
                 QuantifiedKind::ParamSpec => {
                     unreachable!(
                         "shaped-array metadata validation rejects ParamSpec shape parameters"
@@ -3235,8 +3338,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls.has_toplevel_qname("shape_extensions", "D")
     }
 
-    /// Parse a single dimension expression (recursive helper)
+    /// Parse a single dimension expression (recursive helper).
+    ///
+    /// A dimension expression is one element of a tensor shape. For example, in
+    /// `Tensor[Batch, Channels + 1, 3]` the dimension expressions are the type
+    /// variable `Batch`, the arithmetic expression `Channels + 1`, and the
+    /// integer literal `3`. Returns the `Type` the dimension resolves to, or
+    /// `None` (after emitting an error) if it is not a valid dimension.
     fn parse_dimension_expr(&self, expr: &Expr, errors: &ErrorCollector) -> Option<Type> {
+        self.parse_dimension_expr_with_context(expr, errors, DimensionExprContext::Bare)
+    }
+
+    fn parse_dimension_expr_with_context(
+        &self,
+        expr: &Expr,
+        errors: &ErrorCollector,
+        context: DimensionExprContext,
+    ) -> Option<Type> {
         // shape_extensions.D[...] and D(...) are runtime-only wrappers that
         // let Python evaluate arithmetic on PEP 695 type variables.
         match expr {
@@ -3245,7 +3363,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Type::ClassDef(ref cls) = base
                     && self.is_shape_arith_wrapper_class(cls)
                 {
-                    return self.parse_dimension_expr(&x.slice, errors);
+                    return self.parse_dimension_expr_with_context(&x.slice, errors, context);
+                }
+                if let Type::ClassDef(ref cls) = base
+                    && self.is_symint_class(cls)
+                {
+                    let xs = Ast::unpack_slice(&x.slice);
+                    return match xs {
+                        [arg] => self.parse_dimension_expr_with_context(arg, errors, context),
+                        _ => {
+                            self.error(
+                                errors,
+                                expr.range(),
+                                ErrorKind::BadSpecialization,
+                                format!("Expected 1 type argument for `Dim`, got {}", xs.len()),
+                            );
+                            None
+                        }
+                    };
                 }
             }
             Expr::Call(ExprCall {
@@ -3256,7 +3391,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && self.is_shape_arith_wrapper_class(cls)
                 {
                     if arguments.args.len() == 1 && arguments.keywords.is_empty() {
-                        return self.parse_dimension_expr(&arguments.args[0], errors);
+                        return self.parse_dimension_expr_with_context(
+                            &arguments.args[0],
+                            errors,
+                            context,
+                        );
                     }
                     self.error(
                         errors,
@@ -3325,29 +3464,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let expr_type = self.expr_infer(expr, errors);
 
                 match &expr_type {
-                    Type::QuantifiedValue(q) => Some(Type::Quantified(q.clone())),
                     Type::ClassDef(cls) if cls.has_toplevel_qname("typing", "Any") => {
                         // typing.Any in a type annotation position (e.g., Tensor[16, Any])
                         // Use Explicit since the user wrote Any explicitly
                         Some(Type::Any(AnyStyle::Explicit))
                     }
                     _ => {
-                        self.error(
-                            errors,
+                        match self.untype_opt_with_context(
+                            expr_type.clone(),
                             expr.range(),
-                            ErrorKind::InvalidAnnotation,
-                            format!(
-                                "Tensor shape dimensions must be integer literals or type variables, got `{}`",
-                                self.for_display(expr_type)
-                            ),
-                        );
-                        None
+                            errors,
+                            UntypeContext::SymbolicInt(context.error_context()),
+                        ) {
+                            Some(Type::Quantified(q)) if q.kind() == QuantifiedKind::SymVar => {
+                                Some(Type::Quantified(q))
+                            }
+                            Some(ty @ Type::TypeVar(_)) => Some(ty),
+                            Some(ty) if ty.is_error() => Some(ty),
+                            _ => {
+                                self.error(
+                                    errors,
+                                    expr.range(),
+                                    ErrorKind::InvalidAnnotation,
+                                    format!(
+                                        "Tensor shape dimensions must be integer literals or type variables, got `{}`",
+                                        self.for_display(expr_type)
+                                    ),
+                                );
+                                None
+                            }
+                        }
                     }
                 }
             }
             // Unary negation: -N, -1, -(N + 1), etc.
             Expr::UnaryOp(x) if x.op == UnaryOp::USub => {
-                let inner = self.parse_dimension_expr(&x.operand, errors)?;
+                let inner = self.parse_dimension_expr_with_context(
+                    &x.operand,
+                    errors,
+                    DimensionExprContext::Arithmetic,
+                )?;
                 Some(self.heap.mk_size(SizeExpr::sub(
                     self.heap.mk_size(SizeExpr::Literal(0)),
                     inner,
@@ -3357,17 +3513,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::BinOp(ExprBinOp {
                 left, op, right, ..
             }) => {
-                let left_dim = self.parse_dimension_expr(left, errors)?;
-                let right_dim = self.parse_dimension_expr(right, errors)?;
-
-                match op {
-                    Operator::Add => Some(self.heap.mk_size(SizeExpr::add(left_dim, right_dim))),
-                    Operator::Sub => Some(self.heap.mk_size(SizeExpr::sub(left_dim, right_dim))),
-                    Operator::Mult => Some(self.heap.mk_size(SizeExpr::mul(left_dim, right_dim))),
-                    Operator::FloorDiv => {
-                        Some(self.heap.mk_size(SizeExpr::floor_div(left_dim, right_dim)))
-                    }
-                    Operator::Pow => Some(self.heap.mk_size(SizeExpr::pow(left_dim, right_dim))),
+                let make_size = match op {
+                    Operator::Add => SizeExpr::add,
+                    Operator::Sub => SizeExpr::sub,
+                    Operator::Mult => SizeExpr::mul,
+                    Operator::FloorDiv => SizeExpr::floor_div,
+                    Operator::Pow => SizeExpr::pow,
                     _ => {
                         self.error(
                             errors,
@@ -3378,9 +3529,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 op.as_str()
                             ),
                         );
-                        None
+                        return None;
                     }
-                }
+                };
+                let left_dim = self.parse_dimension_expr_with_context(
+                    left,
+                    errors,
+                    DimensionExprContext::Arithmetic,
+                )?;
+                let right_dim = self.parse_dimension_expr_with_context(
+                    right,
+                    errors,
+                    DimensionExprContext::Arithmetic,
+                )?;
+                Some(self.heap.mk_size(make_size(left_dim, right_dim)))
             }
             // Anything else is an error
             _ => {
@@ -3401,7 +3563,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Parse a list of dimension expressions, simplifying and validating each one.
     /// Returns None if any dimension fails to parse or is non-positive.
-    fn parse_dimension_list(&self, args: &[Expr], errors: &ErrorCollector) -> Option<Vec<Type>> {
+    pub(super) fn parse_dimension_list(
+        &self,
+        args: &[Expr],
+        errors: &ErrorCollector,
+    ) -> Option<Vec<Type>> {
         let mut dims = Vec::new();
         for arg in args {
             if let Some(dim) = self.parse_dimension_expr(arg, errors) {
@@ -3450,74 +3616,47 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn contains_quantified(ty: &Type, param: &Quantified) -> bool {
-        ty.any(|ty| {
-            matches!(ty, Type::Quantified(q) | Type::QuantifiedValue(q) if q.as_ref() == param)
-        })
-    }
-
-    fn is_dim_bound(ty: &Type) -> bool {
-        matches!(ty, Type::Dim(_))
-            || matches!(ty, Type::ClassType(cls) if cls.has_qname("shape_extensions", "Dim"))
-    }
-
-    fn type_mentions_param_as_dimension(
-        &self,
-        ty: &Type,
-        param: &Quantified,
-        depth: usize,
-    ) -> bool {
-        if depth > 8 {
-            return false;
-        }
-        match ty {
-            Type::Dim(inner) => Self::contains_quantified(inner, param),
-            Type::Size(_) => Self::contains_quantified(ty, param),
-            Type::ShapedArray(tensor) => match tensor.shape.as_tuple() {
-                Tuple::Concrete(dims) => {
-                    dims.iter().any(|dim| Self::contains_quantified(dim, param))
-                }
-                Tuple::Unbounded(middle) => Self::contains_quantified(middle, param),
-                Tuple::Unpacked(unpacked) => {
-                    let (prefix, middle, suffix) = &**unpacked;
-                    prefix
-                        .iter()
-                        .chain(suffix)
-                        .any(|dim| Self::contains_quantified(dim, param))
-                        || Self::contains_quantified(middle, param)
-                }
-            },
-            Type::ClassType(cls) => cls.targs().iter_paired().any(|(nested_param, nested_arg)| {
-                Self::contains_quantified(nested_arg, param)
-                    && self.class_tparam_used_in_shape_context(
-                        cls.class_object(),
-                        nested_param,
-                        depth + 1,
-                    )
-            }),
-            _ => {
-                let mut found = false;
-                ty.recurse(&mut |ty| {
-                    found |= self.type_mentions_param_as_dimension(ty, param, depth + 1);
-                });
-                found
-            }
-        }
-    }
-
-    fn class_tparam_used_in_shape_context(
+    fn proxy_method_subscript_infer(
         &self,
         cls: &Class,
-        param: &Quantified,
-        depth: usize,
-    ) -> bool {
-        if matches!(param.restriction(), Restriction::Bound(bound) if Self::is_dim_bound(bound)) {
-            return true;
-        }
-        self.get_class_field_map(cls).values().any(|field| {
-            let (ty, _, _) = field.for_variance_inference();
-            self.type_mentions_param_as_dimension(ty, param, depth)
-        })
+        xs: &[Expr],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        let target_ty = match xs {
+            [Expr::StringLiteral(lit)] => match Lit::from_string_literal(lit) {
+                Some(lit) => lit.to_explicit_type(),
+                None => {
+                    self.error(
+                        errors,
+                        lit.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "`ProxyMethod` target must be a string literal".to_owned(),
+                    );
+                    self.heap.mk_any_error()
+                }
+            },
+            [arg] => {
+                self.error(
+                    errors,
+                    arg.range(),
+                    ErrorKind::InvalidAnnotation,
+                    "`ProxyMethod` target must be a string literal".to_owned(),
+                );
+                self.heap.mk_any_error()
+            }
+            _ => {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidAnnotation,
+                    "`ProxyMethod` requires exactly one string literal target".to_owned(),
+                );
+                self.heap.mk_any_error()
+            }
+        };
+        self.heap
+            .mk_type_of(self.specialize(cls, vec![target_ty], range, errors))
     }
 
     fn class_subscript_infer(
@@ -3581,14 +3720,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &[Expr],
         errors: &ErrorCollector,
     ) -> Vec<Type> {
+        let tparams = self.get_class_tparams(cls);
+        self.parse_type_args_for_tparams(args, tparams.as_vec(), errors)
+    }
+
+    fn parse_type_args_for_tparams(
+        &self,
+        args: &[Expr],
+        tparams_vec: &[Quantified],
+        errors: &ErrorCollector,
+    ) -> Vec<Type> {
         if !self.solver().tensor_shapes {
             return args.map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors));
         }
-        let tparams = self.get_class_tparams(cls);
-        let tparams_vec = tparams.as_vec();
         let variadic_idx = tparams_vec
             .iter()
             .position(|param| param.is_type_var_tuple());
+        let int_type = self.stdlib.int().clone().to_type();
         let param_for_arg = |idx: usize| {
             if let Some(variadic_idx) = variadic_idx {
                 let suffix_len = tparams_vec.len() - variadic_idx - 1;
@@ -3606,32 +3754,116 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args.iter()
             .enumerate()
             .map(|(idx, arg)| {
-                if let Some(param) = param_for_arg(idx)
-                    && (param.is_type_var() || param.is_type_var_tuple())
-                    && self.class_tparam_used_in_shape_context(cls, param, 0)
-                    && !matches!(arg, Expr::Starred(_))
-                {
-                    self.parse_dimension_expr(arg, errors)
-                        .unwrap_or_else(Type::any_error)
-                } else {
-                    self.expr_untype(arg, TypeFormContext::TypeArgument, errors)
+                if let Some(param) = param_for_arg(idx) {
+                    if param.kind() == QuantifiedKind::SymVar && !matches!(arg, Expr::Starred(_)) {
+                        return self
+                            .parse_dimension_expr(arg, errors)
+                            .unwrap_or_else(Type::any_error);
+                    }
+                    if param.kind() == QuantifiedKind::TypeVar
+                        && let Expr::List(ExprList { elts, .. }) = arg
+                        && Self::is_size_tuple_carrier_bound(
+                            &param.upper_bound(self.stdlib, self.heap),
+                            &int_type,
+                        )
+                    {
+                        return self
+                            .parse_size_tuple_shape_args(elts, errors)
+                            .map(|shape| shape_to_tuple_carrier_arg(&shape))
+                            .unwrap_or_else(Type::any_error);
+                    }
                 }
+                self.expr_untype(arg, TypeFormContext::TypeArgument, errors)
             })
             .collect()
     }
 
-    /// Check if a type is a valid TypeVarTuple (either directly or wrapped in Unpack).
-    /// Returns the unwrapped type if valid, None otherwise.
-    fn unwrap_type_var_tuple(ty: &Type) -> Option<Type> {
+    /// Returns whether `ty` is the normalized upper bound for a bare `SizeTuple`
+    /// carrier `TypeVar`.
+    ///
+    /// When the user writes `[S: SizeTuple]`, Pyrefly normalizes `SizeTuple` to a
+    /// `tuple[int, ...]` type. Other tuple bounds are ordinary type bounds and
+    /// must not enable compact shape-list parsing.
+    fn is_size_tuple_carrier_bound(ty: &Type, int_type: &Type) -> bool {
         match ty {
-            Type::TypeVarTuple(_) => Some(ty.clone()),
-            Type::Quantified(q) if q.kind() == QuantifiedKind::TypeVarTuple => Some(ty.clone()),
-            Type::Unpack(inner) => Self::unwrap_type_var_tuple(inner),
-            // Allow unbounded tuples like tuple[Any, ...] as variadic middles.
-            // These represent "unknown number of batch dims" and are already
-            // handled by the broadcast and shape-tracking logic.
-            Type::Tuple(Tuple::Unbounded(_)) => Some(ty.clone()),
-            _ => None,
+            Type::Tuple(Tuple::Unbounded(inner)) => inner.as_ref() == int_type,
+            _ => false,
+        }
+    }
+
+    /// Returns whether `ty` can legally be the argument inside `Elements[...]`.
+    ///
+    /// Valid carriers are concrete tuple types, type aliases (which normalize to
+    /// tuples), and `TypeVar`s whose upper bound is a `SizeTuple` (i.e., a tuple type).
+    fn is_size_tuple_elements_carrier(&self, ty: &Type) -> bool {
+        let upper_bound = match ty {
+            Type::Tuple(_) | Type::UntypedAlias(_) => return true,
+            Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
+            Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
+            _ => return false,
+        };
+        let int_type = self.stdlib.int().clone().to_type();
+        Self::is_size_tuple_carrier_bound(&upper_bound, &int_type)
+    }
+
+    fn is_shape_elements_class(&self, cls: &Class) -> bool {
+        cls.has_toplevel_qname("shape_extensions", "Elements")
+    }
+
+    /// Parse `Elements[S]` in `*Elements[S]`, returning the bare `S` carrier.
+    ///
+    /// `Elements` is the conceptual inverse of `tuple[Unpack[Ts]]`: whereas
+    /// `tuple[Unpack[Ts]]` wraps a `TypeVarTuple` into a concrete tuple type,
+    /// `Elements[S]` extracts the element sequence from a `SizeTuple` carrier `S`.
+    /// This fills a gap in the typing spec — there is no standard way to decompose
+    /// a variadic carrier without a `TypeVarTuple` — letting callers write
+    /// `Array[[*Elements[S], OUT], DType]` instead of needing a `TypeVarTuple`.
+    fn parse_size_tuple_elements_projection(
+        &self,
+        value: &Expr,
+        errors: &ErrorCollector,
+    ) -> Result<Option<Type>, ()> {
+        let Expr::Subscript(subscript) = value else {
+            return Ok(None);
+        };
+        let base = self.expr_infer(&subscript.value, errors);
+        let Type::ClassDef(ref cls) = base else {
+            return Ok(None);
+        };
+        if !self.is_shape_elements_class(cls) {
+            return Ok(None);
+        }
+
+        match Ast::unpack_slice(&subscript.slice) {
+            [arg] => {
+                let carrier = self.expr_untype(arg, TypeFormContext::TypeArgument, errors);
+                if self.is_size_tuple_elements_carrier(&carrier) {
+                    Ok(Some(carrier))
+                } else {
+                    self.error(
+                        errors,
+                        arg.range(),
+                        ErrorKind::InvalidAnnotation,
+                        format!(
+                            "`Elements[...]` requires a `SizeTuple` carrier, got `{}`",
+                            self.for_display(carrier)
+                        ),
+                    );
+                    Err(())
+                }
+            }
+            args => {
+                self.error(
+                    errors,
+                    subscript.slice.range(),
+                    ErrorKind::BadSpecialization,
+                    format!(
+                        "Expected 1 type argument for `Elements`, got {}",
+                        args.len()
+                    ),
+                );
+                Err(())
+            }
         }
     }
 
@@ -3648,25 +3880,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    /// Parse a shape argument list like `[2, 3]`, `[N + M, K]`, or `[2, *Shape, 4]`.
-    ///
-    /// Returns both the tensor shape and the flattened type arguments to feed to
-    /// the class's `TypeVarTuple` parameter.
-    fn parse_shaped_array_shape_args(
+    fn parse_size_tuple_shape_args(
         &self,
-        shape_args: &[Expr],
+        args: &[Expr],
         errors: &ErrorCollector,
-    ) -> Option<(ShapedArrayShape, Vec<Type>)> {
-        // Check if any argument is a starred expression (unpacked TypeVarTuple)
-        let star = shape_args
+    ) -> Option<ShapedArrayShape> {
+        let star = args
             .iter()
             .enumerate()
             .find(|(_, arg)| matches!(arg, Expr::Starred(_)));
 
         if let Some((star_idx, Expr::Starred(ExprStarred { value, .. }))) = star {
-            // Handle variadic shape: [2, *Shape, 4]
-            // Verify there's only one starred expression
-            if let Some(second) = shape_args[star_idx + 1..]
+            if let Some(second) = args[star_idx + 1..]
                 .iter()
                 .find(|arg| matches!(arg, Expr::Starred(_)))
             {
@@ -3674,56 +3899,43 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     errors,
                     second.range(),
                     ErrorKind::InvalidAnnotation,
-                    "Tensor shape can have at most one unpacked TypeVarTuple".to_owned(),
+                    "`SizeTuple` can have at most one unpacked shape carrier".to_owned(),
                 );
                 return None;
             }
 
-            // Parse prefix and suffix dimensions
-            let prefix = self.parse_dimension_list(&shape_args[..star_idx], errors)?;
-            let suffix = self.parse_dimension_list(&shape_args[star_idx + 1..], errors)?;
-
-            // Parse the starred expression
-            let middle_ty = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
-
-            // Verify and unwrap TypeVarTuple
-            let Some(middle_ty) = Self::unwrap_type_var_tuple(&middle_ty) else {
-                self.error(
-                    errors,
-                    value.range(),
-                    ErrorKind::InvalidAnnotation,
-                    format!(
-                        "Unpacked type in Tensor shape must be a TypeVarTuple, got `{}`",
-                        self.for_display(middle_ty)
-                    ),
-                );
-                return None;
+            let prefix = self.parse_dimension_list(&args[..star_idx], errors)?;
+            let suffix = self.parse_dimension_list(&args[star_idx + 1..], errors)?;
+            let middle_ty = match self.parse_size_tuple_elements_projection(value, errors) {
+                Ok(Some(middle_ty)) => middle_ty,
+                Ok(None) => {
+                    let got = self.expr_untype(value, TypeFormContext::TypeArgument, errors);
+                    self.error(
+                        errors,
+                        value.range(),
+                        ErrorKind::InvalidAnnotation,
+                        format!(
+                            "Unpacked type in `SizeTuple` must use `Elements[...]`, got `{}`",
+                            self.for_display(got)
+                        ),
+                    );
+                    return None;
+                }
+                Err(()) => return None,
             };
-
-            let mut targs = prefix.clone();
-            targs.push(self.heap.mk_unpack(middle_ty.clone()));
-            targs.extend(suffix.clone());
-
-            return Some((ShapedArrayShape::unpacked(prefix, middle_ty, suffix), targs));
+            return Some(ShapedArrayShape::unpacked(prefix, middle_ty, suffix));
         }
 
-        // No starred expression - parse as concrete shape
-        let dims = self.parse_dimension_list(shape_args, errors)?;
-        Some((ShapedArrayShape::from_types(dims.clone()), dims))
+        self.parse_dimension_list(args, errors)
+            .map(ShapedArrayShape::from_types)
     }
 
     /// Parse a registered shaped-array annotation.
     ///
-    /// There are two modes, determined by the kind of the registered shape
-    /// parameter:
-    ///
-    /// - **Variadic segment mode** (`TypeVarTuple`): the shape occupies a
-    ///   variable-length segment of the subscript, so `Array[DType, *Shape]` and
-    ///   `Array[*Shape, DType]` split their subscripts differently.
-    /// - **Single tuple-carrier parameter mode** (`TypeVar`): the shape is a
-    ///   single ordinary type argument carrying a tuple (e.g. NumPy's
-    ///   `ndarray[Shape, DType]`). We specialize the class normally and project
-    ///   the carrier into a shape via `shaped_array_classtype_to_shaped_array_type`.
+    /// The registered shape parameter is a single ordinary type argument that
+    /// carries a tuple (e.g. `ndarray[Shape, DType]`). We specialize the class
+    /// normally and project the carrier into a shape via
+    /// `shaped_array_classtype_to_shaped_array_type`.
     fn parse_registered_shaped_array_type(
         &self,
         cls: &Class,
@@ -3735,112 +3947,70 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .shaped_array_shape_for_class(cls)
             .expect("registered shaped-array class should have shape metadata");
 
-        match shape_param.kind() {
-            QuantifiedKind::TypeVar => {
-                // Single tuple-carrier parameter mode: ordinary class specialization,
-                // then project the carrier into a shape.
-                //
-                // The registered shape slot additionally accepts a compact
-                // tuple literal as an alternate surface form:
-                // `Array[(2, 3), DType]` normalizes to
-                // `Array[tuple[Literal[2], Literal[3]], DType]`. This rewrite is
-                // scoped to the registered shape argument only -- it is purely
-                // syntax normalization for that slot, NOT general support for
-                // tuple literals in arbitrary type positions.
-                let tparams = self.get_class_tparams(cls);
-                let shape_idx = tparams
-                    .iter()
-                    .position(|param| param == &shape_param)
-                    .expect("shaped-array metadata should refer to a class type parameter");
-                // Map every argument by position. Missing or extra args still
-                // flow to ordinary specialization/arity diagnostics; shape-slot
-                // validation runs when the shape argument was supplied and the
-                // annotation does not have too many positional type arguments.
-                let validate_shape_slot = shape_idx < args.len() && args.len() <= tparams.len();
-                let class_targs = args
-                    .iter()
-                    .enumerate()
-                    .map(|(i, arg)| match arg {
-                        Expr::Tuple(tuple) if i == shape_idx => {
-                            // Compact carrier: parse the elements with the shared
-                            // dimension parser (which emits precise per-element
-                            // diagnostics), then rebuild the equivalent tuple
-                            // carrier. On a bad dimension the error is already
-                            // reported, so this slot degrades to an error type.
-                            match self.parse_dimension_list(&tuple.elts, errors) {
-                                Some(dims) => {
-                                    shape_to_tuple_carrier(&ShapedArrayShape::from_types(dims))
-                                }
-                                None => Type::any_error(),
-                            }
-                        }
-                        _ => {
-                            let ty = self.expr_untype(arg, TypeFormContext::TypeArgument, errors);
-                            // An unbounded tuple (`tuple[int, ...]`, `tuple[Any, ...]`,
-                            // `tuple[object, ...]`) carries no concrete rank, so it
-                            // cannot serve as a shaped-array shape carrier. Reject it
-                            // here, where we still have the source range, instead of
-                            // silently projecting it to a shapeless array later.
-                            if validate_shape_slot
-                                && i == shape_idx
-                                && Self::has_unbounded_tuple_carrier(&ty)
-                            {
-                                self.error(
-                                    errors,
-                                    arg.range(),
-                                    ErrorKind::InvalidAnnotation,
-                                    "Unbounded tuple types cannot be used as shaped-array shape carriers".to_owned(),
-                                );
-                                Type::any_error()
-                            } else {
-                                ty
-                            }
-                        }
-                    })
-                    .collect();
-                let base_class =
-                    self.specialize_nontypeddict_to_classtype(cls, class_targs, range, errors);
-                return self
-                    .shaped_array_classtype_to_shaped_array_type(&base_class)
-                    .to_type();
-            }
-            QuantifiedKind::TypeVarTuple => {}
-            QuantifiedKind::ParamSpec => {
-                unreachable!("shaped-array metadata validation rejects ParamSpec shape parameters")
-            }
-        }
-
         let tparams = self.get_class_tparams(cls);
         let shape_idx = tparams
             .iter()
             .position(|param| param == &shape_param)
             .expect("shaped-array metadata should refer to a class type parameter");
-        let suffix_count = tparams.len() - shape_idx - 1;
-        let shape_start = shape_idx.min(args.len());
-        let shape_end = args.len().saturating_sub(suffix_count).max(shape_start);
-
-        let prefix_targs = args[..shape_start]
+        match shape_param.kind() {
+            QuantifiedKind::TypeVar | QuantifiedKind::SymVar => {}
+            QuantifiedKind::TypeVarTuple => unreachable!(
+                "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+            ),
+            QuantifiedKind::ParamSpec => {
+                unreachable!("shaped-array metadata validation rejects ParamSpec shape parameters")
+            }
+        }
+        let validate_shape_slot = shape_idx < args.len() && args.len() <= tparams.len();
+        let class_targs = args
             .iter()
-            .map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors));
-        let suffix_targs = args[shape_end..]
-            .iter()
-            .map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors));
-
-        let Some((shaped_array_shape, shape_targs)) =
-            self.parse_shaped_array_shape_args(&args[shape_start..shape_end], errors)
-        else {
-            return Type::any_error();
-        };
-        let class_targs = prefix_targs
-            .chain(shape_targs)
-            .chain(suffix_targs)
+            .enumerate()
+            .map(|(i, arg)| match arg {
+                Expr::List(ExprList { elts, .. }) if i == shape_idx => {
+                    match self.parse_size_tuple_shape_args(elts, errors) {
+                        Some(shape) => shape_to_tuple_carrier(&shape),
+                        None => Type::any_error(),
+                    }
+                }
+                _ => {
+                    if i == shape_idx
+                        && let Type::ClassDef(cls) = self.expr_infer(arg, &self.error_swallower())
+                        && self.is_size_tuple_class(&cls)
+                    {
+                        self.bare_size_tuple_carrier()
+                    } else {
+                        let ty = self.expr_untype(arg, TypeFormContext::TypeArgument, errors);
+                        if validate_shape_slot
+                            && i == shape_idx
+                            && Self::has_unbounded_tuple_carrier(&ty)
+                        {
+                            self.error(
+                                errors,
+                                arg.range(),
+                                ErrorKind::InvalidAnnotation,
+                                "Unbounded tuple types cannot be used as shaped-array shape carriers"
+                                    .to_owned(),
+                            );
+                            Type::any_error()
+                        } else {
+                            ty
+                        }
+                    }
+                }
+            })
             .collect();
         let base_class = self.specialize_nontypeddict_to_classtype(cls, class_targs, range, errors);
-
-        ShapedArrayType::new(base_class, shaped_array_shape)
-            .with_shape_arg_style(ShapedArrayShapeArgStyle::TypeVarTuple { index: shape_idx })
+        self.shaped_array_classtype_to_shaped_array_type(&base_class)
             .to_type()
     }
+
+    fn parse_size_tuple_type(&self, args: &[Expr], errors: &ErrorCollector) -> Type {
+        let Some(shape) = self.parse_size_tuple_shape_args(args, errors) else {
+            return self.heap.mk_type_of(Type::any_error());
+        };
+        self.heap.mk_type_of(shape_to_tuple_carrier(&shape))
+    }
+
     /// Parse Dim[3], Dim[N], Dim[N+1] into Type::Dim(...)
     fn parse_symint_type(&self, args: &[Expr], range: TextRange, errors: &ErrorCollector) -> Type {
         // Dim takes exactly one argument

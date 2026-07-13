@@ -8,6 +8,7 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
@@ -16,21 +17,23 @@ if TYPE_CHECKING:
 
 def test_view_literals():
     """Test .view() with literal dimensions"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.view(2, 5, 20)
-    assert_type(y, Tensor[2, 5, 20])
-    assert_type(y, Tensor[2, 5, 20])
+    assert_type(y, Tensor[[2, 5, 20]])
+    assert_type(y, Tensor[[2, 5, 20]])
 
 
 def test_reshape_literals():
     """Test .reshape() with literal dimensions"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.reshape(2, 5, 20)
-    assert_type(y, Tensor[2, 5, 20])
-    assert_type(y, Tensor[2, 5, 20])
+    assert_type(y, Tensor[[2, 5, 20]])
+    assert_type(y, Tensor[[2, 5, 20]])
 
 
-def test_view_symbolic[N, M](x: Tensor[N, M]) -> Tensor[2, N // 2, M]:
+def test_view_symbolic[N: SymVar, M: SymVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[2, N // 2, M]]:
     """Test .view() with symbolic dimensions
 
     Takes a tensor with shape [N, M] where N is divisible by 2,
@@ -51,5 +54,5 @@ def test_view_symbolic[N, M](x: Tensor[N, M]) -> Tensor[2, N // 2, M]:
 
 # Test by calling with concrete tensor
 result = test_view_symbolic(torch.randn(10, 20))
-assert_type(result, Tensor[2, (10 // 2), 20])
-assert_type(result, Tensor[2, 5, 20])
+assert_type(result, Tensor[[2, (10 // 2), 20]])
+assert_type(result, Tensor[[2, 5, 20]])

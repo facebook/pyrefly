@@ -472,6 +472,10 @@ impl ClassSynthesizedFields {
         self.0.get(name)
     }
 
+    pub fn get_index_of(&self, name: &Name) -> Option<usize> {
+        self.0.get_index_of(name)
+    }
+
     /// Combines two sets of synthesized fields, with the second set
     /// overwriting any fields in the first set that have the same name.
     pub fn combine(mut self, other: Self) -> Self {

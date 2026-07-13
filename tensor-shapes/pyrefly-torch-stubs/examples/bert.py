@@ -1,10 +1,7 @@
-# Portions (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is adapted from pytorch/benchmark (TorchBenchmark),
-# which is licensed under the BSD 3-Clause License:
-# https://github.com/pytorch/benchmark/blob/main/LICENSE
-#
-# This adaptation adds tensor shape type annotations for pyrefly.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 """
 BERT from TorchBenchmark with shape annotations.
@@ -14,14 +11,15 @@ Original: pytorch/benchmark/torchbenchmark/models/BERT_pytorch/bert_pytorch/mode
 
 import math
 from collections.abc import Callable
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import Elements, SizeTuple
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Dim, SymVar
     from torch import Tensor
 
 
@@ -30,11 +28,11 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class LayerNorm[Features](nn.Module):
+class LayerNorm[Features: SymVar](nn.Module):
     """Construct a layernorm module (See citation for details)."""
 
-    a_2: Tensor[Features]
-    b_2: Tensor[Features]
+    a_2: Tensor[[Features]]
+    b_2: Tensor[[Features]]
 
     def __init__(self, features: Dim[Features], eps: float = 1e-6) -> None:
         super().__init__()
@@ -42,15 +40,17 @@ class LayerNorm[Features](nn.Module):
         self.b_2 = nn.Parameter(torch.zeros(features))
         self.eps = eps
 
-    def forward[*Bs](self, x: Tensor[*Bs, Features]) -> Tensor[*Bs, Features]:
+    def forward[Bs: SizeTuple](
+        self, x: Tensor[[*Elements[Bs], Features]]
+    ) -> Tensor[[*Elements[Bs], Features]]:
         mean = x.mean(-1, keepdim=True)
-        assert_type(mean, Tensor[*Bs, 1])
+        assert_type(mean, Tensor[[*Elements[Bs], 1]])
         std = x.std(-1, keepdim=True)
-        assert_type(std, Tensor[*Bs, 1])
+        assert_type(std, Tensor[[*Elements[Bs], 1]])
         return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
 
 
-class SublayerConnection[Hidden](nn.Module):
+class SublayerConnection[Hidden: SymVar](nn.Module):
     """
     A residual connection followed by a layer norm.
     Note for code simplicity the norm is first as opposed to last.
@@ -61,16 +61,16 @@ class SublayerConnection[Hidden](nn.Module):
         self.norm = LayerNorm(size)
         self.dropout = nn.Dropout(dropout)
 
-    def forward[B, T](
+    def forward[B: SymVar, T: SymVar](
         self,
-        x: Tensor[B, T, Hidden],
-        sublayer: Callable[[Tensor[B, T, Hidden]], Tensor[B, T, Hidden]],
-    ) -> Tensor[B, T, Hidden]:
+        x: Tensor[[B, T, Hidden]],
+        sublayer: Callable[[Tensor[[B, T, Hidden]]], Tensor[[B, T, Hidden]]],
+    ) -> Tensor[[B, T, Hidden]]:
         """Apply residual connection to any sublayer with the same size."""
         return x + self.dropout(sublayer(self.norm(x)))
 
 
-class PositionwiseFeedForward[DModel, DFF](nn.Module):
+class PositionwiseFeedForward[DModel: SymVar, DFF: SymVar](nn.Module):
     """Implements FFN equation."""
 
     def __init__(
@@ -82,14 +82,16 @@ class PositionwiseFeedForward[DModel, DFF](nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.activation = nn.GELU()
 
-    def forward[B, T](self, x: Tensor[B, T, DModel]) -> Tensor[B, T, DModel]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, DModel]]
+    ) -> Tensor[[B, T, DModel]]:
         h = self.w_1(x)
-        assert_type(h, Tensor[B, T, DFF])
+        assert_type(h, Tensor[[B, T, DFF]])
         h = self.activation(h)
-        assert_type(h, Tensor[B, T, DFF])
+        assert_type(h, Tensor[[B, T, DFF]])
         h = self.dropout(h)
         h = self.w_2(h)
-        assert_type(h, Tensor[B, T, DModel])
+        assert_type(h, Tensor[[B, T, DModel]])
         return h
 
 
@@ -101,14 +103,14 @@ class PositionwiseFeedForward[DModel, DFF](nn.Module):
 class Attention(nn.Module):
     """Compute 'Scaled Dot Product Attention'"""
 
-    def forward[B, H, T, DK](
+    def forward[B: SymVar, H: SymVar, T: SymVar, DK: SymVar](
         self,
-        query: Tensor[B, H, T, DK],
-        key: Tensor[B, H, T, DK],
-        value: Tensor[B, H, T, DK],
+        query: Tensor[[B, H, T, DK]],
+        key: Tensor[[B, H, T, DK]],
+        value: Tensor[[B, H, T, DK]],
         mask: Tensor | None = None,
         dropout: nn.Dropout | None = None,
-    ) -> tuple[Tensor[B, H, T, DK], Tensor[B, H, T, T]]:
+    ) -> tuple[Tensor[[B, H, T, DK]], Tensor[[B, H, T, T]]]:
         scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(query.size(-1))
 
         if mask is not None:
@@ -122,7 +124,7 @@ class Attention(nn.Module):
         return torch.matmul(p_attn, value), p_attn
 
 
-class MultiHeadedAttention[DModel, H](nn.Module):
+class MultiHeadedAttention[DModel: SymVar, H: SymVar](nn.Module):
     """Take in model size and number of heads."""
 
     def __init__(self, h: Dim[H], d_model: Dim[DModel], dropout: float = 0.1) -> None:
@@ -141,13 +143,13 @@ class MultiHeadedAttention[DModel, H](nn.Module):
         self.attention = Attention()
         self.dropout = nn.Dropout(p=dropout)
 
-    def forward[B, T](
+    def forward[B: SymVar, T: SymVar](
         self,
-        query: Tensor[B, T, DModel],
-        key: Tensor[B, T, DModel],
-        value: Tensor[B, T, DModel],
+        query: Tensor[[B, T, DModel]],
+        key: Tensor[[B, T, DModel]],
+        value: Tensor[[B, T, DModel]],
         mask: Tensor | None = None,
-    ) -> Tensor[B, T, DModel]:
+    ) -> Tensor[[B, T, DModel]]:
         batch_size = query.size(0)
         seq_len = query.size(1)
         assert_type(batch_size, Dim[B])
@@ -159,7 +161,7 @@ class MultiHeadedAttention[DModel, H](nn.Module):
             .view(batch_size, seq_len, self.h, self.d_k)
             .transpose(1, 2)
         )
-        assert_type(query_p, Tensor[B, H, T, (DModel // H)])
+        assert_type(query_p, Tensor[[B, H, T, (DModel // H)]])
         key_p = (
             self.linear_layers[1](key)
             .view(batch_size, seq_len, self.h, self.d_k)
@@ -175,7 +177,7 @@ class MultiHeadedAttention[DModel, H](nn.Module):
         attn_out, attn = self.attention(
             query_p, key_p, value_p, mask=mask, dropout=self.dropout
         )
-        assert_type(attn_out, Tensor[B, H, T, (DModel // H)])
+        assert_type(attn_out, Tensor[[B, H, T, (DModel // H)]])
 
         # 3) "Concat" using a view and apply a final linear.
         x = (
@@ -183,7 +185,7 @@ class MultiHeadedAttention[DModel, H](nn.Module):
             .contiguous()
             .view(batch_size, seq_len, self.d_model)
         )
-        assert_type(x, Tensor[B, T, DModel])
+        assert_type(x, Tensor[[B, T, DModel]])
 
         return self.output_linear(x)
 
@@ -193,7 +195,7 @@ class MultiHeadedAttention[DModel, H](nn.Module):
 # ============================================================================
 
 
-class TokenEmbedding[VocabSize: Dim[Any], EmbedSize: Dim[Any] = 512](
+class TokenEmbedding[VocabSize: SymVar, EmbedSize: SymVar = 512](
     nn.Embedding[VocabSize, EmbedSize]
 ):
     def __init__(
@@ -229,7 +231,7 @@ class SegmentEmbedding(nn.Embedding):
         super().__init__(3, embed_size, padding_idx=0)
 
 
-class BERTEmbedding[VocabSize: Dim[Any], EmbedSize: Dim[Any]](nn.Module):
+class BERTEmbedding[VocabSize: SymVar, EmbedSize: SymVar](nn.Module):
     """
     BERT Embedding which is consisted with under features
         1. TokenEmbedding : normal embedding matrix
@@ -252,9 +254,9 @@ class BERTEmbedding[VocabSize: Dim[Any], EmbedSize: Dim[Any]](nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         self.embed_size = embed_size
 
-    def forward[B, T](
-        self, sequence: Tensor[B, T], segment_label: Tensor[B, T]
-    ) -> Tensor[B, T, EmbedSize]:
+    def forward[B: SymVar, T: SymVar](
+        self, sequence: Tensor[[B, T]], segment_label: Tensor[[B, T]]
+    ) -> Tensor[[B, T, EmbedSize]]:
         x = self.token(sequence) + self.position(sequence) + self.segment(segment_label)
         return self.dropout(x)
 
@@ -264,7 +266,7 @@ class BERTEmbedding[VocabSize: Dim[Any], EmbedSize: Dim[Any]](nn.Module):
 # ============================================================================
 
 
-class SelfAttentionWrapper[DModel, H](nn.Module):
+class SelfAttentionWrapper[DModel: SymVar, H: SymVar](nn.Module):
     """Wraps MultiHeadedAttention for self-attention (Q=K=V=x).
 
     The original uses a LambdaModule (TorchScript JIT wrapper) to convert the
@@ -280,11 +282,13 @@ class SelfAttentionWrapper[DModel, H](nn.Module):
     def set_mask(self, mask: Tensor) -> None:
         self.mask = mask
 
-    def forward[B, T](self, x: Tensor[B, T, DModel]) -> Tensor[B, T, DModel]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, DModel]]
+    ) -> Tensor[[B, T, DModel]]:
         return self.attention(x, x, x, mask=self.mask)
 
 
-class TransformerBlock[Hidden, H](nn.Module):
+class TransformerBlock[Hidden: SymVar, H: SymVar](nn.Module):
     """
     Bidirectional Encoder = Transformer (self-attention)
     Transformer = MultiHead_Attention + Feed_Forward with sublayer connection
@@ -307,14 +311,14 @@ class TransformerBlock[Hidden, H](nn.Module):
         self.output_sublayer = SublayerConnection(size=hidden, dropout=dropout)
         self.dropout = nn.Dropout(p=dropout)
 
-    def forward[B, T](
-        self, x: Tensor[B, T, Hidden], mask: Tensor
-    ) -> Tensor[B, T, Hidden]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, Hidden]], mask: Tensor
+    ) -> Tensor[[B, T, Hidden]]:
         self.self_attn.set_mask(mask)
         x = self.input_sublayer(x, self.self_attn)
-        assert_type(x, Tensor[B, T, Hidden])
+        assert_type(x, Tensor[[B, T, Hidden]])
         x = self.output_sublayer(x, self.feed_forward)
-        assert_type(x, Tensor[B, T, Hidden])
+        assert_type(x, Tensor[[B, T, Hidden]])
         return self.dropout(x)
 
 
@@ -323,7 +327,7 @@ class TransformerBlock[Hidden, H](nn.Module):
 # ============================================================================
 
 
-class BERT[VocabSize: Dim[Any], Hidden: Dim[Any] = 768, H: Dim[Any] = 12](nn.Module):
+class BERT[VocabSize: SymVar, Hidden: SymVar = 768, H: SymVar = 12](nn.Module):
     """
     BERT model : Bidirectional Encoder Representations from Transformers.
     """
@@ -362,21 +366,21 @@ class BERT[VocabSize: Dim[Any], Hidden: Dim[Any] = 768, H: Dim[Any] = 12](nn.Mod
             ]
         )
 
-    def forward[B, T](
-        self, x: Tensor[B, T], segment_info: Tensor[B, T]
-    ) -> Tensor[B, T, Hidden]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T]], segment_info: Tensor[[B, T]]
+    ) -> Tensor[[B, T, Hidden]]:
         # attention masking for padded token
         # torch.ByteTensor([batch_size, 1, seq_len, seq_len)
         mask: Tensor = (x > 0).unsqueeze(1).repeat(1, x.size(1), 1).unsqueeze(1)
 
         # embedding the indexed sequence to sequence of vectors
         x_emb = self.embedding(x, segment_info)
-        assert_type(x_emb, Tensor[B, T, Hidden])
+        assert_type(x_emb, Tensor[[B, T, Hidden]])
 
         # running over multiple transformer blocks
         for transformer in self.transformer_blocks:
             x_emb = transformer(x_emb, mask)
-        assert_type(x_emb, Tensor[B, T, Hidden])
+        assert_type(x_emb, Tensor[[B, T, Hidden]])
 
         return x_emb
 
@@ -386,7 +390,7 @@ class BERT[VocabSize: Dim[Any], Hidden: Dim[Any] = 768, H: Dim[Any] = 12](nn.Mod
 # ============================================================================
 
 
-class NextSentencePrediction[Hidden](nn.Module):
+class NextSentencePrediction[Hidden: SymVar](nn.Module):
     """
     2-class classification model : is_next, is_not_next
     """
@@ -396,11 +400,13 @@ class NextSentencePrediction[Hidden](nn.Module):
         self.linear = nn.Linear(hidden, 2)
         self.softmax = nn.LogSoftmax(dim=-1)
 
-    def forward[B, T](self, x: Tensor[B, T, Hidden]) -> Tensor[B, 2]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, Hidden]]
+    ) -> Tensor[[B, 2]]:
         return self.softmax(self.linear(x[:, 0]))
 
 
-class MaskedLanguageModel[Hidden: Dim[Any], VocabSize: Dim[Any]](nn.Module):
+class MaskedLanguageModel[Hidden: SymVar, VocabSize: SymVar](nn.Module):
     """
     predicting origin token from masked input sequence
     n-class classification problem, n-class = vocab_size
@@ -411,11 +417,13 @@ class MaskedLanguageModel[Hidden: Dim[Any], VocabSize: Dim[Any]](nn.Module):
         self.linear = nn.Linear(hidden, vocab_size)
         self.softmax = nn.LogSoftmax(dim=-1)
 
-    def forward[B, T](self, x: Tensor[B, T, Hidden]) -> Tensor[B, T, VocabSize]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, Hidden]]
+    ) -> Tensor[[B, T, VocabSize]]:
         return self.softmax(self.linear(x))
 
 
-class BERTLM[VocabSize: Dim[Any], Hidden: Dim[Any], H: Dim[Any]](nn.Module):
+class BERTLM[VocabSize: SymVar, Hidden: SymVar, H: SymVar](nn.Module):
     """
     BERT Language Model
     Next Sentence Prediction Model + Masked Language Model
@@ -429,15 +437,15 @@ class BERTLM[VocabSize: Dim[Any], Hidden: Dim[Any], H: Dim[Any]](nn.Module):
         self.next_sentence = NextSentencePrediction(bert.hidden)
         self.mask_lm = MaskedLanguageModel(bert.hidden, vocab_size)
 
-    def forward[B, T](
-        self, x: Tensor[B, T], segment_label: Tensor[B, T]
-    ) -> tuple[Tensor[B, 2], Tensor[B, T, VocabSize]]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T]], segment_label: Tensor[[B, T]]
+    ) -> tuple[Tensor[[B, 2]], Tensor[[B, T, VocabSize]]]:
         x_out = self.bert(x, segment_label)
-        assert_type(x_out, Tensor[B, T, Hidden])
+        assert_type(x_out, Tensor[[B, T, Hidden]])
         nsp = self.next_sentence(x_out)
-        assert_type(nsp, Tensor[B, 2])
+        assert_type(nsp, Tensor[[B, 2]])
         mlm = self.mask_lm(x_out)
-        assert_type(mlm, Tensor[B, T, VocabSize])
+        assert_type(mlm, Tensor[[B, T, VocabSize]])
         return nsp, mlm
 
 
@@ -451,11 +459,11 @@ def test_bert_model():
     bert = BERT(vocab_size=30522, hidden=256, n_layers=2, attn_heads=8)
     assert_type(bert, BERT[30522, 256, 8])
 
-    x: Tensor[4, 128] = torch.randint(0, 30522, (4, 128))
-    segment: Tensor[4, 128] = torch.zeros(4, 128).long()
+    x: Tensor[[4, 128]] = torch.randint(0, 30522, (4, 128))
+    segment: Tensor[[4, 128]] = torch.zeros(4, 128).long()
 
     out = bert(x, segment)
-    assert_type(out, Tensor[4, 128, 256])
+    assert_type(out, Tensor[[4, 128, 256]])
 
 
 def test_bert_default_hidden():
@@ -463,11 +471,11 @@ def test_bert_default_hidden():
     bert = BERT(vocab_size=30522, n_layers=2, attn_heads=12)
     assert_type(bert, BERT[30522, 768])
 
-    x: Tensor[4, 128] = torch.randint(0, 30522, (4, 128))
-    segment: Tensor[4, 128] = torch.zeros(4, 128).long()
+    x: Tensor[[4, 128]] = torch.randint(0, 30522, (4, 128))
+    segment: Tensor[[4, 128]] = torch.zeros(4, 128).long()
 
     out = bert(x, segment)
-    assert_type(out, Tensor[4, 128, 768])
+    assert_type(out, Tensor[[4, 128, 768]])
 
 
 def test_bert_lm():
@@ -475,9 +483,9 @@ def test_bert_lm():
     bert = BERT(vocab_size=30522, hidden=256, n_layers=2, attn_heads=8)
     model = BERTLM(bert, vocab_size=30522)
 
-    x: Tensor[4, 128] = torch.randint(0, 30522, (4, 128))
-    segment: Tensor[4, 128] = torch.zeros(4, 128).long()
+    x: Tensor[[4, 128]] = torch.randint(0, 30522, (4, 128))
+    segment: Tensor[[4, 128]] = torch.zeros(4, 128).long()
 
     nsp_out, mlm_out = model(x, segment)
-    assert_type(nsp_out, Tensor[4, 2])
-    assert_type(mlm_out, Tensor[4, 128, 30522])
+    assert_type(nsp_out, Tensor[[4, 2]])
+    assert_type(mlm_out, Tensor[[4, 128, 30522]])

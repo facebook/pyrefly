@@ -1,10 +1,7 @@
-# Portions (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is adapted from pytorch/benchmark (TorchBenchmark),
-# which is licensed under the BSD 3-Clause License:
-# https://github.com/pytorch/benchmark/blob/main/LICENSE
-#
-# This adaptation adds tensor shape type annotations for pyrefly.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 """
 LLaMA decoder-only transformer from TorchBenchmark with shape annotations.
@@ -49,6 +46,7 @@ from typing import Any, assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import Elements, SizeTuple, SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
@@ -61,7 +59,15 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class LLaMAConfig[VocabSize, D, NHead, NLayer, HiddenDim, MaxBatch, MaxSeq]:
+class LLaMAConfig[
+    VocabSize: SymVar,
+    D: SymVar,
+    NHead: SymVar,
+    NLayer: SymVar,
+    HiddenDim: SymVar,
+    MaxBatch: SymVar,
+    MaxSeq: SymVar,
+]:
     """Configuration for LLaMA model, generic over key dimensions."""
 
     vocab_size: Dim[VocabSize]
@@ -85,9 +91,9 @@ def compute_hidden_dim(dim: int, multiple_of: int = 256) -> int:
 # ============================================================================
 
 
-def precompute_freqs_cis[HeadDim, End](
+def precompute_freqs_cis[HeadDim: SymVar, End: SymVar](
     dim: Dim[HeadDim], end: Dim[End], theta: float = 10000.0
-) -> Tensor[End, HeadDim // 2]:
+) -> Tensor[[End, HeadDim // 2]]:
     """Precompute complex-valued frequency tensor for RoPE.
 
     Original: llama/model.py precompute_freqs_cis function.
@@ -106,9 +112,9 @@ def precompute_freqs_cis[HeadDim, End](
     return freqs_cis
 
 
-def reshape_for_broadcast[T, HD](
-    freqs_cis: Tensor[T, HD], x: Tensor
-) -> Tensor[1, 1, T, HD]:
+def reshape_for_broadcast[T: SymVar, HD: SymVar](
+    freqs_cis: Tensor[[T, HD]], x: Tensor
+) -> Tensor[[1, 1, T, HD]]:
     """Reshape frequency tensor for broadcasting with multi-head tensors.
 
     Original: llama/model.py reshape_for_broadcast function.
@@ -120,11 +126,11 @@ def reshape_for_broadcast[T, HD](
     return freqs_cis.view(1, 1, t, hd)
 
 
-def apply_rotary_emb[B, NHead, T, HeadDim](
-    xq: Tensor[B, NHead, T, HeadDim],
-    xk: Tensor[B, NHead, T, HeadDim],
-    freqs_cis: Tensor[T, HeadDim // 2],
-) -> tuple[Tensor[B, NHead, T, HeadDim], Tensor[B, NHead, T, HeadDim]]:
+def apply_rotary_emb[B: SymVar, NHead: SymVar, T: SymVar, HeadDim: SymVar](
+    xq: Tensor[[B, NHead, T, HeadDim]],
+    xk: Tensor[[B, NHead, T, HeadDim]],
+    freqs_cis: Tensor[[T, HeadDim // 2]],
+) -> tuple[Tensor[[B, NHead, T, HeadDim]], Tensor[[B, NHead, T, HeadDim]]]:
     """Apply rotary positional embeddings to query and key tensors.
 
     Original: llama/model.py apply_rotary_emb function.
@@ -136,11 +142,11 @@ def apply_rotary_emb[B, NHead, T, HeadDim](
     flatten(3) → (B, NHead, T, (HeadDim//2)*2) — A1 gap: can't prove = HeadDim
     """
     xq_c = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    assert_type(xq_c, Tensor[B, NHead, T, HeadDim // 2])
+    assert_type(xq_c, Tensor[[B, NHead, T, HeadDim // 2]])
     xk_c = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    assert_type(xk_c, Tensor[B, NHead, T, HeadDim // 2])
+    assert_type(xk_c, Tensor[[B, NHead, T, HeadDim // 2]])
     freqs_bc = reshape_for_broadcast(freqs_cis, xq_c)
-    assert_type(freqs_bc, Tensor[1, 1, T, HeadDim // 2])
+    assert_type(freqs_bc, Tensor[[1, 1, T, HeadDim // 2]])
     xq_out = torch.view_as_real(xq_c * freqs_bc).flatten(3)
     xk_out = torch.view_as_real(xk_c * freqs_bc).flatten(3)
     # A1: (HeadDim//2)*2 can't be proven equal to HeadDim
@@ -152,7 +158,7 @@ def apply_rotary_emb[B, NHead, T, HeadDim](
 # ============================================================================
 
 
-def build_causal_mask[T](seq_len: Dim[T]) -> Tensor[T, T]:
+def build_causal_mask[T: SymVar](seq_len: Dim[T]) -> Tensor[[T, T]]:
     """Build causal (upper-triangular) attention mask.
 
     Original: llama/model.py, constructed in Transformer.__init__.
@@ -170,7 +176,7 @@ def build_causal_mask[T](seq_len: Dim[T]) -> Tensor[T, T]:
 # ============================================================================
 
 
-class RMSNorm[D](nn.Module):
+class RMSNorm[D: SymVar](nn.Module):
     """Root Mean Square Layer Normalization.
 
     Shape-preserving: (*, D) → (*, D)
@@ -181,7 +187,9 @@ class RMSNorm[D](nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def forward[*Bs](self, x: Tensor[*Bs, D]) -> Tensor[*Bs, D]:
+    def forward[Bs: SizeTuple](
+        self, x: Tensor[[*Elements[Bs], D]]
+    ) -> Tensor[[*Elements[Bs], D]]:
         normed = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return normed * self.weight
 
@@ -191,7 +199,7 @@ class RMSNorm[D](nn.Module):
 # ============================================================================
 
 
-class FeedForward[D, HiddenDim](nn.Module):
+class FeedForward[D: SymVar, HiddenDim: SymVar](nn.Module):
     """SwiGLU feedforward network.
 
     Architecture: silu(w1(x)) * w3(x) → w2 → output
@@ -210,11 +218,11 @@ class FeedForward[D, HiddenDim](nn.Module):
         self.w2 = nn.Linear(config.hidden_dim, config.dim, bias=False)
         self.w3 = nn.Linear(config.dim, config.hidden_dim, bias=False)
 
-    def forward[B, T](self, x: Tensor[B, T, D]) -> Tensor[B, T, D]:
+    def forward[B: SymVar, T: SymVar](self, x: Tensor[[B, T, D]]) -> Tensor[[B, T, D]]:
         gate = F.silu(self.w1(x))
-        assert_type(gate, Tensor[B, T, HiddenDim])
+        assert_type(gate, Tensor[[B, T, HiddenDim]])
         up = self.w3(x)
-        assert_type(up, Tensor[B, T, HiddenDim])
+        assert_type(up, Tensor[[B, T, HiddenDim]])
         return self.w2(gate * up)
 
 
@@ -223,7 +231,7 @@ class FeedForward[D, HiddenDim](nn.Module):
 # ============================================================================
 
 
-class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
+class Attention[D: SymVar, NHead: SymVar, MaxBatch: SymVar, MaxSeq: SymVar](nn.Module):
     """Multi-head self-attention with RoPE and KV cache.
 
     Shape flow:
@@ -258,13 +266,13 @@ class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
             (config.max_batch_size, config.max_seq_len, config.n_heads, self.head_dim)
         )
 
-    def forward[B, T, SP](
+    def forward[B: SymVar, T: SymVar, SP: SymVar](
         self,
-        x: Tensor[B, T, D],
+        x: Tensor[[B, T, D]],
         start_pos: Dim[SP] | None = None,
-        freqs_cis: Tensor[T, D // NHead // 2] | None = None,
-        mask: Tensor[T, T] | None = None,
-    ) -> Tensor[B, T, D]:
+        freqs_cis: Tensor[[T, D // NHead // 2]] | None = None,
+        mask: Tensor[[T, T]] | None = None,
+    ) -> Tensor[[B, T, D]]:
         b, t, d = x.size()
         assert_type(b, Dim[B])
         assert_type(t, Dim[T])
@@ -272,16 +280,16 @@ class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
         q = self.wq(x)
         k = self.wk(x)
         v = self.wv(x)
-        assert_type(q, Tensor[B, T, D])
-        assert_type(k, Tensor[B, T, D])
-        assert_type(v, Tensor[B, T, D])
+        assert_type(q, Tensor[[B, T, D]])
+        assert_type(k, Tensor[[B, T, D]])
+        assert_type(v, Tensor[[B, T, D]])
         # Reshape to multi-head: (B, T, D) → (B, T, NHead, HeadDim) → (B, NHead, T, HeadDim)
         xq = q.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         xk = k.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         xv = v.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
-        assert_type(xq, Tensor[B, NHead, T, D // NHead])
-        assert_type(xk, Tensor[B, NHead, T, D // NHead])
-        assert_type(xv, Tensor[B, NHead, T, D // NHead])
+        assert_type(xq, Tensor[[B, NHead, T, D // NHead]])
+        assert_type(xk, Tensor[[B, NHead, T, D // NHead]])
+        assert_type(xv, Tensor[[B, NHead, T, D // NHead]])
         # Apply RoPE if frequency tensor provided (shape-preserving)
         if freqs_cis is not None:
             xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
@@ -304,16 +312,16 @@ class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
         else:
             # No cache: keys = xk, values = xv
             scores = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
-            assert_type(scores, Tensor[B, NHead, T, T])
+            assert_type(scores, Tensor[[B, NHead, T, T]])
             if mask is not None:
                 scores = scores + mask
             scores = F.softmax(scores.float(), dim=-1)
-            assert_type(scores, Tensor[B, NHead, T, T])
+            assert_type(scores, Tensor[[B, NHead, T, T]])
             output = torch.matmul(scores, xv)
-        assert_type(output, Tensor[B, NHead, T, D // NHead])
+        assert_type(output, Tensor[[B, NHead, T, D // NHead]])
         # Reassemble: (B, NHead, T, HeadDim) → (B, T, NHead, HeadDim) → (B, T, D)
         output_flat = output.transpose(1, 2).contiguous().view(b, t, d)
-        assert_type(output_flat, Tensor[B, T, D])
+        assert_type(output_flat, Tensor[[B, T, D]])
         return self.wo(output_flat)
 
 
@@ -322,7 +330,13 @@ class Attention[D, NHead, MaxBatch, MaxSeq](nn.Module):
 # ============================================================================
 
 
-class TransformerBlock[D, NHead, HiddenDim, MaxBatch, MaxSeq](nn.Module):
+class TransformerBlock[
+    D: SymVar,
+    NHead: SymVar,
+    HiddenDim: SymVar,
+    MaxBatch: SymVar,
+    MaxSeq: SymVar,
+](nn.Module):
     """Pre-norm transformer block with RMSNorm.
 
     x → RMSNorm → Attention → + residual
@@ -341,17 +355,17 @@ class TransformerBlock[D, NHead, HiddenDim, MaxBatch, MaxSeq](nn.Module):
         self.attention_norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.ffn_norm = RMSNorm(config.dim, eps=config.norm_eps)
 
-    def forward[B, T, SP](
+    def forward[B: SymVar, T: SymVar, SP: SymVar](
         self,
-        x: Tensor[B, T, D],
+        x: Tensor[[B, T, D]],
         start_pos: Dim[SP] | None = None,
-        freqs_cis: Tensor[T, D // NHead // 2] | None = None,
-        mask: Tensor[T, T] | None = None,
-    ) -> Tensor[B, T, D]:
+        freqs_cis: Tensor[[T, D // NHead // 2]] | None = None,
+        mask: Tensor[[T, T]] | None = None,
+    ) -> Tensor[[B, T, D]]:
         h = x + self.attention(self.attention_norm(x), start_pos, freqs_cis, mask)
-        assert_type(h, Tensor[B, T, D])
+        assert_type(h, Tensor[[B, T, D]])
         out = h + self.feed_forward(self.ffn_norm(h))
-        assert_type(out, Tensor[B, T, D])
+        assert_type(out, Tensor[[B, T, D]])
         return out
 
 
@@ -360,7 +374,9 @@ class TransformerBlock[D, NHead, HiddenDim, MaxBatch, MaxSeq](nn.Module):
 # ============================================================================
 
 
-class Transformer[VocabSize, D, NHead, HiddenDim](nn.Module):
+class Transformer[VocabSize: SymVar, D: SymVar, NHead: SymVar, HiddenDim: SymVar](
+    nn.Module
+):
     """LLaMA decoder-only transformer.
 
     tokens (B, T) → Embedding → (B, T, D)
@@ -386,11 +402,11 @@ class Transformer[VocabSize, D, NHead, HiddenDim](nn.Module):
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
 
-    def forward[B, T, SP](
-        self, tokens: Tensor[B, T], start_pos: Dim[SP] | None = None
-    ) -> Tensor[B, VocabSize]:
+    def forward[B: SymVar, T: SymVar, SP: SymVar](
+        self, tokens: Tensor[[B, T]], start_pos: Dim[SP] | None = None
+    ) -> Tensor[[B, VocabSize]]:
         h = self.tok_embeddings(tokens)
-        assert_type(h, Tensor[B, T, D])
+        assert_type(h, Tensor[[B, T, D]])
         # Precompute RoPE frequencies and causal mask for this sequence
         seq_len = tokens.shape[1]
         freqs_cis = precompute_freqs_cis(self.head_dim, seq_len * 2)
@@ -400,17 +416,17 @@ class Transformer[VocabSize, D, NHead, HiddenDim](nn.Module):
         else:
             freqs_cis = freqs_cis[:seq_len]
         # Build causal mask only for multi-token sequences (prefill).
-        mask: Tensor[T, T] | None = None
+        mask: Tensor[[T, T]] | None = None
         if start_pos is None and seq_len > 1:
             mask = build_causal_mask(seq_len)
         for layer in self.layers:
             h = layer(h, start_pos, freqs_cis, mask)
-        assert_type(h, Tensor[B, T, D])
+        assert_type(h, Tensor[[B, T, D]])
         h = self.norm(h)
-        assert_type(h, Tensor[B, T, D])
+        assert_type(h, Tensor[[B, T, D]])
         # Only compute logits for the last token
         last = h[:, -1]
-        assert_type(last, Tensor[B, D])
+        assert_type(last, Tensor[[B, D]])
         return self.output(last)
 
 
@@ -422,9 +438,9 @@ class Transformer[VocabSize, D, NHead, HiddenDim](nn.Module):
 def test_rmsnorm():
     """Test RMSNorm: shape-preserving."""
     norm = RMSNorm(256)
-    x: Tensor[4, 16, 256] = torch.randn(4, 16, 256)
+    x: Tensor[[4, 16, 256]] = torch.randn(4, 16, 256)
     out = norm(x)
-    assert_type(out, Tensor[4, 16, 256])
+    assert_type(out, Tensor[[4, 16, 256]])
 
 
 def test_feedforward():
@@ -439,9 +455,9 @@ def test_feedforward():
         max_seq_len=2048,
     )
     ff = FeedForward(config)
-    x: Tensor[4, 16, 256] = torch.randn(4, 16, 256)
+    x: Tensor[[4, 16, 256]] = torch.randn(4, 16, 256)
     out = ff(x)
-    assert_type(out, Tensor[4, 16, 256])
+    assert_type(out, Tensor[[4, 16, 256]])
 
 
 def test_attention():
@@ -456,9 +472,9 @@ def test_attention():
         max_seq_len=2048,
     )
     attn = Attention(config)
-    x: Tensor[4, 16, 256] = torch.randn(4, 16, 256)
+    x: Tensor[[4, 16, 256]] = torch.randn(4, 16, 256)
     out = attn(x)
-    assert_type(out, Tensor[4, 16, 256])
+    assert_type(out, Tensor[[4, 16, 256]])
 
 
 def test_transformer_block():
@@ -473,9 +489,9 @@ def test_transformer_block():
         max_seq_len=2048,
     )
     block = TransformerBlock(config)
-    x: Tensor[4, 16, 256] = torch.randn(4, 16, 256)
+    x: Tensor[[4, 16, 256]] = torch.randn(4, 16, 256)
     out = block(x)
-    assert_type(out, Tensor[4, 16, 256])
+    assert_type(out, Tensor[[4, 16, 256]])
 
 
 def test_transformer():
@@ -490,9 +506,9 @@ def test_transformer():
         max_seq_len=2048,
     )
     model = Transformer(config)
-    tokens: Tensor[2, 16] = torch.randint(0, 1000, (2, 16))
+    tokens: Tensor[[2, 16]] = torch.randint(0, 1000, (2, 16))
     out = model(tokens)
-    assert_type(out, Tensor[2, 1000])
+    assert_type(out, Tensor[[2, 1000]])
 
 
 def test_transformer_different_dims():
@@ -507,6 +523,6 @@ def test_transformer_different_dims():
         max_seq_len=2048,
     )
     model = Transformer(config)
-    tokens: Tensor[8, 32] = torch.randint(0, 500, (8, 32))
+    tokens: Tensor[[8, 32]] = torch.randint(0, 500, (8, 32))
     out = model(tokens)
-    assert_type(out, Tensor[8, 500])
+    assert_type(out, Tensor[[8, 500]])

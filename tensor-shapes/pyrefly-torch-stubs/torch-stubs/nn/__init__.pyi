@@ -20,8 +20,10 @@ from typing import (
     TypeVar,
 )
 
+from shape_extensions import Elements, SizeTuple, SymVar
+
 if TYPE_CHECKING:
-    from shape_extensions import Dim as _Dim, uses_shape_dsl
+    from shape_extensions import Dim as _Dim, ProxyMethod, uses_shape_dsl
     from torch import Tensor
     from torch._shapes import (
         nn_avgpool_forward_ir,
@@ -51,6 +53,7 @@ class Module:
 
     def __init__(self) -> None: ...
     def __getattr__(self, name: str) -> Any: ...
+    __call__: ProxyMethod["forward"]
     def forward(self, *args: Any, **kwargs: Any) -> Any: ...
     def register_buffer(
         self, name: str, tensor: Tensor | None, persistent: bool = True
@@ -89,9 +92,9 @@ class Module:
 # In PyTorch, nn.Parameter is a class, but for type checking we model it as a function
 # that returns Tensor (not Parameter) to match runtime behavior where operations on
 # Parameters return Tensors. This makes the type system simpler and more accurate.
-def Parameter[*Shape](
-    data: Tensor[*Shape], requires_grad: bool = True
-) -> Tensor[*Shape]:
+def Parameter[Shape: SizeTuple](
+    data: Tensor[Shape], requires_grad: bool = True
+) -> Tensor[Shape]:
     """
     Wraps a tensor as a module parameter.
     Returns the tensor (for type purposes) since operations on Parameters return Tensors.
@@ -101,7 +104,9 @@ def Parameter[*Shape](
 # Buffer wrapper
 # Similar to Parameter, Buffer wraps a tensor that is not a parameter but should be
 # part of the module's state_dict. For type checking we model it as returning Tensor.
-def Buffer[*Shape](data: Tensor[*Shape], persistent: bool = True) -> Tensor[*Shape]:
+def Buffer[Shape: SizeTuple](
+    data: Tensor[Shape], persistent: bool = True
+) -> Tensor[Shape]:
     """
     Wraps a tensor as a module buffer.
     Returns the tensor (for type purposes) since operations on Buffers return Tensors.
@@ -109,11 +114,11 @@ def Buffer[*Shape](data: Tensor[*Shape], persistent: bool = True) -> Tensor[*Sha
     ...
 
 # Linear layer
-class Linear[IN, OUT](Module):
+class Linear[IN: SymVar, OUT: SymVar](Module):
     """Applies a linear transformation to the incoming data: y = xA^T + b"""
 
-    weight: Tensor[OUT, IN]
-    bias: Tensor[OUT] | None
+    weight: Tensor[[OUT, IN]]
+    bias: Tensor[[OUT]] | None
 
     def __init__(
         self,
@@ -123,25 +128,27 @@ class Linear[IN, OUT](Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*Bs](self, input: Tensor[*Bs, IN]) -> Tensor[*Bs, OUT]: ...
+    def forward[Bs: SizeTuple](
+        self, input: Tensor[[*Elements[Bs], IN]]
+    ) -> Tensor[[*Elements[Bs], OUT]]: ...
 
 # Dropout
 class Dropout(Module):
     """During training, randomly zeroes some of the elements of the input tensor with probability p"""
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None: ...
-    def forward[*Shape](self, input: Tensor[*Shape]) -> Tensor[*Shape]: ...
+    def forward[Shape: SizeTuple](self, input: Tensor[Shape]) -> Tensor[Shape]: ...
 
 # GELU activation
 class GELU(Module):
     """Applies the Gaussian Error Linear Units function"""
     def __init__(self, approximate: str = "none") -> None: ...
-    def forward[*Shape](self, input: Tensor[*Shape]) -> Tensor[*Shape]: ...
+    def forward[Shape: SizeTuple](self, input: Tensor[Shape]) -> Tensor[Shape]: ...
 
 # Embedding
-class Embedding[NUM_EMB, EMB_DIM](Module):
+class Embedding[NUM_EMB: SymVar, EMB_DIM: SymVar](Module):
     """A simple lookup table that stores embeddings of a fixed dictionary and size"""
 
-    weight: Tensor[NUM_EMB, EMB_DIM]
+    weight: Tensor[[NUM_EMB, EMB_DIM]]
 
     def __init__(
         self,
@@ -160,11 +167,13 @@ class Embedding[NUM_EMB, EMB_DIM](Module):
 
     # 1D input: [T] -> [T, EMB_DIM]
     @overload
-    def forward[T](self, input: Tensor[T]) -> Tensor[T, EMB_DIM]: ...
+    def forward[T: SymVar](self, input: Tensor[[T]]) -> Tensor[[T, EMB_DIM]]: ...
 
     # 2D input: [B, T] -> [B, T, EMB_DIM]
     @overload
-    def forward[B, T](self, input: Tensor[B, T]) -> Tensor[B, T, EMB_DIM]: ...
+    def forward[B: SymVar, T: SymVar](
+        self, input: Tensor[[B, T]]
+    ) -> Tensor[[B, T, EMB_DIM]]: ...
 
 # ModuleDict
 class ModuleDict[T](Module):
@@ -206,67 +215,67 @@ class ModuleList[T](Module):
 class ReLU(Module):
     """Applies ReLU activation"""
     def __init__(self, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class ReLU6(Module):
     """Applies ReLU6 activation (clamps to [0, 6])"""
     def __init__(self, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class SiLU(Module):
     """Applies SiLU (Swish) activation"""
     def __init__(self, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Sigmoid(Module):
     """Applies element-wise Sigmoid"""
     def __init__(self) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Tanh(Module):
     """Applies element-wise Tanh"""
     def __init__(self) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Mish(Module):
     """Applies Mish activation"""
     def __init__(self, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Hardswish(Module):
     """Applies Hardswish activation"""
     def __init__(self, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Hardsigmoid(Module):
     """Applies Hardsigmoid activation"""
     def __init__(self, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class LeakyReLU(Module):
     """Applies LeakyReLU activation"""
     def __init__(self, negative_slope: float = 0.01, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class ELU(Module):
     """Applies ELU activation"""
     def __init__(self, alpha: float = 1.0, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class SELU(Module):
     """Applies SELU activation"""
     def __init__(self, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class CELU(Module):
     """Applies CELU activation"""
     def __init__(self, alpha: float = 1.0, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Softplus(Module):
     """Applies Softplus activation"""
     def __init__(self, beta: float = 1, threshold: float = 20) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class PReLU(Module):
     """Applies PReLU activation"""
@@ -277,24 +286,24 @@ class PReLU(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Threshold(Module):
     """Applies Threshold activation"""
     def __init__(
         self, threshold: float, value: float, inplace: bool = False
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Softmax(Module):
     """Applies Softmax along a dimension"""
     def __init__(self, dim: int | None = None) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class LogSoftmax(Module):
     """Applies LogSoftmax along a dimension"""
     def __init__(self, dim: int | None = None) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 # ==============================================================================
 # Normalization Modules (shape-preserving)
@@ -311,7 +320,7 @@ class LayerNorm(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class RMSNorm(Module):
     """Applies Root Mean Square Layer Normalization"""
@@ -323,7 +332,7 @@ class RMSNorm(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class GroupNorm(Module):
     """Applies Group Normalization"""
@@ -340,7 +349,7 @@ class GroupNorm(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class BatchNorm1d(Module):
     """Applies Batch Normalization over a 2D or 3D input"""
@@ -358,7 +367,7 @@ class BatchNorm1d(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class BatchNorm2d(Module):
     """Applies Batch Normalization over a 4D input"""
@@ -376,7 +385,7 @@ class BatchNorm2d(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class BatchNorm3d(Module):
     """Applies Batch Normalization over a 5D input"""
@@ -394,7 +403,7 @@ class BatchNorm3d(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class InstanceNorm1d(Module):
     """Applies Instance Normalization over a 3D input"""
@@ -408,7 +417,7 @@ class InstanceNorm1d(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class InstanceNorm2d(Module):
     """Applies Instance Normalization over a 4D input"""
@@ -422,7 +431,7 @@ class InstanceNorm2d(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class InstanceNorm3d(Module):
     """Applies Instance Normalization over a 5D input"""
@@ -436,7 +445,7 @@ class InstanceNorm3d(Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 # ==============================================================================
 # Dropout Modules (shape-preserving)
@@ -445,27 +454,27 @@ class InstanceNorm3d(Module):
 class Dropout1d(Module):
     """Randomly zero out entire channels (1D)"""
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Dropout2d(Module):
     """Randomly zero out entire channels (2D)"""
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class Dropout3d(Module):
     """Randomly zero out entire channels (3D)"""
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class AlphaDropout(Module):
     """Applies Alpha Dropout for SELU networks"""
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 class FeatureAlphaDropout(Module):
     """Randomly masks entire channels with Alpha Dropout"""
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 # ==============================================================================
 # Other Shape-Preserving Modules
@@ -474,22 +483,27 @@ class FeatureAlphaDropout(Module):
 class Identity(Module):
     """Identity module that returns the input unchanged"""
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[S: SizeTuple](self, input: Tensor[S]) -> Tensor[S]: ...
 
 # ==============================================================================
 # Convolution Modules
 # ==============================================================================
 
-class Conv1d[InC, OutC, K, S: _Dim[Any] = 1, P: _Dim[Any] = 0, D: _Dim[Any] = 1](
-    Module
-):
+class Conv1d[
+    InC: SymVar,
+    OutC: SymVar,
+    K: SymVar,
+    S: SymVar = 1,
+    P: SymVar = 0,
+    D: SymVar = 1,
+](Module):
     """1D convolution. Tracks channel and spatial dimensions.
 
     Type parameters S, P, D are bound from constructor arguments via _Dim[T].
     PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
     """
 
-    weight: Tensor[OutC, InC, K]
+    weight: Tensor[[OutC, InC, K]]
 
     def __init__(
         self,
@@ -505,13 +519,18 @@ class Conv1d[InC, OutC, K, S: _Dim[Any] = 1, P: _Dim[Any] = 0, D: _Dim[Any] = 1]
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[B, L](
-        self, input: Tensor[B, InC, L]
-    ) -> Tensor[B, OutC, (L + 2 * P - D * (K - 1) - 1) // S + 1]: ...
+    def forward[B: SymVar, L: SymVar](
+        self, input: Tensor[[B, InC, L]]
+    ) -> Tensor[[B, OutC, (L + 2 * P - D * (K - 1) - 1) // S + 1]]: ...
 
-class Conv2d[InC, OutC, K, S: _Dim[Any] = 1, P: _Dim[Any] = 0, D: _Dim[Any] = 1](
-    Module
-):
+class Conv2d[
+    InC: SymVar,
+    OutC: SymVar,
+    K: SymVar,
+    S: SymVar = 1,
+    P: SymVar = 0,
+    D: SymVar = 1,
+](Module):
     """2D convolution. Tracks channel and spatial dimensions.
 
     Type parameters S, P, D are bound from constructor arguments via _Dim[T].
@@ -525,8 +544,8 @@ class Conv2d[InC, OutC, K, S: _Dim[Any] = 1, P: _Dim[Any] = 0, D: _Dim[Any] = 1]
     dispatches via stub signatures, not DSL.
     """
 
-    weight: Tensor[OutC, InC, K, K]
-    bias: Tensor[OutC] | None
+    weight: Tensor[[OutC, InC, K, K]]
+    bias: Tensor[[OutC]] | None
 
     def __init__(
         self,
@@ -542,25 +561,32 @@ class Conv2d[InC, OutC, K, S: _Dim[Any] = 1, P: _Dim[Any] = 0, D: _Dim[Any] = 1]
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[B, H, W](
-        self, input: Tensor[B, InC, H, W]
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, input: Tensor[[B, InC, H, W]]
     ) -> Tensor[
-        B,
-        OutC,
-        (H + 2 * P - D * (K - 1) - 1) // S + 1,
-        (W + 2 * P - D * (K - 1) - 1) // S + 1,
+        [
+            B,
+            OutC,
+            (H + 2 * P - D * (K - 1) - 1) // S + 1,
+            (W + 2 * P - D * (K - 1) - 1) // S + 1,
+        ]
     ]: ...
 
-class Conv3d[InC, OutC, K, S: _Dim[Any] = 1, P: _Dim[Any] = 0, D: _Dim[Any] = 1](
-    Module
-):
+class Conv3d[
+    InC: SymVar,
+    OutC: SymVar,
+    K: SymVar,
+    S: SymVar = 1,
+    P: SymVar = 0,
+    D: SymVar = 1,
+](Module):
     """3D convolution. Tracks channel and spatial dimensions.
 
     Type parameters S, P, D are bound from constructor arguments via _Dim[T].
     PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
     """
 
-    weight: Tensor[OutC, InC, K, K, K]
+    weight: Tensor[[OutC, InC, K, K, K]]
 
     def __init__(
         self,
@@ -576,24 +602,26 @@ class Conv3d[InC, OutC, K, S: _Dim[Any] = 1, P: _Dim[Any] = 0, D: _Dim[Any] = 1]
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[B, D_, H, W](
-        self, input: Tensor[B, InC, D_, H, W]
+    def forward[B: SymVar, D_: SymVar, H: SymVar, W: SymVar](
+        self, input: Tensor[[B, InC, D_, H, W]]
     ) -> Tensor[
-        B,
-        OutC,
-        (D_ + 2 * P - D * (K - 1) - 1) // S + 1,
-        (H + 2 * P - D * (K - 1) - 1) // S + 1,
-        (W + 2 * P - D * (K - 1) - 1) // S + 1,
+        [
+            B,
+            OutC,
+            (D_ + 2 * P - D * (K - 1) - 1) // S + 1,
+            (H + 2 * P - D * (K - 1) - 1) // S + 1,
+            (W + 2 * P - D * (K - 1) - 1) // S + 1,
+        ]
     ]: ...
 
 class ConvTranspose1d[
-    InC,
-    OutC,
-    K,
-    S: _Dim[Any] = 1,
-    P: _Dim[Any] = 0,
-    OP: _Dim[Any] = 0,
-    D: _Dim[Any] = 1,
+    InC: SymVar,
+    OutC: SymVar,
+    K: SymVar,
+    S: SymVar = 1,
+    P: SymVar = 0,
+    OP: SymVar = 0,
+    D: SymVar = 1,
 ](Module):
     """1D transposed convolution. Tracks channel and spatial dimensions.
 
@@ -601,7 +629,7 @@ class ConvTranspose1d[
     PEP 696 defaults apply when arguments are omitted.
     """
 
-    weight: Tensor[InC, OutC, K]
+    weight: Tensor[[InC, OutC, K]]
 
     def __init__(
         self,
@@ -618,18 +646,18 @@ class ConvTranspose1d[
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[B, L](
-        self, input: Tensor[B, InC, L]
-    ) -> Tensor[B, OutC, (L - 1) * S - 2 * P + D * (K - 1) + OP + 1]: ...
+    def forward[B: SymVar, L: SymVar](
+        self, input: Tensor[[B, InC, L]]
+    ) -> Tensor[[B, OutC, (L - 1) * S - 2 * P + D * (K - 1) + OP + 1]]: ...
 
 class ConvTranspose2d[
-    InC,
-    OutC,
-    K,
-    S: _Dim[Any] = 1,
-    P: _Dim[Any] = 0,
-    OP: _Dim[Any] = 0,
-    D: _Dim[Any] = 1,
+    InC: SymVar,
+    OutC: SymVar,
+    K: SymVar,
+    S: SymVar = 1,
+    P: SymVar = 0,
+    OP: SymVar = 0,
+    D: SymVar = 1,
 ](Module):
     """2D transposed convolution. Tracks channel and spatial dimensions.
 
@@ -637,7 +665,7 @@ class ConvTranspose2d[
     PEP 696 defaults apply when arguments are omitted.
     """
 
-    weight: Tensor[InC, OutC, K, K]
+    weight: Tensor[[InC, OutC, K, K]]
 
     def __init__(
         self,
@@ -654,23 +682,25 @@ class ConvTranspose2d[
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[B, H, W](
-        self, input: Tensor[B, InC, H, W]
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, input: Tensor[[B, InC, H, W]]
     ) -> Tensor[
-        B,
-        OutC,
-        (H - 1) * S - 2 * P + D * (K - 1) + OP + 1,
-        (W - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+        [
+            B,
+            OutC,
+            (H - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+            (W - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+        ]
     ]: ...
 
 class ConvTranspose3d[
-    InC,
-    OutC,
-    K,
-    S: _Dim[Any] = 1,
-    P: _Dim[Any] = 0,
-    OP: _Dim[Any] = 0,
-    D: _Dim[Any] = 1,
+    InC: SymVar,
+    OutC: SymVar,
+    K: SymVar,
+    S: SymVar = 1,
+    P: SymVar = 0,
+    OP: SymVar = 0,
+    D: SymVar = 1,
 ](Module):
     """3D transposed convolution. Tracks channel and spatial dimensions.
 
@@ -678,7 +708,7 @@ class ConvTranspose3d[
     PEP 696 defaults apply when arguments are omitted.
     """
 
-    weight: Tensor[InC, OutC, K, K, K]
+    weight: Tensor[[InC, OutC, K, K, K]]
 
     def __init__(
         self,
@@ -695,14 +725,16 @@ class ConvTranspose3d[
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[B, D_, H, W](
-        self, input: Tensor[B, InC, D_, H, W]
+    def forward[B: SymVar, D_: SymVar, H: SymVar, W: SymVar](
+        self, input: Tensor[[B, InC, D_, H, W]]
     ) -> Tensor[
-        B,
-        OutC,
-        (D_ - 1) * S - 2 * P + D * (K - 1) + OP + 1,
-        (H - 1) * S - 2 * P + D * (K - 1) + OP + 1,
-        (W - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+        [
+            B,
+            OutC,
+            (D_ - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+            (H - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+            (W - 1) * S - 2 * P + D * (K - 1) + OP + 1,
+        ]
     ]: ...
 
 # ==============================================================================
@@ -807,45 +839,53 @@ class AvgPool3d(Module):
     )
     def forward(self, input: Tensor) -> Tensor: ...
 
-class AdaptiveAvgPool1d[OL](Module):
+class AdaptiveAvgPool1d[OL: SymVar](Module):
     """1D adaptive average pooling"""
     def __init__(self, output_size: _Dim[OL]) -> None: ...
-    def forward[B, C](self, input: Tensor[B, C, Any]) -> Tensor[B, C, OL]: ...
+    def forward[B: SymVar, C: SymVar](
+        self, input: Tensor[[B, C, Any]]
+    ) -> Tensor[[B, C, OL]]: ...
 
-class AdaptiveAvgPool2d[OH, OW](Module):
+class AdaptiveAvgPool2d[OH: SymVar, OW: SymVar](Module):
     """2D adaptive average pooling"""
     def __init__(self, output_size: tuple[_Dim[OH], _Dim[OW]]) -> None: ...
-    def forward[B, C](self, input: Tensor[B, C, Any, Any]) -> Tensor[B, C, OH, OW]: ...
+    def forward[B: SymVar, C: SymVar](
+        self, input: Tensor[[B, C, Any, Any]]
+    ) -> Tensor[[B, C, OH, OW]]: ...
 
-class AdaptiveAvgPool3d[OD, OH, OW](Module):
+class AdaptiveAvgPool3d[OD: SymVar, OH: SymVar, OW: SymVar](Module):
     """3D adaptive average pooling"""
     def __init__(self, output_size: tuple[_Dim[OD], _Dim[OH], _Dim[OW]]) -> None: ...
-    def forward[B, C](
-        self, input: Tensor[B, C, Any, Any, Any]
-    ) -> Tensor[B, C, OD, OH, OW]: ...
+    def forward[B: SymVar, C: SymVar](
+        self, input: Tensor[[B, C, Any, Any, Any]]
+    ) -> Tensor[[B, C, OD, OH, OW]]: ...
 
-class AdaptiveMaxPool1d[OL](Module):
+class AdaptiveMaxPool1d[OL: SymVar](Module):
     """1D adaptive max pooling"""
     def __init__(self, output_size: _Dim[OL], return_indices: bool = False) -> None: ...
-    def forward[B, C](self, input: Tensor[B, C, Any]) -> Tensor[B, C, OL]: ...
+    def forward[B: SymVar, C: SymVar](
+        self, input: Tensor[[B, C, Any]]
+    ) -> Tensor[[B, C, OL]]: ...
 
-class AdaptiveMaxPool2d[OH, OW](Module):
+class AdaptiveMaxPool2d[OH: SymVar, OW: SymVar](Module):
     """2D adaptive max pooling"""
     def __init__(
         self, output_size: tuple[_Dim[OH], _Dim[OW]], return_indices: bool = False
     ) -> None: ...
-    def forward[B, C](self, input: Tensor[B, C, Any, Any]) -> Tensor[B, C, OH, OW]: ...
+    def forward[B: SymVar, C: SymVar](
+        self, input: Tensor[[B, C, Any, Any]]
+    ) -> Tensor[[B, C, OH, OW]]: ...
 
-class AdaptiveMaxPool3d[OD, OH, OW](Module):
+class AdaptiveMaxPool3d[OD: SymVar, OH: SymVar, OW: SymVar](Module):
     """3D adaptive max pooling"""
     def __init__(
         self,
         output_size: tuple[_Dim[OD], _Dim[OH], _Dim[OW]],
         return_indices: bool = False,
     ) -> None: ...
-    def forward[B, C](
-        self, input: Tensor[B, C, Any, Any, Any]
-    ) -> Tensor[B, C, OD, OH, OW]: ...
+    def forward[B: SymVar, C: SymVar](
+        self, input: Tensor[[B, C, Any, Any, Any]]
+    ) -> Tensor[[B, C, OD, OH, OW]]: ...
 
 # ==============================================================================
 # Upsampling / Rearrangement Modules
@@ -879,10 +919,10 @@ class GLU(Module):
 class LSTM(Module):
     """Long Short-Term Memory RNN.
 
-    Input:  Tensor[B, T, InputSize]  (batch_first=True assumed)
-    Output: (Tensor[B, T, HiddenSize * ND],
-             Tensor[NL * ND, B, HiddenSize],
-             Tensor[NL * ND, B, HiddenSize])
+    Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
+    Output: (Tensor[[B, T, HiddenSize * ND]],
+             Tensor[[NL * ND, B, HiddenSize]],
+             Tensor[[NL * ND, B, HiddenSize]])
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
@@ -911,8 +951,8 @@ class LSTM(Module):
 class LSTMCell(Module):
     """Long Short-Term Memory cell.
 
-    Input:  Tensor[B, InputSize]
-    Output: (Tensor[B, HiddenSize], Tensor[B, HiddenSize])
+    Input:  Tensor[[B, InputSize]]
+    Output: (Tensor[[B, HiddenSize]], Tensor[[B, HiddenSize]])
 
     Shape inference via DSL + NNModule init capture.
     """
@@ -933,9 +973,9 @@ class LSTMCell(Module):
 class GRU(Module):
     """Gated Recurrent Unit RNN.
 
-    Input:  Tensor[B, T, InputSize]  (batch_first=True assumed)
-    Output: (Tensor[B, T, HiddenSize * ND],
-             Tensor[NL * ND, B, HiddenSize])
+    Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
+    Output: (Tensor[[B, T, HiddenSize * ND]],
+             Tensor[[NL * ND, B, HiddenSize]])
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
@@ -966,8 +1006,8 @@ class GRU(Module):
 class GRUCell(Module):
     """Gated Recurrent Unit cell.
 
-    Input:  Tensor[B, InputSize]
-    Output: Tensor[B, HiddenSize]
+    Input:  Tensor[[B, InputSize]]
+    Output: Tensor[[B, HiddenSize]]
 
     Shape-preserving when InputSize == HiddenSize; otherwise returns
     unrefined Tensor (no DSL registration).
@@ -1126,7 +1166,7 @@ class ParameterList[T](Module):
     def __iter__(self) -> Iterator[T]: ...
     def __len__(self) -> int: ...
 
-class LazyLinear[OUT](Module):
+class LazyLinear[OUT: SymVar](Module):
     """Linear layer with lazy in_features initialization.
 
     out_features is known at construction; in_features is inferred at first forward.
@@ -1142,7 +1182,9 @@ class LazyLinear[OUT](Module):
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    def forward[*Bs](self, input: Tensor[*Bs, Any]) -> Tensor[*Bs, OUT]: ...
+    def forward[Bs: SizeTuple](
+        self, input: Tensor[[*Elements[Bs], Any]]
+    ) -> Tensor[[*Elements[Bs], OUT]]: ...
 
 class Flatten(Module):
     """Flattens a contiguous range of dims.
@@ -1180,14 +1222,14 @@ class ReplicationPad2d(Module):
     def forward(self, input: Tensor) -> Tensor: ...
 
 # Embedding variants
-class EmbeddingBag[NUM_EMB, EMB_DIM](Module):
+class EmbeddingBag[NUM_EMB: SymVar, EMB_DIM: SymVar](Module):
     """Computes sums or means of 'bags' of embeddings.
 
     Unlike Embedding, EmbeddingBag aggregates over variable-length groups
     of indices using offsets. Output batch dimension comes from offsets.
     """
 
-    weight: Tensor[NUM_EMB, EMB_DIM]
+    weight: Tensor[[NUM_EMB, EMB_DIM]]
 
     def __init__(
         self,
@@ -1207,12 +1249,12 @@ class EmbeddingBag[NUM_EMB, EMB_DIM](Module):
 
     # EmbeddingBag forward: batch dim B comes from offsets (default, include_last_offset=False).
     # Embedding dim EMB_DIM is always preserved from init.
-    def forward[B](
+    def forward[B: SymVar](
         self,
         input: Tensor,
-        offsets: Tensor[B] | None = None,
+        offsets: Tensor[[B]] | None = None,
         per_sample_weights: Tensor | None = None,
-    ) -> Tensor[B, EMB_DIM]: ...
+    ) -> Tensor[[B, EMB_DIM]]: ...
 
 __all__ = [
     "functional",

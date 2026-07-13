@@ -51,8 +51,10 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::SizeExpr;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::shaped_array::ShapedArrayShape;
+use pyrefly_types::shaped_array::ShapedArrayShapeArgStyle;
 use pyrefly_types::shaped_array::ShapedArraySyntax;
 use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::shaped_array::shape_to_tuple_carrier_arg;
 use pyrefly_types::types::TParams;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -267,6 +269,51 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Build a jaxtyping-syntax `ShapedArrayType` and synchronize the tuple carrier.
+    ///
+    /// For shaped arrays whose shape parameter is a `TypeVar` (SizeTuple carrier),
+    /// the carrier type argument on `base_class` is updated to reflect `shape` so
+    /// that shape-aware operations (e.g. `.shape` access, generic return reprojection)
+    /// remain coherent with the jaxtyping annotation.
+    fn jaxtyping_shaped_array_type(
+        &self,
+        mut base_class: ClassType,
+        shape: ShapedArrayShape,
+    ) -> Type {
+        let shape_arg_style = match self.shaped_array_shape_for_class_type(&base_class) {
+            Some(shape_param) => {
+                let shape_idx = self
+                    .get_class_tparams(base_class.class_object())
+                    .iter()
+                    .position(|param| param == &shape_param)
+                    // The metadata is produced by `@shaped_array` validation which
+                    // verifies the shape param is an actual type parameter of the class.
+                    .expect("shaped-array metadata should refer to a class type parameter");
+                match shape_param.kind() {
+                    QuantifiedKind::TypeVar | QuantifiedKind::SymVar => {
+                        let carrier = base_class.targs_mut().as_mut().get_mut(shape_idx).expect(
+                            // Pyrefly always constructs ClassType with one targ per tparam.
+                            "class type should have an argument for each type parameter",
+                        );
+                        *carrier = shape_to_tuple_carrier_arg(&shape);
+                        ShapedArrayShapeArgStyle::TupleCarrier { index: shape_idx }
+                    }
+                    QuantifiedKind::TypeVarTuple => unreachable!(
+                        "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+                    ),
+                    QuantifiedKind::ParamSpec => unreachable!(
+                        "shaped-array metadata validation rejects ParamSpec shape parameters"
+                    ),
+                }
+            }
+            None => ShapedArrayShapeArgStyle::Unknown,
+        };
+        ShapedArrayType::new(base_class, shape)
+            .with_syntax(ShapedArraySyntax::Jaxtyping)
+            .with_shape_arg_style(shape_arg_style)
+            .to_type()
+    }
+
     /// Parse a jaxtyping annotation like `Float[Tensor, "batch channels"]`.
     fn parse_jaxtyping_annotation(
         &self,
@@ -307,9 +354,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if tokens.is_empty() {
             // Empty shape string means scalar tensor (rank 0), like Tensor[()]
             let shaped_array_shape = ShapedArrayShape::from_types(vec![]);
-            return ShapedArrayType::new(base_class, shaped_array_shape)
-                .with_syntax(ShapedArraySyntax::Jaxtyping)
-                .to_type();
+            return self.jaxtyping_shaped_array_type(base_class, shaped_array_shape);
         }
 
         // Find variadic token: "*name", "*#name", or "...".
@@ -340,26 +385,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Represented as tuple[Any, ...], same as shapeless tensor middle.
                 Type::any_tuple()
             } else {
-                // "*name" or "*#name": named TypeVarTuple.
+                // "*name" or "*#name": named variadic shape.
                 // Strip leading '*', then strip optional broadcast '#' prefix.
                 let var_name = &tokens[var_idx][1..];
                 let var_name = var_name.strip_prefix('#').unwrap_or(var_name);
-                let q = self
-                    .get_or_create_jaxtyping_dim(Name::new(var_name), QuantifiedKind::TypeVarTuple);
+                let q = match self.shaped_array_shape_for_class_type(&base_class) {
+                    Some(shape_param) => match shape_param.kind() {
+                        QuantifiedKind::TypeVar | QuantifiedKind::SymVar => self
+                            .get_or_create_jaxtyping_shape_carrier(
+                                Name::new(var_name),
+                                shape_param.kind(),
+                            ),
+                        QuantifiedKind::TypeVarTuple => unreachable!(
+                            "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+                        ),
+                        QuantifiedKind::ParamSpec => unreachable!(
+                            "shaped-array metadata validation rejects ParamSpec shape parameters"
+                        ),
+                    },
+                    None => self.get_or_create_jaxtyping_dim(
+                        Name::new(var_name),
+                        QuantifiedKind::TypeVarTuple,
+                    ),
+                };
                 Type::Quantified(Box::new(q))
             };
 
             let shaped_array_shape = ShapedArrayShape::unpacked(prefix, middle, suffix);
-            ShapedArrayType::new(base_class, shaped_array_shape)
-                .with_syntax(ShapedArraySyntax::Jaxtyping)
-                .to_type()
+            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
         } else {
             // Concrete shape: all tokens are non-variadic dims
             let dims = self.parse_jaxtyping_dim_tokens(&tokens);
             let shaped_array_shape = ShapedArrayShape::from_types(dims);
-            ShapedArrayType::new(base_class, shaped_array_shape)
-                .with_syntax(ShapedArraySyntax::Jaxtyping)
-                .to_type()
+            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
         }
     }
 

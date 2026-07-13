@@ -1,6 +1,5 @@
 [patch.crates-io]
 backtrace = { git = "https://github.com/rust-lang/backtrace-rs", rev = "df979dcf80027eb047d7bb9e0874710c15009f31" }
-rustversion = { git = "https://github.com/fbsource/rustversion", rev = "3f072e049635b7463275fc4edebbbed3840d9297" }
 
 [profile.release]
 debug = 1

@@ -102,6 +102,86 @@ Point3(1)  # E: Missing argument `y` in function `Point3.__new__`
     "#,
 );
 
+testcase!(
+    test_named_tuple_replace,
+    r#"
+from typing import NamedTuple, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+p = Point(1, "")
+assert_type(p._replace(x=2), Point)
+p._replace()
+p._replace(z=5)  # E: Unexpected keyword argument `z`
+p._replace(x="str")  # E: is not assignable to parameter `x`
+p._replace(1)  # E: Expected 0 positional arguments
+    "#,
+);
+
+testcase!(
+    test_named_tuple_functional_replace,
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+
+Point1 = namedtuple("Point1", ["x", "y"])
+Point2 = NamedTuple("Point2", [("x", int), ("y", str)])
+
+Point1(1, "")._replace(x="anything")
+Point1(1, "")._replace(z=5)  # E: Unexpected keyword argument `z`
+Point2(1, "")._replace(x="str")  # E: is not assignable to parameter `x`
+Point2(1, "")._replace(y="str")
+    "#,
+);
+
+// `_replace` returns `Self`: it must preserve subclasses, generic type
+// arguments, and `TypeVar`-bound receivers rather than collapsing to the
+// concrete base class.
+testcase!(
+    test_named_tuple_replace_returns_self,
+    r#"
+from typing import NamedTuple, Generic, TypeVar, assert_type
+
+class Point(NamedTuple):
+    x: int
+    y: str
+
+class SubPoint(Point):
+    def norm(self) -> int: ...
+
+assert_type(SubPoint(1, "")._replace(x=2), SubPoint)
+
+T = TypeVar("T")
+class Box(NamedTuple, Generic[T]):
+    item: T
+
+b: Box[int] = Box(1)
+assert_type(b._replace(item=2), Box[int])
+
+TP = TypeVar("TP", bound=Point)
+def f(p: TP) -> TP:
+    return p._replace(x=2)
+    "#,
+);
+
+// With dynamic fields, `_replace` accepts any keyword and still returns the
+// namedtuple type.
+testcase!(
+    test_named_tuple_replace_dynamic_fields,
+    r#"
+import collections
+from typing import assert_type
+
+Base = collections.namedtuple("Base", ["name"])
+Ext = collections.namedtuple("Ext", [*Base._fields, "extra"])
+e = Ext("n", "x")
+assert_type(e._replace(extra="new"), Ext)
+e._replace(anything="ok")
+    "#,
+);
+
 // Regression test for https://github.com/facebook/pyrefly/issues/2811
 testcase!(
     test_inline_collections_namedtuple_constructor,

@@ -7,19 +7,20 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
 
 
-class RMSNorm[D](nn.Module):
+class RMSNorm[D: SymVar](nn.Module):
     def __init__(self, dim: Dim[D], eps: float = 1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
 
-class DirectAssignmentFails[D](nn.Module):
+class DirectAssignmentFails[D: SymVar](nn.Module):
     """This class demonstrates Issue 3 with direct assignment."""
 
     ffn_norm: RMSNorm[D]
@@ -33,7 +34,7 @@ class DirectAssignmentFails[D](nn.Module):
         assert_type(self.ffn_norm, RMSNorm[D])
 
 
-class WorkaroundWorks[D](nn.Module):
+class WorkaroundWorks[D: SymVar](nn.Module):
     """This class demonstrates the workaround for Issue 3."""
 
     ffn_norm: RMSNorm[D]

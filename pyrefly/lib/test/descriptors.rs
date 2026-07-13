@@ -961,6 +961,41 @@ C.__get__()  # E: Expected a callable, got `C`
 );
 
 testcase!(
+    // A protocol used as a decorator return type that defines both `__call__` and
+    // `__get__` is a descriptor: attribute access must go through `__get__`, not be
+    // treated as a callback protocol. See GitHub issue #3345.
+    test_callable_descriptor_protocol,
+    r#"
+from typing import Any, Callable, Concatenate, Protocol, Self, assert_type, overload
+
+
+class Method[**P, R](Protocol):
+    def __call__(self, __self__: Any, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type[Any]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Any, owner: type[Any] | None = None) -> Callable[P, R]: ...
+
+    def __get__(self, instance: Any | None, owner: type[Any] | None = None) -> Self | Callable[P, R]: ...
+
+
+def wrap[**P, R](method: Callable[Concatenate[Any, P], R]) -> Method[P, R]: ...
+
+
+class Foo:
+    @wrap
+    def bar(self) -> None: ...
+
+
+def f(foo: Foo) -> None:
+    assert_type(foo.bar, Callable[[], None])
+    foo.bar()
+    "#,
+);
+
+testcase!(
     // Assignment resolves a descriptor through its getter too, so the same guard keeps
     // the write path from overflowing the stack.
     test_self_referential_descriptor_set_no_crash,

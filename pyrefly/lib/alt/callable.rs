@@ -58,7 +58,6 @@ use crate::types::callable::ParamList;
 use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::quantified::Quantified;
-use crate::types::quantified::QuantifiedKind;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
@@ -408,6 +407,21 @@ impl CallArgPreEval<'_> {
                 {
                     return Some(ty);
                 }
+                if matches!(
+                    solver.canonicalize_shape_dsl_type(hint.clone()),
+                    Type::ShapedArray(_)
+                ) {
+                    let ty = solver.reproject_tuple_carrier_shape(
+                        solver.canonicalize_shape_dsl_type(solver.expr_infer(x, arg_errors)),
+                    );
+                    solver.check_type_with_options(
+                        &ty,
+                        hint,
+                        range,
+                        TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
+                    );
+                    return Some(ty);
+                }
                 Some(
                     solver
                         .expr_with_options(
@@ -681,7 +695,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> ArgMap {
         let record = |bound: &mut Option<HashMap<String, Type>>, name: &Name, ty: Type| {
             if let Some(map) = bound.as_mut() {
-                map.insert(name.to_string(), self.canonicalize_shape_dsl_type(ty));
+                map.insert(
+                    name.to_string(),
+                    self.reproject_tuple_carrier_shape(self.canonicalize_shape_dsl_type(ty)),
+                );
             }
         };
         let mut argmap = ArgMap::new();
@@ -1603,7 +1620,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
         let argmap = match callable.params {
-            Params::List(params) => self.callable_infer_params(
+            Params::List(params) | Params::Partial(params) => self.callable_infer_params(
                 callable_name,
                 &params,
                 None,
@@ -1738,7 +1755,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // The self param may not be recorded by callable_infer_params if it's
             // positional-only without a name.
             if let Some(ref obj) = self_obj {
-                let obj = self.canonicalize_shape_dsl_type(obj.clone());
+                let obj = self
+                    .reproject_tuple_carrier_shape(self.canonicalize_shape_dsl_type(obj.clone()));
                 bound.entry("self".to_owned()).or_insert(obj);
             }
             // Auto-inject module field values for DSL params not in bound_args.
@@ -1778,15 +1796,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// shapes are parsed into the shape field directly and need no reprojection.
     fn reproject_tuple_carrier_shape(&self, ty: Type) -> Type {
         ty.transform(&mut |ty| {
-            if let Type::ShapedArray(shaped_array) = ty {
-                let base_class = shaped_array.base_class.clone();
-                if let Some(shape_param) = self.shaped_array_shape_for_class_type(&base_class)
-                    && shape_param.kind() == QuantifiedKind::TypeVar
-                {
-                    *ty = self
-                        .shaped_array_classtype_to_shaped_array_type(&base_class)
-                        .to_type();
+            let shaped_array = match ty {
+                Type::ClassType(cls) => self.try_reproject_class_type_to_shaped_array(cls),
+                Type::ShapedArray(shaped_array) => {
+                    self.try_reproject_class_type_to_shaped_array(&shaped_array.base_class)
                 }
+                _ => return,
+            };
+            if let Some(shaped_array) = shaped_array {
+                *ty = shaped_array.to_type();
             }
         })
     }

@@ -7,6 +7,8 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import SymVar
+
 if TYPE_CHECKING:
     from shape_extensions import Dim
 
@@ -14,11 +16,11 @@ if TYPE_CHECKING:
 # Test 1: Top-level type var unification
 # When passing Dim[A * B] to a function expecting Dim[X],
 # X should be unified with A * B
-def identity_symint[X](x: Dim[X]) -> Dim[X]:
+def identity_symint[X: SymVar](x: Dim[X]) -> Dim[X]:
     return x
 
 
-def test_top_level_unification[A, B](a: Dim[A], b: Dim[B]):
+def test_top_level_unification[A: SymVar, B: SymVar](a: Dim[A], b: Dim[B]):
     expr = a * b  # Dim[A * B]
     assert_type(expr, Dim[A * B])
     result = identity_symint(expr)
@@ -30,11 +32,11 @@ def test_top_level_unification[A, B](a: Dim[A], b: Dim[B]):
 # Test 2: Nested type var without prior binding
 # When passing Dim[(A * B) // 2] to a function expecting Dim[X // 2],
 # X cannot be inferred from a nested position - this is an error
-def half_symint[X](x: Dim[X // 2]) -> Dim[X]:
+def half_symint[X: SymVar](x: Dim[X // 2]) -> Dim[X]:
     return x * 2  # type: ignore
 
 
-def test_nested_unification_fails[A, B](a: Dim[A], b: Dim[B]):
+def test_nested_unification_fails[A: SymVar, B: SymVar](a: Dim[A], b: Dim[B]):
     expr = (a * b) // 2  # Dim[(A * B) // 2]
     # X is in a nested position and cannot be inferred.
     # E: Type variable cannot be inferred from a nested position
@@ -43,11 +45,11 @@ def test_nested_unification_fails[A, B](a: Dim[A], b: Dim[B]):
 
 # Test 3: Nested type var with prior binding
 # If X is bound from the first argument, then the second argument can use X in a nested position
-def two_args[X](first: Dim[X], second: Dim[X // 2]) -> Dim[X]:
+def two_args[X: SymVar](first: Dim[X], second: Dim[X // 2]) -> Dim[X]:
     return first
 
 
-def test_nested_with_prior_binding[N](n: Dim[N]):
+def test_nested_with_prior_binding[N: SymVar](n: Dim[N]):
     half_n = n // 2  # Dim[N // 2]
     # First arg binds X = N, second arg checks N // 2 = N // 2.
     result = two_args(n, half_n)
@@ -56,7 +58,7 @@ def test_nested_with_prior_binding[N](n: Dim[N]):
 
 # Test 4: Nested type var with prior binding - complex expression
 # X is bound to A + A from first arg, second arg uses X // 2 = (A + A) // 2 = A
-def test_nested_with_simplification[A](a: Dim[A]):
+def test_nested_with_simplification[A: SymVar](a: Dim[A]):
     double_a = a + a  # Dim[A + A]
     # X = A + A from first arg
     # Second arg: X // 2 = (A + A) // 2 = A (after simplification)

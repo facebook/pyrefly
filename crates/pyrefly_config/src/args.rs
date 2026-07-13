@@ -331,6 +331,17 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     strict_callable_subtyping: Option<bool>,
+    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
+    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
+    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// parameter types and arity are checked precisely.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    strict_partial_subtyping: Option<bool>,
     /// Whether to use spec-compliant overload evaluation semantics.
     /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
     /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
@@ -485,6 +496,9 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.strict_callable_subtyping {
             config.root.strict_callable_subtyping = Some(*x);
+        }
+        if let Some(x) = &self.strict_partial_subtyping {
+            config.root.strict_partial_subtyping = Some(*x);
         }
         if let Some(x) = &self.spec_compliant_overloads {
             config.root.spec_compliant_overloads = Some(*x);

@@ -56,7 +56,7 @@ fn callable_to_structured(
     pending_class_traits: &mut Vec<(usize, Class)>,
 ) -> usize {
     let param_indices: Vec<usize> = match params {
-        Params::List(param_list) => param_list
+        Params::List(param_list) | Params::Partial(param_list) => param_list
             .items()
             .iter()
             .map(|p| type_to_structured(p.as_type(), table, pending_class_traits))

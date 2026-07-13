@@ -9,13 +9,14 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
     from torch import Tensor
 
 
-class MultiHead[D](nn.Module):
+class MultiHead[D: SymVar](nn.Module):
     """Module using ParameterList to store per-head projection weights."""
 
     def __init__(self, d: Dim[D], n_heads: int) -> None:
@@ -24,13 +25,13 @@ class MultiHead[D](nn.Module):
             [nn.Parameter(torch.randn(d, d)) for _ in range(n_heads)]
         )
 
-    def forward[B](self, x: Tensor[B, D]) -> Tensor[B, D]:
+    def forward[B: SymVar](self, x: Tensor[[B, D]]) -> Tensor[[B, D]]:
         return x
 
 
 def test_parameter_list_len():
     """ParameterList supports len()."""
     m = MultiHead(64, 4)
-    x: Tensor[8, 64] = torch.randn(8, 64)
+    x: Tensor[[8, 64]] = torch.randn(8, 64)
     out = m(x)
-    assert_type(out, Tensor[8, 64])
+    assert_type(out, Tensor[[8, 64]])

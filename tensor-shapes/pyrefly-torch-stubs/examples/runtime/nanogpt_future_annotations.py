@@ -23,34 +23,37 @@ import torch
 import torch.nn as nn
 import torch.nn.init
 import torch.optim
+from shape_extensions import Elements, SizeTuple
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Dim, SymVar
     from torch import Tensor
 
 
-class LayerNorm[M](nn.Module):
+class LayerNorm[M: SymVar](nn.Module):
     """LayerNorm but with an optional bias. Generic over normalized dimension size."""
 
     def __init__(self, ndim: Dim[M], bias: bool):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
-        assert_type(self.weight, Tensor[M])
+        assert_type(self.weight, Tensor[[M]])
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
-        assert_type(self.bias, Tensor[M] | None)
+        assert_type(self.bias, Tensor[[M]] | None)
 
-    def forward[*Bs](self, input: Tensor[*Bs, M]) -> Tensor[*Bs, M]:
+    def forward[Bs: SizeTuple](
+        self, input: Tensor[[*Elements[Bs], M]]
+    ) -> Tensor[[*Elements[Bs], M]]:
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
 @dataclass
 class GPTConfig[
-    VocabSize,
-    BlockSize,
-    NEmbedding,
-    NHead,
-    NLayer,
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+    NLayer: SymVar,
 ]:
     """Configuration for GPT model, generic over key dimensions"""
 
@@ -63,7 +66,9 @@ class GPTConfig[
     bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
 
-class CausalSelfAttention[NEmbedding, NHead, BlockSize](nn.Module):
+class CausalSelfAttention[NEmbedding: SymVar, NHead: SymVar, BlockSize: SymVar](
+    nn.Module
+):
     """Multi-head causal self-attention. Generic over embedding dim, num heads, and block size."""
 
     def __init__(self, config: GPTConfig[Any, BlockSize, NEmbedding, NHead, Any]):
@@ -93,9 +98,11 @@ class CausalSelfAttention[NEmbedding, NHead, BlockSize](nn.Module):
                     1, 1, config.block_size, config.block_size
                 )
             )
-            assert_type(self.bias, Tensor[1, 1, BlockSize, BlockSize])
+            assert_type(self.bias, Tensor[[1, 1, BlockSize, BlockSize]])
 
-    def forward[B, T](self, x: Tensor[B, T, NEmbedding]) -> Tensor[B, T, NEmbedding]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         b, t, c = (
             x.size()
         )  # batch size, sequence length, embedding dimensionality (n_embd)
@@ -104,35 +111,35 @@ class CausalSelfAttention[NEmbedding, NHead, BlockSize](nn.Module):
         assert_type(c, Dim[NEmbedding])
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        assert_type(x, Tensor[B, T, NEmbedding])
+        assert_type(x, Tensor[[B, T, NEmbedding]])
         c_attn = self.c_attn(x)
-        assert_type(c_attn, Tensor[B, T, (3 * NEmbedding)])
+        assert_type(c_attn, Tensor[[B, T, (3 * NEmbedding)]])
         split = c_attn.split(self.n_embd, dim=2)
         assert_type(self.n_embd, Dim[NEmbedding])
         assert_type(
             split,
             tuple[
-                Tensor[B, T, NEmbedding],
-                Tensor[B, T, NEmbedding],
-                Tensor[B, T, NEmbedding],
+                Tensor[[B, T, NEmbedding]],
+                Tensor[[B, T, NEmbedding]],
+                Tensor[[B, T, NEmbedding]],
             ],
         )
         q, k, v = split
-        assert_type(q, Tensor[B, T, NEmbedding])
-        assert_type(k, Tensor[B, T, NEmbedding])
-        assert_type(v, Tensor[B, T, NEmbedding])
+        assert_type(q, Tensor[[B, T, NEmbedding]])
+        assert_type(k, Tensor[[B, T, NEmbedding]])
+        assert_type(v, Tensor[[B, T, NEmbedding]])
         k = k.view(b, t, self.n_head, c // self.n_head).transpose(
             1, 2
         )  # (B, nh, T, hs)
-        assert_type(k, Tensor[B, NHead, T, (NEmbedding // NHead)])
+        assert_type(k, Tensor[[B, NHead, T, (NEmbedding // NHead)]])
         q = q.view(b, t, self.n_head, c // self.n_head).transpose(
             1, 2
         )  # (B, nh, T, hs)
-        assert_type(q, Tensor[B, NHead, T, (NEmbedding // NHead)])
+        assert_type(q, Tensor[[B, NHead, T, (NEmbedding // NHead)]])
         v = v.view(b, t, self.n_head, c // self.n_head).transpose(
             1, 2
         )  # (B, nh, T, hs)
-        assert_type(v, Tensor[B, NHead, T, (NEmbedding // NHead)])
+        assert_type(v, Tensor[[B, NHead, T, (NEmbedding // NHead)]])
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -145,35 +152,35 @@ class CausalSelfAttention[NEmbedding, NHead, BlockSize](nn.Module):
                 dropout_p=self.dropout if self.training else 0,
                 is_causal=True,
             )
-            assert_type(y, Tensor[B, NHead, T, (NEmbedding // NHead)])
+            assert_type(y, Tensor[[B, NHead, T, (NEmbedding // NHead)]])
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            assert_type(att, Tensor[B, NHead, T, T])
+            assert_type(att, Tensor[[B, NHead, T, T]])
             mask = self.bias[:, :, :t, :t] == 0
-            assert_type(mask, Tensor[1, 1, T, T])
+            assert_type(mask, Tensor[[1, 1, T, T]])
             att = att.masked_fill(mask, float("-inf"))
-            assert_type(att, Tensor[B, NHead, T, T])
+            assert_type(att, Tensor[[B, NHead, T, T]])
             att = F.softmax(att, dim=-1)
-            assert_type(att, Tensor[B, NHead, T, T])
+            assert_type(att, Tensor[[B, NHead, T, T]])
             att = self.attn_dropout(att)
-            assert_type(att, Tensor[B, NHead, T, T])
+            assert_type(att, Tensor[[B, NHead, T, T]])
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-            assert_type(y, Tensor[B, NHead, T, (NEmbedding // NHead)])
+            assert_type(y, Tensor[[B, NHead, T, (NEmbedding // NHead)]])
 
-        assert_type(y, Tensor[B, NHead, T, (NEmbedding // NHead)])
+        assert_type(y, Tensor[[B, NHead, T, (NEmbedding // NHead)]])
         y = (
             y.transpose(1, 2).contiguous().view(b, t, c)
         )  # re-assemble all head outputs side by side
-        assert_type(y, Tensor[B, T, NEmbedding])
+        assert_type(y, Tensor[[B, T, NEmbedding]])
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        assert_type(y, Tensor[B, T, NEmbedding])
+        assert_type(y, Tensor[[B, T, NEmbedding]])
         return y
 
 
-class MLP[NEmbedding](nn.Module):
+class MLP[NEmbedding: SymVar](nn.Module):
     """Multi-layer perceptron. Generic over embedding dimension."""
 
     def __init__(self, config: GPTConfig[Any, Any, NEmbedding, Any, Any]):
@@ -185,19 +192,21 @@ class MLP[NEmbedding](nn.Module):
         assert_type(self.c_proj, nn.Linear[(4 * NEmbedding), NEmbedding])
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward[B, T](self, x: Tensor[B, T, NEmbedding]) -> Tensor[B, T, NEmbedding]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         h = self.c_fc(x)
-        assert_type(h, Tensor[B, T, (4 * NEmbedding)])
+        assert_type(h, Tensor[[B, T, (4 * NEmbedding)]])
         h = self.gelu(h)
-        assert_type(h, Tensor[B, T, (4 * NEmbedding)])
+        assert_type(h, Tensor[[B, T, (4 * NEmbedding)]])
         x = self.c_proj(h)
-        assert_type(x, Tensor[B, T, NEmbedding])
+        assert_type(x, Tensor[[B, T, NEmbedding]])
         x = self.dropout(x)
-        assert_type(x, Tensor[B, T, NEmbedding])
+        assert_type(x, Tensor[[B, T, NEmbedding]])
         return x
 
 
-class Block[NEmbedding, NHead, BlockSize](nn.Module):
+class Block[NEmbedding: SymVar, NHead: SymVar, BlockSize: SymVar](nn.Module):
     """Transformer block with self-attention and MLP. Generic over embedding dim, num heads, and block size."""
 
     def __init__(self, config: GPTConfig[Any, BlockSize, NEmbedding, NHead, Any]):
@@ -211,18 +220,20 @@ class Block[NEmbedding, NHead, BlockSize](nn.Module):
         self.mlp = MLP(config)
         assert_type(self.mlp, MLP[NEmbedding])
 
-    def forward[B, T](self, x: Tensor[B, T, NEmbedding]) -> Tensor[B, T, NEmbedding]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
 
 
 class GPTConfigArgs[
-    VocabSize,
-    BlockSize,
-    NEmbedding,
-    NHead,
-    NLayer,
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+    NLayer: SymVar,
 ](TypedDict):
     """TypedDict for GPTConfig constructor arguments, generic over key dimensions"""
 
@@ -235,7 +246,12 @@ class GPTConfigArgs[
     dropout: float
 
 
-class TransformerModules[VocabSize, BlockSize, NEmbedding, NHead](TypedDict):
+class TransformerModules[
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+](TypedDict):
     """TypedDict defining the structure of GPT transformer modules. Generic over key dimensions."""
 
     wte: nn.Embedding[VocabSize, NEmbedding]  # token embeddings
@@ -245,7 +261,13 @@ class TransformerModules[VocabSize, BlockSize, NEmbedding, NHead](TypedDict):
     ln_f: LayerNorm[NEmbedding]  # final layer norm
 
 
-class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
+class GPT[
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+    NLayer: SymVar,
+](nn.Module):
     """GPT Language Model. Generic over vocabulary size, block size, embedding dim, num heads, and num layers."""
 
     def __init__(
@@ -316,9 +338,11 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward[B, T](
-        self, idx: Tensor[B, T], targets: Tensor[B, T] | None = None
-    ) -> tuple[Tensor[B, T, VocabSize] | Tensor[B, 1, VocabSize], Tensor[()] | None]:
+    def forward[B: SymVar, T: SymVar](
+        self, idx: Tensor[[B, T]], targets: Tensor[[B, T]] | None = None
+    ) -> tuple[
+        Tensor[[B, T, VocabSize]] | Tensor[[B, 1, VocabSize]], Tensor[[]] | None
+    ]:
         device = idx.device
         b, t = idx.size()
         assert_type(b, Dim[B])
@@ -327,39 +351,39 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
             f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         )
         pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
-        assert_type(pos, Tensor[T])
+        assert_type(pos, Tensor[[T]])
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        assert_type(tok_emb, Tensor[B, T, NEmbedding])
+        assert_type(tok_emb, Tensor[[B, T, NEmbedding]])
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
-        assert_type(pos_emb, Tensor[T, NEmbedding])
+        assert_type(pos_emb, Tensor[[T, NEmbedding]])
         tok_pos_emb = tok_emb + pos_emb
-        assert_type(tok_pos_emb, Tensor[B, T, NEmbedding])
+        assert_type(tok_pos_emb, Tensor[[B, T, NEmbedding]])
         x = self.transformer.drop(tok_pos_emb)
-        assert_type(x, Tensor[B, T, NEmbedding])
+        assert_type(x, Tensor[[B, T, NEmbedding]])
         for block in self.transformer.h:
-            _x: Tensor[B, T, NEmbedding] = x
+            _x: Tensor[[B, T, NEmbedding]] = x
             x = block(_x)
-        assert_type(x, Tensor[B, T, NEmbedding])
+        assert_type(x, Tensor[[B, T, NEmbedding]])
 
         x = self.transformer.ln_f(x)
-        assert_type(x, Tensor[B, T, NEmbedding])
+        assert_type(x, Tensor[[B, T, NEmbedding]])
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            assert_type(logits, Tensor[B, T, VocabSize])
+            assert_type(logits, Tensor[[B, T, VocabSize]])
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
-            assert_type(loss, Tensor[()])
+            assert_type(loss, Tensor[[]])
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(
                 x[:, (-1,), :]
             )  # note: using list [-1] to preserve the time dim
-            assert_type(logits, Tensor[B, 1, VocabSize])
+            assert_type(logits, Tensor[[B, 1, VocabSize]])
             loss = None
 
         return logits, loss
@@ -489,13 +513,13 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate[B](
+    def generate[B: SymVar](
         self,
-        idx: Tensor[B, Any],
+        idx: Tensor[[B, Any]],
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: int | None = None,
-    ) -> Tensor[B, Any]:
+    ) -> Tensor[[B, Any]]:
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -508,27 +532,27 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
                 if idx.size(1) <= self.config.block_size
                 else idx[:, -self.config.block_size :]
             )
-            assert_type(idx_cond, Tensor[B, Any])
+            assert_type(idx_cond, Tensor[[B, Any]])
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
-            assert_type(logits, Tensor[B, 1, VocabSize] | Tensor[B, Any, VocabSize])
+            assert_type(logits, Tensor[[B, 1, VocabSize]] | Tensor[[B, Any, VocabSize]])
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
-            assert_type(logits, Tensor[B, VocabSize])
+            assert_type(logits, Tensor[[B, VocabSize]])
             # optionally crop the logits to only the top k options
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
             # apply softmax to convert logits to (normalized) probabilities
-            assert_type(logits, Tensor[B, VocabSize])
+            assert_type(logits, Tensor[[B, VocabSize]])
             probs = F.softmax(logits, dim=-1)
-            assert_type(probs, Tensor[B, VocabSize])
+            assert_type(probs, Tensor[[B, VocabSize]])
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
-            assert_type(idx_next, Tensor[B, 1])
+            assert_type(idx_next, Tensor[[B, 1]])
             # append sampled index to the running sequence and continue
-            _idx: Tensor[B, Any] = idx
+            _idx: Tensor[[B, Any]] = idx
             idx = torch.cat((_idx, idx_next), dim=1)
 
-        assert_type(idx, Tensor[B, Any])
+        assert_type(idx, Tensor[[B, Any]])
         return idx

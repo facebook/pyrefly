@@ -48,7 +48,7 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Dim, SymVar
     from torch import Tensor
 
 
@@ -76,7 +76,9 @@ def conv_init(m: nn.Module) -> None:
 # (not ResnetConditionHR or NLayerDiscriminator). Included for completeness.
 
 
-def conv3x3[InC, OutC](in_channels: Dim[InC], out_channels: Dim[OutC]) -> nn.Sequential:
+def conv3x3[InC: SymVar, OutC: SymVar](
+    in_channels: Dim[InC], out_channels: Dim[OutC]
+) -> nn.Sequential:
     """3×3 conv + BN + ReLU, shape-preserving (padding=1)."""
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -85,7 +87,9 @@ def conv3x3[InC, OutC](in_channels: Dim[InC], out_channels: Dim[OutC]) -> nn.Seq
     )
 
 
-def conv1x1[InC, OutC](in_channels: Dim[InC], out_channels: Dim[OutC]) -> nn.Sequential:
+def conv1x1[InC: SymVar, OutC: SymVar](
+    in_channels: Dim[InC], out_channels: Dim[OutC]
+) -> nn.Sequential:
     """1×1 conv + BN + ReLU, changes channels only."""
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, kernel_size=1),
@@ -94,7 +98,7 @@ def conv1x1[InC, OutC](in_channels: Dim[InC], out_channels: Dim[OutC]) -> nn.Seq
     )
 
 
-def upconv3x3[InC, OutC](
+def upconv3x3[InC: SymVar, OutC: SymVar](
     in_channels: Dim[InC], out_channels: Dim[OutC]
 ) -> nn.Sequential:
     """Upsample(2×) + 3×3 conv + BN + ReLU."""
@@ -111,7 +115,7 @@ def upconv3x3[InC, OutC](
 # ============================================================================
 
 
-class ResnetBlock[C](nn.Module):
+class ResnetBlock[C: SymVar](nn.Module):
     """Residual block with ReflectionPad2d.
 
     conv_block = nn.Sequential(
@@ -137,7 +141,9 @@ class ResnetBlock[C](nn.Module):
             nn.BatchNorm2d(dim),
         )
 
-    def forward[B, H, W](self, x: Tensor[B, C, H, W]) -> Tensor[B, C, H, W]:
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, x: Tensor[[B, C, H, W]]
+    ) -> Tensor[[B, C, H, W]]:
         return x + self.conv_block(x)
 
 
@@ -146,7 +152,7 @@ class ResnetBlock[C](nn.Module):
 # ============================================================================
 
 
-class EncoderBranch[InC](nn.Module):
+class EncoderBranch[InC: SymVar](nn.Module):
     """Single encoder branch: input → 256 channels at 1/4 spatial resolution.
 
     Architecture (ngf=64), built as nn.Sequential:
@@ -174,9 +180,9 @@ class EncoderBranch[InC](nn.Module):
             nn.ReLU(),
         )
 
-    def forward[B, H, W](
-        self, x: Tensor[B, InC, H, W]
-    ) -> Tensor[B, 256, (H - 1) // 4 + 1, (W - 1) // 4 + 1]:
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, x: Tensor[[B, InC, H, W]]
+    ) -> Tensor[[B, 256, (H - 1) // 4 + 1, (W - 1) // 4 + 1]]:
         return self.model(x)
 
 
@@ -214,14 +220,14 @@ class ImageEncoder(nn.Module):
             nn.ReLU(),
         )
 
-    def forward[B, H, W](
-        self, x: Tensor[B, 3, H, W]
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, x: Tensor[[B, 3, H, W]]
     ) -> tuple[
-        Tensor[B, 128, (H - 1) // 2 + 1, (W - 1) // 2 + 1],
-        Tensor[B, 256, (H - 1) // 4 + 1, (W - 1) // 4 + 1],
+        Tensor[[B, 128, (H - 1) // 2 + 1, (W - 1) // 2 + 1]],
+        Tensor[[B, 256, (H - 1) // 4 + 1, (W - 1) // 4 + 1]],
     ]:
         feat1 = self.stage1(x)
-        assert_type(feat1, Tensor[B, 128, (H - 1) // 2 + 1, (W - 1) // 2 + 1])
+        assert_type(feat1, Tensor[[B, 128, (H - 1) // 2 + 1, (W - 1) // 2 + 1]])
         feat2 = self.stage2(feat1)
         return feat1, feat2
 
@@ -339,60 +345,60 @@ class Generator(nn.Module):
             nn.Conv2d(64, 3, kernel_size=7, padding=0),
         )
 
-    def forward[B](
+    def forward[B: SymVar](
         self,
-        image: Tensor[B, 3, 256, 256],
-        back: Tensor[B, 3, 256, 256],
-        seg: Tensor[B, 1, 256, 256],
-        multi: Tensor[B, 4, 256, 256],
-    ) -> tuple[Tensor[B, 1, 256, 256], Tensor[B, 3, 256, 256]]:
+        image: Tensor[[B, 3, 256, 256]],
+        back: Tensor[[B, 3, 256, 256]],
+        seg: Tensor[[B, 1, 256, 256]],
+        multi: Tensor[[B, 4, 256, 256]],
+    ) -> tuple[Tensor[[B, 1, 256, 256]], Tensor[[B, 3, 256, 256]]]:
         # Encode image (with skip connection)
         img_feat1, img_feat = self.img_encoder(image)
-        assert_type(img_feat1, Tensor[B, 128, 128, 128])
-        assert_type(img_feat, Tensor[B, 256, 64, 64])
+        assert_type(img_feat1, Tensor[[B, 128, 128, 128]])
+        assert_type(img_feat, Tensor[[B, 256, 64, 64]])
         # Encode other branches
         back_feat = self.back_encoder(back)
-        assert_type(back_feat, Tensor[B, 256, 64, 64])
+        assert_type(back_feat, Tensor[[B, 256, 64, 64]])
         seg_feat = self.seg_encoder(seg)
-        assert_type(seg_feat, Tensor[B, 256, 64, 64])
+        assert_type(seg_feat, Tensor[[B, 256, 64, 64]])
         multi_feat = self.multi_encoder(multi)
-        assert_type(multi_feat, Tensor[B, 256, 64, 64])
+        assert_type(multi_feat, Tensor[[B, 256, 64, 64]])
         # Cross-branch fusion
         comb_b = self.comb_back(torch.cat((img_feat, back_feat), dim=1))
-        assert_type(comb_b, Tensor[B, 64, 64, 64])
+        assert_type(comb_b, Tensor[[B, 64, 64, 64]])
         comb_s = self.comb_seg(torch.cat((img_feat, seg_feat), dim=1))
-        assert_type(comb_s, Tensor[B, 64, 64, 64])
+        assert_type(comb_s, Tensor[[B, 64, 64, 64]])
         comb_m = self.comb_multi(torch.cat((img_feat, multi_feat), dim=1))
-        assert_type(comb_m, Tensor[B, 64, 64, 64])
+        assert_type(comb_m, Tensor[[B, 64, 64, 64]])
         # Concat fused features
         oth_feat = torch.cat((comb_b, comb_s, comb_m), dim=1)
-        assert_type(oth_feat, Tensor[B, 192, 64, 64])
+        assert_type(oth_feat, Tensor[[B, 192, 64, 64]])
         # Bottleneck: reduce channels + ResBlocks
         dec = self.dec_reduce(torch.cat((img_feat, oth_feat), dim=1))
-        assert_type(dec, Tensor[B, 256, 64, 64])
+        assert_type(dec, Tensor[[B, 256, 64, 64]])
         dec = self.res_shared(dec)
-        assert_type(dec, Tensor[B, 256, 64, 64])
+        assert_type(dec, Tensor[[B, 256, 64, 64]])
         # Alpha branch
         al = self.al_res(dec)
-        assert_type(al, Tensor[B, 256, 64, 64])
+        assert_type(al, Tensor[[B, 256, 64, 64]])
         al = self.al_up1(al)
-        assert_type(al, Tensor[B, 128, 128, 128])
+        assert_type(al, Tensor[[B, 128, 128, 128]])
         al = self.al_up2(al)
-        assert_type(al, Tensor[B, 64, 256, 256])
+        assert_type(al, Tensor[[B, 64, 256, 256]])
         alpha = self.al_out(al)
-        assert_type(alpha, Tensor[B, 1, 256, 256])
+        assert_type(alpha, Tensor[[B, 1, 256, 256]])
         # Foreground branch
         fg = self.fg_res(dec)
-        assert_type(fg, Tensor[B, 256, 64, 64])
+        assert_type(fg, Tensor[[B, 256, 64, 64]])
         fg_up = self.fg_up1(fg)
-        assert_type(fg_up, Tensor[B, 128, 128, 128])
+        assert_type(fg_up, Tensor[[B, 128, 128, 128]])
         # Skip connection: concat with img_feat1
         fg_skip = torch.cat((fg_up, img_feat1), dim=1)
-        assert_type(fg_skip, Tensor[B, 256, 128, 128])
+        assert_type(fg_skip, Tensor[[B, 256, 128, 128]])
         fg_out = self.fg_up2(fg_skip)
-        assert_type(fg_out, Tensor[B, 64, 256, 256])
+        assert_type(fg_out, Tensor[[B, 64, 256, 256]])
         foreground = self.fg_out(fg_out)
-        assert_type(foreground, Tensor[B, 3, 256, 256])
+        assert_type(foreground, Tensor[[B, 3, 256, 256]])
         return alpha, foreground
 
 
@@ -434,10 +440,10 @@ class Discriminator(nn.Module):
             nn.Conv2d(512, 1, kernel_size=4, stride=1, padding=2),
         )
 
-    def forward[B, H, W](
-        self, x: Tensor[B, 3, H, W]
+    def forward[B: SymVar, H: SymVar, W: SymVar](
+        self, x: Tensor[[B, 3, H, W]]
     ) -> Tensor[
-        B, 1, 3 + (1 + (1 + H // 2) // 2) // 2, 3 + (1 + (1 + W // 2) // 2) // 2
+        [B, 1, 3 + (1 + (1 + H // 2) // 2) // 2, 3 + (1 + (1 + W // 2) // 2) // 2]
     ]:
         return self.model(x)
 
@@ -502,60 +508,60 @@ class MultiscaleDiscriminator(nn.Module):
 def test_resnet_block():
     """Test shape-preserving residual block."""
     block = ResnetBlock(256)
-    x: Tensor[2, 256, 64, 64] = torch.randn(2, 256, 64, 64)
+    x: Tensor[[2, 256, 64, 64]] = torch.randn(2, 256, 64, 64)
     out = block(x)
-    assert_type(out, Tensor[2, 256, 64, 64])
+    assert_type(out, Tensor[[2, 256, 64, 64]])
 
 
 def test_encoder_branch():
     """Test encoder branch: (B, 3, 256, 256) → (B, 256, 64, 64)."""
     enc = EncoderBranch(3)
-    x: Tensor[2, 3, 256, 256] = torch.randn(2, 3, 256, 256)
+    x: Tensor[[2, 3, 256, 256]] = torch.randn(2, 3, 256, 256)
     out = enc(x)
-    assert_type(out, Tensor[2, 256, 64, 64])
+    assert_type(out, Tensor[[2, 256, 64, 64]])
 
 
 def test_encoder_branch_seg():
     """Test encoder branch with 1-channel input (segmentation)."""
     enc = EncoderBranch(1)
-    x: Tensor[2, 1, 256, 256] = torch.randn(2, 1, 256, 256)
+    x: Tensor[[2, 1, 256, 256]] = torch.randn(2, 1, 256, 256)
     out = enc(x)
-    assert_type(out, Tensor[2, 256, 64, 64])
+    assert_type(out, Tensor[[2, 256, 64, 64]])
 
 
 def test_image_encoder():
     """Test image encoder with skip connection output."""
     enc = ImageEncoder()
-    x: Tensor[2, 3, 256, 256] = torch.randn(2, 3, 256, 256)
+    x: Tensor[[2, 3, 256, 256]] = torch.randn(2, 3, 256, 256)
     feat1, feat2 = enc(x)
-    assert_type(feat1, Tensor[2, 128, 128, 128])
-    assert_type(feat2, Tensor[2, 256, 64, 64])
+    assert_type(feat1, Tensor[[2, 128, 128, 128]])
+    assert_type(feat2, Tensor[[2, 256, 64, 64]])
 
 
 def test_generator():
     """Test full generator: 4 inputs → (alpha, foreground)."""
     gen = Generator()
-    image: Tensor[2, 3, 256, 256] = torch.randn(2, 3, 256, 256)
-    back: Tensor[2, 3, 256, 256] = torch.randn(2, 3, 256, 256)
-    seg: Tensor[2, 1, 256, 256] = torch.randn(2, 1, 256, 256)
-    multi: Tensor[2, 4, 256, 256] = torch.randn(2, 4, 256, 256)
+    image: Tensor[[2, 3, 256, 256]] = torch.randn(2, 3, 256, 256)
+    back: Tensor[[2, 3, 256, 256]] = torch.randn(2, 3, 256, 256)
+    seg: Tensor[[2, 1, 256, 256]] = torch.randn(2, 1, 256, 256)
+    multi: Tensor[[2, 4, 256, 256]] = torch.randn(2, 4, 256, 256)
     alpha, fg = gen(image, back, seg, multi)
-    assert_type(alpha, Tensor[2, 1, 256, 256])
-    assert_type(fg, Tensor[2, 3, 256, 256])
+    assert_type(alpha, Tensor[[2, 1, 256, 256]])
+    assert_type(fg, Tensor[[2, 3, 256, 256]])
 
 
 def test_discriminator():
     """Test PatchGAN discriminator: (B, 3, 256, 256) → (B, 1, 35, 35)."""
     disc = Discriminator()
-    x: Tensor[2, 3, 256, 256] = torch.randn(2, 3, 256, 256)
+    x: Tensor[[2, 3, 256, 256]] = torch.randn(2, 3, 256, 256)
     out = disc(x)
-    assert_type(out, Tensor[2, 1, 35, 35])
+    assert_type(out, Tensor[[2, 1, 35, 35]])
 
 
 def test_multiscale_discriminator():
     """Test multi-scale discriminator: returns list of outputs at different scales."""
     msd = MultiscaleDiscriminator(num_D=3)
-    x: Tensor[2, 3, 256, 256] = torch.randn(2, 3, 256, 256)
+    x: Tensor[[2, 3, 256, 256]] = torch.randn(2, 3, 256, 256)
     results = msd(x)
     # Returns list of bare Tensor — setattr/getattr and variable-scale inputs
     # prevent shape tracking

@@ -4,6 +4,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-unsafe
+
 """Benchmark `textDocument/definition` between LSP servers on a codebase.
 
 This script is intentionally self-contained (std-lib only) so it can run in

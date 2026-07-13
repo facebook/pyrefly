@@ -856,9 +856,10 @@ impl ConfigFile {
     ) -> Vec<ImportLookupPathPart<'a>> {
         let mut result = vec![];
         if let Some(source_db) = &self.source_db {
-            result.push(ImportLookupPathPart::BuildSystem(
-                source_db.get_target(origin),
-            ));
+            let target = source_db
+                .as_live_source_database()
+                .and_then(|source_db| source_db.get_target(origin));
+            result.push(ImportLookupPathPart::BuildSystem(target));
         }
         result.push(ImportLookupPathPart::SearchPathFromArgs(
             &self.search_path_from_args,
@@ -974,6 +975,14 @@ impl ConfigFile {
                  // we can use unwrap here, because the value in the root config must
                  // be set in `ConfigFile::configure()`.
                  self.root.strict_callable_subtyping.unwrap())
+    }
+
+    pub fn strict_partial_subtyping(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_strict_partial_subtyping, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.strict_partial_subtyping.unwrap())
     }
 
     pub fn spec_compliant_overloads(&self, path: &Path) -> bool {
@@ -1108,7 +1117,9 @@ impl ConfigFile {
         }
 
         for source_db in source_dbs {
-            result.extend(source_db.get_paths_to_watch());
+            if let Some(live_source_db) = source_db.as_live_source_database() {
+                result.extend(live_source_db.get_paths_to_watch());
+            }
         }
         result
     }
@@ -1136,6 +1147,10 @@ impl ConfigFile {
             let Some(source_db) = &config.source_db else {
                 continue;
             };
+            // Static source databases do not participate in live rebuild telemetry.
+            if source_db.as_live_source_database().is_none() {
+                continue;
+            }
             sourcedb_configs
                 .entry(source_db)
                 .or_default()
@@ -1162,13 +1177,17 @@ impl ConfigFile {
             telemetry.finish_task(event_telemetry, error);
         }
         for (source_db, configs_and_files) in sourcedb_configs {
+            let live_source_db = source_db
+                .as_live_source_database()
+                .expect("source_db was filtered to live source databases");
             let start = Instant::now();
             let all_files = configs_and_files
                 .iter()
                 .flat_map(|x| x.1.iter())
                 .map(|p| p.module_path_buf())
                 .collect::<SmallSet<_>>();
-            let (sourcedb_rebuild, instance_stats) = source_db.query_source_db(all_files, force);
+            let (sourcedb_rebuild, instance_stats) =
+                live_source_db.query_source_db(all_files, force);
             let changed = match sourcedb_rebuild {
                 Err(error) => {
                     log_telemetry(&telemetry, start, instance_stats, Some(&error));
@@ -1178,7 +1197,7 @@ impl ConfigFile {
                 }
                 Ok(r) => r,
             };
-            let generated_files = source_db.get_generated_files();
+            let generated_files = live_source_db.get_generated_files();
             if !generated_files.is_empty() {
                 let mut write = GENERATED_FILE_CONFIG_OVERRIDE.write();
                 // we don't need any specific config here, any config for this sourcedb will work
@@ -1314,6 +1333,7 @@ impl ConfigFile {
             apply_preset_default!(infer_return_types);
             apply_preset_default!(infer_with_first_use);
             apply_preset_default!(strict_callable_subtyping);
+            apply_preset_default!(strict_partial_subtyping);
             apply_preset_default!(spec_compliant_overloads);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
@@ -1371,6 +1391,10 @@ impl ConfigFile {
 
         if self.root.strict_callable_subtyping.is_none() {
             self.root.strict_callable_subtyping = Some(false);
+        }
+
+        if self.root.strict_partial_subtyping.is_none() {
+            self.root.strict_partial_subtyping = Some(false);
         }
 
         if self.root.spec_compliant_overloads.is_none() {
@@ -1755,6 +1779,7 @@ mod tests {
                     infer_with_first_use: None,
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
+                    strict_partial_subtyping: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
@@ -1780,6 +1805,7 @@ mod tests {
                         infer_with_first_use: Some(false),
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
+                        strict_partial_subtyping: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
@@ -2207,6 +2233,7 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
+                strict_partial_subtyping: Some(false),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
@@ -2482,6 +2509,7 @@ output-format = "omit-errors"
             Severity::Ignore
         );
         assert_eq!(config.root.strict_callable_subtyping, Some(true));
+        assert_eq!(config.root.strict_partial_subtyping, Some(true));
     }
 
     #[test]
@@ -3003,6 +3031,7 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
+                strict_partial_subtyping: Some(false),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
@@ -3042,6 +3071,7 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
+                strict_partial_subtyping: Some(false),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,

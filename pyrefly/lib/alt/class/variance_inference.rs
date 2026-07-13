@@ -268,7 +268,7 @@ fn on_callable(
     // Walk parameters contravariantly. Receiver-bound methods skip their first parameter
     // because lookup either binds it from dynamic dispatch or requantifies it for class access.
     match &callable.params {
-        Params::List(param_list) => {
+        Params::List(param_list) | Params::Partial(param_list) => {
             for param in param_list.items().iter().skip(usize::from(skip_receiver)) {
                 on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
             }
@@ -476,7 +476,7 @@ fn check_callable_variance(
             violations,
         );
     }
-    if let Params::List(param_list) = &callable.params {
+    if let Params::List(param_list) | Params::Partial(param_list) = &callable.params {
         for param in param_list.items().iter() {
             if let Type::Quantified(q) = param.as_type() {
                 check_typevar(

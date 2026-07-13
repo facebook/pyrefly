@@ -19,6 +19,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anstream::eprintln;
+use anstream::stderr;
 use anstream::stdout;
 use anyhow::Context as _;
 use clap::Parser;
@@ -474,6 +475,22 @@ fn write_error_text_to_console(
     let stdout = stdout();
     let color_choice = stdout.current_choice();
     let mut renderer = ErrorRenderer::new(BufWriter::new(stdout.lock()), color_choice);
+    for error in errors {
+        renderer.write(error, relative_to, verbose)?;
+        renderer.flush()?;
+    }
+    renderer.flush()?;
+    Ok(())
+}
+
+pub(crate) fn write_errors_to_stderr(
+    relative_to: &Path,
+    errors: &[Error],
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let stderr = stderr();
+    let color_choice = stderr.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stderr.lock()), color_choice);
     for error in errors {
         renderer.write(error, relative_to, verbose)?;
         renderer.flush()?;

@@ -5,13 +5,16 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import SymVar
+
+
 if TYPE_CHECKING:
     from shape_extensions import Dim
     from torch import Tensor
 
 
-def test_starred_unpack[B, T, NHeads, HeadDim](
-    x: Tensor[B, T, NHeads, HeadDim],
+def test_starred_unpack[B: SymVar, T: SymVar, NHeads: SymVar, HeadDim: SymVar](
+    x: Tensor[[B, T, NHeads, HeadDim]],
 ) -> None:
     # First check that tuple slicing works
     sizes = x.size()
@@ -22,4 +25,4 @@ def test_starred_unpack[B, T, NHeads, HeadDim](
 
     # Starred unpacking now preserves element types
     result = x.float().reshape(*sliced, -1, 2)
-    assert_type(result, Tensor[B, T, NHeads, HeadDim // 2, 2])
+    assert_type(result, Tensor[[B, T, NHeads, HeadDim // 2, 2]])

@@ -18,6 +18,8 @@
 //!
 //! You can also use `# mypy: ignore-errors`, `# pyrefly: ignore-errors`
 //! or `# type: ignore` at the beginning of a file to suppress all errors.
+//! `# pyrefly: ignore-errors[invalid-type]` suppresses only the listed error
+//! codes across the file rather than all errors.
 //!
 //! For Pyre compatibility we also allow `# pyre-ignore` and `# pyre-fixme`
 //! as equivalents to `pyre: ignore`, and `# pyre-ignore-all-errors` as
@@ -248,12 +250,29 @@ pub struct Suppression {
     /// This may differ from the line the suppression applies to
     /// (e.g., when the comment is on the line above).
     comment_line: LineNumber,
+    /// Byte offset within `comment_line` of the `#` that starts the comment.
+    comment_offset: usize,
 }
 
 impl Suppression {
+    /// A blanket suppression for `tool` that matches every error code.
+    fn blanket(tool: Tool, comment_line: LineNumber, comment_offset: usize) -> Self {
+        Self {
+            tool,
+            kind: Vec::new(),
+            comment_line,
+            comment_offset,
+        }
+    }
+
     /// Returns the line number where the suppression comment is located.
     pub fn comment_line(&self) -> LineNumber {
         self.comment_line
+    }
+
+    /// Returns the byte offset of the comment's `#` within `comment_line`.
+    pub fn comment_offset(&self) -> usize {
+        self.comment_offset
     }
 
     /// Returns the error codes that this suppression applies to.
@@ -293,20 +312,18 @@ impl Ignore {
         for (idx, line_str) in code.lines().enumerate() {
             let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
             in_triple_quote = new_state;
-            let comments = if let Some(comment_start) = comment_start {
-                &line_str[comment_start..]
-            } else {
-                ""
-            };
             let is_comment_only_line = comment_start
                 .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
             line = LineNumber::from_zero_indexed(idx as u32);
             if !pending.is_empty() && (line_str.is_empty() || !is_comment_only_line) {
                 ignores.entry(line).or_default().append(&mut pending);
             }
-            // We know `#` is at the beginning, so the first split is an empty string
-            for x in comments.split('#').skip(1) {
-                if let Some(supp) = Self::parse_ignore_comment(x, line) {
+            let Some(comment_start) = comment_start else {
+                continue;
+            };
+            // We know `#` is at `comment_start`, so the first split is an empty string
+            for x in line_str[comment_start..].split('#').skip(1) {
+                if let Some(supp) = Self::parse_ignore_comment(x, line, comment_start) {
                     if is_comment_only_line {
                         pending.push(supp);
                     } else {
@@ -325,8 +342,12 @@ impl Ignore {
     }
 
     /// Given the content of a comment, parse it as a suppression.
-    /// The comment_line parameter indicates which line the comment is on.
-    fn parse_ignore_comment(l: &str, comment_line: LineNumber) -> Option<Suppression> {
+    /// `comment_line` and `comment_offset` locate the `#` starting the comment.
+    fn parse_ignore_comment(
+        l: &str,
+        comment_line: LineNumber,
+        comment_offset: usize,
+    ) -> Option<Suppression> {
         let mut lex = Lexer(l);
         lex.trim_start();
 
@@ -348,15 +369,12 @@ impl Ignore {
             let inside = rest.split_once(']').map_or(rest, |x| x.0);
             return Some(Suppression {
                 tool,
-                kind: inside.split(',').map(|x| x.trim().to_owned()).collect(),
+                kind: parse_error_codes(inside),
                 comment_line,
+                comment_offset,
             });
         } else if gap || lex.word_boundary() {
-            return Some(Suppression {
-                tool,
-                kind: Vec::new(),
-                comment_line,
-            });
+            return Some(Suppression::blanket(tool, comment_line, comment_offset));
         }
         None
     }
@@ -462,8 +480,9 @@ fn is_in_multiline_string(
 /// Parse top-level `ignore-errors` / `ignore-all-errors` / `type: ignore` directives.
 ///
 /// Scans the beginning of the file for comment-only lines (including blank lines
-/// and lines inside multiline strings like docstrings). Returns the map of tools
-/// with ignore-all directives and the line number where each directive appears.
+/// and lines inside multiline strings like docstrings). Returns the file-level
+/// suppressions found; Pyrefly entries may carry specific error codes
+/// (`# pyrefly: ignore-errors[code]`), while other tools are blanket-only.
 ///
 /// After a docstring, only `ignore-errors` directives are recognized — bare
 /// `# type: ignore` is not, since it could plausibly be meant as a per-line
@@ -471,8 +490,8 @@ fn is_in_multiline_string(
 pub fn parse_ignore_all(
     code: &str,
     multiline_string_ranges: &[(LineNumber, LineNumber)],
-) -> SmallMap<Tool, LineNumber> {
-    let mut res = SmallMap::new();
+) -> Vec<Suppression> {
+    let mut res = Vec::new();
     let mut prev_ignore = None;
     let mut seen_docstring = false;
 
@@ -501,10 +520,10 @@ pub fn parse_ignore_all(
             break;
         }
 
-        if let Some((tool, prev_line)) = prev_ignore {
+        if let Some((tool, prev_line, prev_offset)) = prev_ignore {
             // The previous `# type: ignore` was followed by another comment or
             // blank line, so it is a whole-file suppression.
-            res.entry(tool).or_insert(prev_line);
+            res.push(Suppression::blanket(tool, prev_line, prev_offset));
             prev_ignore = None;
         }
 
@@ -512,21 +531,58 @@ pub fn parse_ignore_all(
         if !lex.starts_with("#") {
             continue;
         }
+        // `trimmed` starts with `#`, so its offset is the line's leading whitespace.
+        let comment_offset = raw_line.len() - raw_line.trim_start().len();
         lex.trim_start();
         if lex.starts_with("pyre-ignore-all-errors") {
-            res.entry(Tool::Pyre).or_insert(line);
+            res.push(Suppression::blanket(Tool::Pyre, line, comment_offset));
         } else if let Some(tool) = lex.starts_with_tool() {
             lex.trim_start();
-            if lex.starts_with("ignore-errors") && lex.blank() {
-                res.entry(tool).or_insert(line);
+            if lex.starts_with("ignore-errors") {
+                lex.trim_start();
+                // Parse an optional `[code, ...]` list, sharing `parse_error_codes`
+                // with the line-level parser. A file-level directive must close its
+                // bracket and have nothing after it, so malformed lines are rejected.
+                let kind = if lex.starts_with("[") {
+                    lex.0.split_once(']').and_then(|(inside, after)| {
+                        // Drop empty entries so `[]`/trailing commas act as a blanket
+                        // ignore rather than a directive that matches nothing.
+                        Lexer(after).blank().then(|| {
+                            parse_error_codes(inside)
+                                .into_iter()
+                                .filter(|code| !code.is_empty())
+                                .collect()
+                        })
+                    })
+                } else if lex.blank() {
+                    Some(Vec::new())
+                } else {
+                    None
+                };
+                // Only Pyrefly honors specific codes; other tools are blanket-only.
+                if let Some(kind) = kind
+                    && (tool == Tool::Pyrefly || kind.is_empty())
+                {
+                    res.push(Suppression {
+                        tool,
+                        kind,
+                        comment_line: line,
+                        comment_offset,
+                    });
+                }
             } else if !seen_docstring && lex.starts_with("ignore") && lex.blank() {
                 // After a docstring, bare `# type: ignore` is not recognized
                 // as an ignore-all directive.
-                prev_ignore = Some((tool, line));
+                prev_ignore = Some((tool, line, comment_offset));
             }
         }
     }
     res
+}
+
+/// Split the comma-separated error codes inside a `[...]` suppression into trimmed names.
+fn parse_error_codes(inside: &str) -> Vec<String> {
+    inside.split(',').map(|x| x.trim().to_owned()).collect()
 }
 
 #[cfg(test)]
@@ -607,15 +663,38 @@ x = """
     }
 
     #[test]
+    fn test_suppression_comment_offset() {
+        fn f(x: &str, expect: &[(u32, usize)]) {
+            assert_eq!(
+                &Ignore::parse_ignores(x)
+                    .into_iter()
+                    .flat_map(|(_, xs)| xs.map(|x| (x.comment_line.get(), x.comment_offset)))
+                    .collect::<Vec<_>>(),
+                expect,
+                "{x:?}"
+            );
+        }
+
+        f("x = 1  # type: ignore", &[(1, 7)]);
+        // Not the `#` inside the string literal
+        f(r##"x: str = "#hash"  # type: ignore"##, &[(1, 18)]);
+        // Line starts inside a triple-quoted string that closes mid-line
+        f("x = \"\"\"\n#fake\"\"\" # type: ignore", &[(2, 9)]);
+        // A comment above code keeps its own line and offset
+        f("  # type: ignore\nx = 1", &[(1, 2)]);
+    }
+
+    #[test]
     fn test_parse_ignore_comment() {
         fn f(x: &str, tool: Option<Tool>, kind: &[&str]) {
             let dummy_line = LineNumber::default();
             assert_eq!(
-                Ignore::parse_ignore_comment(x, dummy_line),
+                Ignore::parse_ignore_comment(x, dummy_line, 0),
                 tool.map(|tool| Suppression {
                     tool,
                     kind: kind.map(|x| (*x).to_owned()),
                     comment_line: dummy_line,
+                    comment_offset: 0,
                 }),
                 "{x:?}"
             );
@@ -699,54 +778,106 @@ x = """
 
     #[test]
     fn test_parse_ignore_all() {
-        fn f(x: &str, ignores: &[(Tool, u32)]) {
+        fn f(x: &str, ignores: &[(Tool, u32, &[&str])]) {
             assert_eq!(
                 parse_ignore_all(x, &[]),
                 ignores
                     .iter()
-                    .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
-                    .collect(),
+                    .map(|x| Suppression {
+                        tool: x.0,
+                        kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
+                        comment_line: LineNumber::new(x.1).unwrap(),
+                        comment_offset: 0,
+                    })
+                    .collect::<Vec<_>>(),
                 "{x:?}"
             );
         }
 
-        f("# pyrefly: ignore-errors\nx = 5", &[(Tool::Pyrefly, 1)]);
+        f(
+            "# pyrefly: ignore-errors\nx = 5",
+            &[(Tool::Pyrefly, 1, &[])],
+        );
+        f(
+            "# pyrefly: ignore-errors[bad-assignment]\nx = 5",
+            &[(Tool::Pyrefly, 1, &["bad-assignment"])],
+        );
+        f(
+            "# pyrefly: ignore-errors [ bad-assignment, bad-return ]\nx = 5",
+            &[(Tool::Pyrefly, 1, &["bad-assignment", "bad-return"])],
+        );
+        // Empty brackets and trailing commas drop empty entries, acting as a blanket ignore.
+        f(
+            "# pyrefly: ignore-errors[]\nx = 5",
+            &[(Tool::Pyrefly, 1, &[])],
+        );
+        f(
+            "# pyrefly: ignore-errors[bad-assignment,]\nx = 5",
+            &[(Tool::Pyrefly, 1, &["bad-assignment"])],
+        );
+        // A missing closing bracket is malformed and rejected, not silently accepted.
+        f("# pyrefly: ignore-errors[bad-assignment\nx = 5", &[]);
         f(
             "# comment\n# pyrefly: ignore-errors\nx = 5",
-            &[(Tool::Pyrefly, 2)],
+            &[(Tool::Pyrefly, 2, &[])],
         );
         f(
             "#comment\n  # indent\n# pyrefly: ignore-errors\nx = 5",
-            &[(Tool::Pyrefly, 3)],
+            &[(Tool::Pyrefly, 3, &[])],
         );
         f("x = 5\n# pyrefly: ignore-errors", &[]);
-        f("# type: ignore\n\nx = 5", &[(Tool::Type, 1)]);
+        // Directives are only recognized in the preamble; once real code (including an
+        // import) appears the scan stops, so a later typed directive is inert — whether
+        // it trails code, trails an import, or is sandwiched between code lines.
+        f("x = 5\n# pyrefly: ignore-errors[bad-assignment]", &[]);
+        f(
+            "import os\n# pyrefly: ignore-errors[bad-assignment]\nx = 5",
+            &[],
+        );
+        f(
+            "x = 5\n# pyrefly: ignore-errors[bad-assignment]\ny = 6",
+            &[],
+        );
+        f("# type: ignore\n\nx = 5", &[(Tool::Type, 1, &[])]);
         f(
             "# comment\n# type: ignore\n# comment\nx = 5",
-            &[(Tool::Type, 2)],
+            &[(Tool::Type, 2, &[])],
         );
         f("# type: ignore\nx = 5", &[]);
-        f("# pyre-ignore-all-errors\nx = 5", &[(Tool::Pyre, 1)]);
+        f("# pyre-ignore-all-errors\nx = 5", &[(Tool::Pyre, 1, &[])]);
         f(
             "# mypy: ignore-errors\n#pyrefly:ignore-errors",
-            &[(Tool::Mypy, 1), (Tool::Pyrefly, 2)],
+            &[(Tool::Mypy, 1, &[]), (Tool::Pyrefly, 2, &[])],
         );
+        f("# mypy: ignore-errors[bad-assignment]\nx = 5", &[]);
 
         // Anything else on the line (other than space) makes it invalid
         f("# pyrefly: ignore-errors because I want to\nx = 5", &[]);
         f("# pyrefly: ignore-errors # because I want to\nx = 5", &[]);
-        f("# pyrefly: ignore-errors \nx = 5", &[(Tool::Pyrefly, 1)]);
+        f(
+            "# pyrefly: ignore-errors[bad-assignment] # because I want to\nx = 5",
+            &[],
+        );
+        f(
+            "# pyrefly: ignore-errors \nx = 5",
+            &[(Tool::Pyrefly, 1, &[])],
+        );
     }
 
     #[test]
     fn test_parse_ignore_all_with_docstring() {
-        fn f(x: &str, ranges: &[(LineNumber, LineNumber)], ignores: &[(Tool, u32)]) {
+        fn f(x: &str, ranges: &[(LineNumber, LineNumber)], ignores: &[(Tool, u32, &[&str])]) {
             assert_eq!(
                 parse_ignore_all(x, ranges),
                 ignores
                     .iter()
-                    .map(|x| (x.0, LineNumber::new(x.1).unwrap()))
-                    .collect(),
+                    .map(|x| Suppression {
+                        tool: x.0,
+                        kind: x.2.iter().map(|x| (*x).to_owned()).collect(),
+                        comment_line: LineNumber::new(x.1).unwrap(),
+                        comment_offset: 0,
+                    })
+                    .collect::<Vec<_>>(),
                 "{x:?}"
             );
         }
@@ -758,7 +889,17 @@ x = """
                 LineNumber::from_zero_indexed(0),
                 LineNumber::from_zero_indexed(2),
             )],
-            &[(Tool::Pyrefly, 4)],
+            &[(Tool::Pyrefly, 4, &[])],
+        );
+
+        // typed ignore-errors[code] after a docstring should also work
+        f(
+            "\"\"\"\nmodule docstring\n\"\"\"\n# pyrefly: ignore-errors[bad-assignment]\nx = 5",
+            &[(
+                LineNumber::from_zero_indexed(0),
+                LineNumber::from_zero_indexed(2),
+            )],
+            &[(Tool::Pyrefly, 4, &["bad-assignment"])],
         );
 
         // bare `# type: ignore` after docstring should NOT be recognized
@@ -778,7 +919,7 @@ x = """
                 LineNumber::from_zero_indexed(1),
                 LineNumber::from_zero_indexed(3),
             )],
-            &[(Tool::Pyrefly, 1)],
+            &[(Tool::Pyrefly, 1, &[])],
         );
     }
 }

@@ -253,7 +253,6 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unknown_argument_type: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_unknown_lambda_type: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unknown_variable_type: Option<Severity>,
@@ -301,7 +300,14 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_incompatible_unannotated_override: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
     pub report_unannotated_class_attribute: Option<Severity>,
+
+    // Decorator rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_untyped_class_decorator: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_untyped_function_decorator: Option<Severity>,
 
     // Name/redeclaration rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -420,8 +426,18 @@ impl RuleOverrides {
             ErrorKind::ImplicitAnyParameter,
         );
         add(self.report_unknown_argument_type, ErrorKind::ImplicitAny);
-        add(self.report_unknown_variable_type, ErrorKind::ImplicitAny);
-        add(self.report_unknown_member_type, ErrorKind::ImplicitAny);
+        add(
+            self.report_unknown_variable_type,
+            ErrorKind::ImplicitAnyVariable,
+        );
+        add(
+            self.report_unknown_member_type,
+            ErrorKind::ImplicitAnyAttribute,
+        );
+        add(
+            self.report_unknown_lambda_type,
+            ErrorKind::ImplicitAnyLambda,
+        );
         add(self.report_invalid_type_var_use, ErrorKind::InvalidTypeVar);
         add(self.report_unnecessary_cast, ErrorKind::RedundantCast);
         add(self.report_undefined_variable, ErrorKind::UnknownName);
@@ -497,13 +513,15 @@ impl RuleOverrides {
             self.report_incompatible_unannotated_override,
             ErrorKind::BadOverrideMutableAttribute,
         );
+
+        // Decorator rules
         add(
-            self.report_unannotated_class_attribute,
-            ErrorKind::ImplicitAnyAttribute,
+            self.report_untyped_class_decorator,
+            ErrorKind::UntypedClassDecorator,
         );
         add(
-            self.report_unannotated_class_attribute,
-            ErrorKind::UnannotatedProtocolMember,
+            self.report_untyped_function_decorator,
+            ErrorKind::UntypedFunctionDecorator,
         );
 
         // Name/redeclaration rules

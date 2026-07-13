@@ -25,6 +25,7 @@ use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
 use crate::callable::Function;
+use crate::callable::FunctionKind;
 use crate::callable::ParamOverlay;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
@@ -32,7 +33,6 @@ use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedIdentity;
-use crate::shaped_array::ShapedArrayShape;
 use crate::shaped_array::ShapedArrayShapeArgStyle;
 use crate::shaped_array::ShapedArraySyntax;
 use crate::shaped_array::ShapedArrayType;
@@ -175,6 +175,18 @@ impl<'a> TypeDisplayContext<'a> {
         t.universe(&mut |t| {
             if let Type::ShapedArray(shaped_array) = t {
                 self.add_qname(shaped_array.base_class.qname());
+            }
+            // A singledispatch dispatcher is displayed as its backing `_SingleDispatchCallable`
+            // class, so that class needs a registered qname to display unqualified.
+            if let Type::Function(func) = t
+                && let FunctionKind::CallbackProtocol(cls) = &func.metadata.kind
+                && matches!(
+                    cls.qname().module_name().as_str(),
+                    "functools" | "singledispatch"
+                )
+                && cls.name().as_str() == "_SingleDispatchCallable"
+            {
+                self.add_qname(cls.qname());
             }
             if let Some(qname) = t.qname() {
                 self.add_qname(qname);
@@ -357,9 +369,8 @@ impl<'a> TypeDisplayContext<'a> {
     ) -> fmt::Result {
         match shaped_array.syntax {
             ShapedArraySyntax::Native => {
-                let (shape_idx, tuple_carrier) = match shaped_array.shape_arg_style {
-                    ShapedArrayShapeArgStyle::TypeVarTuple { index } => (index, false),
-                    ShapedArrayShapeArgStyle::TupleCarrier { index } => (index, true),
+                let shape_idx = match shaped_array.shape_arg_style {
+                    ShapedArrayShapeArgStyle::TupleCarrier { index } => index,
                     ShapedArrayShapeArgStyle::Unknown => {
                         output.write_qname(shaped_array.base_class.qname())?;
                         if !shaped_array.is_shapeless() {
@@ -370,7 +381,7 @@ impl<'a> TypeDisplayContext<'a> {
                         return Ok(());
                     }
                 };
-                self.fmt_shaped_array_as_class(shaped_array, shape_idx, tuple_carrier, output)
+                self.fmt_shaped_array_as_class(shaped_array, shape_idx, output)
             }
             ShapedArraySyntax::Jaxtyping => {
                 output.write_str("Shaped[")?;
@@ -386,7 +397,6 @@ impl<'a> TypeDisplayContext<'a> {
         &self,
         shaped_array: &ShapedArrayType,
         shape_idx: usize,
-        tuple_carrier: bool,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
         let targs = shaped_array.base_class.targs();
@@ -410,52 +420,12 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str(", ")?;
             }
             if i == shape_idx {
-                if tuple_carrier {
-                    self.fmt_shape_as_tuple_carrier(shaped_array, output)?;
-                } else {
-                    self.fmt_shape_as_type_var_tuple(&shaped_array.shape, output)?;
-                }
+                self.fmt_shape_as_tuple_carrier(shaped_array, output)?;
             } else {
                 self.fmt_targ(param, arg, output)?;
             }
         }
         output.write_str("]")
-    }
-
-    fn fmt_shape_as_type_var_tuple(
-        &self,
-        shape: &ShapedArrayShape,
-        output: &mut impl TypeOutput,
-    ) -> fmt::Result {
-        match shape.as_tuple() {
-            Tuple::Concrete(dims) => {
-                if dims.is_empty() {
-                    output.write_str("()")
-                } else {
-                    self.fmt_type_sequence(dims.iter(), ", ", false, output)
-                }
-            }
-            Tuple::Unbounded(t) if t.is_any() => {
-                let unpacked_middle = Type::Unpack(Box::new(Type::any_tuple()));
-                self.fmt_helper_generic(&unpacked_middle, false, output)
-            }
-            Tuple::Unbounded(_) => {
-                unreachable!("shaped-array unbounded shapes must be tuple[Any, ...]")
-            }
-            Tuple::Unpacked(unpacked) => {
-                let (prefix, middle, suffix) = &**unpacked;
-                let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
-                self.fmt_type_sequence(
-                    prefix
-                        .iter()
-                        .chain(std::iter::once(&unpacked_middle))
-                        .chain(suffix.iter()),
-                    ", ",
-                    false,
-                    output,
-                )
-            }
-        }
     }
 
     fn fmt_shape_as_tuple_carrier(
@@ -468,12 +438,9 @@ impl<'a> TypeDisplayContext<'a> {
         }
         match shaped_array.shape.as_tuple() {
             Tuple::Concrete(dims) => {
-                output.write_str("(")?;
+                output.write_str("[")?;
                 self.fmt_type_sequence(dims.iter(), ", ", false, output)?;
-                if dims.len() == 1 {
-                    output.write_str(",")?;
-                }
-                output.write_str(")")
+                output.write_str("]")
             }
             Tuple::Unbounded(_) => {
                 unreachable!("shaped-array unbounded shapes must be tuple[Any, ...]")
@@ -483,7 +450,7 @@ impl<'a> TypeDisplayContext<'a> {
                 if prefix.is_empty() && suffix.is_empty() && is_tuple_carrier_shape_middle(middle) {
                     return self.fmt_helper_generic(middle, false, output);
                 }
-                output.write_str("(")?;
+                output.write_str("[")?;
                 let unpacked_middle = Type::Unpack(Box::new(middle.clone()));
                 self.fmt_type_sequence(
                     prefix
@@ -494,10 +461,7 @@ impl<'a> TypeDisplayContext<'a> {
                     false,
                     output,
                 )?;
-                if prefix.is_empty() && suffix.is_empty() {
-                    output.write_str(",")?;
-                }
-                output.write_str(")")
+                output.write_str("]")
             }
         }
     }
@@ -789,7 +753,9 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_builtin("LiteralString", qname)
             }
             Type::Callable(c) => {
-                if self.lsp_display_mode == LspDisplayMode::Hover && is_toplevel {
+                // Hover output should be readable even when callables appear inside unions
+                // (e.g. constructor display that unions __new__ and __init__).
+                if self.lsp_display_mode == LspDisplayMode::Hover {
                     c.fmt_with_type_with_newlines(output, &|t, o| {
                         self.fmt_helper_generic(t, false, o)
                     })
@@ -818,6 +784,21 @@ impl<'a> TypeDisplayContext<'a> {
                     signature,
                     metadata,
                 } = &**func;
+                // A singledispatch dispatcher is modeled as a callback protocol over the fallback
+                // signature, but should still reveal as `_SingleDispatchCallable[T]`.
+                if let FunctionKind::CallbackProtocol(cls) = &metadata.kind
+                    && matches!(
+                        cls.qname().module_name().as_str(),
+                        "functools" | "singledispatch"
+                    )
+                    && cls.name().as_str() == "_SingleDispatchCallable"
+                {
+                    return self.fmt_helper_generic(
+                        &Type::ClassType((**cls).clone()),
+                        is_toplevel,
+                        output,
+                    );
+                }
                 match self.lsp_display_mode {
                     LspDisplayMode::Hover
                     | LspDisplayMode::SignatureHelp
@@ -845,8 +826,16 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str(": ...")
                         }
                     }
-                    _ => signature
-                        .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o)),
+                    _ => {
+                        if self.lsp_display_mode == LspDisplayMode::Hover {
+                            signature.fmt_with_type_with_newlines(output, &|t, o| {
+                                self.fmt_helper_generic(t, false, o)
+                            })
+                        } else {
+                            signature
+                                .fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
+                        }
+                    }
                 }
             }
             Type::Overload(overload) => {
@@ -859,8 +848,8 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     Ok(())
                 } else {
-                    let multiline =
-                        is_toplevel && self.lsp_display_mode != LspDisplayMode::ProvideType;
+                    let multiline = self.lsp_display_mode == LspDisplayMode::Hover
+                        || (is_toplevel && self.lsp_display_mode != LspDisplayMode::ProvideType);
                     if multiline {
                         output.write_str("Overload[\n  ")?;
                     } else {
@@ -2089,7 +2078,7 @@ pub mod tests {
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
             ctx.display(&tuple).to_string(),
-            "tuple[(hello: None, *, world: None) -> None]"
+            "tuple[(\n    hello: None,\n    *,\n    world: None\n) -> None]"
         );
     }
 

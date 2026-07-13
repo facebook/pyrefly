@@ -34,9 +34,11 @@ use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::attr::NoAccessReason;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::class::class_field::DescriptorBase;
 use crate::alt::class::dataclass::ReplaceKind;
 use crate::alt::expr::TypeOrExpr;
@@ -187,6 +189,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> CallTarget {
         self.error_with_context(errors, range, error_kind, msg, context);
         CallTarget::Any(AnyStyle::Error)
+    }
+
+    fn proxy_method_call_error(&self, ty: &Type) -> Option<NoAccessReason> {
+        match ty {
+            Type::ClassType(cls) | Type::SelfType(cls) => {
+                match self.get_instance_attribute(cls, &dunder::CALL) {
+                    Some(ClassAttribute::NoAccess(
+                        error @ NoAccessReason::ProxyMethodTargetInvalid { .. },
+                    )) => Some(error),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// We only raise here for calls where we know the callee is the
@@ -451,7 +467,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             // NNModule instances delegate call dispatch to their underlying class.
-            // instance_as_dunder_call will find `forward` for nn.Module subclasses.
+            // instance_as_dunder_call resolves the stubbed `__call__` proxy for nn.Module subclasses.
             // We patch the BoundMethod's self object to be the NNModule type so
             // that inject_module_attrs can detect NNModule and inject its fields.
             Type::NNModule(module) => {
@@ -587,6 +603,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 *target
             }
             CallTargetLookup::Error(..) => {
+                // Re-query `__call__` only on the error path so ordinary calls don't pay for
+                // preserving the original access error through call target resolution.
+                if let Some(error) = self.proxy_method_call_error(&ty) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::NoAccess,
+                        error.to_error_msg(&dunder::CALL),
+                    );
+                    return CallTarget::Any(AnyStyle::Error);
+                }
                 let expect_message = match call_style {
                     CallStyle::Method(method) => {
                         format!("Expected `{method}` to be a callable")
@@ -1048,8 +1075,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && ct.targs().as_slice().len() == 1
         {
             let targ = ct.targs().as_slice()[0].clone();
+            let ty = self
+                .tuple_constructor_arg_type(args, keywords)
+                .unwrap_or_else(|| self.heap.mk_unbounded_tuple(targ));
             ConstructedInstance {
-                ty: self.heap.mk_unbounded_tuple(targ),
+                ty,
                 matched_hint,
                 errors,
                 specialization_errors,
@@ -1218,6 +1248,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn tuple_constructor_arg_type(
+        &self,
+        args: &[CallArg],
+        keywords: &[CallKeyword],
+    ) -> Option<Type> {
+        if !keywords.is_empty() {
+            return None;
+        }
+        let [CallArg::Arg(arg)] = args else {
+            return None;
+        };
+        let infer_errors = self.error_swallower();
+        self.tuple_constructor_arg_type_from_type(arg.infer(self, &infer_errors))
+    }
+
+    fn tuple_constructor_arg_type_from_type(&self, ty: Type) -> Option<Type> {
+        match ty {
+            Type::Tuple(tuple) => Some(self.heap.mk_tuple(tuple)),
+            Type::ClassType(cls) => self.as_tuple(&cls).map(|tuple| self.heap.mk_tuple(tuple)),
+            Type::Union(union) => union
+                .members
+                .into_iter()
+                .map(|member| self.tuple_constructor_arg_type_from_type(member))
+                .collect::<Option<Vec<_>>>()
+                .map(|members| self.unions(members)),
+            _ => None,
+        }
+    }
+
     fn check_unnecessary_type_conversion(
         &self,
         cls: &ClassType,
@@ -1334,6 +1393,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     .map(|x| format!("`{x}`"))
                                     .collect::<Vec<_>>()
                                     .join(", ")
+                            ),
+                            context,
+                        );
+                    } else if constructor_kind == ConstructorKind::BareClassName
+                        && metadata.is_explicitly_abstract()
+                    {
+                        self.error_with_context(
+                            errors,
+                            arguments_range,
+                            ErrorKind::BadInstantiation,
+                            format!(
+                                "Cannot instantiate `{}` because it directly extends `ABC` or uses `ABCMeta`",
+                                cls.name()
                             ),
                             context,
                         );
@@ -1967,11 +2039,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // against attribute names, including `init=False` fields. Both require an attrs class.
                 Some(CalleeKind::Function(
                     kind @ (FunctionKind::DataclassReplace
+                    | FunctionKind::CopyReplace
                     | FunctionKind::AttrsEvolve
                     | FunctionKind::AttrsAssoc),
                 )) => {
                     let replace_kind = match kind {
-                        FunctionKind::DataclassReplace => ReplaceKind::Replace,
+                        FunctionKind::DataclassReplace | FunctionKind::CopyReplace => {
+                            ReplaceKind::Replace
+                        }
                         FunctionKind::AttrsEvolve => ReplaceKind::Evolve,
                         FunctionKind::AttrsAssoc => ReplaceKind::Assoc,
                         _ => unreachable!("guarded by the enclosing match arm"),
@@ -2052,6 +2127,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     self.call_issubclass(&x.arguments.args[0], &x.arguments.args[1], errors)
                 }
+                // `f.register(C)(impl)`: applying the tagged factory decorator by call.
+                _ if let Type::KwCall(kw) = ty
+                    && matches!(&kw.func_metadata.kind, FunctionKind::SingleDispatchRegister(_))
+                    && x.arguments.args.len() == 1
+                    && x.arguments.keywords.is_empty() =>
+                {
+                    self.apply_singledispatch_register(
+                        ty,
+                        &x.arguments.args[0],
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range(),
+                        hint,
+                        errors,
+                    )
+                }
+                _ if let Some(fallback_first) = Self::singledispatch_register_first(ty) => self
+                    .call_singledispatch_register(
+                        fallback_first,
+                        ty,
+                        &x.arguments,
+                        &args,
+                        &kws,
+                        x.func.range(),
+                        x.arguments.range(),
+                        hint,
+                        errors,
+                    ),
                 _ if matches!(ty, Type::ClassDef(cls) if cls == self.stdlib.builtins_type().class_object())
                     && x.arguments.args.len() == 1 && x.arguments.keywords.is_empty() =>
                 {
@@ -2069,6 +2173,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 //     f = staticmethod(f)
                 // Check if this call applies a decorator with known typing effects to a function.
                 _ if let Some(ret) = self.maybe_apply_function_decorator(ty, &args, &kws, errors) => ret,
+                // A `@singledispatch` dispatcher call is checked against the fallback signature with
+                // its dispatch parameter widened, so a call to any registered impl is accepted.
+                _ if Self::is_singledispatch_dispatcher(ty) => self.freeform_call_infer(
+                    self.widen_singledispatch_dispatch_param(ty.clone()),
+                    &args,
+                    &kws,
+                    x.func.range(),
+                    x.arguments.range(),
+                    hint,
+                    errors,
+                ),
                 _ => self.freeform_call_infer(ty.clone(), &args, &kws, x.func.range(), x.arguments.range(), hint, errors),
             }});
             // TypeIs and TypeGuard functions return bool at runtime

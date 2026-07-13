@@ -49,6 +49,26 @@ testcase!(
 );
 
 testcase!(
+    test_pyrefly_top_level_ignore_typed,
+    r#"
+# pyrefly: ignore-errors[bad-assignment]
+x: int = "x"
+3 + "3"  # E:
+"#,
+);
+
+testcase!(
+    // A typed file-level directive is only honored in the preamble; placed after code
+    // it is inert, so the error on the following line is still reported.
+    test_pyrefly_top_level_ignore_typed_not_at_top,
+    r#"
+x: int = "x"  # E:
+# pyrefly: ignore-errors[bad-assignment]
+y: int = "y"  # E:
+"#,
+);
+
+testcase!(
     test_pyrefly_top_level_ignore_wrong_same_line,
     r#"
 3 + "3" # pyrefly: ignore-errors # E:

@@ -8,12 +8,13 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import SymVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_topk_basic[B, V](logits: Tensor[B, V]):
+def test_topk_basic[B: SymVar, V: SymVar](logits: Tensor[[B, V]]):
     """Test topk with a shaped tensor"""
     v, _ = torch.topk(logits, 5)
-    assert_type(v, Tensor[B, 5])
+    assert_type(v, Tensor[[B, 5]])

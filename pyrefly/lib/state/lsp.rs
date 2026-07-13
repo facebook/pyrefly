@@ -19,6 +19,7 @@ use itertools::Itertools;
 use lsp_types::CompletionItem;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::deprecated_aliases::is_deprecated_stdlib_alias;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module::Module;
@@ -30,6 +31,7 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -108,6 +110,13 @@ pub(crate) enum CalleeKind {
     Method(TextRange, Identifier),
     /// Unknown callee (e.g., callable returned from another call)
     Unknown,
+}
+
+/// The receiver type, method name, and call surface for an operator dunder.
+struct OperatorDunder {
+    base_type: Type,
+    dunder_name: Name,
+    range: TextRange,
 }
 
 fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
@@ -301,6 +310,41 @@ impl DefinitionMetadata {
     }
 }
 
+pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
+    match ty {
+        Type::Union(union) => {
+            let mut members = union.members.iter();
+            let Some(first) = members.next() else {
+                return SymbolKind::Attribute;
+            };
+            let kind = attribute_symbol_kind_from_type(first);
+            if members.all(|member| attribute_symbol_kind_from_type(member) == kind) {
+                kind
+            } else {
+                SymbolKind::Attribute
+            }
+        }
+        ty if ty.is_toplevel_callable() => {
+            // A callable attribute is a method unless its metadata proves it is a free
+            // function. Overloads and bound dunder methods (e.g. `__getitem__`, an
+            // overloaded operator) carry no directly resolvable `Def` metadata, so they
+            // must default to method rather than function.
+            let is_function = ty.visit_toplevel_func_metadata(
+                &|meta| matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_none()),
+            );
+            if is_function {
+                SymbolKind::Function
+            } else {
+                SymbolKind::Method
+            }
+        }
+        Type::ClassDef(_) | Type::Type(_) => SymbolKind::Class,
+        Type::TypeAlias(_) | Type::UntypedAlias(_) => SymbolKind::TypeAlias,
+        Type::Module(_) => SymbolKind::Module,
+        _ => SymbolKind::Attribute,
+    }
+}
+
 /// Generic helper to visit keyword arguments with a custom handler.
 /// The handler receives the keyword index and reference, and returns true to stop iteration.
 /// This function will also take in a generic function which is used a filter
@@ -363,6 +407,8 @@ pub(crate) enum IdentifierContext {
     Attribute {
         /// The range of just the base expression.
         base_range: TextRange,
+        /// The root name of the base expression, when the base is an attribute chain rooted at a name.
+        base_identifier: Option<Identifier>,
         /// The range of the entire expression.
         range: TextRange,
         /// Whether the attribute is being loaded, assigned to, or deleted.
@@ -448,6 +494,20 @@ impl IdentifierContext {
 pub(crate) struct IdentifierWithContext {
     pub(crate) identifier: Identifier,
     pub(crate) context: IdentifierContext,
+}
+
+/// How the identifier at a position resolves to a type.
+enum ResolutionKind {
+    /// Resolve through a binding key — a reference or a declaration.
+    Key(Key),
+    /// A directly-constructed type with no binding key. Only module identifiers.
+    Type(Type),
+    /// Member access (a computed expression, not a declaration): resolve via the
+    /// recorded expression trace at this range, call-aware in callee position.
+    Trace(TextRange),
+    /// The identifier has no type of its own — e.g. a keyword-argument label that
+    /// binds no parameter.
+    NoType,
 }
 
 #[derive(PartialEq, Eq)]
@@ -592,11 +652,20 @@ impl IdentifierWithContext {
     }
 
     fn from_expr_attr(id: &Identifier, attr: &ExprAttribute) -> Self {
+        fn base_identifier(expr: &Expr) -> Option<Identifier> {
+            match expr {
+                Expr::Name(name) => Some(Ast::expr_name_identifier(name.clone())),
+                Expr::Attribute(attr) => base_identifier(attr.value.as_ref()),
+                _ => None,
+            }
+        }
+
         let identifier = id.clone();
         Self {
             identifier,
             context: IdentifierContext::Attribute {
                 base_range: attr.value.range(),
+                base_identifier: base_identifier(attr.value.as_ref()),
                 range: attr.range(),
                 expr_context: attr.ctx,
             },
@@ -1014,6 +1083,77 @@ impl<'a> Transaction<'a> {
         self.get_type_at_impl_with_options(handle, position, for_display, true)
     }
 
+    /// Classify how the identifier `identifier` in `context` resolves to a type.
+    fn classify_surface(
+        &self,
+        handle: &Handle,
+        identifier: &Identifier,
+        context: &IdentifierContext,
+    ) -> ResolutionKind {
+        match context {
+            IdentifierContext::Expr(expr_context) => ResolutionKind::Key(match expr_context {
+                ExprContext::Store => Key::Definition(ShortIdentifier::new(identifier)),
+                ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
+                    Key::BoundName(ShortIdentifier::new(identifier))
+                }
+            }),
+            // TODO: Handle relative import (via ModuleName::new_maybe_relative)
+            IdentifierContext::ImportedModule { name, .. } => ResolutionKind::Type(Type::Module(
+                ModuleType::new(name.first_component(), OrderedSet::from_iter([*name])),
+            )),
+            IdentifierContext::ImportedName {
+                name_after_import, ..
+            } => ResolutionKind::Key(Key::Definition(ShortIdentifier::new(name_after_import))),
+            IdentifierContext::FunctionDef { .. }
+            | IdentifierContext::MethodDef { .. }
+            | IdentifierContext::ClassDef { .. }
+            | IdentifierContext::Parameter
+            | IdentifierContext::TypeParameter
+            | IdentifierContext::ExceptionHandler
+            | IdentifierContext::PatternMatch(_) => {
+                ResolutionKind::Key(Key::Definition(ShortIdentifier::new(identifier)))
+            }
+            IdentifierContext::MutableCapture => {
+                ResolutionKind::Key(Key::MutableCapture(ShortIdentifier::new(identifier)))
+            }
+            // A keyword name resolves to the matched parameter's declaration, so
+            // it reduces to a binding key like any other declaration. When no
+            // parameter matches it has no type of its own.
+            IdentifierContext::KeywordArgument(callee_kind) => self
+                .keyword_argument_key(handle, identifier, callee_kind)
+                .map_or(ResolutionKind::NoType, ResolutionKind::Key),
+            // Member access is a computed expression, not a declaration.
+            IdentifierContext::Attribute { range, .. } => ResolutionKind::Trace(*range),
+        }
+    }
+
+    /// The parameter declaration key a keyword-argument name resolves to, if it
+    /// matches a parameter of the (same-module) callee.
+    fn keyword_argument_key(
+        &self,
+        handle: &Handle,
+        identifier: &Identifier,
+        callee_kind: &CalleeKind,
+    ) -> Option<Key> {
+        self.find_definition_for_keyword_argument(
+            handle,
+            identifier,
+            callee_kind,
+            FindPreference::default(),
+        )
+        .first()
+        .and_then(|item| {
+            let code_at_range = item.module.code_at(item.definition_range);
+            // If refinement failed, definition_range points to the callee itself,
+            // not a matching parameter.
+            if code_at_range != identifier.id.as_str() {
+                return None;
+            }
+            let id = Identifier::new(Name::new(code_at_range), item.definition_range);
+            Some(Key::Definition(ShortIdentifier::new(&id)))
+        })
+    }
+
     fn get_type_at_impl_with_options(
         &self,
         handle: &Handle,
@@ -1021,29 +1161,54 @@ impl<'a> Transaction<'a> {
         for_display: bool,
         coerce_callees: bool,
     ) -> Option<Type> {
-        match self.identifier_at(handle, position) {
-            Some(IdentifierWithContext {
-                identifier: id,
-                context: IdentifierContext::Expr(expr_context),
-            }) => {
-                let key = match expr_context {
-                    ExprContext::Store => Key::Definition(ShortIdentifier::new(&id)),
-                    ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
-                        Key::BoundName(ShortIdentifier::new(&id))
-                    }
-                };
+        let Some(IdentifierWithContext {
+            identifier,
+            context,
+        }) = self.identifier_at(handle, position)
+        else {
+            return self.type_from_expression_at_impl(handle, position, false, for_display);
+        };
+        let kind = self.classify_surface(handle, &identifier, &context);
+        self.type_from_resolution(
+            handle,
+            position,
+            &identifier,
+            &context,
+            kind,
+            for_display,
+            coerce_callees,
+        )
+    }
 
+    /// Compute the type for an already-classified identifier resolution. Split
+    /// out so callers that have already run `identifier_at`/`classify_surface`
+    /// (e.g. `get_computed_type_at_range`) can reuse that work instead of
+    /// re-resolving the same range.
+    fn type_from_resolution(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        identifier: &Identifier,
+        context: &IdentifierContext,
+        kind: ResolutionKind,
+        for_display: bool,
+        coerce_callees: bool,
+    ) -> Option<Type> {
+        match kind {
+            ResolutionKind::Type(ty) => Some(ty),
+            ResolutionKind::Key(key) => {
                 let bindings = self.get_bindings(handle)?;
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
                 let mut ty = self.get_type_for_surface(handle, &key, for_display)?;
-                if coerce_callees {
+                // Only a plain expression reference coerces to its callee signature.
+                if coerce_callees && let IdentifierContext::Expr(_) = context {
                     let call_args_range = self.callee_at(handle, position).and_then(
                         |ExprCall {
                              func, arguments, ..
                          }| {
-                            (func.range() == id.range).then_some(arguments.range)
+                            (func.range() == identifier.range).then_some(arguments.range)
                         },
                     );
                     if let Some(arguments_range) = call_args_range {
@@ -1059,137 +1224,10 @@ impl<'a> Transaction<'a> {
                 }
                 Some(ty)
             }
-            Some(IdentifierWithContext {
-                identifier: _,
-                context:
-                    IdentifierContext::ImportedModule {
-                        name: module_name, ..
-                    },
-            }) => {
-                // TODO: Handle relative import (via ModuleName::new_maybe_relative)
-                Some(Type::Module(ModuleType::new(
-                    module_name.first_component(),
-                    OrderedSet::from_iter([module_name]),
-                )))
-            }
-            Some(IdentifierWithContext {
-                identifier: _,
-                context:
-                    IdentifierContext::ImportedName {
-                        name_after_import, ..
-                    },
-            }) => {
-                let key = Key::Definition(ShortIdentifier::new(&name_after_import));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context:
-                    IdentifierContext::FunctionDef { docstring_range: _ }
-                    | IdentifierContext::MethodDef { docstring_range: _ },
-            }) => {
-                let key = Key::Definition(ShortIdentifier::new(&identifier));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::ClassDef { docstring_range: _ },
-            }) => {
-                let key = Key::Definition(ShortIdentifier::new(&identifier));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::Parameter,
-            }) => {
-                let key = Key::Definition(ShortIdentifier::new(&identifier));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::TypeParameter,
-            }) => {
-                let key = Key::Definition(ShortIdentifier::new(&identifier));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::ExceptionHandler,
-            }) => {
-                let key = Key::Definition(ShortIdentifier::new(&identifier));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::PatternMatch(_),
-            }) => {
-                let key = Key::Definition(ShortIdentifier::new(&identifier));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::KeywordArgument(callee_kind),
-            }) => self
-                .find_definition_for_keyword_argument(
-                    handle,
-                    &identifier,
-                    &callee_kind,
-                    FindPreference::default(),
-                )
-                .first()
-                .and_then(|item| {
-                    let code_at_range = item.module.code_at(item.definition_range);
-                    // If refinement failed, definition_range points to the callee itself,
-                    // not a matching parameter. In that case, return None.
-                    if code_at_range != identifier.id.as_str() {
-                        return None;
-                    }
-                    let name = Name::new(code_at_range);
-                    let id = Identifier::new(name.clone(), item.definition_range);
-                    let key = Key::Definition(ShortIdentifier::new(&id));
-                    let bindings = self.get_bindings(handle)?;
-                    if !bindings.is_valid_key(&key) {
-                        return None;
-                    }
-                    self.get_type_for_surface(handle, &key, for_display)
-                }),
-            Some(IdentifierWithContext {
-                identifier: _,
-                context: IdentifierContext::Attribute { range, .. },
-            }) => {
+            ResolutionKind::Trace(range) => {
+                // In callee position, prefer the chosen-overload return type.
                 if let Some(ExprCall {
-                    node_index: _,
-                    range: _,
-                    func,
-                    arguments,
+                    func, arguments, ..
                 }) = &self.callee_at(handle, position)
                     && func.range() == range
                     && let Some(ret) = self.get_chosen_overload_trace_for_surface(
@@ -1203,18 +1241,7 @@ impl<'a> Transaction<'a> {
                     self.get_type_trace_for_surface(handle, range, for_display)
                 }
             }
-            Some(IdentifierWithContext {
-                identifier,
-                context: IdentifierContext::MutableCapture,
-            }) => {
-                let key = Key::MutableCapture(ShortIdentifier::new(&identifier));
-                let bindings = self.get_bindings(handle)?;
-                if !bindings.is_valid_key(&key) {
-                    return None;
-                }
-                self.get_type_for_surface(handle, &key, for_display)
-            }
-            None => self.type_from_expression_at_impl(handle, position, false, for_display),
+            ResolutionKind::NoType => None,
         }
     }
 
@@ -1248,18 +1275,37 @@ impl<'a> Transaction<'a> {
     ///
     /// TSP prefers raw bound types of identifiers since it re-resolves declarations.
     pub fn get_computed_type_at_range(&self, handle: &Handle, range: TextRange) -> Option<Type> {
-        // Bare names need declaration-preserving lookup to avoid coercing
-        // overloaded functions into synthesized callables.
-        if range.is_empty()
-            || self.get_ast(handle).is_some_and(|module| {
-                Ast::locate_node(&module, range.start())
-                    .into_iter()
-                    .any(|node| node.range() == range && matches!(node, AnyNodeRef::ExprName(_)))
-            })
-        {
+        // An empty range is a point query on the declaration-preserving path.
+        if range.is_empty() {
             return self.get_type_at_preserving_declaration(handle, range.start());
         }
-        self.get_type_trace(handle, range)
+        // A range that is exactly an identifier resolving through a binding asks
+        // "what is this declared as"; anything else asks "what does this range
+        // evaluate to". Classify once and reuse the resolution to compute the
+        // type, rather than re-resolving via `get_type_at_preserving_declaration`.
+        let Some(IdentifierWithContext {
+            identifier,
+            context,
+        }) = self.identifier_at(handle, range.start())
+        else {
+            return self.get_type_trace(handle, range);
+        };
+        let kind = self.classify_surface(handle, &identifier, &context);
+        if identifier.range == range
+            && matches!(kind, ResolutionKind::Key(_) | ResolutionKind::Type(_))
+        {
+            self.type_from_resolution(
+                handle,
+                range.start(),
+                &identifier,
+                &context,
+                kind,
+                false,
+                false,
+            )
+        } else {
+            self.get_type_trace(handle, range)
+        }
     }
 
     fn get_result_type_at_impl(
@@ -1976,7 +2022,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns:
     /// - `Ok(None)` — no operator node found in `covering_nodes`
-    /// - `Ok(Some((base_type, dunder_name)))` — operator with a navigable dunder
+    /// - `Ok(Some(dunder))` — operator with a navigable dunder
     /// - `Err(NotAnIdentifier)` — operator without a dunder (`not`, `is`, `is not`)
     /// - `Err(AnswersNotFound)` — operator found but answers unavailable
     /// - `Err(TypeTraceNotFound)` — operator found but base expression has no type trace
@@ -1984,7 +2030,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         covering_nodes: &[AnyNodeRef],
-    ) -> Result<Option<(Type, Name)>, EmptyResponseReason> {
+    ) -> Result<Option<OperatorDunder>, EmptyResponseReason> {
         // Look up the type of an expression, distinguishing "no answers"
         // from "answers available but no type trace for this range."
         let type_at = |range: TextRange| -> Result<Type, EmptyResponseReason> {
@@ -2003,8 +2049,14 @@ impl<'a> Transaction<'a> {
                     for op in &compare.ops {
                         // Handle membership test operators (in/not in) - uses __contains__ on the right operand
                         if matches!(op, CmpOp::In | CmpOp::NotIn) {
-                            let result = type_at(compare.comparators.first()?.range())
-                                .map(|right_type| (right_type, dunder::CONTAINS));
+                            let result =
+                                type_at(compare.comparators.first()?.range()).map(|right_type| {
+                                    OperatorDunder {
+                                        base_type: right_type,
+                                        dunder_name: dunder::CONTAINS,
+                                        range: compare.range(),
+                                    }
+                                });
                             return Some(result);
                         }
                         // is / is not — no dunder
@@ -2020,8 +2072,12 @@ impl<'a> Transaction<'a> {
                         }
                         // Handle rich comparison operators
                         if let Some(dunder_name) = dunder::rich_comparison_dunder(*op) {
-                            let result = type_at(compare.left.range())
-                                .map(|left_type| (left_type, dunder_name));
+                            let result =
+                                type_at(compare.left.range()).map(|left_type| OperatorDunder {
+                                    base_type: left_type,
+                                    dunder_name,
+                                    range: compare.range(),
+                                });
                             return Some(result);
                         }
                     }
@@ -2029,7 +2085,21 @@ impl<'a> Transaction<'a> {
                 }
                 AnyNodeRef::ExprBinOp(binop) => {
                     let dunder_name = Name::new_static(binop.op.dunder());
-                    Some(type_at(binop.left.range()).map(|left_type| (left_type, dunder_name)))
+                    Some(type_at(binop.left.range()).map(|left_type| OperatorDunder {
+                        base_type: left_type,
+                        dunder_name,
+                        range: binop.range(),
+                    }))
+                }
+                AnyNodeRef::StmtAugAssign(augassign) => {
+                    let dunder_name = Name::new_static(augassign.op.in_place_dunder());
+                    Some(
+                        type_at(augassign.target.range()).map(|left_type| OperatorDunder {
+                            base_type: left_type,
+                            dunder_name,
+                            range: augassign.range(),
+                        }),
+                    )
                 }
                 AnyNodeRef::ExprUnaryOp(unaryop) => {
                     let dunder_name = match unaryop.op {
@@ -2041,7 +2111,11 @@ impl<'a> Transaction<'a> {
                         }),
                     };
                     Some(dunder_name.and_then(|name| {
-                        type_at(unaryop.operand.range()).map(|operand_type| (operand_type, name))
+                        type_at(unaryop.operand.range()).map(|operand_type| OperatorDunder {
+                            base_type: operand_type,
+                            dunder_name: name,
+                            range: unaryop.range(),
+                        })
                     }))
                 }
                 AnyNodeRef::ExprSubscript(subscript) => {
@@ -2051,15 +2125,29 @@ impl<'a> Transaction<'a> {
                         ExprContext::Del => Some(dunder::DELITEM),
                         ExprContext::Invalid => None,
                     }?;
-                    Some(type_at(subscript.value.range()).map(|base_type| (base_type, dunder_name)))
+                    Some(
+                        type_at(subscript.value.range()).map(|base_type| OperatorDunder {
+                            base_type,
+                            dunder_name,
+                            range: subscript.range(),
+                        }),
+                    )
                 }
                 // Handle iteration `in` keyword in for loops
-                AnyNodeRef::StmtFor(stmt_for) => {
-                    Some(type_at(stmt_for.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
-                }
+                AnyNodeRef::StmtFor(stmt_for) => Some(type_at(stmt_for.iter.range()).map(
+                    |iter_type| OperatorDunder {
+                        base_type: iter_type,
+                        dunder_name: dunder::ITER,
+                        range: stmt_for.iter.range(),
+                    },
+                )),
                 // Handle iteration `in` keyword in comprehensions
                 AnyNodeRef::Comprehension(comp) => {
-                    Some(type_at(comp.iter.range()).map(|iter_type| (iter_type, dunder::ITER)))
+                    Some(type_at(comp.iter.range()).map(|iter_type| OperatorDunder {
+                        base_type: iter_type,
+                        dunder_name: dunder::ITER,
+                        range: comp.iter.range(),
+                    }))
                 }
                 _ => None,
             })
@@ -2094,6 +2182,16 @@ impl<'a> Transaction<'a> {
         self.get_chosen_overload_trace_for_surface(handle, subscript.range(), true)
     }
 
+    pub(crate) fn operator_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        if self.identifier_at(handle, position).is_some() {
+            return None;
+        }
+        let module = self.get_ast(handle)?;
+        let covering_nodes = Ast::locate_node(&module, position);
+        let dunder = self.find_operator_dunder(handle, &covering_nodes).ok()??;
+        self.get_chosen_overload_trace_for_surface(handle, dunder.range, true)
+    }
+
     /// Try operator-based go-to-definition. Returns `Ok(None)` when there is
     /// no operator at the cursor, `Ok(Some(...))` on success, or
     /// `Err(...)` when an operator was found but couldn't be resolved.
@@ -2103,10 +2201,14 @@ impl<'a> Transaction<'a> {
         covering_nodes: &[AnyNodeRef],
         preference: FindPreference,
     ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
-        let Some((base_type, dunder_name)) = self.find_operator_dunder(handle, covering_nodes)?
-        else {
+        let Some(dunder) = self.find_operator_dunder(handle, covering_nodes)? else {
             return Ok(None);
         };
+        let OperatorDunder {
+            base_type,
+            dunder_name,
+            range: _,
+        } = dunder;
         let dunder_str = dunder_name.to_string();
         let defs = self
             .find_attribute_definition_for_base_type(handle, preference, base_type, &dunder_name)
@@ -3102,7 +3204,12 @@ impl<'a> Transaction<'a> {
             import_format,
         );
         let range = import_edit.range;
-        let is_deprecated = export.deprecation.is_some();
+        let is_deprecated = export.deprecation.is_some()
+            || is_deprecated_stdlib_alias(
+                handle.sys_info().version(),
+                &import_edit.module_name,
+                unknown_name,
+            );
         let title = format!(
             "Insert import: `{}`{}",
             import_edit.display_text,
@@ -3890,6 +3997,7 @@ impl<'a> Transaction<'a> {
             import_format,
             CompletionOptions {
                 supports_completion_item_details,
+                auto_import: true,
                 ..Default::default()
             },
             custom_thread_pool,
@@ -4014,7 +4122,7 @@ impl<'a> Transaction<'a> {
     /// - Returns true if both modules should be shown in auto-import suggestions.
     /// - Handles stdlib patterns where a public module (`io`) re-exports from a
     ///   private implementation module (`_io`).
-    fn should_include_reexport(original: &Handle, canonical: &Handle) -> bool {
+    fn should_include_reexport(original: &Handle, canonical: &Handle, name: &Name) -> bool {
         let canonical_module = canonical.module();
         let original_module = original.module();
         let canonical_components = canonical_module.components();
@@ -4050,6 +4158,16 @@ impl<'a> Transaction<'a> {
                 return true;
             }
         }
+        if canonical_module.as_str() == "typing"
+            && original_module.as_str() == "collections.abc"
+            && is_deprecated_stdlib_alias(
+                original.sys_info().version(),
+                canonical_module.as_str(),
+                name.as_str(),
+            )
+        {
+            return true;
+        }
         false
     }
 
@@ -4068,7 +4186,7 @@ impl<'a> Transaction<'a> {
                         {
                             let mut results = vec![(canonical_handle.dupe(), export.clone())];
                             if canonical_handle != *handle
-                                && (Self::should_include_reexport(handle, &canonical_handle)
+                                && (Self::should_include_reexport(handle, &canonical_handle, &name)
                                     || (exports_data.is_explicit_reexport(&name)
                                         && Self::allows_explicit_reexport(handle)))
                             {
@@ -4114,7 +4232,7 @@ impl<'a> Transaction<'a> {
                             export.clone(),
                         ));
                         if canonical_handle != *handle
-                            && (Self::should_include_reexport(handle, &canonical_handle)
+                            && (Self::should_include_reexport(handle, &canonical_handle, name)
                                 || (exports_data.is_explicit_reexport(name)
                                     && Self::allows_explicit_reexport(handle)))
                         {

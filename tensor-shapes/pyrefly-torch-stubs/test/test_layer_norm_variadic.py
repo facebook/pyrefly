@@ -7,25 +7,26 @@
 
 from typing import assert_type, cast
 
+from shape_extensions import Elements, SizeTuple, SymVar
 from torch import Tensor
 from torch.nn import functional as F
 
 
-def test_layer_norm_with_variadic[Ndim, *Bs]() -> None:
+def test_layer_norm_with_variadic[Ndim: SymVar, Bs: SizeTuple]() -> None:
     """Test that layer_norm preserves variadic shape with suffix dimension."""
-    input = cast(Tensor[*Bs, Ndim], ...)
-    weight = cast(Tensor[Ndim], ...)
+    input = cast(Tensor[[*Elements[Bs], Ndim]], ...)
+    weight = cast(Tensor[[Ndim]], ...)
 
     # This should preserve the full shape
     result = F.layer_norm(input, weight.shape, weight, None, 1e-5)
-    assert_type(result, Tensor[*Bs, Ndim])
+    assert_type(result, Tensor[[*Elements[Bs], Ndim]])
 
 
 def test_layer_norm_concrete() -> None:
     """Test layer_norm with concrete dimensions."""
-    input = cast(Tensor[2, 3, 4], ...)
-    weight = cast(Tensor[4], ...)
+    input = cast(Tensor[[2, 3, 4]], ...)
+    weight = cast(Tensor[[4]], ...)
 
     # This should work fine
     result = F.layer_norm(input, weight.shape, weight, None, 1e-5)
-    assert_type(result, Tensor[2, 3, 4])
+    assert_type(result, Tensor[[2, 3, 4]])

@@ -68,12 +68,56 @@ def _patch_torch_if_available() -> None:
 _patch_torch_if_available()
 
 
+class SizeTuple:
+    """Integer tuple carrier for shape-like type parameters.
+
+    At runtime this is a no-op marker class. Pyrefly treats `SizeTuple` in type
+    positions as the shape carrier corresponding to `tuple[int, ...]`.
+    """
+
+    def __class_getitem__(cls, params):
+        return cls
+
+
+class Elements:
+    """Inverse of ``tuple[Unpack[S]]``: extracts the element sequence from a SizeTuple carrier.
+
+    In the Python typing spec, ``tuple[Unpack[Ts]]`` wraps a ``TypeVarTuple`` into a
+    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given a ``SizeTuple``
+    carrier ``S``, ``*Elements[S]`` splices its element sequence into a shape position,
+    e.g. ``Array[[*Elements[S], OUT], DType]``.
+
+    This fills a gap in the current typing spec — there is no standard mechanism to
+    decompose a variadic carrier without a ``TypeVarTuple``. Pyrefly uses the ``.pyi``
+    stub for type inference; this class exists so annotations evaluate without crashing
+    at runtime.
+    """
+
+    def __init__(self, carrier):
+        self.carrier = carrier
+
+    def __class_getitem__(cls, carrier):
+        return cls(carrier)
+
+    def __iter__(self):
+        yield self
+
+    def __repr__(self):
+        return f"Elements[{self.carrier!r}]"
+
+
 class Dim[T]:
     """Symbolic integer type for dimension values.
 
     At runtime this is a no-op generic class. The type checker uses the
     .pyi stub for shape inference.
     """
+
+    pass
+
+
+class ProxyMethod[T]:
+    """Type-checker marker for method forwarding annotations."""
 
     pass
 
@@ -209,23 +253,24 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-class TypeVar:
-    """TypeVar with arithmetic support for tensor shape dimensions.
+class SymVar:
+    """Symbolic variable with arithmetic support for tensor shape dimensions.
 
     Like typing.TypeVar but arithmetic operations (N + 1, N * 2, etc.)
     return self instead of raising TypeError. Setting
     __class__ = typing.TypeVar makes isinstance(x, typing.TypeVar)
     return True, so Generic[N] and TypedDict + Generic[N] both work.
 
-    In pyrefly, shape_extensions.TypeVar is treated identically to
+    In pyrefly, shape_extensions.SymVar is treated identically to
     typing.TypeVar.
     """
 
     __class__ = typing.TypeVar
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, *, bound=None):
         self.__name__ = name
         self.name = name
+        self.__bound__ = bound
 
     def __repr__(self):
         return self.name

@@ -121,7 +121,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 let items = params.items();
                 items.iter().any(|p| matches!(p, Param::Varargs(..)))
                     && items.iter().any(|p| matches!(p, Param::Kwargs(..)))
@@ -143,7 +143,9 @@ impl Callable {
             return true;
         }
         match &self.params {
-            Params::List(params) => params.items().iter().any(|p| p.as_type().any(check)),
+            Params::List(params) | Params::Partial(params) => {
+                params.items().iter().any(|p| p.as_type().any(check))
+            }
             Params::ParamSpec(prefix, p) => {
                 prefix.iter().any(|pp| {
                     let ty = match pp {
@@ -163,7 +165,7 @@ impl Callable {
             return false;
         }
         match &self.params {
-            Params::List(params) => params
+            Params::List(params) | Params::Partial(params) => params
                 .items()
                 .iter()
                 .all(|p| matches!(p.as_type(), Type::Any(AnyStyle::Implicit))),
@@ -421,6 +423,10 @@ impl PrefixParam {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
     List(ParamList),
+    /// The residual parameter list of a `functools.partial(...)`: behaves like `List` for
+    /// call-checking, but is additionally recognized as assignable to `functools.partial[ret]`
+    /// (see the subtyping rule in `subset.rs`). Carries the parameters left after binding a prefix.
+    Partial(ParamList),
     Ellipsis,
     /// All possible materializations of `...`. A subset check with Callable[Materialization, R]
     /// succeeds only if it would succeed with Materialization replaced with any parameter list.
@@ -436,7 +442,7 @@ pub enum Params {
 impl Params {
     fn arg_counts(&self) -> ArgCounts {
         match self {
-            Self::List(params) => {
+            Self::List(params) | Self::Partial(params) => {
                 let mut counts = ArgCounts {
                     positional: ArgCount::none_allowed(),
                     keyword: ArgCount::none_allowed(),
@@ -864,6 +870,7 @@ pub enum FunctionKind {
     Dataclass,
     DataclassField,
     DataclassReplace,
+    CopyReplace,
     DataclassAsdict,
     /// `attr.fields(C)` / `attrs.fields(C)`.
     AttrsFields,
@@ -892,6 +899,9 @@ pub enum FunctionKind {
     NoTypeCheck,
     /// Instance of a protocol with a `__call__` method. The function has the `__call__` signature.
     CallbackProtocol(Box<ClassType>),
+    /// The `register` method of a `functools.singledispatch` dispatcher, tagged with the fallback's
+    /// first-parameter type so the registered dispatch type can be validated against it.
+    SingleDispatchRegister(Box<Type>),
     TotalOrdering,
     DisjointBase,
     /// `numba.jit()`
@@ -922,7 +932,7 @@ impl Callable {
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 output.write_str("(")?;
                 params.fmt_with_type(output, write_type, &ParamOverlay::All)?;
                 output.write_str(") -> ")?;
@@ -980,7 +990,7 @@ impl Callable {
         write_type: &impl Fn(&Type, &mut O) -> fmt::Result,
     ) -> fmt::Result {
         match &self.params {
-            Params::List(params) if params.len() > 1 => {
+            Params::List(params) | Params::Partial(params) if params.len() > 1 => {
                 // For multiple parameters, put each on a new line with indentation
                 output.write_str("(\n    ")?;
                 params.fmt_with_type_with_newlines(output, write_type)?;
@@ -988,6 +998,7 @@ impl Callable {
                 write_type(&self.ret, output)
             }
             Params::List(..)
+            | Params::Partial(..)
             | Params::ParamSpec(..)
             | Params::Ellipsis
             | Params::Materialization => self.fmt_with_type(output, write_type),
@@ -997,6 +1008,14 @@ impl Callable {
     pub fn list(params: ParamList, ret: Type) -> Self {
         Self {
             params: Params::List(params),
+            ret,
+        }
+    }
+
+    /// Build a `Callable` carrying a [`Params::Partial`] residual signature, returning `ret`.
+    pub fn partial(params: ParamList, ret: Type) -> Self {
+        Self {
+            params: Params::Partial(params),
             ret,
         }
     }
@@ -1045,6 +1064,20 @@ impl Callable {
                 }
             }
             Self {
+                params: Params::Partial(params),
+                ret,
+            } => {
+                let (first, rest) = params.0.split_first()?;
+                if let Param::Varargs(_, first) = first {
+                    Some((first, self.clone()))
+                } else {
+                    Some((
+                        first.as_type(),
+                        Self::partial(ParamList(rest.to_vec()), ret.clone()),
+                    ))
+                }
+            }
+            Self {
                 params: Params::ParamSpec(ts, p),
                 ret,
             } => {
@@ -1072,7 +1105,7 @@ impl Callable {
     /// don't prevent it.
     pub fn accepts_single_positional_arg(&self) -> bool {
         match &self.params {
-            Params::List(params) => match params.0.split_first() {
+            Params::List(params) | Params::Partial(params) => match params.0.split_first() {
                 Some((_, rest)) => !rest.iter().any(|p| {
                     matches!(
                         p,
@@ -1266,6 +1299,7 @@ impl FunctionKind {
             ("dataclasses", None, "dataclass") => Self::Dataclass,
             ("dataclasses", None, "field") => Self::DataclassField,
             ("dataclasses", None, "replace") => Self::DataclassReplace,
+            ("copy", None, "replace") => Self::CopyReplace,
             ("dataclasses", None, "asdict") => Self::DataclassAsdict,
             ("attr" | "attrs", None, "fields") => Self::AttrsFields,
             ("attr" | "attrs", None, "fields_dict") => Self::AttrsFieldsDict,
@@ -1311,6 +1345,7 @@ impl FunctionKind {
             Self::Dataclass => ModuleName::dataclasses(),
             Self::DataclassField => ModuleName::dataclasses(),
             Self::DataclassReplace => ModuleName::dataclasses(),
+            Self::CopyReplace => ModuleName::from_str("copy"),
             Self::DataclassAsdict => ModuleName::dataclasses(),
             Self::AttrsFields => ModuleName::attr(),
             Self::AttrsFieldsDict => ModuleName::attr(),
@@ -1326,6 +1361,7 @@ impl FunctionKind {
             Self::RevealType => ModuleName::typing(),
             Self::RuntimeCheckable => ModuleName::typing(),
             Self::CallbackProtocol(cls) => cls.qname().module_name(),
+            Self::SingleDispatchRegister(_) => ModuleName::functools(),
             Self::AbstractMethod => ModuleName::abc(),
             Self::NoTypeCheck => ModuleName::typing(),
             Self::TotalOrdering => ModuleName::functools(),
@@ -1348,6 +1384,7 @@ impl FunctionKind {
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
             Self::DataclassField => Cow::Owned(Name::new_static("field")),
             Self::DataclassReplace => Cow::Owned(Name::new_static("replace")),
+            Self::CopyReplace => Cow::Owned(Name::new_static("replace")),
             Self::DataclassAsdict => Cow::Owned(Name::new_static("asdict")),
             Self::AttrsFields => Cow::Owned(Name::new_static("fields")),
             Self::AttrsFieldsDict => Cow::Owned(Name::new_static("fields_dict")),
@@ -1363,6 +1400,7 @@ impl FunctionKind {
             Self::RevealType => Cow::Owned(Name::new_static("reveal_type")),
             Self::RuntimeCheckable => Cow::Owned(Name::new_static("runtime_checkable")),
             Self::CallbackProtocol(_) => Cow::Owned(dunder::CALL),
+            Self::SingleDispatchRegister(_) => Cow::Owned(Name::new_static("register")),
             Self::AbstractMethod => Cow::Owned(Name::new_static("abstractmethod")),
             Self::NoTypeCheck => Cow::Owned(Name::new_static("no_type_check")),
             Self::TotalOrdering => Cow::Owned(Name::new_static("total_ordering")),
@@ -1385,6 +1423,7 @@ impl FunctionKind {
             Self::Dataclass => None,
             Self::DataclassField => None,
             Self::DataclassReplace => None,
+            Self::CopyReplace => None,
             Self::DataclassAsdict => None,
             Self::AttrsFields => None,
             Self::AttrsFieldsDict => None,
@@ -1403,6 +1442,7 @@ impl FunctionKind {
             Self::NumbaNjit => None,
             Self::AttrsConvertersOptional => None,
             Self::CallbackProtocol(cls) => Some(cls.class_object().dupe()),
+            Self::SingleDispatchRegister(_) => None,
             Self::AbstractMethod => None,
             Self::NoTypeCheck => None,
             Self::TotalOrdering => None,
@@ -1433,7 +1473,7 @@ impl FunctionKind {
     /// Does this decorator require special-casing to be signature-preserving?
     pub fn is_signature_preserving_decorator(&self) -> bool {
         match self {
-            Self::NumbaJit | Self::NumbaNjit => true,
+            Self::NumbaJit | Self::NumbaNjit | Self::SingleDispatchRegister(_) => true,
             _ => false,
         }
     }

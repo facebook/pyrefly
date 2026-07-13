@@ -8,27 +8,28 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import SizeTuple
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
 # Test case 1: Generic function with TypeVarTuple
-def identity[*Ts](x: Tensor[*Ts]) -> Tensor[*Ts]:
-    assert_type(x, Tensor[*Ts])
+def identity[Ts: SizeTuple](x: Tensor[Ts]) -> Tensor[Ts]:
+    assert_type(x, Tensor[Ts])
     return x
 
 
 def test_identity():
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = identity(x)
-    assert_type(y, Tensor[10, 20])
+    assert_type(y, Tensor[[10, 20]])
 
 
 # Test case 2: Compare with nn.Parameter
 def test_parameter():
     import torch.nn as nn
 
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     param = nn.Parameter(x)
-    assert_type(param, Tensor[10, 20])
+    assert_type(param, Tensor[[10, 20]])

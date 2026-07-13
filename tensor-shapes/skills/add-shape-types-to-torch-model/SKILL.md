@@ -767,7 +767,7 @@ if TYPE_CHECKING:
 
 **Runtime-compatible annotations:** if you need annotations to evaluate at
 runtime (e.g., for runtime shape validation), import `shape_extensions` directly
-(not under `TYPE_CHECKING`). Use old-style `shape_extensions.TypeVar` instead of
+(not under `TYPE_CHECKING`). Use old-style `shape_extensions.SymVar` instead of
 PEP 695 syntax, since `class Foo[T]` doesn't support arithmetic on `T` at
 runtime. Alternatively, `from __future__ import annotations` defers evaluation
 so annotations never execute, but then `assert_type` becomes a no-op at

@@ -69,7 +69,9 @@ impl Restriction {
             Self::Bound(t) => t.clone(),
             Self::Constraints(ts) => unions(ts.clone(), heap),
             Self::Unrestricted => match kind {
-                QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
+                QuantifiedKind::TypeVar | QuantifiedKind::SymVar => {
+                    stdlib.object().clone().to_type()
+                }
                 QuantifiedKind::ParamSpec => Type::Ellipsis,
                 QuantifiedKind::TypeVarTuple => Type::any_tuple(),
             },
@@ -159,6 +161,7 @@ impl Display for Variance {
 #[derive(Debug, PartialEq, TypeEq, Eq, Ord, PartialOrd)]
 struct TypeVarInner {
     qname: QName,
+    kind: QuantifiedKind,
     restriction: Restriction,
     default: Option<Type>,
     /// The variance if known, or None for infer_variance=True
@@ -173,9 +176,28 @@ impl TypeVar {
         default: Option<Type>,
         variance: PreInferenceVariance,
     ) -> Self {
+        Self::new_with_kind(
+            name,
+            module,
+            QuantifiedKind::TypeVar,
+            restriction,
+            default,
+            variance,
+        )
+    }
+
+    pub fn new_with_kind(
+        name: Identifier,
+        module: Module,
+        kind: QuantifiedKind,
+        restriction: Restriction,
+        default: Option<Type>,
+        variance: PreInferenceVariance,
+    ) -> Self {
         Self(ArcId::new(TypeVarInner {
             // TODO: properly take parent from caller of new()
             qname: QName::new(name, NestingContext::toplevel(), module),
+            kind,
             restriction,
             default,
             variance,
@@ -188,6 +210,10 @@ impl TypeVar {
 
     pub fn restriction(&self) -> &Restriction {
         &self.0.restriction
+    }
+
+    pub fn kind(&self) -> QuantifiedKind {
+        self.0.kind
     }
 
     pub fn default(&self) -> Option<&Type> {
@@ -204,8 +230,7 @@ impl TypeVar {
 
     /// The upper bound of this legacy TypeVar as a type.
     pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
-        self.restriction()
-            .as_type(stdlib, heap, QuantifiedKind::TypeVar)
+        self.restriction().as_type(stdlib, heap, self.kind())
     }
 
     pub fn type_eq_inner(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {

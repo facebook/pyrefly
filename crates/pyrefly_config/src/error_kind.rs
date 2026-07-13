@@ -134,6 +134,9 @@ pub enum ErrorKind {
     /// Attempting to return a value that does not match the function's return type.
     /// Can also arise when returning values from generators.
     BadReturn,
+    /// A `functools.singledispatch` implementation is registered with a dispatch type that is
+    /// not a subtype of the fallback function's first parameter, so it can never be dispatched to.
+    BadSingledispatchRegister,
     /// Attempting to specialize a generic class with incorrect type arguments.
     /// e.g. `type[int, str]` is an error because `type` accepts only 1 type arg.
     BadSpecialization,
@@ -164,15 +167,19 @@ pub enum ErrorKind {
     /// `implicit-any` itself is reserved for the umbrella suppression/config
     /// code (suppressing `implicit-any` suppresses every sub-kind).
     ImplicitAny,
-    /// An implicit `Any` introduced when a class attribute is defined by
-    /// assignment to `self.x = None` or `self.x = ()` without an explicit
-    /// annotation.
+    /// An implicit `Any` introduced when a class attribute without an explicit
+    /// annotation is defined by assignment to `self.x = None`, `self.x = ()`,
+    /// or a value with an unknown type.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyAttribute,
     /// An implicit `Any` introduced when an empty container (`[]`, `{}`) cannot
     /// be inferred from context and is pinned to a container of `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyEmptyContainer,
+    /// An implicit `Any` introduced when a lambda parameter or return type cannot
+    /// be inferred from context.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyLambda,
     /// An implicit `Any` introduced because a function parameter has no
     /// annotation. The `self` and `cls` parameters of methods are excluded.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
@@ -183,6 +190,10 @@ pub enum ErrorKind {
     /// to `Any`.
     /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
     ImplicitAnyTypeArgument,
+    /// An implicit `Any` introduced when a variable is assigned a value of
+    /// unknown type without an explicit annotation.
+    /// This is a sub-kind of [ImplicitAny]: suppressing `implicit-any` also suppresses this error.
+    ImplicitAnyVariable,
     /// Usage of a module that was not actually imported, but does exist.
     ImplicitImport,
     /// An attribute was implicitly defined by assignment to `self` in a method that we
@@ -267,6 +278,14 @@ pub enum ErrorKind {
     NameMismatch,
     /// The attribute exists but does not support this access pattern.
     NoAccess,
+    /// Umbrella error kind for cases where `Any` is returned from a function with a concrete return type.
+    NoAnyReturn,
+    /// An explicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnExplicit,
+    /// An implicit `Any` returned from a function with a concrete return type.
+    /// This is a sub-kind of [NoAnyReturn]: suppressing `no-any-return` also suppresses this error.
+    NoAnyReturnImplicit,
     /// Attempting to call an overloaded function, but none of the signatures match.
     NoMatchingOverload,
     /// The SCC fixpoint iteration did not converge within the maximum number of
@@ -368,6 +387,10 @@ pub enum ErrorKind {
     UnsupportedDelete,
     /// Attempting to apply an operation to arguments that do not support it.
     UnsupportedOperation,
+    /// A class decorator whose own type is `Any`, obscuring the decorated class type.
+    UntypedClassDecorator,
+    /// A function decorator whose own type is `Any`, obscuring the decorated function type.
+    UntypedFunctionDecorator,
     /// Import is missing an expected stubs package
     UntypedImport,
     /// Result of async function call is never used or awaited
@@ -436,7 +459,11 @@ impl ErrorKind {
             ErrorKind::ImplicitAnyAttribute
             | ErrorKind::ImplicitAnyEmptyContainer
             | ErrorKind::ImplicitAnyParameter
-            | ErrorKind::ImplicitAnyTypeArgument => Some(ErrorKind::ImplicitAny),
+            | ErrorKind::ImplicitAnyTypeArgument
+            | ErrorKind::ImplicitAnyVariable => Some(ErrorKind::ImplicitAny),
+            ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
+                Some(ErrorKind::NoAnyReturn)
+            }
             _ => None,
         }
     }
@@ -481,6 +508,9 @@ impl ErrorKind {
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,
             ErrorKind::MissingSource => Severity::Ignore,
             ErrorKind::NameMismatch => Severity::Warn,
+            ErrorKind::NoAnyReturn => Severity::Ignore,
+            ErrorKind::NoAnyReturnExplicit => Severity::Ignore,
+            ErrorKind::NoAnyReturnImplicit => Severity::Ignore,
             ErrorKind::NonExhaustiveMatch => Severity::Warn,
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
@@ -496,11 +526,15 @@ impl ErrorKind {
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::ImplicitAnyLambda => Severity::Ignore,
+            ErrorKind::ImplicitAnyVariable => Severity::Ignore,
             ErrorKind::UnnecessaryComparison => Severity::Warn,
             ErrorKind::UnnecessaryTypeConversion => Severity::Warn,
             ErrorKind::Unreachable => Severity::Warn,
             ErrorKind::UnreachableMatchCase => Severity::Warn,
             ErrorKind::UnresolvableDunderAll => Severity::Warn,
+            ErrorKind::UntypedClassDecorator => Severity::Ignore,
+            ErrorKind::UntypedFunctionDecorator => Severity::Ignore,
             ErrorKind::UntypedImport => Severity::Warn,
             ErrorKind::UnusedIgnore => Severity::Ignore,
             ErrorKind::UnusedTypeIgnore => Severity::Ignore,

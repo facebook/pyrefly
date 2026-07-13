@@ -273,6 +273,10 @@ pub enum NoAccessReason {
     SettingReadOnlyDescriptor(Class),
     /// Calling a method via `super()` when no implementation is available (e.g. abstract protocol or abstract base method).
     SuperMethodNeedsImplementation(Class),
+    /// A proxy method was accessed on the class object rather than an instance.
+    ProxyMethodClassAccess(Class),
+    /// A proxy method declaration exists, but its target cannot be used as an instance method.
+    ProxyMethodTargetInvalid { class: Class, target: Name },
 }
 
 #[derive(Debug)]
@@ -326,6 +330,18 @@ impl NoAccessReason {
                 let class_name = class.name();
                 format!(
                     "Method `{attr_name}` inherited from class `{class_name}` has no implementation and cannot be accessed via `super()`"
+                )
+            }
+            NoAccessReason::ProxyMethodClassAccess(class) => {
+                let class_name = class.name();
+                format!(
+                    "Proxy method `{attr_name}` of class `{class_name}` can only be accessed on instances"
+                )
+            }
+            NoAccessReason::ProxyMethodTargetInvalid { class, target } => {
+                let class_name = class.name();
+                format!(
+                    "Proxy method `{attr_name}` of class `{class_name}` cannot resolve target method `{target}`"
                 )
             }
         }
@@ -609,7 +625,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Both types and error messages can be duplicated if elements in `attr_base` gets duplicated (can happen with
         // if base type contain vars). Make sure that dedup logic applies to both branches.
         if success {
-            self.unions(types)
+            // `.register` on a singledispatch dispatcher needs the fallback's first param, only
+            // available here; the tagging logic lives in `singledispatch.rs`.
+            self.tag_singledispatch_register(base, attr_name, self.unions(types))
         } else if !error_messages.is_empty() {
             error_messages.sort();
             error_messages.dedup();
@@ -2193,9 +2211,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Vec1::try_from_vec(acc).map(AttributeBase).ok()
     }
 
+    pub(crate) fn try_reproject_class_type_to_shaped_array(
+        &self,
+        cls: &ClassType,
+    ) -> Option<ShapedArrayType> {
+        if !cls
+            .targs()
+            .as_slice()
+            .iter()
+            .any(|arg| matches!(arg, Type::Tuple(_)))
+        {
+            return None;
+        }
+        let shape_param = self.shaped_array_shape_for_class_type(cls)?;
+        if !shape_param.is_type_var() {
+            return None;
+        }
+        Some(self.shaped_array_classtype_to_shaped_array_type(cls))
+    }
+
     fn as_attribute_base1(&self, ty: Type, acc: &mut Vec<AttributeBase1>) {
         match ty {
-            Type::ClassType(class_type) => acc.push(AttributeBase1::ClassInstance(class_type)),
+            Type::ClassType(class_type) => {
+                if let Some(shaped_array) =
+                    self.try_reproject_class_type_to_shaped_array(&class_type)
+                {
+                    acc.push(AttributeBase1::ShapedArrayInstance(shaped_array))
+                } else {
+                    acc.push(AttributeBase1::ClassInstance(class_type))
+                }
+            }
             Type::ClassDef(cls) => acc.push(AttributeBase1::ClassObject(ClassBase::ClassDef(
                 self.as_class_type_unchecked(&cls),
             ))),
@@ -2310,6 +2355,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     acc.push(class_base)
                 }
+            }
+            Type::Type(f) if matches!(&*f, Type::ClassDef(_)) => {
+                let Type::ClassDef(class) = *f else {
+                    unreachable!("guarded by matches! above")
+                };
+                // type[ClassDef(C)] is C.__class__: C's metaclass, viewed as a class object.
+                let metaclass = self
+                    .get_metadata_for_class(&class)
+                    .metaclass(self.stdlib)
+                    .clone();
+                acc.push(AttributeBase1::ClassObject(ClassBase::ClassType(metaclass)))
             }
             Type::QuantifiedValue(q) => acc.push(AttributeBase1::QuantifiedValue(*q)),
             Type::Type(f) if matches!(&*f, Type::Quantified(_)) => {

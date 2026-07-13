@@ -7,6 +7,7 @@
 
 from typing import Any, Callable
 
+from shape_extensions import SymVar
 from torch import Tensor
 
 # Type alias for mask modification functions
@@ -32,16 +33,23 @@ class BlockMask:
         _compile: bool = False,
     ) -> None: ...
 
-def flex_attention[B, H, H_kv, Tq, Tkv, D](
-    query: Tensor[B, H, Tq, D],
-    key: Tensor[B, H_kv, Tkv, D],
-    value: Tensor[B, H_kv, Tkv, D],
+def flex_attention[
+    B: SymVar,
+    H: SymVar,
+    H_kv: SymVar,
+    Tq: SymVar,
+    Tkv: SymVar,
+    D: SymVar,
+](
+    query: Tensor[[B, H, Tq, D]],
+    key: Tensor[[B, H_kv, Tkv, D]],
+    value: Tensor[[B, H_kv, Tkv, D]],
     score_mod: Callable[..., Any] | None = None,
     block_mask: BlockMask | None = None,
     scale: float | None = None,
     enable_gqa: bool = False,
     return_lse: bool = False,
-) -> Tensor[B, H, Tq, D]:
+) -> Tensor[[B, H, Tq, D]]:
     """Flexible attention with block-sparse masking.
 
     Args:

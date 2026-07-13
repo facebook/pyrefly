@@ -23,6 +23,7 @@ from typing import assert_type, Callable, TYPE_CHECKING
 
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import Elements, SizeTuple, SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
@@ -45,25 +46,29 @@ def test_basic_variadic[*Cs](x: tuple[*Cs]) -> None:
 
 
 # Tensor: variadic batch dims through multiple shape-preserving calls
-class TwoReluCalls[D](nn.Module):
+class TwoReluCalls[D: SymVar](nn.Module):
     def __init__(self, d: Dim[D]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(d, 256)
         self.fc2 = nn.Linear(256, 256)
 
-    def forward[*Bs](self, x: Tensor[*Bs, D]) -> Tensor[*Bs, 256]:
+    def forward[Bs: SizeTuple](
+        self, x: Tensor[[*Elements[Bs], D]]
+    ) -> Tensor[[*Elements[Bs], 256]]:
         h = F.relu(self.fc1(x))
-        assert_type(h, Tensor[*Bs, 256])
+        assert_type(h, Tensor[[*Elements[Bs], 256]])
         return F.relu(self.fc2(h))
 
 
 # Nested variadic-preserving calls (matches tacotron2 Prenet pattern)
-class NestedVariadic[D](nn.Module):
+class NestedVariadic[D: SymVar](nn.Module):
     def __init__(self, d: Dim[D]) -> None:
         super().__init__()
         self.fc = nn.Linear(d, 256)
 
-    def forward[*Bs](self, x: Tensor[*Bs, D]) -> Tensor[*Bs, 256]:
+    def forward[Bs: SizeTuple](
+        self, x: Tensor[[*Elements[Bs], D]]
+    ) -> Tensor[[*Elements[Bs], 256]]:
         return F.dropout(F.relu(self.fc(x)), p=0.5, training=True)
 
 

@@ -13,6 +13,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import Elements, SizeTuple, SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 # --- view on Linear output with variadic *Bs ---
 
 
-class Reshaper[K, D](nn.Module):
+class Reshaper[K: SymVar, D: SymVar](nn.Module):
     """Linear whose out_features is a Dim expression, followed by view."""
 
     def __init__(self, k: Dim[K], d: Dim[D]) -> None:
@@ -31,36 +32,38 @@ class Reshaper[K, D](nn.Module):
         self.d = d
         self.proj = nn.Linear(256, k * d)
 
-    def forward[B](self, x: Tensor[B, 256]) -> Tensor[B, K, D]:
-        # proj(x) returns Tensor[*Bs, K*D] — *Bs is unresolved variadic.
+    def forward[B: SymVar](self, x: Tensor[[B, 256]]) -> Tensor[[B, K, D]]:
+        # proj(x) returns Tensor[[*Elements[Bs], K*D]] — *Elements[Bs] is unresolved variadic.
         # view should fall back to bare rather than crashing.
         p = self.proj(x)
         # Annotation fallback: view can't infer -1 from variadic shape
-        out: Tensor[B, K, D] = p.view(-1, self.k, self.d)
+        out: Tensor[[B, K, D]] = p.view(-1, self.k, self.d)
         return out
 
 
 def test_view_on_variadic_linear():
     """view() on Linear output with Dim expression doesn't crash."""
     m = Reshaper(16, 8)
-    x: Tensor[4, 256] = torch.randn(4, 256)
+    x: Tensor[[4, 256]] = torch.randn(4, 256)
     out = m(x)
-    assert_type(out, Tensor[4, 16, 8])
+    assert_type(out, Tensor[[4, 16, 8]])
 
 
 # --- reshape on explicitly variadic function param ---
 
 
-def reshape_variadic[*Bs, C](x: Tensor[*Bs, C], c: Dim[C]) -> Tensor[*Bs, C]:
+def reshape_variadic[Bs: SizeTuple, C: SymVar](
+    x: Tensor[[*Elements[Bs], C]], c: Dim[C]
+) -> Tensor[[*Elements[Bs], C]]:
     """reshape on a variadic tensor should not crash."""
     y = x.reshape(-1, c)
     # y is bare (can't infer -1 from variadic); annotation fallback
-    result: Tensor[*Bs, C] = y
+    result: Tensor[[*Elements[Bs], C]] = y
     return result
 
 
 def test_reshape_variadic_param():
     """reshape() on explicitly variadic tensor doesn't crash."""
-    x: Tensor[2, 3, 10] = torch.randn(2, 3, 10)
+    x: Tensor[[2, 3, 10]] = torch.randn(2, 3, 10)
     out = reshape_variadic(x, 10)
-    assert_type(out, Tensor[2, 3, 10])
+    assert_type(out, Tensor[[2, 3, 10]])

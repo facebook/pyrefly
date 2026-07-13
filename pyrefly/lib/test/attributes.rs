@@ -702,6 +702,21 @@ C.x  # E: Generic attribute `x` of class `C` is not visible on the class
 );
 
 testcase!(
+    test_class_generic_attribute_lookup_on_self_type,
+    r#"
+from typing import assert_type
+
+class C[T]:
+    x: type[T]
+
+    @classmethod
+    def f(cls) -> type[T]:
+        assert_type(cls.x, type[T])
+        return cls.x
+"#,
+);
+
+testcase!(
     test_var_attribute,
     r#"
 from typing import assert_type
@@ -1715,7 +1730,7 @@ def test_union(x: A  | B):
 );
 
 testcase!(
-    bug = "type[ClassDef(..)] and type[ClassType(..)] should be type (or the direct metaclass?)",
+    bug = "type[ClassType(..)] should be type (or the direct metaclass?)",
     test_attribute_access_on_type_class,
     r#"
 # handy hack to get a type[X] for any X
@@ -1729,8 +1744,29 @@ class D[T]:
     @classmethod
     def m(cls, x: T): ...
 
-ty(C).m(0) # E: Expr::attr_infer_for_type attribute base undefined
+ty(C).m(0) # E: Class `type` has no class attribute `m`
 ty(D[int]).m(0) # E: Expr::attr_infer_for_type attribute base undefined
+"#,
+);
+
+testcase!(
+    test_attribute_access_on_classdef_metaclass,
+    r#"
+class Meta(type):
+    def __setattr__(cls, name: str, value: int) -> None: ...
+    def __getattribute__(cls, name: str) -> object: ...
+
+class C(metaclass=Meta):
+    pass
+
+C.__class__.__setattr__(C, "x", 0)
+C.__class__.__setattr__(C, "x", "bad") # E: Argument `Literal['bad']` is not assignable to parameter `value` with type `int`
+C.__class__.__getattribute__(C, "x")
+
+class DefaultMeta:
+    pass
+
+DefaultMeta.__class__.mro(DefaultMeta)
 "#,
 );
 
@@ -1747,7 +1783,7 @@ class TD(TypedDict):
     x: int
 
 ty(TD(x = 0))(x = 0)
-ty(TD).mro() # E: Expr::attr_infer_for_type attribute base undefined
+ty(TD).mro() # E: Missing argument `self` in function `type.mro`
 "#,
 );
 
@@ -2926,4 +2962,95 @@ class C:
 def f(c: C):
     assert_type(c.x, Any)
     "#,
+);
+
+testcase!(
+    test_implicit_any_attribute_untyped_call,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
+);
+
+testcase!(
+    test_implicit_any_attribute_class_body_untyped_call,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
+);
+
+testcase!(
+    test_implicit_any_attribute_annotated_no_error,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x: int = untyped(1)
+"#,
+);
+
+testcase!(
+    test_implicit_any_attribute_known_no_error,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+class C:
+    def __init__(self) -> None:
+        self.x = 1
+        self.s = "hello"
+"#,
+);
+
+testcase!(
+    test_implicit_any_attribute_suppressed_by_implicit_any,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+def untyped(x):
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x = untyped(1)  # pyrefly: ignore[implicit-any]
+"#,
+);
+
+testcase!(
+    test_implicit_any_attribute_explicit_any_no_error,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+from typing import Any, cast
+class C:
+    def __init__(self) -> None:
+        # An explicit `Any` is intentional, so only implicit `Any` should trigger.
+        self.x = cast(Any, 1)
+"#,
+);
+
+testcase!(
+    test_implicit_any_attribute_class_body_no_double_report,
+    TestEnv::new()
+        .enable_implicit_any_variable_error()
+        .enable_implicit_any_attribute_error(),
+    r#"
+def untyped(x):
+    return x
+
+# With both rules enabled, a class-body attribute is reported ONLY by
+# implicit-any-attribute, not unknown-variable-type (the is_class_body_assignment
+# guard prevents a double report). Exactly one error must fire here.
+class C:
+    x = untyped(1)  # E: implicitly inferred to be `Any`
+"#,
 );

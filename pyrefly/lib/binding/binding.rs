@@ -1150,14 +1150,16 @@ pub enum BindingExpect {
     /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
     MatchExhaustiveness {
         subject_idx: Idx<Key>,
-        narrowing_subject: NarrowingSubject,
+        narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
+        // Should we show the raw expression of the match subject instead of the name?
+        show_subject_expr: bool,
     },
     /// A match case whose pattern may not overlap with the current subject type.
     MatchCaseReachability {
         subject_idx: Idx<Key>,
-        narrowing_subject: NarrowingSubject,
+        narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
     },
@@ -2081,6 +2083,8 @@ pub struct NameAssign {
     pub expr: Box<Expr>,
     pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     pub is_in_function_scope: bool,
+    /// True if this assignment is directly in a class body.
+    pub is_class_body_assignment: bool,
     pub first_use: FirstUse,
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
@@ -2232,8 +2236,15 @@ pub enum Binding {
         TextRange,
         Option<Box<MultiTargetReceiver>>,
     ),
-    /// TypeVar, ParamSpec, or TypeVarTuple
-    TypeVar(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
+    /// TypeVar or SymVar
+    TypeVar(
+        Box<(
+            Option<Idx<KeyAnnotation>>,
+            Identifier,
+            Box<ExprCall>,
+            QuantifiedKind,
+        )>,
+    ),
     ParamSpec(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     TypeVarTuple(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     /// An expression returned from a function.
@@ -2413,8 +2424,8 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, ")")
             }
             Self::TypeVar(x) => {
-                let (a, name, call) = x.as_ref();
-                write!(f, "TypeVar({}, {name}, {})", ann(a), m.display(call))
+                let (a, name, call, kind) = x.as_ref();
+                write!(f, "{kind}({}, {name}, {})", ann(a), m.display(call))
             }
             Self::ParamSpec(x) => {
                 let (a, name, call) = x.as_ref();
@@ -2891,6 +2902,8 @@ pub enum AnnotationTarget {
     /// An annotated assignment. For attribute assignments, the name is the attribute name ("attr" in "x.attr")
     /// Does the annotated assignment have an initial value?
     Assign(Name, AnnAssignHasValue),
+    /// An annotated attribute assignment. The name is the attribute name ("attr" in "x.attr").
+    AttrAssign(Name),
     /// A member of a class
     ClassMember(Name),
 }
@@ -2903,6 +2916,7 @@ impl Display for AnnotationTarget {
             Self::KwargsParam(name) => write!(f, "kwargs `{name}`"),
             Self::Return(name) => write!(f, "`{name}` return"),
             Self::Assign(name, _initialized) => write!(f, "variable `{name}`"),
+            Self::AttrAssign(name) => write!(f, "attribute `{name}`"),
             Self::ClassMember(name) => write!(f, "attribute `{name}`"),
         }
     }
@@ -2916,6 +2930,7 @@ impl AnnotationTarget {
             Self::KwargsParam(_) => TypeFormContext::ParameterKwargsAnnotation,
             Self::Return(_) => TypeFormContext::ReturnAnnotation,
             Self::Assign(_, is_initialized) => TypeFormContext::VarAnnotation(*is_initialized),
+            Self::AttrAssign(_) => TypeFormContext::ClassVarAnnotation,
             Self::ClassMember(_) => TypeFormContext::ClassVarAnnotation,
         }
     }
@@ -3025,6 +3040,7 @@ pub enum ClassFieldDefinition {
     MethodLike {
         definition: Idx<Key>,
         has_return_annotation: bool,
+        annotation: Option<Idx<KeyAnnotation>>,
     },
     /// A nested class definition within the class body.
     /// The definition field stores the Idx<Key> that points to the class binding.

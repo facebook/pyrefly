@@ -6,10 +6,13 @@
 """Test subtyping compatibility between equivalent shape expressions.
 
 Shape expressions that simplify to the same value should be compatible.
-For example, Tensor[2 + 3] should be assignable to Tensor[5].
+For example, Tensor[[2 + 3]] should be assignable to Tensor[[5]].
 """
 
 from typing import TYPE_CHECKING
+
+from shape_extensions import SymVar
+
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -20,22 +23,22 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-def literal_add_equals_literal(x: Tensor[2 + 3, 4]) -> Tensor[5, 4]:
+def literal_add_equals_literal(x: Tensor[[2 + 3, 4]]) -> Tensor[[5, 4]]:
     """2 + 3 simplifies to 5"""
     return x
 
 
-def literal_mul_equals_literal(x: Tensor[2 * 3, 4]) -> Tensor[6, 4]:
+def literal_mul_equals_literal(x: Tensor[[2 * 3, 4]]) -> Tensor[[6, 4]]:
     """2 * 3 simplifies to 6"""
     return x
 
 
-def literal_complex_expr(x: Tensor[2 * 3 + 1, 4]) -> Tensor[7, 4]:
+def literal_complex_expr(x: Tensor[[2 * 3 + 1, 4]]) -> Tensor[[7, 4]]:
     """2 * 3 + 1 = 7"""
     return x
 
 
-def literal_sub_equals_literal(x: Tensor[10 - 3, 4]) -> Tensor[7, 4]:
+def literal_sub_equals_literal(x: Tensor[[10 - 3, 4]]) -> Tensor[[7, 4]]:
     """10 - 3 = 7"""
     return x
 
@@ -45,12 +48,12 @@ def literal_sub_equals_literal(x: Tensor[10 - 3, 4]) -> Tensor[7, 4]:
 # ============================================================================
 
 
-def add_commutative[N, M](x: Tensor[N + M]) -> Tensor[M + N]:
+def add_commutative[N: SymVar, M: SymVar](x: Tensor[[N + M]]) -> Tensor[[M + N]]:
     """Addition is commutative: N + M = M + N"""
     return x
 
 
-def mul_commutative[N, M](x: Tensor[N * M]) -> Tensor[M * N]:
+def mul_commutative[N: SymVar, M: SymVar](x: Tensor[[N * M]]) -> Tensor[[M * N]]:
     """Multiplication is commutative: N * M = M * N"""
     return x
 
@@ -60,17 +63,17 @@ def mul_commutative[N, M](x: Tensor[N * M]) -> Tensor[M * N]:
 # ============================================================================
 
 
-def concrete_plus_symbolic[N](x: Tensor[N + 0]) -> Tensor[N]:
+def concrete_plus_symbolic[N: SymVar](x: Tensor[[N + 0]]) -> Tensor[[N]]:
     """N + 0 = N (additive identity)"""
     return x
 
 
-def concrete_times_one[N](x: Tensor[N * 1]) -> Tensor[N]:
+def concrete_times_one[N: SymVar](x: Tensor[[N * 1]]) -> Tensor[[N]]:
     """N * 1 = N (multiplicative identity)"""
     return x
 
 
-def double_is_times_two[N](x: Tensor[N + N]) -> Tensor[N * 2]:
+def double_is_times_two[N: SymVar](x: Tensor[[N + N]]) -> Tensor[[N * 2]]:
     """N + N = N * 2"""
     return x
 
@@ -80,22 +83,22 @@ def double_is_times_two[N](x: Tensor[N + N]) -> Tensor[N * 2]:
 # ============================================================================
 
 
-def add_not_equal_mul[N, M](x: Tensor[N + M]) -> Tensor[N * M]:
+def add_not_equal_mul[N: SymVar, M: SymVar](x: Tensor[[N + M]]) -> Tensor[[N * M]]:
     """N + M != N * M in general."""
-    # E: Returned type `Tensor[(N + M)]` is not assignable
-    #    to declared return type `Tensor[(N * M)]`
+    # E: Returned type `Tensor[[(N + M)]]` is not assignable
+    #    to declared return type `Tensor[[(N * M)]]`
     return x
 
 
-def different_constants[N](x: Tensor[N + 1]) -> Tensor[N + 2]:
+def different_constants[N: SymVar](x: Tensor[[N + 1]]) -> Tensor[[N + 2]]:
     """N + 1 != N + 2."""
-    # E: Returned type `Tensor[(1 + N)]` is not assignable
-    #    to declared return type `Tensor[(2 + N)]`
+    # E: Returned type `Tensor[[(1 + N)]]` is not assignable
+    #    to declared return type `Tensor[[(2 + N)]]`
     return x
 
 
-def wrong_literal_simplification(x: Tensor[2 + 3, 4]) -> Tensor[6, 4]:
+def wrong_literal_simplification(x: Tensor[[2 + 3, 4]]) -> Tensor[[6, 4]]:
     """2 + 3 = 5, not 6."""
-    # E: Returned type `Tensor[5, 4]` is not assignable
-    #    to declared return type `Tensor[6, 4]`
+    # E: Returned type `Tensor[[5, 4]]` is not assignable
+    #    to declared return type `Tensor[[6, 4]]`
     return x

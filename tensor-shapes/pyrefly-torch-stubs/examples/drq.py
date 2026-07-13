@@ -1,10 +1,7 @@
-# Portions (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is adapted from pytorch/benchmark (TorchBenchmark),
-# which is licensed under the BSD 3-Clause License:
-# https://github.com/pytorch/benchmark/blob/main/LICENSE
-#
-# This adaptation adds tensor shape type annotations for pyrefly.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 """
 DRQ (Data-Regularized Q) actor-critic from TorchBenchmark with shape annotations.
@@ -34,19 +31,20 @@ Key patterns exercised:
 - CNN feature extractor → MLP head (common RL pattern)
 - nn.Sequential for MLP pipelines (faithful to original mlp() helper)
 - Dual Q-networks: two parallel MLPs producing two scalar outputs
-- Concatenation of features + action: Tensor[B, FeatDim + ActDim]
-- Chunk operation: Tensor[B, 2*A] → (Tensor[B, A], Tensor[B, A])
+- Concatenation of features + action: Tensor[[B, FeatDim + ActDim]]
+- Chunk operation: Tensor[[B, 2*A]] → (Tensor[[B, A]], Tensor[[B, A]])
 - Shared encoder weights via copy_conv_weights_from
 - Distribution wrapping (SquashedNormal = Normal + TanhTransform)
 - Agent training loop with actor/critic/alpha updates
 """
 
 import math
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import Any, assert_type, cast, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import shaped_array, SizeTuple, SymVar
 from torch.distributions import Normal, TransformedDistribution
 from torch.distributions.transforms import Transform
 
@@ -74,18 +72,21 @@ class TanhTransform(Transform):
     def __eq__(self, other: object) -> bool:
         return isinstance(other, TanhTransform)
 
-    def _call[*S](self, x: Tensor[*S]) -> Tensor[*S]:
+    def _call[S: SizeTuple](self, x: Tensor[S]) -> Tensor[S]:
         return x.tanh()
 
-    def _inverse[*S](self, y: Tensor[*S]) -> Tensor[*S]:
+    def _inverse[S: SizeTuple](self, y: Tensor[S]) -> Tensor[S]:
         return y.clamp(-0.99999997, 0.99999997).atanh()
 
-    def log_abs_det_jacobian[*S](self, x: Tensor[*S], y: Tensor[*S]) -> Tensor[*S]:
+    def log_abs_det_jacobian[S: SizeTuple](
+        self, x: Tensor[S], y: Tensor[S]
+    ) -> Tensor[S]:
         # Numerically stable: log(1 - tanh(x)^2) = 2*(log(2) - x - softplus(-2x))
         return 2.0 * (math.log(2.0) - x - F.softplus(-2.0 * x))
 
 
-class SquashedNormal[*EventShape](TransformedDistribution):
+@shaped_array(shape="EventShape")
+class SquashedNormal[EventShape: SizeTuple](TransformedDistribution[EventShape]):
     """Normal distribution followed by tanh squashing.
 
     Original: torchbenchmark/util/distribution.py SquashedNormal class.
@@ -94,7 +95,7 @@ class SquashedNormal[*EventShape](TransformedDistribution):
     Shape-preserving: rsample/log_prob return same shape as loc/scale.
     """
 
-    def __init__(self, loc: Tensor[*EventShape], scale: Tensor[*EventShape]) -> None:
+    def __init__(self, loc: Tensor[EventShape], scale: Tensor[EventShape]) -> None:
         self.loc = loc
         self.scale = scale
         base_dist = Normal(loc, scale)
@@ -102,7 +103,7 @@ class SquashedNormal[*EventShape](TransformedDistribution):
         super().__init__(base_dist, tfms)  # type: ignore[bad-argument-type]
 
     @property
-    def mean(self) -> Tensor[*EventShape]:
+    def mean(self) -> Tensor[EventShape]:
         mu = self.loc
         for tr in self.transforms:
             mu = tr(mu)
@@ -114,7 +115,7 @@ class SquashedNormal[*EventShape](TransformedDistribution):
 # ============================================================================
 
 
-class Encoder[C, FeatDim](nn.Module):
+class Encoder[C: SymVar, FeatDim: SymVar](nn.Module):
     """CNN encoder for 84x84 pixel observations.
 
     Architecture:
@@ -136,7 +137,7 @@ class Encoder[C, FeatDim](nn.Module):
         self.conv4 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
         self.fc = nn.Linear(39200, feature_dim)
         self.ln = nn.LayerNorm(feature_dim)
-        self.flatten = nn.Flatten()
+        self.flatten = nn.Flatten(1, -1)
 
     def copy_conv_weights_from(self, source: "Encoder[C, FeatDim]") -> None:
         """Copy conv layer weights from another encoder (for weight sharing).
@@ -162,22 +163,22 @@ class Encoder[C, FeatDim](nn.Module):
             f"{prefix}_conv4_w": self.conv4.weight,
         }
 
-    def forward[B](self, obs: Tensor[B, C, 84, 84]) -> Tensor[B, FeatDim]:
+    def forward[B: SymVar](self, obs: Tensor[[B, C, 84, 84]]) -> Tensor[[B, FeatDim]]:
         obs = obs / 255.0
         h1 = torch.relu(self.conv1(obs))
-        assert_type(h1, Tensor[B, 32, 41, 41])
+        assert_type(h1, Tensor[[B, 32, 41, 41]])
         h2 = torch.relu(self.conv2(h1))
-        assert_type(h2, Tensor[B, 32, 39, 39])
+        assert_type(h2, Tensor[[B, 32, 39, 39]])
         h3 = torch.relu(self.conv3(h2))
-        assert_type(h3, Tensor[B, 32, 37, 37])
+        assert_type(h3, Tensor[[B, 32, 37, 37]])
         h4 = torch.relu(self.conv4(h3))
-        assert_type(h4, Tensor[B, 32, 35, 35])
-        h4_flat = self.flatten(h4)
-        assert_type(h4_flat, Tensor[B, 39200])
+        assert_type(h4, Tensor[[B, 32, 35, 35]])
+        h4_flat = h4.flatten(1)
+        assert_type(h4_flat, Tensor[[B, 39200]])
         h5 = self.fc(h4_flat)
-        assert_type(h5, Tensor[B, FeatDim])
+        assert_type(h5, Tensor[[B, FeatDim]])
         h6 = self.ln(h5)
-        assert_type(h6, Tensor[B, FeatDim])
+        assert_type(h6, Tensor[[B, FeatDim]])
         return torch.tanh(h6)
 
 
@@ -186,7 +187,7 @@ class Encoder[C, FeatDim](nn.Module):
 # ============================================================================
 
 
-class Actor[C, FeatDim, ActDim, H](nn.Module):
+class Actor[C: SymVar, FeatDim: SymVar, ActDim: SymVar, H: SymVar](nn.Module):
     """MLP policy head on top of CNN encoder.
 
     Architecture:
@@ -195,7 +196,7 @@ class Actor[C, FeatDim, ActDim, H](nn.Module):
 
     mlp() = nn.Sequential(Linear, ReLU, Linear, ReLU, Linear)
 
-    (B, C, 84, 84) → (Tensor[B, ActDim], Tensor[B, ActDim])
+    (B, C, 84, 84) → (Tensor[[B, ActDim]], Tensor[[B, ActDim]])
     """
 
     def __init__(
@@ -218,25 +219,25 @@ class Actor[C, FeatDim, ActDim, H](nn.Module):
             nn.Linear(hidden_dim, 2 * action_dim),
         )
 
-    def forward[B](
-        self, obs: Tensor[B, C, 84, 84], detach_encoder: bool = False
-    ) -> SquashedNormal[B, ActDim]:
+    def forward[B: SymVar](
+        self, obs: Tensor[[B, C, 84, 84]], detach_encoder: bool = False
+    ) -> SquashedNormal[SizeTuple[B, ActDim]]:
         feat = self.encoder(obs)
-        assert_type(feat, Tensor[B, FeatDim])
+        assert_type(feat, Tensor[[B, FeatDim]])
         if detach_encoder:
             feat = feat.detach()
         out = self.trunk(feat)
-        assert_type(out, Tensor[B, 2 * ActDim])
+        assert_type(out, Tensor[[B, 2 * ActDim]])
         mu, log_std = out.chunk(2, dim=-1)
-        assert_type(mu, Tensor[B, ActDim])
-        assert_type(log_std, Tensor[B, ActDim])
+        assert_type(mu, Tensor[[B, ActDim]])
+        assert_type(log_std, Tensor[[B, ActDim]])
         # Constrain log_std to [log_std_min, log_std_max]
         log_std = torch.tanh(log_std)
         log_std_min, log_std_max = self.log_std_bounds
         log_std = log_std_min + 0.5 * (log_std_max - log_std_min) * (log_std + 1)
         std = log_std.exp()
-        assert_type(std, Tensor[B, ActDim])
-        return SquashedNormal(mu, std)
+        assert_type(std, Tensor[[B, ActDim]])
+        return cast(SquashedNormal[SizeTuple[B, ActDim]], SquashedNormal(mu, std))
 
 
 # ============================================================================
@@ -244,7 +245,7 @@ class Actor[C, FeatDim, ActDim, H](nn.Module):
 # ============================================================================
 
 
-class Critic[C, FeatDim, ActDim, H](nn.Module):
+class Critic[C: SymVar, FeatDim: SymVar, ActDim: SymVar, H: SymVar](nn.Module):
     """Double Q-network critic on top of CNN encoder.
 
     Architecture:
@@ -253,7 +254,7 @@ class Critic[C, FeatDim, ActDim, H](nn.Module):
 
     mlp() = nn.Sequential(Linear, ReLU, Linear, ReLU, Linear)
 
-    (B, C, 84, 84), (B, ActDim) → (Tensor[B, 1], Tensor[B, 1])
+    (B, C, 84, 84), (B, ActDim) → (Tensor[[B, 1]], Tensor[[B, 1]])
     """
 
     def __init__(
@@ -282,22 +283,22 @@ class Critic[C, FeatDim, ActDim, H](nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward[B](
+    def forward[B: SymVar](
         self,
-        obs: Tensor[B, C, 84, 84],
-        action: Tensor[B, ActDim],
+        obs: Tensor[[B, C, 84, 84]],
+        action: Tensor[[B, ActDim]],
         detach_encoder: bool = False,
-    ) -> tuple[Tensor[B, 1], Tensor[B, 1]]:
+    ) -> tuple[Tensor[[B, 1]], Tensor[[B, 1]]]:
         feat = self.encoder(obs)
-        assert_type(feat, Tensor[B, FeatDim])
+        assert_type(feat, Tensor[[B, FeatDim]])
         if detach_encoder:
             feat = feat.detach()
         obs_action = torch.cat((feat, action), dim=1)
-        assert_type(obs_action, Tensor[B, FeatDim + ActDim])
+        assert_type(obs_action, Tensor[[B, FeatDim + ActDim]])
         q1 = self.Q1(obs_action)
-        assert_type(q1, Tensor[B, 1])
+        assert_type(q1, Tensor[[B, 1]])
         q2 = self.Q2(obs_action)
-        assert_type(q2, Tensor[B, 1])
+        assert_type(q2, Tensor[[B, 1]])
         return q1, q2
 
 
@@ -315,7 +316,7 @@ def soft_update_params(net: nn.Module, target_net: nn.Module, tau: float) -> Non
         target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
 
 
-class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
+class DRQAgent[C: SymVar, FeatDim: SymVar, ActDim: SymVar, H: SymVar](nn.Module):
     """DRQ agent wrapping actor and critic with shared encoder weights.
 
     Original: drq.py DrQAgent class.
@@ -368,25 +369,27 @@ class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
     def alpha(self) -> Tensor:
         return self.log_alpha.exp()
 
-    def act[B](self, obs: Tensor[B, C, 84, 84]) -> SquashedNormal[B, ActDim]:
+    def act[B: SymVar](
+        self, obs: Tensor[[B, C, 84, 84]]
+    ) -> SquashedNormal[SizeTuple[B, ActDim]]:
         """Select action: returns SquashedNormal distribution from actor."""
         return self.actor(obs)
 
-    def criticize[B](
-        self, obs: Tensor[B, C, 84, 84], action: Tensor[B, ActDim]
-    ) -> tuple[Tensor[B, 1], Tensor[B, 1]]:
+    def criticize[B: SymVar](
+        self, obs: Tensor[[B, C, 84, 84]], action: Tensor[[B, ActDim]]
+    ) -> tuple[Tensor[[B, 1]], Tensor[[B, 1]]]:
         """Evaluate action: returns (q1, q2) from critic."""
         return self.critic(obs, action)
 
-    def update_critic[B](
+    def update_critic[B: SymVar](
         self,
-        obs: Tensor[B, C, 84, 84],
-        action: Tensor[B, ActDim],
-        reward: Tensor[B, 1],
-        next_obs: Tensor[B, C, 84, 84],
-        not_done: Tensor[B, 1],
-        obs_aug: Tensor[B, C, 84, 84],
-        next_obs_aug: Tensor[B, C, 84, 84],
+        obs: Tensor[[B, C, 84, 84]],
+        action: Tensor[[B, ActDim]],
+        reward: Tensor[[B, 1]],
+        next_obs: Tensor[[B, C, 84, 84]],
+        not_done: Tensor[[B, 1]],
+        obs_aug: Tensor[[B, C, 84, 84]],
+        next_obs_aug: Tensor[[B, C, 84, 84]],
     ) -> Tensor:
         """Update critic networks using clipped double-Q learning.
 
@@ -441,8 +444,8 @@ class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
         self.critic_optimizer.step()
         return critic_loss
 
-    def update_actor_and_alpha[B](
-        self, obs: Tensor[B, C, 84, 84]
+    def update_actor_and_alpha[B: SymVar](
+        self, obs: Tensor[[B, C, 84, 84]]
     ) -> tuple[Tensor, Tensor, Tensor]:
         """Update actor and entropy temperature alpha.
 
@@ -473,15 +476,15 @@ class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
 
         return actor_loss, alpha_loss, self.alpha
 
-    def update[B](
+    def update[B: SymVar](
         self,
-        obs: Tensor[B, C, 84, 84],
-        action: Tensor[B, ActDim],
-        reward: Tensor[B, 1],
-        next_obs: Tensor[B, C, 84, 84],
-        not_done: Tensor[B, 1],
-        obs_aug: Tensor[B, C, 84, 84],
-        next_obs_aug: Tensor[B, C, 84, 84],
+        obs: Tensor[[B, C, 84, 84]],
+        action: Tensor[[B, ActDim]],
+        reward: Tensor[[B, 1]],
+        next_obs: Tensor[[B, C, 84, 84]],
+        not_done: Tensor[[B, 1]],
+        obs_aug: Tensor[[B, C, 84, 84]],
+        next_obs_aug: Tensor[[B, C, 84, 84]],
         step: int,
     ) -> dict[str, Tensor]:
         """Full update step: critic, then optionally actor + alpha + target.
@@ -521,54 +524,54 @@ class DRQAgent[C, FeatDim, ActDim, H](nn.Module):
 def test_encoder():
     """Test CNN encoder: (B, 9, 84, 84) → (B, 50)."""
     enc = Encoder(9, 50)
-    obs: Tensor[4, 9, 84, 84] = torch.randn(4, 9, 84, 84)
+    obs: Tensor[[4, 9, 84, 84]] = torch.randn(4, 9, 84, 84)
     feat = enc(obs)
-    assert_type(feat, Tensor[4, 50])
+    assert_type(feat, Tensor[[4, 50]])
 
 
 def test_encoder_rgb():
     """Test CNN encoder with 3-channel (RGB) input."""
     enc = Encoder(3, 128)
-    obs: Tensor[8, 3, 84, 84] = torch.randn(8, 3, 84, 84)
+    obs: Tensor[[8, 3, 84, 84]] = torch.randn(8, 3, 84, 84)
     feat = enc(obs)
-    assert_type(feat, Tensor[8, 128])
+    assert_type(feat, Tensor[[8, 128]])
 
 
 def test_actor():
     """Test actor: (B, 9, 84, 84) → SquashedNormal distribution."""
     actor = Actor(9, 50, 6, 1024)
-    obs: Tensor[4, 9, 84, 84] = torch.randn(4, 9, 84, 84)
+    obs: Tensor[[4, 9, 84, 84]] = torch.randn(4, 9, 84, 84)
     dist = actor(obs)
-    assert_type(dist, SquashedNormal[4, 6])
+    assert_type(dist, SquashedNormal[SizeTuple[4, 6]])
 
 
 def test_critic():
     """Test critic: (B, 9, 84, 84), (B, 6) → (q1, q2) each (B, 1)."""
     critic = Critic(9, 50, 6, 1024)
-    obs: Tensor[4, 9, 84, 84] = torch.randn(4, 9, 84, 84)
-    action: Tensor[4, 6] = torch.randn(4, 6)
+    obs: Tensor[[4, 9, 84, 84]] = torch.randn(4, 9, 84, 84)
+    action: Tensor[[4, 6]] = torch.randn(4, 6)
     q1, q2 = critic(obs, action)
-    assert_type(q1, Tensor[4, 1])
-    assert_type(q2, Tensor[4, 1])
+    assert_type(q1, Tensor[[4, 1]])
+    assert_type(q2, Tensor[[4, 1]])
 
 
 def test_critic_different_dims():
     """Test critic with different channel/action dimensions."""
     critic = Critic(3, 128, 4, 512)
-    obs: Tensor[8, 3, 84, 84] = torch.randn(8, 3, 84, 84)
-    action: Tensor[8, 4] = torch.randn(8, 4)
+    obs: Tensor[[8, 3, 84, 84]] = torch.randn(8, 3, 84, 84)
+    action: Tensor[[8, 4]] = torch.randn(8, 4)
     q1, q2 = critic(obs, action)
-    assert_type(q1, Tensor[8, 1])
-    assert_type(q2, Tensor[8, 1])
+    assert_type(q1, Tensor[[8, 1]])
+    assert_type(q2, Tensor[[8, 1]])
 
 
 def test_drq_agent():
     """Test DRQ agent: act and criticize."""
     agent = DRQAgent(9, 50, 6, 1024)
-    obs: Tensor[4, 9, 84, 84] = torch.randn(4, 9, 84, 84)
+    obs: Tensor[[4, 9, 84, 84]] = torch.randn(4, 9, 84, 84)
     dist = agent.act(obs)
-    assert_type(dist, SquashedNormal[4, 6])
-    action: Tensor[4, 6] = torch.randn(4, 6)
+    assert_type(dist, SquashedNormal[SizeTuple[4, 6]])
+    action: Tensor[[4, 6]] = torch.randn(4, 6)
     q1, q2 = agent.criticize(obs, action)
-    assert_type(q1, Tensor[4, 1])
-    assert_type(q2, Tensor[4, 1])
+    assert_type(q1, Tensor[[4, 1]])
+    assert_type(q2, Tensor[[4, 1]])

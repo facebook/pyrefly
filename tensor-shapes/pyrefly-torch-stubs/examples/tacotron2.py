@@ -1,10 +1,7 @@
-# Portions (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is adapted from pytorch/benchmark (TorchBenchmark),
-# which is licensed under the BSD 3-Clause License:
-# https://github.com/pytorch/benchmark/blob/main/LICENSE
-#
-# This adaptation adds tensor shape type annotations for pyrefly.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 """
 Tacotron2 text-to-speech model from TorchBenchmark with shape annotations.
@@ -46,6 +43,7 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import Elements, SizeTuple, SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
@@ -57,7 +55,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class Prenet[NMel](nn.Module):
+class Prenet[NMel: SymVar](nn.Module):
     """Decoder prenet: 2 Linear layers with always-on dropout.
 
     (B, NMel) → (B, 256)
@@ -68,9 +66,11 @@ class Prenet[NMel](nn.Module):
         self.fc1 = nn.Linear(n_mel, 256)
         self.fc2 = nn.Linear(256, 256)
 
-    def forward[*Bs](self, x: Tensor[*Bs, NMel]) -> Tensor[*Bs, 256]:
+    def forward[Bs: SizeTuple](
+        self, x: Tensor[[*Elements[Bs], NMel]]
+    ) -> Tensor[[*Elements[Bs], 256]]:
         h = F.dropout(F.relu(self.fc1(x)), p=0.5, training=True)
-        assert_type(h, Tensor[*Bs, 256])
+        assert_type(h, Tensor[[*Elements[Bs], 256]])
         return F.dropout(F.relu(self.fc2(h)), p=0.5, training=True)
 
 
@@ -79,7 +79,7 @@ class Prenet[NMel](nn.Module):
 # ============================================================================
 
 
-class Postnet[NMel](nn.Module):
+class Postnet[NMel: SymVar](nn.Module):
     """Post-processing network: 5 Conv1d layers, shape-preserving on NMel.
 
     Architecture (with kernel_size=5, padding=2, all shape-preserving on T):
@@ -103,17 +103,19 @@ class Postnet[NMel](nn.Module):
         self.conv5 = nn.Conv1d(512, n_mel, kernel_size=5, stride=1, padding=2)
         self.bn5 = nn.BatchNorm1d(n_mel)
 
-    def forward[B, T](self, x: Tensor[B, NMel, T]) -> Tensor[B, NMel, T]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, NMel, T]]
+    ) -> Tensor[[B, NMel, T]]:
         h = F.dropout(torch.tanh(self.bn1(self.conv1(x))), 0.5, self.training)
-        assert_type(h, Tensor[B, 512, T])
+        assert_type(h, Tensor[[B, 512, T]])
         h = F.dropout(torch.tanh(self.bn2(self.conv2(h))), 0.5, self.training)
-        assert_type(h, Tensor[B, 512, T])
+        assert_type(h, Tensor[[B, 512, T]])
         h = F.dropout(torch.tanh(self.bn3(self.conv3(h))), 0.5, self.training)
-        assert_type(h, Tensor[B, 512, T])
+        assert_type(h, Tensor[[B, 512, T]])
         h = F.dropout(torch.tanh(self.bn4(self.conv4(h))), 0.5, self.training)
-        assert_type(h, Tensor[B, 512, T])
+        assert_type(h, Tensor[[B, 512, T]])
         out = F.dropout(self.bn5(self.conv5(h)), 0.5, self.training)
-        assert_type(out, Tensor[B, NMel, T])
+        assert_type(out, Tensor[[B, NMel, T]])
         return out
 
 
@@ -122,7 +124,7 @@ class Postnet[NMel](nn.Module):
 # ============================================================================
 
 
-class Encoder[EmbDim](nn.Module):
+class Encoder[EmbDim: SymVar](nn.Module):
     """Tacotron2 encoder: Conv1d stack + BiLSTM.
 
     Architecture:
@@ -154,21 +156,23 @@ class Encoder[EmbDim](nn.Module):
             bidirectional=True,
         )
 
-    def forward[B, T](self, x: Tensor[B, EmbDim, T]) -> Tensor[B, T, EmbDim]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, EmbDim, T]]
+    ) -> Tensor[[B, T, EmbDim]]:
         # Conv stack (shape-preserving on T)
         h = F.dropout(F.relu(self.bn1(self.conv1(x))), 0.5, self.training)
-        assert_type(h, Tensor[B, EmbDim, T])
+        assert_type(h, Tensor[[B, EmbDim, T]])
         h = F.dropout(F.relu(self.bn2(self.conv2(h))), 0.5, self.training)
-        assert_type(h, Tensor[B, EmbDim, T])
+        assert_type(h, Tensor[[B, EmbDim, T]])
         h = F.dropout(F.relu(self.bn3(self.conv3(h))), 0.5, self.training)
-        assert_type(h, Tensor[B, EmbDim, T])
+        assert_type(h, Tensor[[B, EmbDim, T]])
         # Transpose to (B, T, EmbDim) for LSTM
         h_t = h.transpose(1, 2)
-        assert_type(h_t, Tensor[B, T, EmbDim])
+        assert_type(h_t, Tensor[[B, T, EmbDim]])
         # BiLSTM
         outputs, _h_n, _c_n = self.lstm(h_t)
         # 2 * (EmbDim // 2) = EmbDim can't be proven algebraically
-        assert_type(outputs, Tensor[B, T, EmbDim])  # type: ignore[assert-type]
+        assert_type(outputs, Tensor[[B, T, EmbDim]])  # type: ignore[assert-type]
         return outputs  # type: ignore[bad-return]
 
 
@@ -189,17 +193,17 @@ class LocationLayer(nn.Module):
         self.location_conv = nn.Conv1d(2, 32, kernel_size=31, stride=1, padding=15)
         self.location_dense = nn.Linear(32, 128, bias=False)
 
-    def forward[B, T](
-        self, attention_weights_cat: Tensor[B, 2, T]
-    ) -> Tensor[B, T, 128]:
+    def forward[B: SymVar, T: SymVar](
+        self, attention_weights_cat: Tensor[[B, 2, T]]
+    ) -> Tensor[[B, T, 128]]:
         processed = self.location_conv(attention_weights_cat)
-        assert_type(processed, Tensor[B, 32, T])
+        assert_type(processed, Tensor[[B, 32, T]])
         processed_t = processed.transpose(1, 2)
-        assert_type(processed_t, Tensor[B, T, 32])
+        assert_type(processed_t, Tensor[[B, T, 32]])
         return self.location_dense(processed_t)
 
 
-class Attention[EmbDim](nn.Module):
+class Attention[EmbDim: SymVar](nn.Module):
     """Location-sensitive additive attention.
 
     Computes alignment energies from:
@@ -219,33 +223,33 @@ class Attention[EmbDim](nn.Module):
         self.v = nn.Linear(128, 1, bias=False)
         self.location_layer = LocationLayer()
 
-    def forward[B, T](
+    def forward[B: SymVar, T: SymVar](
         self,
-        query: Tensor[B, 1024],
-        memory: Tensor[B, T, EmbDim],
-        processed_memory: Tensor[B, T, 128],
-        attention_weights_cat: Tensor[B, 2, T],
-    ) -> tuple[Tensor[B, EmbDim], Tensor[B, T]]:
+        query: Tensor[[B, 1024]],
+        memory: Tensor[[B, T, EmbDim]],
+        processed_memory: Tensor[[B, T, 128]],
+        attention_weights_cat: Tensor[[B, 2, T]],
+    ) -> tuple[Tensor[[B, EmbDim]], Tensor[[B, T]]]:
         # Project query: (B, 1024) → (B, 1, 128)
         processed_query = self.query_layer(query.unsqueeze(1))
-        assert_type(processed_query, Tensor[B, 1, 128])
+        assert_type(processed_query, Tensor[[B, 1, 128]])
         # Location features: (B, 2, T) → (B, T, 128)
         processed_attention = self.location_layer(attention_weights_cat)
-        assert_type(processed_attention, Tensor[B, T, 128])
+        assert_type(processed_attention, Tensor[[B, T, 128]])
         # Additive attention energy
         energies = self.v(
             torch.tanh(processed_query + processed_attention + processed_memory)
         )
-        assert_type(energies, Tensor[B, T, 1])
+        assert_type(energies, Tensor[[B, T, 1]])
         energies_squeezed = energies.squeeze(-1)
-        assert_type(energies_squeezed, Tensor[B, T])
+        assert_type(energies_squeezed, Tensor[[B, T]])
         attention_weights = F.softmax(energies_squeezed, dim=1)
-        assert_type(attention_weights, Tensor[B, T])
+        assert_type(attention_weights, Tensor[[B, T]])
         # Context: (B, 1, T) @ (B, T, EmbDim) → (B, 1, EmbDim) → (B, EmbDim)
         context = torch.bmm(attention_weights.unsqueeze(1), memory)
-        assert_type(context, Tensor[B, 1, EmbDim])
+        assert_type(context, Tensor[[B, 1, EmbDim]])
         context_squeezed = context.squeeze(1)
-        assert_type(context_squeezed, Tensor[B, EmbDim])
+        assert_type(context_squeezed, Tensor[[B, EmbDim]])
         return context_squeezed, attention_weights
 
 
@@ -254,7 +258,7 @@ class Attention[EmbDim](nn.Module):
 # ============================================================================
 
 
-class DecoderStep[EmbDim](nn.Module):
+class DecoderStep[EmbDim: SymVar](nn.Module):
     """Single decoder step using LSTMCell (non-autoregressive view).
 
     One step of the autoregressive decoder, exposing the shape flow:
@@ -274,41 +278,41 @@ class DecoderStep[EmbDim](nn.Module):
         self.linear_projection = nn.Linear(1024 + embed_dim, 80)
         self.gate_layer = nn.Linear(1024 + embed_dim, 1)
 
-    def forward[B](
+    def forward[B: SymVar](
         self,
-        prenet_out: Tensor[B, 256],
-        attention_context: Tensor[B, EmbDim],
-        attn_h: Tensor[B, 1024],
-        attn_c: Tensor[B, 1024],
-        dec_h: Tensor[B, 1024],
-        dec_c: Tensor[B, 1024],
+        prenet_out: Tensor[[B, 256]],
+        attention_context: Tensor[[B, EmbDim]],
+        attn_h: Tensor[[B, 1024]],
+        attn_c: Tensor[[B, 1024]],
+        dec_h: Tensor[[B, 1024]],
+        dec_c: Tensor[[B, 1024]],
     ) -> tuple[
-        Tensor[B, 80],
-        Tensor[B, 1],
-        Tensor[B, 1024],
-        Tensor[B, 1024],
-        Tensor[B, 1024],
-        Tensor[B, 1024],
+        Tensor[[B, 80]],
+        Tensor[[B, 1]],
+        Tensor[[B, 1024]],
+        Tensor[[B, 1024]],
+        Tensor[[B, 1024]],
+        Tensor[[B, 1024]],
     ]:
         # Attention RNN
         cell_input = torch.cat((prenet_out, attention_context), dim=1)
-        assert_type(cell_input, Tensor[B, 256 + EmbDim])
+        assert_type(cell_input, Tensor[[B, 256 + EmbDim]])
         attn_h, attn_c = self.attention_rnn(cell_input, (attn_h, attn_c))
-        assert_type(attn_h, Tensor[B, 1024])
-        assert_type(attn_c, Tensor[B, 1024])
+        assert_type(attn_h, Tensor[[B, 1024]])
+        assert_type(attn_c, Tensor[[B, 1024]])
         # Decoder RNN
         dec_input = torch.cat((attn_h, attention_context), dim=1)
-        assert_type(dec_input, Tensor[B, 1024 + EmbDim])
+        assert_type(dec_input, Tensor[[B, 1024 + EmbDim]])
         dec_h, dec_c = self.decoder_rnn(dec_input, (dec_h, dec_c))
-        assert_type(dec_h, Tensor[B, 1024])
-        assert_type(dec_c, Tensor[B, 1024])
+        assert_type(dec_h, Tensor[[B, 1024]])
+        assert_type(dec_c, Tensor[[B, 1024]])
         # Projection
         proj_input = torch.cat((dec_h, attention_context), dim=1)
-        assert_type(proj_input, Tensor[B, 1024 + EmbDim])
+        assert_type(proj_input, Tensor[[B, 1024 + EmbDim]])
         mel_out = self.linear_projection(proj_input)
-        assert_type(mel_out, Tensor[B, 80])
+        assert_type(mel_out, Tensor[[B, 80]])
         gate_out = self.gate_layer(proj_input)
-        assert_type(gate_out, Tensor[B, 1])
+        assert_type(gate_out, Tensor[[B, 1]])
         return mel_out, gate_out, attn_h, attn_c, dec_h, dec_c
 
 
@@ -317,7 +321,7 @@ class DecoderStep[EmbDim](nn.Module):
 # ============================================================================
 
 
-class Tacotron2[NSymbols](nn.Module):
+class Tacotron2[NSymbols: SymVar](nn.Module):
     """Tacotron2 TTS model.
 
     tokens (B, T_text) → Embedding → (B, T_text, 512)
@@ -339,8 +343,8 @@ class Tacotron2[NSymbols](nn.Module):
         self.postnet = Postnet(80)
         self.max_decoder_steps = max_decoder_steps
 
-    def forward[B, T](
-        self, tokens: Tensor[B, T], teacher_forcing_mel: Tensor | None = None
+    def forward[B: SymVar, T: SymVar](
+        self, tokens: Tensor[[B, T]], teacher_forcing_mel: Tensor | None = None
     ) -> Tensor:
         """Run Tacotron2 end-to-end.
 
@@ -358,44 +362,44 @@ class Tacotron2[NSymbols](nn.Module):
         """
         # Encode text
         embedded = self.embedding(tokens)
-        assert_type(embedded, Tensor[B, T, 512])
+        assert_type(embedded, Tensor[[B, T, 512]])
         encoded = self.encoder(embedded.transpose(1, 2))
-        assert_type(encoded, Tensor[B, T, 512])
+        assert_type(encoded, Tensor[[B, T, 512]])
         # Initialize decoder state
         b = tokens.shape[0]
-        attn_h: Tensor[B, 1024] = torch.zeros(b, 1024)
-        attn_c: Tensor[B, 1024] = torch.zeros(b, 1024)
-        dec_h: Tensor[B, 1024] = torch.zeros(b, 1024)
-        dec_c: Tensor[B, 1024] = torch.zeros(b, 1024)
+        attn_h: Tensor[[B, 1024]] = torch.zeros(b, 1024)
+        attn_c: Tensor[[B, 1024]] = torch.zeros(b, 1024)
+        dec_h: Tensor[[B, 1024]] = torch.zeros(b, 1024)
+        dec_c: Tensor[[B, 1024]] = torch.zeros(b, 1024)
         # Initial context, mel input, and attention state
         t = tokens.shape[1]
-        attention_context: Tensor[B, 512] = torch.zeros(b, 512)
-        decoder_input: Tensor[B, 80] = torch.zeros(b, 80)
-        attention_weights: Tensor[B, T] = torch.zeros(b, t)
-        attention_weights_cum: Tensor[B, T] = torch.zeros(b, t)
+        attention_context: Tensor[[B, 512]] = torch.zeros(b, 512)
+        decoder_input: Tensor[[B, 80]] = torch.zeros(b, 80)
+        attention_weights: Tensor[[B, T]] = torch.zeros(b, t)
+        attention_weights_cum: Tensor[[B, T]] = torch.zeros(b, t)
         processed_memory = self.attention.memory_layer(encoded)
-        assert_type(processed_memory, Tensor[B, T, 128])
+        assert_type(processed_memory, Tensor[[B, T, 128]])
         # Autoregressive decoder loop
-        mel_outputs: list[Tensor[B, 80]] = []
+        mel_outputs: list[Tensor[[B, 80]]] = []
         for step in range(self.max_decoder_steps):
             prenet_out = self.prenet(decoder_input)
-            assert_type(prenet_out, Tensor[B, 256])
+            assert_type(prenet_out, Tensor[[B, 256]])
             # Attention: compute context from encoder output
             attention_weights_cat = torch.cat(
                 (attention_weights.unsqueeze(1), attention_weights_cum.unsqueeze(1)),
                 dim=1,
             )
-            assert_type(attention_weights_cat, Tensor[B, 2, T])
+            assert_type(attention_weights_cat, Tensor[[B, 2, T]])
             attention_context, attention_weights = self.attention(
                 attn_h, encoded, processed_memory, attention_weights_cat
             )
-            assert_type(attention_context, Tensor[B, 512])
+            assert_type(attention_context, Tensor[[B, 512]])
             attention_weights_cum = attention_weights_cum + attention_weights
             # Decoder step
             mel_out, gate_out, attn_h, attn_c, dec_h, dec_c = self.decoder_step(
                 prenet_out, attention_context, attn_h, attn_c, dec_h, dec_c
             )
-            assert_type(mel_out, Tensor[B, 80])
+            assert_type(mel_out, Tensor[[B, 80]])
             mel_outputs.append(mel_out)
             # Stop condition: gate > 0.5 (sigmoid threshold)
             if teacher_forcing_mel is None and torch.sigmoid(gate_out).min() > 0.5:
@@ -420,7 +424,7 @@ class Tacotron2[NSymbols](nn.Module):
 # ============================================================================
 
 
-class ConvNorm[InC, OutC](nn.Module):
+class ConvNorm[InC: SymVar, OutC: SymVar](nn.Module):
     """Thin wrapper around Conv1d with Xavier uniform initialization.
 
     Original: tacotron2/layers.py ConvNorm class.
@@ -448,11 +452,13 @@ class ConvNorm[InC, OutC](nn.Module):
         )
         nn.init.xavier_uniform_(self.conv.weight)
 
-    def forward[B, T](self, x: Tensor[B, InC, T]) -> Tensor[B, OutC, T]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, InC, T]]
+    ) -> Tensor[[B, OutC, T]]:
         return self.conv(x)
 
 
-class LinearNorm[InF, OutF](nn.Module):
+class LinearNorm[InF: SymVar, OutF: SymVar](nn.Module):
     """Thin wrapper around Linear with Xavier uniform initialization.
 
     Original: tacotron2/layers.py LinearNorm class.
@@ -463,7 +469,7 @@ class LinearNorm[InF, OutF](nn.Module):
         self.linear = nn.Linear(in_features, out_features)
         nn.init.xavier_uniform_(self.linear.weight)
 
-    def forward[B](self, x: Tensor[B, InF]) -> Tensor[B, OutF]:
+    def forward[B: SymVar](self, x: Tensor[[B, InF]]) -> Tensor[[B, OutF]]:
         return self.linear(x)
 
 
@@ -573,74 +579,74 @@ class TacotronSTFT(nn.Module):
 def test_prenet():
     """Test prenet: (B, 80) → (B, 256)."""
     prenet = Prenet(80)
-    x: Tensor[4, 80] = torch.randn(4, 80)
+    x: Tensor[[4, 80]] = torch.randn(4, 80)
     out = prenet(x)
-    assert_type(out, Tensor[4, 256])
+    assert_type(out, Tensor[[4, 256]])
 
 
 def test_postnet():
     """Test postnet: (B, 80, T) → (B, 80, T) shape-preserving."""
     postnet = Postnet(80)
-    x: Tensor[4, 80, 200] = torch.randn(4, 80, 200)
+    x: Tensor[[4, 80, 200]] = torch.randn(4, 80, 200)
     out = postnet(x)
-    assert_type(out, Tensor[4, 80, 200])
+    assert_type(out, Tensor[[4, 80, 200]])
 
 
 def test_encoder():
     """Test encoder: (B, 512, T) → (B, T, 512) with BiLSTM."""
     enc = Encoder(512)
-    x: Tensor[4, 512, 50] = torch.randn(4, 512, 50)
+    x: Tensor[[4, 512, 50]] = torch.randn(4, 512, 50)
     out = enc(x)
-    assert_type(out, Tensor[4, 50, 512])
+    assert_type(out, Tensor[[4, 50, 512]])
 
 
 def test_location_layer():
     """Test location layer: (B, 2, T) → (B, T, 128)."""
     loc = LocationLayer()
-    x: Tensor[4, 2, 50] = torch.randn(4, 2, 50)
+    x: Tensor[[4, 2, 50]] = torch.randn(4, 2, 50)
     out = loc(x)
-    assert_type(out, Tensor[4, 50, 128])
+    assert_type(out, Tensor[[4, 50, 128]])
 
 
 def test_attention():
     """Test attention: query + memory → context + weights."""
     attn = Attention(512)
-    query: Tensor[4, 1024] = torch.randn(4, 1024)
-    memory: Tensor[4, 50, 512] = torch.randn(4, 50, 512)
-    processed_memory: Tensor[4, 50, 128] = torch.randn(4, 50, 128)
-    weights_cat: Tensor[4, 2, 50] = torch.randn(4, 2, 50)
+    query: Tensor[[4, 1024]] = torch.randn(4, 1024)
+    memory: Tensor[[4, 50, 512]] = torch.randn(4, 50, 512)
+    processed_memory: Tensor[[4, 50, 128]] = torch.randn(4, 50, 128)
+    weights_cat: Tensor[[4, 2, 50]] = torch.randn(4, 2, 50)
     context, weights = attn(query, memory, processed_memory, weights_cat)
-    assert_type(context, Tensor[4, 512])
-    assert_type(weights, Tensor[4, 50])
+    assert_type(context, Tensor[[4, 512]])
+    assert_type(weights, Tensor[[4, 50]])
 
 
 def test_decoder_step():
     """Test single decoder step shape flow."""
     dec = DecoderStep(512)
-    prenet_out: Tensor[4, 256] = torch.randn(4, 256)
-    ctx: Tensor[4, 512] = torch.randn(4, 512)
-    attn_h: Tensor[4, 1024] = torch.zeros(4, 1024)
-    attn_c: Tensor[4, 1024] = torch.zeros(4, 1024)
-    dec_h: Tensor[4, 1024] = torch.zeros(4, 1024)
-    dec_c: Tensor[4, 1024] = torch.zeros(4, 1024)
+    prenet_out: Tensor[[4, 256]] = torch.randn(4, 256)
+    ctx: Tensor[[4, 512]] = torch.randn(4, 512)
+    attn_h: Tensor[[4, 1024]] = torch.zeros(4, 1024)
+    attn_c: Tensor[[4, 1024]] = torch.zeros(4, 1024)
+    dec_h: Tensor[[4, 1024]] = torch.zeros(4, 1024)
+    dec_c: Tensor[[4, 1024]] = torch.zeros(4, 1024)
     mel, gate, attn_h2, attn_c2, dec_h2, dec_c2 = dec(
         prenet_out, ctx, attn_h, attn_c, dec_h, dec_c
     )
-    assert_type(mel, Tensor[4, 80])
-    assert_type(gate, Tensor[4, 1])
+    assert_type(mel, Tensor[[4, 80]])
+    assert_type(gate, Tensor[[4, 1]])
 
 
 def test_conv_norm():
     """Test ConvNorm wrapper: properly types output channels."""
     conv = ConvNorm(80, 512, kernel_size=5, padding=2)
-    x: Tensor[4, 80, 200] = torch.randn(4, 80, 200)
+    x: Tensor[[4, 80, 200]] = torch.randn(4, 80, 200)
     out = conv(x)
-    assert_type(out, Tensor[4, 512, 200])
+    assert_type(out, Tensor[[4, 512, 200]])
 
 
 def test_linear_norm():
     """Test LinearNorm wrapper: properly types output features."""
     ln = LinearNorm(256, 128)
-    x: Tensor[4, 256] = torch.randn(4, 256)
+    x: Tensor[[4, 256]] = torch.randn(4, 256)
     out = ln(x)
-    assert_type(out, Tensor[4, 128])
+    assert_type(out, Tensor[[4, 128]])

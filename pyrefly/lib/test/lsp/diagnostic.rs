@@ -23,7 +23,7 @@ fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
             if i > 0 {
                 report.push_str(", ");
             }
-            report.push_str(&format!("Import `{}` is unused", unused.name.as_str()));
+            report.push_str(&format!("Import `{}` may be unused", unused.name.as_str()));
         }
         report
     } else {
@@ -76,7 +76,7 @@ def foo() -> str:
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `os` is unused");
+    assert_eq!(report, "Import `os` may be unused");
 }
 
 #[test]
@@ -104,7 +104,7 @@ def foo() -> str:
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `os` is unused");
+    assert_eq!(report, "Import `os` may be unused");
 }
 
 #[test]
@@ -132,7 +132,36 @@ def process(items: List[str]):
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `Dict` is unused");
+    assert_eq!(report, "Import `Dict` may be unused");
+}
+
+#[test]
+fn test_symvar_type_parameter_marker_imports_are_used() {
+    let code = r#"
+from os import path
+from shape_extensions import Dim, SymVar
+import shape_extensions as se
+
+def direct[N: SymVar](x: Dim[N]) -> Dim[N]:
+    return x
+
+def module_alias[N: se.SymVar](x: se.Dim[N]) -> se.Dim[N]:
+    return x
+"#;
+    let shape_extensions = r#"
+from typing import _SpecialForm
+
+class Dim[T]: ...
+SymVar: _SpecialForm
+"#;
+    let (handles, state) = mk_multi_file_state(
+        &[("main", code), ("shape_extensions", shape_extensions)],
+        Require::Exports,
+        true,
+    );
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_import_diagnostics(&state, handle);
+    assert_eq!(report, "Import `path` may be unused");
 }
 
 #[test]
@@ -384,7 +413,7 @@ import os as operating_system
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `operating_system` is unused");
+    assert_eq!(report, "Import `operating_system` may be unused");
 }
 
 #[test]
@@ -396,5 +425,5 @@ from math import tau as my_tau
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `my_tau` is unused");
+    assert_eq!(report, "Import `my_tau` may be unused");
 }

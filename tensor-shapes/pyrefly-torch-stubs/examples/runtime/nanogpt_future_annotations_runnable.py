@@ -25,14 +25,15 @@ import torch
 import torch.nn as nn
 import torch.nn.init
 import torch.optim
+from shape_extensions import Elements, SizeTuple
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Dim, SymVar
     from torch import Tensor
 
 
-class LayerNorm[M](nn.Module):
+class LayerNorm[M: SymVar](nn.Module):
     """LayerNorm but with an optional bias. Generic over normalized dimension size."""
 
     def __init__(self, ndim: Dim[M], bias: bool):
@@ -40,17 +41,19 @@ class LayerNorm[M](nn.Module):
         self.weight = nn.Parameter(torch.ones(ndim))
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
 
-    def forward[*Bs](self, input: Tensor[*Bs, M]) -> Tensor[*Bs, M]:
+    def forward[Bs: SizeTuple](
+        self, input: Tensor[[*Elements[Bs], M]]
+    ) -> Tensor[[*Elements[Bs], M]]:
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
 @dataclass
 class GPTConfig[
-    VocabSize,
-    BlockSize,
-    NEmbedding,
-    NHead,
-    NLayer,
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+    NLayer: SymVar,
 ]:
     """Configuration for GPT model, generic over key dimensions"""
 
@@ -63,7 +66,9 @@ class GPTConfig[
     bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
 
-class CausalSelfAttention[NEmbedding, NHead, BlockSize](nn.Module):
+class CausalSelfAttention[NEmbedding: SymVar, NHead: SymVar, BlockSize: SymVar](
+    nn.Module
+):
     """Multi-head causal self-attention. Generic over embedding dim, num heads, and block size."""
 
     def __init__(self, config: GPTConfig[Any, BlockSize, NEmbedding, NHead, Any]):
@@ -92,7 +97,9 @@ class CausalSelfAttention[NEmbedding, NHead, BlockSize](nn.Module):
                 )
             )
 
-    def forward[B, T](self, x: Tensor[B, T, NEmbedding]) -> Tensor[B, T, NEmbedding]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         b, t, c = (
             x.size()
         )  # batch size, sequence length, embedding dimensionality (n_embd)
@@ -140,7 +147,7 @@ class CausalSelfAttention[NEmbedding, NHead, BlockSize](nn.Module):
         return y
 
 
-class MLP[NEmbedding](nn.Module):
+class MLP[NEmbedding: SymVar](nn.Module):
     """Multi-layer perceptron. Generic over embedding dimension."""
 
     def __init__(self, config: GPTConfig[Any, Any, NEmbedding, Any, Any]):
@@ -150,7 +157,9 @@ class MLP[NEmbedding](nn.Module):
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward[B, T](self, x: Tensor[B, T, NEmbedding]) -> Tensor[B, T, NEmbedding]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         h = self.c_fc(x)
         h = self.gelu(h)
         x = self.c_proj(h)
@@ -158,7 +167,7 @@ class MLP[NEmbedding](nn.Module):
         return x
 
 
-class Block[NEmbedding, NHead, BlockSize](nn.Module):
+class Block[NEmbedding: SymVar, NHead: SymVar, BlockSize: SymVar](nn.Module):
     """Transformer block with self-attention and MLP. Generic over embedding dim, num heads, and block size."""
 
     def __init__(self, config: GPTConfig[Any, BlockSize, NEmbedding, NHead, Any]):
@@ -168,18 +177,20 @@ class Block[NEmbedding, NHead, BlockSize](nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward[B, T](self, x: Tensor[B, T, NEmbedding]) -> Tensor[B, T, NEmbedding]:
+    def forward[B: SymVar, T: SymVar](
+        self, x: Tensor[[B, T, NEmbedding]]
+    ) -> Tensor[[B, T, NEmbedding]]:
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
 
 
 class GPTConfigArgs[
-    VocabSize,
-    BlockSize,
-    NEmbedding,
-    NHead,
-    NLayer,
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+    NLayer: SymVar,
 ](TypedDict):
     """TypedDict for GPTConfig constructor arguments, generic over key dimensions"""
 
@@ -192,7 +203,12 @@ class GPTConfigArgs[
     dropout: float
 
 
-class TransformerModules[VocabSize, BlockSize, NEmbedding, NHead](TypedDict):
+class TransformerModules[
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+](TypedDict):
     """TypedDict defining the structure of GPT transformer modules. Generic over key dimensions."""
 
     wte: nn.Embedding[VocabSize, NEmbedding]  # token embeddings
@@ -202,7 +218,13 @@ class TransformerModules[VocabSize, BlockSize, NEmbedding, NHead](TypedDict):
     ln_f: LayerNorm[NEmbedding]  # final layer norm
 
 
-class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
+class GPT[
+    VocabSize: SymVar,
+    BlockSize: SymVar,
+    NEmbedding: SymVar,
+    NHead: SymVar,
+    NLayer: SymVar,
+](nn.Module):
     """GPT Language Model. Generic over vocabulary size, block size, embedding dim, num heads, and num layers."""
 
     def __init__(
@@ -268,9 +290,11 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward[B, T](
-        self, idx: Tensor[B, T], targets: Tensor[B, T] | None = None
-    ) -> tuple[Tensor[B, T, VocabSize] | Tensor[B, 1, VocabSize], Tensor[()] | None]:
+    def forward[B: SymVar, T: SymVar](
+        self, idx: Tensor[[B, T]], targets: Tensor[[B, T]] | None = None
+    ) -> tuple[
+        Tensor[[B, T, VocabSize]] | Tensor[[B, 1, VocabSize]], Tensor[[]] | None
+    ]:
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, (
@@ -284,7 +308,7 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
         tok_pos_emb = tok_emb + pos_emb
         x = self.transformer.drop(tok_pos_emb)
         for block in self.transformer.h:
-            _x: Tensor[B, T, NEmbedding] = x
+            _x: Tensor[[B, T, NEmbedding]] = x
             x = block(_x)
 
         x = self.transformer.ln_f(x)
@@ -429,13 +453,13 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
         return mfu
 
     @torch.no_grad()
-    def generate[B](
+    def generate[B: SymVar](
         self,
-        idx: Tensor[B, Any],
+        idx: Tensor[[B, Any]],
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: int | None = None,
-    ) -> Tensor[B, Any]:
+    ) -> Tensor[[B, Any]]:
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -461,7 +485,7 @@ class GPT[VocabSize, BlockSize, NEmbedding, NHead, NLayer](nn.Module):
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
-            _idx: Tensor[B, Any] = idx
+            _idx: Tensor[[B, Any]] = idx
             idx = torch.cat((_idx, idx_next), dim=1)
 
         return idx

@@ -7,36 +7,39 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import SymVar
+
+
 if TYPE_CHECKING:
     import torch
     import torch.nn.functional as F
     from torch import Tensor
 
 
-def test_relu_function[N, M](x: Tensor[N, M]):
+def test_relu_function[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
     """Test torch.relu preserves shape"""
     y = torch.relu(x)
-    assert_type(y, Tensor[N, M])
+    assert_type(y, Tensor[[N, M]])
 
 
-def test_relu_method[N, M](x: Tensor[N, M]):
+def test_relu_method[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
     """Test Tensor.relu preserves shape"""
     y = x.relu()
-    assert_type(y, Tensor[N, M])
+    assert_type(y, Tensor[[N, M]])
 
 
-def test_relu_method_literal(x: Tensor[2, 3, 4]):
+def test_relu_method_literal(x: Tensor[[2, 3, 4]]):
     y = x.relu()
-    assert_type(y, Tensor[2, 3, 4])
+    assert_type(y, Tensor[[2, 3, 4]])
 
 
-def test_relu_functional[N, M](x: Tensor[N, M]):
+def test_relu_functional[N: SymVar, M: SymVar](x: Tensor[[N, M]]):
     """Test F.relu preserves shape"""
     y = F.relu(x)
-    assert_type(y, Tensor[N, M])
+    assert_type(y, Tensor[[N, M]])
 
 
-def test_relu_with_literals(x: Tensor[2, 3, 4]):
+def test_relu_with_literals(x: Tensor[[2, 3, 4]]):
     """Test relu with literal shapes"""
     y = torch.relu(x)
-    assert_type(y, Tensor[2, 3, 4])
+    assert_type(y, Tensor[[2, 3, 4]])

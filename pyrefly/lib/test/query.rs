@@ -20,8 +20,8 @@ use tempfile::TempDir;
 
 use crate::config::config::ConfigFile;
 use crate::config::finder::ConfigFinder;
-use crate::query::IndexedTypeShapeKind;
 use crate::query::Query;
+use crate::query::SerializedTypeTableEntry;
 use crate::query::TypeShape;
 use crate::test::util::init_test;
 
@@ -62,7 +62,7 @@ fn type_shape_values(types: Vec<(PythonASTRange, TypeShape)>) -> Vec<Value> {
         .collect()
 }
 
-fn indexed_shape_values(type_table: &[IndexedTypeShapeKind]) -> Vec<Value> {
+fn indexed_shape_values(type_table: &[SerializedTypeTableEntry]) -> Vec<Value> {
     type_table
         .iter()
         .map(|type_shape| serde_json::to_value(type_shape).unwrap())
@@ -262,6 +262,61 @@ def apply(f: Callable[[int, str], bool], x: T) -> bool:
 }
 
 #[test]
+fn test_type_shapes_mark_staticmethod_callables() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    // A value-position reference to a `@staticmethod` surfaces as a callable
+    // type whose shape must carry `is_staticmethod: true`, so consumers can
+    // recover the static-method identity that is otherwise only in `display`
+    // (`typing.StaticMethod[...]`). A plain function omits the field.
+    let code = r#"
+class C:
+    @staticmethod
+    def sm(x: int) -> str:
+        return "ok"
+
+def plain(x: int) -> str:
+    return "ok"
+
+sm_ref = C.sm
+plain_ref = plain
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let shapes = type_shape_values(query.get_type_shapes_in_file(module_name, path).unwrap());
+
+    let is_callable_with_string_return = |shape: &Value| -> bool {
+        shape.get("kind").and_then(Value::as_str) == Some("callable")
+            && shape
+                .get("return_type")
+                .is_some_and(|rt| is_named_shape(rt, "builtins.str"))
+    };
+
+    assert!(
+        shapes.iter().any(|shape| {
+            is_callable_with_string_return(shape)
+                && shape.get("is_staticmethod").and_then(Value::as_bool) == Some(true)
+        }),
+        "Expected the staticmethod reference to emit a callable shape with is_staticmethod=true:\n{shapes:#?}",
+    );
+    assert!(
+        shapes.iter().any(|shape| {
+            is_callable_with_string_return(shape)
+                // skip_serializing_if omits the field entirely when false.
+                && shape.get("is_staticmethod").is_none()
+        }),
+        "Expected the plain function to emit a callable shape without is_staticmethod:\n{shapes:#?}",
+    );
+}
+
+#[test]
 fn test_type_shapes_include_unspecified_type_arg_count_for_generic_classes() {
     let tdir = TempDir::new().unwrap();
     let file_path = tdir.path().join("main.py");
@@ -301,6 +356,56 @@ value: Box[int] = Box()
 }
 
 #[test]
+fn test_type_table_include_display_false_omits_per_location_display() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let code = r#"from typing import Callable
+
+f: Callable[[int, str], bool]
+x: list[int]
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let response = query
+        .get_type_table_in_file(module_name, path, false)
+        .unwrap();
+
+    assert!(
+        !response.types.is_empty(),
+        "expected located refs even without display",
+    );
+    assert!(
+        response
+            .types
+            .iter()
+            .all(|located_type| located_type.display.is_none()),
+        "no located ref should carry a display when include_display=false:\n{:#?}",
+        response.types,
+    );
+    // The deduped type table is still built off the structural shapes.
+    let table = indexed_shape_values(&response.type_table);
+    assert!(
+        table
+            .iter()
+            .any(|shape| shape.get("kind").and_then(Value::as_str) == Some("callable")),
+        "expected the structural type table to be populated:\n{table:#?}",
+    );
+    // The `display` key must be absent from the serialized wire, not null.
+    let serialized = serde_json::to_value(&response.types[0]).unwrap();
+    assert!(
+        serialized.get("display").is_none(),
+        "display must be omitted from the wire when include_display=false:\n{serialized:#?}",
+    );
+}
+
+#[test]
 fn test_type_table_direct_conversion_includes_callable_union_optional_and_dedup() {
     let tdir = TempDir::new().unwrap();
     let file_path = tdir.path().join("main.py");
@@ -322,7 +427,7 @@ second: list[int]
     assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
 
     let response = query
-        .get_type_table_in_file_with_timing(module_name, path)
+        .get_type_table_in_file_with_timing(module_name, path, true)
         .unwrap()
         .0;
     let table = indexed_shape_values(&response.type_table);
@@ -331,8 +436,8 @@ second: list[int]
         response
             .types
             .iter()
-            .any(|located_type| located_type.display
-                == "(builtins.int, builtins.str) -> builtins.bool"),
+            .any(|located_type| located_type.display.as_deref()
+                == Some("(builtins.int, builtins.str) -> builtins.bool")),
         "Expected callable top-level display in located refs:\n{:#?}",
         response.types,
     );
@@ -378,6 +483,28 @@ second: list[int]
     assert_eq!(
         1, list_int_entries,
         "Expected repeated list[int] annotations to share one structural table entry:\n{table:#?}",
+    );
+
+    // Every wire entry carries its structural hash so clients can key a global
+    // (cross-file) hash -> parsed shape cache on it.
+    assert!(
+        table
+            .iter()
+            .all(|shape| shape.get("hash").and_then(Value::as_u64).is_some()),
+        "Expected every type_table entry to carry a u64 hash:\n{table:#?}",
+    );
+    // Structurally distinct shapes must hash differently.
+    let int_hash = table[int_index]
+        .get("hash")
+        .and_then(Value::as_u64)
+        .unwrap();
+    let str_hash = table[str_index]
+        .get("hash")
+        .and_then(Value::as_u64)
+        .unwrap();
+    assert_ne!(
+        int_hash, str_hash,
+        "Expected builtins.int and builtins.str to have distinct structural hashes",
     );
 }
 
@@ -442,7 +569,7 @@ c = Color.RED
     assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
 
     let response = query
-        .get_type_table_in_file_with_timing(module_name, path)
+        .get_type_table_in_file_with_timing(module_name, path, true)
         .unwrap()
         .0;
     let table = indexed_shape_values(&response.type_table);
@@ -456,6 +583,64 @@ c = Color.RED
             .iter()
             .any(|shape| is_indexed_named_shape(shape, "typing.Literal", &[member_index])),
         "Expected typing.Literal entry referencing the qualified enum member:\n{table:#?}",
+    );
+}
+
+#[test]
+fn test_type_table_anonymous_typed_dict_is_dict() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    // An unannotated dict literal with string-literal keys synthesizes an
+    // anonymous TypedDict. Its structured shape must be `dict[str, int | str]`
+    // (keeping the field value types), not an opaque `TypedDictionary` marker
+    // that drops them.
+    let code = r#"d = {"count": 1, "name": "x"}
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+
+    let query = create_query();
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+
+    let errors = query.add_files(vec![(module_name, path.clone())]);
+    assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+    let response = query
+        .get_type_table_in_file_with_timing(module_name, path, true)
+        .unwrap()
+        .0;
+    let table = indexed_shape_values(&response.type_table);
+
+    assert!(
+        !table
+            .iter()
+            .any(|shape| is_named_shape(shape, "TypedDictionary")
+                || is_named_shape(shape, "NonTotalTypedDictionary")),
+        "anonymous TypedDict should not emit an opaque TypedDictionary marker:\n{table:#?}",
+    );
+
+    let str_index = table
+        .iter()
+        .position(|shape| is_indexed_named_shape(shape, "builtins.str", &[]))
+        .expect("expected builtins.str leaf");
+    let int_index = table
+        .iter()
+        .position(|shape| is_indexed_named_shape(shape, "builtins.int", &[]))
+        .expect("expected builtins.int leaf");
+    let value_index = table
+        .iter()
+        .position(|shape| {
+            is_indexed_named_shape(shape, "typing.Union", &[int_index, str_index])
+                || is_indexed_named_shape(shape, "typing.Union", &[str_index, int_index])
+        })
+        .expect("expected `int | str` field value union");
+    assert!(
+        table.iter().any(|shape| is_indexed_named_shape(
+            shape,
+            "builtins.dict",
+            &[str_index, value_index]
+        )),
+        "expected `dict[str, int | str]` shape for the anonymous TypedDict:\n{table:#?}",
     );
 }
 

@@ -11,7 +11,7 @@
 With postponed evaluation, annotations are stored as strings and never
 evaluated at definition time. This additionally avoids the TypeVar
 arithmetic crash (N + 1 etc.), which remains a problem without future
-annotations when using PEP 695 TypeVar (shape_extensions.TypeVar solves it differently).
+annotations when using PEP 695 TypeVar (shape_extensions.SymVar solves it differently).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import unittest
 from typing import assert_type, Generic
 
 import torch
-from shape_extensions import assert_shape, Dim, TypeVar
+from shape_extensions import assert_shape, Dim, SymVar
 
 
 class TestSubscriptRuntime(unittest.TestCase):
@@ -28,9 +28,9 @@ class TestSubscriptRuntime(unittest.TestCase):
     (shape_extensions patches __class_getitem__)."""
 
     def test_concrete_subscript(self):
-        """Tensor[3, 4] — concrete integer dims, no TypeVars."""
+        """Tensor[[3, 4]] — concrete integer dims, no TypeVars."""
 
-        def f(x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
+        def f(x: torch.Tensor[[3, 4]]) -> torch.Tensor[[3, 4]]:
             return x
 
         t = torch.randn(3, 4)
@@ -38,9 +38,9 @@ class TestSubscriptRuntime(unittest.TestCase):
         assert_shape(result, (3, 4))
 
     def test_typevar_subscript(self):
-        """Tensor[N, 3] — TypeVar in subscript, no arithmetic."""
+        """Tensor[[N, 3]] — TypeVar in subscript, no arithmetic."""
 
-        def f[N](x: torch.Tensor[N, 3]) -> torch.Tensor[N, 3]:
+        def f[N](x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N, 3]]:
             return x
 
         t = torch.randn(4, 3)
@@ -97,9 +97,9 @@ class TestCombined(unittest.TestCase):
     """TypeVar arithmetic inside Tensor subscript."""
 
     def test_tensor_typevar_arithmetic(self):
-        """Tensor[N+1, 3] — both problems at once, works with future annotations."""
+        """Tensor[[N+1, 3]] — both problems at once, works with future annotations."""
 
-        def f[N](x: torch.Tensor[N + 1, 3]) -> torch.Tensor[N, 3]:
+        def f[N](x: torch.Tensor[[N + 1, 3]]) -> torch.Tensor[[N, 3]]:
             return x
 
         t = torch.randn(4, 3)
@@ -111,10 +111,10 @@ class TestClassAnnotationRuntime(unittest.TestCase):
     """Classes with class-level and method-level TypeVars."""
 
     def test_class_concrete_subscript(self):
-        """Class method with Tensor[3, 4] — concrete dims."""
+        """Class method with Tensor[[3, 4]] — concrete dims."""
 
         class Layer:
-            def forward(self, x: torch.Tensor[3, 4]) -> torch.Tensor[3, 4]:
+            def forward(self, x: torch.Tensor[[3, 4]]) -> torch.Tensor[[3, 4]]:
                 return x
 
         result = Layer().forward(torch.randn(3, 4))
@@ -124,7 +124,7 @@ class TestClassAnnotationRuntime(unittest.TestCase):
         """Class-level (N, M) and method-level (B) TypeVars, no arithmetic."""
 
         class Layer[N, M]:
-            def forward[B](self, x: torch.Tensor[B, N]) -> torch.Tensor[B, M]:
+            def forward[B](self, x: torch.Tensor[[B, N]]) -> torch.Tensor[[B, M]]:
                 return x  # type: ignore[return-value]
 
         result = Layer().forward(torch.randn(2, 5))
@@ -134,7 +134,7 @@ class TestClassAnnotationRuntime(unittest.TestCase):
         """Class-level TypeVar with arithmetic in method annotation."""
 
         class PadLayer[N]:
-            def forward(self, x: torch.Tensor[N, 3]) -> torch.Tensor[N + 1, 3]:
+            def forward(self, x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N + 1, 3]]:
                 return x  # type: ignore[return-value]
 
         result = PadLayer().forward(torch.randn(4, 3))
@@ -182,42 +182,42 @@ class TestAssertTypeRuntime(unittest.TestCase):
     from __future__ import annotations does NOT postpone its evaluation."""
 
     def test_assert_type_concrete(self):
-        """assert_type(x, Tensor[3, 4]) — works after shape_extensions patch."""
+        """assert_type(x, Tensor[[3, 4]]) — works after shape_extensions patch."""
         t = torch.randn(3, 4)
-        assert_type(t, torch.Tensor[3, 4])
+        assert_type(t, torch.Tensor[[3, 4]])
 
     def test_assert_type_typevar(self):
-        """assert_type(result, Tensor[N, 3]) — works after shape_extensions patch."""
+        """assert_type(result, Tensor[[N, 3]]) — works after shape_extensions patch."""
 
-        def f[N](x: torch.Tensor[N, 3]) -> torch.Tensor[N, 3]:
-            assert_type(x, torch.Tensor[N, 3])
+        def f[N](x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N, 3]]:
+            assert_type(x, torch.Tensor[[N, 3]])
             return x
 
         f(torch.randn(4, 3))
 
     def test_assert_type_arithmetic(self):
-        """assert_type(result, Tensor[N+1, 3]) — arithmetic in assert_type."""
+        """assert_type(result, Tensor[[N+1, 3]]) — arithmetic in assert_type."""
 
-        def f[N](x: torch.Tensor[N, 3]) -> torch.Tensor[N + 1, 3]:
+        def f[N](x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N + 1, 3]]:
             with self.assertRaisesRegex(
                 TypeError,
                 r"unsupported operand type\(s\) for \+: 'typing.TypeVar' and 'int'",
             ):
-                assert_type(x, torch.Tensor[N + 1, 3])
+                assert_type(x, torch.Tensor[[N + 1, 3]])
             return x
 
         f(torch.randn(4, 3))
 
 
 class TestTypeVarWithFutureAnnotations(unittest.TestCase):
-    """shape_extensions.TypeVar combined with future annotations — everything works."""
+    """shape_extensions.SymVar combined with future annotations — everything works."""
 
     def test_in_annotation(self):
-        """shape_extensions.TypeVar in annotations with future annotations."""
-        N = TypeVar("N")
-        M = TypeVar("M")
+        """shape_extensions.SymVar in annotations with future annotations."""
+        N = SymVar("N")
+        M = SymVar("M")
 
-        def f(x: torch.Tensor[N, M]) -> torch.Tensor[N, M]:
+        def f(x: torch.Tensor[[N, M]]) -> torch.Tensor[[N, M]]:
             return x
 
         t = torch.randn(3, 4)
@@ -225,10 +225,10 @@ class TestTypeVarWithFutureAnnotations(unittest.TestCase):
         assert_shape(result, (3, 4))
 
     def test_arithmetic_in_annotation(self):
-        """shape_extensions.TypeVar arithmetic in annotations with future annotations."""
-        N = TypeVar("N")
+        """shape_extensions.SymVar arithmetic in annotations with future annotations."""
+        N = SymVar("N")
 
-        def f(x: torch.Tensor[N, 3]) -> torch.Tensor[N + 1, 3]:
+        def f(x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N + 1, 3]]:
             return x
 
         t = torch.randn(4, 3)
@@ -237,11 +237,11 @@ class TestTypeVarWithFutureAnnotations(unittest.TestCase):
 
     def test_generic_class(self):
         """Generic class with future annotations."""
-        N = TypeVar("N")
-        M = TypeVar("M")
+        N = SymVar("N")
+        M = SymVar("M")
 
         class Layer(Generic[N, M]):
-            def forward(self, x: torch.Tensor[N]) -> torch.Tensor[M]:
+            def forward(self, x: torch.Tensor[[N]]) -> torch.Tensor[[M]]:
                 return x
 
         layer = Layer()

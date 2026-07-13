@@ -351,6 +351,7 @@ use crate::state::state::Transaction;
 use crate::state::subscriber::CompositeSubscriber;
 use crate::state::subscriber::PublishDiagnosticsSubscriber;
 use crate::state::subscriber::Subscriber;
+use crate::tsp::type_conversion::StdlibClasses;
 use crate::tsp::type_conversion::convert_type_with_resolvers;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassType;
@@ -403,7 +404,7 @@ pub trait TspInterface: Send + Sync + 'static {
     fn pending_watched_file_changes(&self) -> &Mutex<Vec<FileEvent>>;
 
     /// Get access to the recheck queue for async task processing
-    fn run_recheck_queue(&self, telemetry: &impl Telemetry);
+    fn run_recheck_queue(&self, telemetry: &dyn Telemetry);
 
     fn stop_recheck_queue(&self);
 
@@ -414,7 +415,7 @@ pub trait TspInterface: Send + Sync + 'static {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,
@@ -1413,7 +1414,7 @@ pub fn lsp_loop(
     build_system_blocking: bool,
     path_remapper: Option<PathRemapper>,
     thrift_remapper: Option<ThriftRemapper>,
-    telemetry: &impl Telemetry,
+    telemetry: &dyn Telemetry,
     external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
@@ -1743,7 +1744,7 @@ impl Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
@@ -2571,15 +2572,6 @@ impl Server {
             initialize_params.initialization_options.as_ref(),
         );
 
-        let dir_cache_enabled = initialize_params
-            .initialization_options
-            .as_ref()
-            .and_then(|opts| opts.get("pyrefly"))
-            .and_then(|pyrefly| pyrefly.get("experiments"))
-            .and_then(|exp| exp.get("dirEntryCache"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
         let should_request_workspace_settings = initialize_params
             .capabilities
             .workspace
@@ -2597,7 +2589,7 @@ impl Server {
             indexing_mode,
             workspace_indexing_limit,
             build_system_blocking,
-            state: State::new_with_options(config_finder, thread_count, dir_cache_enabled),
+            state: State::new(config_finder, thread_count),
             open_notebook_cells: RwLock::new(HashMap::new()),
             open_files: RwLock::new(HashMap::new()),
             published_workspace_diagnostics: Mutex::new(HashMap::new()),
@@ -2657,10 +2649,6 @@ impl Server {
     }
 
     pub fn telemetry_state(&self) -> TelemetryServerState {
-        let mut active_experiments = Vec::new();
-        if self.state.dir_cache_enabled() {
-            active_experiments.push("dir_entry_cache".to_owned());
-        }
         TelemetryServerState {
             has_sourcedb: self.workspaces.sourcedb_available(),
             id: self.id,
@@ -2668,7 +2656,7 @@ impl Server {
             server_start_time: self.server_start_time,
             agent_session_id: self.agent_session_id.clone(),
             agent_invocation_id: self.agent_invocation_id.clone(),
-            active_experiments,
+            active_experiments: vec![],
         }
     }
 
@@ -2862,7 +2850,8 @@ impl Server {
     ) -> Option<ProvideTypeResponse> {
         let uri = &params.text_document.uri;
         let handle = self.make_handle_if_enabled(uri, None).ok()?;
-        provide_type(transaction, &handle, params.positions)
+        let notebook_cell = self.maybe_get_code_cell_index(uri);
+        provide_type(transaction, &handle, params.positions, notebook_cell)
     }
 
     fn type_error_display_status(&self, path: &Path) -> TypeErrorDisplayStatus {
@@ -3487,7 +3476,7 @@ impl Server {
     /// invalidate find and perform a recheck.
     fn queue_source_db_rebuild_and_recheck(
         &self,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         force: bool,
     ) {
@@ -3542,7 +3531,7 @@ impl Server {
     fn did_open<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         url: Url,
@@ -3839,7 +3828,7 @@ impl Server {
     fn did_change_watched_files(
         &self,
         params: DidChangeWatchedFilesParams,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) {
         let events = CategorizedEvents::new_lsp(params.changes);
@@ -3910,7 +3899,7 @@ impl Server {
         &self,
         url: Url,
         kind: DidCloseKind,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) {
         let Some(path) = self.path_for_uri(&url) else {
@@ -4377,12 +4366,16 @@ impl Server {
         let complete_function_parens = lsp_config
             .and_then(|c| c.complete_function_parens)
             .unwrap_or(false);
+        let auto_import = lsp_config
+            .and_then(|c| c.auto_import_completions)
+            .unwrap_or(true);
         let completion_options = CompletionRequestOptions {
             supports_completion_item_details: self.supports_completion_item_details(),
             complete_function_parens,
             supports_snippet_completions: supports_snippet_completions(
                 &self.initialize_params.capabilities,
             ),
+            auto_import,
         };
         let mru_snapshot = self.completion_mru.lock().clone();
         let info = transaction
@@ -5246,7 +5239,7 @@ impl Server {
         &self,
         transaction: &Transaction<'_>,
         query: &str,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
     ) -> anyhow::Result<Vec<SymbolInformation>> {
         let external_provider = self.external_references.clone();
@@ -5382,7 +5375,7 @@ impl Server {
                     range: lsp_range,
                     severity: Some(DiagnosticSeverity::HINT),
                     source: Some("Pyrefly".to_owned()),
-                    message: format!("Import `{}` is unused", unused.name.as_str()).into(),
+                    message: format!("Import `{}` may be unused", unused.name.as_str()).into(),
                     code: Some(NumberOrString::String("unused-import".to_owned())),
                     code_description: None,
                     related_information: None,
@@ -6337,11 +6330,21 @@ impl Server {
         let resolve_export = |module_name: ModuleName, name: &Name| {
             resolve_export_location(transaction, source_handle, module_name, name)
         };
+        // Sentinel-like types (`None`, `TypeGuard`/`TypeIs`, `Size`/`Dim`) are
+        // encoded as the stdlib's version-aware classes. Computing `ty` already
+        // populated this transaction's `Stdlib`, so `get_stdlib` stays on the
+        // warm path (see the doc comment above).
+        let stdlib = transaction.get_stdlib(source_handle);
         convert_type_with_resolvers(
             ty,
             Some(&resolve_func_range),
             Some(&resolve_module_path),
             Some(&resolve_export),
+            StdlibClasses {
+                none_type: stdlib.none_type(),
+                bool_type: stdlib.bool(),
+                int_type: stdlib.int(),
+            },
         )
     }
 }
@@ -6394,7 +6397,7 @@ impl TspInterface for Server {
         dispatch_lsp_events(self, reader);
     }
 
-    fn run_recheck_queue(&self, telemetry: &impl Telemetry) {
+    fn run_recheck_queue(&self, telemetry: &dyn Telemetry) {
         self.recheck_queue.run_until_stopped(self, telemetry);
     }
 
@@ -6406,7 +6409,7 @@ impl TspInterface for Server {
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
+        telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
         event: LspEvent,

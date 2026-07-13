@@ -26,14 +26,14 @@ class SimpleModule(nn.Module):
         super().__init__()
         self.size = size
 
-    def forward(self, x: Tensor[10, 20]) -> Tensor[10, 20]:
+    def forward(self, x: Tensor[[10, 20]]) -> Tensor[[10, 20]]:
         """Forward pass - just returns input"""
         return x
 
-    def process(self, x: Tensor[10, 20]) -> Tensor[10, 20]:
+    def process(self, x: Tensor[[10, 20]]) -> Tensor[[10, 20]]:
         """Method that calls self() instead of self.forward()"""
         # This should work - self(x) redirects to self.forward(x)
-        result: Tensor[10, 20] = self(x)
+        result: Tensor[[10, 20]] = self(x)
         return result
 
 
@@ -43,11 +43,11 @@ class RecursiveModule(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, x: Tensor[5, 10], depth: int) -> Tensor[5, 10]:
+    def forward(self, x: Tensor[[5, 10]], depth: int) -> Tensor[[5, 10]]:
         """Forward pass that recursively calls self"""
         if depth > 0:
             # Recursive self call
-            intermediate: Tensor[5, 10] = self(x, depth - 1)
+            intermediate: Tensor[[5, 10]] = self(x, depth - 1)
             return intermediate
         return x
 
@@ -58,48 +58,48 @@ class NestedCallModule(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, x: Tensor[3, 4]) -> Tensor[3, 4]:
+    def forward(self, x: Tensor[[3, 4]]) -> Tensor[[3, 4]]:
         """Forward pass"""
         return x * 2
 
-    def apply_twice(self, x: Tensor[3, 4]) -> Tensor[3, 4]:
+    def apply_twice(self, x: Tensor[[3, 4]]) -> Tensor[[3, 4]]:
         """Apply forward twice using self()"""
-        once: Tensor[3, 4] = self(x)
-        twice: Tensor[3, 4] = self(once)
+        once: Tensor[[3, 4]] = self(x)
+        twice: Tensor[[3, 4]] = self(once)
         return twice
 
-    def apply_and_add(self, x: Tensor[3, 4], y: Tensor[3, 4]) -> Tensor[3, 4]:
+    def apply_and_add(self, x: Tensor[[3, 4]], y: Tensor[[3, 4]]) -> Tensor[[3, 4]]:
         """Apply forward to both inputs and add"""
-        x_out: Tensor[3, 4] = self(x)
-        y_out: Tensor[3, 4] = self(y)
-        result: Tensor[3, 4] = x_out + y_out
+        x_out: Tensor[[3, 4]] = self(x)
+        y_out: Tensor[[3, 4]] = self(y)
+        result: Tensor[[3, 4]] = x_out + y_out
         return result
 
 
 def test_simple_self_call():
     """Test basic self() call in a method"""
     module = SimpleModule(10)
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
 
     # Call via process method which uses self()
-    assert_type(module.process(x), Tensor[10, 20])
+    assert_type(module.process(x), Tensor[[10, 20]])
 
 
 def test_recursive_self_call():
     """Test recursive self() calls"""
     module = RecursiveModule()
-    x: Tensor[5, 10] = torch.randn(5, 10)
+    x: Tensor[[5, 10]] = torch.randn(5, 10)
 
     # Recursive call
-    assert_type(module(x, 3), Tensor[5, 10])
+    assert_type(module(x, 3), Tensor[[5, 10]])
 
 
 def test_nested_self_calls():
     """Test multiple self() calls in methods"""
     module = NestedCallModule()
-    x: Tensor[3, 4] = torch.randn(3, 4)
-    y: Tensor[3, 4] = torch.randn(3, 4)
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
+    y: Tensor[[3, 4]] = torch.randn(3, 4)
 
     # Call methods that use self() internally
-    assert_type(module.apply_twice(x), Tensor[3, 4])
-    assert_type(module.apply_and_add(x, y), Tensor[3, 4])
+    assert_type(module.apply_twice(x), Tensor[[3, 4]])
+    assert_type(module.apply_and_add(x, y), Tensor[[3, 4]])

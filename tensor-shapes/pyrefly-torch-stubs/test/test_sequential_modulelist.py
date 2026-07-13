@@ -10,10 +10,11 @@ Note: These containers may have limitations because they're type-erased
 (they hold generic Module objects, not specifically typed ones)
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import SymVar
 
 if TYPE_CHECKING:
     from shape_extensions import Dim
@@ -24,25 +25,25 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class LinearLayer[N, M](nn.Module):
+class LinearLayer[N: SymVar, M: SymVar](nn.Module):
     """Reusable linear layer for testing"""
 
-    weight: Tensor[M, N]
+    weight: Tensor[[M, N]]
 
     def __init__(self, in_features: Dim[N], out_features: Dim[M]):
         super().__init__()
         # Now M and N are bound to runtime values via Literal types
         self.weight = torch.randn(out_features, in_features)
 
-    def forward[B](self, x: Tensor[B, N]) -> Tensor[B, M]:
-        weight_t: Tensor[N, M] = self.weight.transpose(0, 1)
+    def forward[B: SymVar](self, x: Tensor[[B, N]]) -> Tensor[[B, M]]:
+        weight_t: Tensor[[N, M]] = self.weight.transpose(0, 1)
         return torch.matmul(x, weight_t)
 
 
 class ReLULayer(nn.Module):
     """Simple ReLU wrapper (truly shape-preserving - works with any dimension)"""
 
-    def forward[B, N](self, x: Tensor[B, N]) -> Tensor[B, N]:
+    def forward[B: SymVar, N: SymVar](self, x: Tensor[[B, N]]) -> Tensor[[B, N]]:
         return torch.relu(x)
 
 
@@ -60,11 +61,11 @@ def test_sequential_construction():
     seq = nn.Sequential(layer1, layer2)
 
     # What happens when we call it? (Sequential is callable via __call__)
-    x: Tensor[16, 5] = torch.randn(16, 5)
+    x: Tensor[[16, 5]] = torch.randn(16, 5)
     y = seq(x)
 
     # Check what type we get back — shape-aware Sequential chains through each module
-    assert_type(y, Tensor[16, 10])
+    assert_type(y, Tensor[[16, 10]])
 
 
 # ============================================================================
@@ -72,7 +73,7 @@ def test_sequential_construction():
 # ============================================================================
 
 
-class ManualSequential[N, M, K](nn.Module):
+class ManualSequential[N: SymVar, M: SymVar, K: SymVar](nn.Module):
     """Manually implement sequential forwarding to show expected behavior"""
 
     layer1: LinearLayer[N, M]
@@ -89,9 +90,9 @@ class ManualSequential[N, M, K](nn.Module):
         self.layer1 = LinearLayer(in_features, hidden_features)
         self.layer2 = LinearLayer(hidden_features, out_features)
 
-    def forward[B](self, x: Tensor[B, N]):
+    def forward[B: SymVar](self, x: Tensor[[B, N]]):
         # This is what Sequential *should* do type-wise
-        # Note: layer outputs have concrete dimensions (Tensor[B, 10])
+        # Note: layer outputs have concrete dimensions (Tensor[[B, 10]])
         h = self.layer1(x)
         y = self.layer2(h)
         return y
@@ -105,13 +106,13 @@ def test_manual_sequential():
     assert_type(model.layer1, LinearLayer[5, 10])
     assert_type(model.layer2, LinearLayer[10, 10])
 
-    x: Tensor[16, 5] = torch.randn(16, 5)
+    x: Tensor[[16, 5]] = torch.randn(16, 5)
     y = model(x)
-    assert_type(y, Tensor[16, 10])
-    assert_type(y, Tensor[16, 10])
+    assert_type(y, Tensor[[16, 10]])
+    assert_type(y, Tensor[[16, 10]])
 
 
-class TypedSequential[N: Dim[Any], M: Dim[Any], K: Dim[Any]](nn.Module):
+class TypedSequential[N: SymVar, M: SymVar, K: SymVar](nn.Module):
     """Sequential that takes layer types instead of dimension literals"""
 
     layer1: LinearLayer[N, M]
@@ -123,7 +124,7 @@ class TypedSequential[N: Dim[Any], M: Dim[Any], K: Dim[Any]](nn.Module):
         self.layer1 = layer1
         self.layer2 = layer2
 
-    def forward[B](self, x: Tensor[B, N]):
+    def forward[B: SymVar](self, x: Tensor[[B, N]]):
         h = self.layer1(x)
         y = self.layer2(h)
         return y
@@ -141,9 +142,9 @@ def test_typed_sequential():
     assert_type(model.layer1, LinearLayer[5, 10])
     assert_type(model.layer2, LinearLayer[10, 10])
 
-    x: Tensor[16, 5] = torch.randn(16, 5)
+    x: Tensor[[16, 5]] = torch.randn(16, 5)
     y = model(x)
-    assert_type(y, Tensor[16, 10])
+    assert_type(y, Tensor[[16, 10]])
 
 
 # ============================================================================

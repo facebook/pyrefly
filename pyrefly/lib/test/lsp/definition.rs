@@ -1635,13 +1635,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3738 |     def __getitem__(self, key: _KT, /) -> _VT:
+3744 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3738 |     def __getitem__(self, key: _KT, /) -> _VT:
+3744 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),

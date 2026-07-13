@@ -169,6 +169,10 @@ impl ClassFields {
         self.0.contains_key(name)
     }
 
+    pub fn get_index_of(&self, name: &Name) -> Option<usize> {
+        self.0.get_index_of(name)
+    }
+
     pub fn fields(&self) -> impl ExactSizeIterator<Item = &Name> {
         self.0.keys()
     }

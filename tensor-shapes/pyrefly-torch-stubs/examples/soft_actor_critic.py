@@ -1,10 +1,7 @@
-# Portions (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is adapted from pytorch/benchmark (TorchBenchmark),
-# which is licensed under the BSD 3-Clause License:
-# https://github.com/pytorch/benchmark/blob/main/LICENSE
-#
-# This adaptation adds tensor shape type annotations for pyrefly.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 """
 Soft Actor-Critic networks from TorchBenchmark with shape annotations.
@@ -35,6 +32,7 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import SizeTuple, SymVar
 from torch import distributions as pyd
 
 if TYPE_CHECKING:
@@ -64,19 +62,21 @@ class TanhTransform(pyd.transforms.Transform):
         self.clamp = clamp
 
     @staticmethod
-    def atanh[*S](x: Tensor[*S]) -> Tensor[*S]:
+    def atanh[S: SizeTuple](x: Tensor[S]) -> Tensor[S]:
         return 0.5 * (x.log1p() - (-x).log1p())
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, TanhTransform)
 
-    def _call[*S](self, x: Tensor[*S]) -> Tensor[*S]:
+    def _call[S: SizeTuple](self, x: Tensor[S]) -> Tensor[S]:
         return x.tanh()
 
-    def _inverse[*S](self, y: Tensor[*S]) -> Tensor[*S]:
+    def _inverse[S: SizeTuple](self, y: Tensor[S]) -> Tensor[S]:
         return self.atanh(y if self.clamp is None else y.clamp(*self.clamp))
 
-    def log_abs_det_jacobian[*S](self, x: Tensor[*S], y: Tensor[*S]) -> Tensor[*S]:
+    def log_abs_det_jacobian[S: SizeTuple](
+        self, x: Tensor[S], y: Tensor[S]
+    ) -> Tensor[S]:
         return 2.0 * (math.log(2.0) - x - F.softplus(-2.0 * x))
 
 
@@ -119,13 +119,15 @@ class BetaDist(pyd.transformed_distribution.TransformedDistribution):
         def __eq__(self, other: object) -> bool:
             return isinstance(other, BetaDist._BetaDistTransform)
 
-        def _inverse[*S](self, y: Tensor[*S]) -> Tensor[*S]:
+        def _inverse[S: SizeTuple](self, y: Tensor[S]) -> Tensor[S]:
             return (y.clamp(-0.99, 0.99) + 1.0) / 2.0
 
-        def _call[*S](self, x: Tensor[*S]) -> Tensor[*S]:
+        def _call[S: SizeTuple](self, x: Tensor[S]) -> Tensor[S]:
             return (2.0 * x) - 1.0
 
-        def log_abs_det_jacobian[*S](self, x: Tensor[*S], y: Tensor[*S]) -> Tensor[*S]:
+        def log_abs_det_jacobian[S: SizeTuple](
+            self, x: Tensor[S], y: Tensor[S]
+        ) -> Tensor[S]:
             # Constant Jacobian — scalar broadcasts to match input shape
             return torch.tensor(math.log(2.0)).unsqueeze(0)  # type: ignore[bad-return]
 
@@ -147,7 +149,7 @@ class BetaDist(pyd.transformed_distribution.TransformedDistribution):
 # ============================================================================
 
 
-class BaselineActor[S, A](nn.Module):
+class BaselineActor[S: SymVar, A: SymVar](nn.Module):
     """Simple MLP actor: state → action.
 
     Architecture: Linear(S, 400) → ReLU → Linear(400, 400) → ReLU →
@@ -160,17 +162,17 @@ class BaselineActor[S, A](nn.Module):
         self.fc2 = nn.Linear(400, 400)
         self.out = nn.Linear(400, action_size)
 
-    def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+    def forward[B: SymVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
         h1 = F.relu(self.fc1(state))
-        assert_type(h1, Tensor[B, 400])
+        assert_type(h1, Tensor[[B, 400]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, 400])
+        assert_type(h2, Tensor[[B, 400]])
         act = torch.tanh(self.out(h2))
-        assert_type(act, Tensor[B, A])
+        assert_type(act, Tensor[[B, A]])
         return act
 
 
-class BaselineCritic[S, A](nn.Module):
+class BaselineCritic[S: SymVar, A: SymVar](nn.Module):
     """Simple MLP critic: (state, action) → Q-value.
 
     Concatenates state and action, then MLP to scalar output.
@@ -184,18 +186,20 @@ class BaselineCritic[S, A](nn.Module):
         self.fc2 = nn.Linear(400, 300)
         self.out = nn.Linear(300, 1)
 
-    def forward[B](self, state: Tensor[B, S], action: Tensor[B, A]) -> Tensor[B, 1]:
+    def forward[B: SymVar](
+        self, state: Tensor[[B, S]], action: Tensor[[B, A]]
+    ) -> Tensor[[B, 1]]:
         sa = torch.cat((state, action), dim=1)
         h1 = F.relu(self.fc1(sa))
-        assert_type(h1, Tensor[B, 400])
+        assert_type(h1, Tensor[[B, 400]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, 300])
+        assert_type(h2, Tensor[[B, 300]])
         val = self.out(h2)
-        assert_type(val, Tensor[B, 1])
+        assert_type(val, Tensor[[B, 1]])
         return val
 
 
-class BigCritic[S, A, H](nn.Module):
+class BigCritic[S: SymVar, A: SymVar, H: SymVar](nn.Module):
     """Large MLP critic with configurable hidden size.
 
     Architecture: Cat(S+A) → Linear(S+A, H) → ReLU →
@@ -213,18 +217,20 @@ class BigCritic[S, A, H](nn.Module):
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, 1)
 
-    def forward[B](self, state: Tensor[B, S], action: Tensor[B, A]) -> Tensor[B, 1]:
+    def forward[B: SymVar](
+        self, state: Tensor[[B, S]], action: Tensor[[B, A]]
+    ) -> Tensor[[B, 1]]:
         sa = torch.cat((state, action), dim=1)
         h1 = F.relu(self.fc1(sa))
-        assert_type(h1, Tensor[B, H])
+        assert_type(h1, Tensor[[B, H]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, H])
+        assert_type(h2, Tensor[[B, H]])
         out = self.fc3(h2)
-        assert_type(out, Tensor[B, 1])
+        assert_type(out, Tensor[[B, 1]])
         return out
 
 
-class BaselineDiscreteCritic[S, A, H](nn.Module):
+class BaselineDiscreteCritic[S: SymVar, A: SymVar, H: SymVar](nn.Module):
     """MLP critic for discrete actions: state → Q-values for each action.
 
     Architecture: Linear(S, H) → ReLU → Linear(H, H) → ReLU →
@@ -239,17 +245,17 @@ class BaselineDiscreteCritic[S, A, H](nn.Module):
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.out = nn.Linear(hidden_size, action_shape)
 
-    def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
+    def forward[B: SymVar](self, state: Tensor[[B, S]]) -> Tensor[[B, A]]:
         h1 = F.relu(self.fc1(state))
-        assert_type(h1, Tensor[B, H])
+        assert_type(h1, Tensor[[B, H]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, H])
+        assert_type(h2, Tensor[[B, H]])
         vals = self.out(h2)
-        assert_type(vals, Tensor[B, A])
+        assert_type(vals, Tensor[[B, A]])
         return vals
 
 
-class StochasticActor[S, A, H](nn.Module):
+class StochasticActor[S: SymVar, A: SymVar, H: SymVar](nn.Module):
     """Stochastic MLP actor: state → distribution over actions.
 
     Architecture: Linear(S, H) → ReLU → Linear(H, H) → ReLU →
@@ -277,40 +283,40 @@ class StochasticActor[S, A, H](nn.Module):
         self.log_std_high = log_std_high
         self.dist_impl = dist_impl
 
-    def forward[B](self, state: Tensor[B, S]) -> SquashedNormal | BetaDist:
+    def forward[B: SymVar](self, state: Tensor[[B, S]]) -> SquashedNormal | BetaDist:
         h1 = F.relu(self.fc1(state))
-        assert_type(h1, Tensor[B, H])
+        assert_type(h1, Tensor[[B, H]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, H])
+        assert_type(h2, Tensor[[B, H]])
         out = self.fc3(h2)
-        assert_type(out, Tensor[B, 2 * A])
+        assert_type(out, Tensor[[B, 2 * A]])
         if self.dist_impl == "pyd":
             mu, log_std = out.chunk(2, dim=1)
-            assert_type(mu, Tensor[B, A])
-            assert_type(log_std, Tensor[B, A])
+            assert_type(mu, Tensor[[B, A]])
+            assert_type(log_std, Tensor[[B, A]])
             log_std_clamped = torch.tanh(log_std)
-            assert_type(log_std_clamped, Tensor[B, A])
+            assert_type(log_std_clamped, Tensor[[B, A]])
             log_std_scaled = self.log_std_low + 0.5 * (
                 self.log_std_high - self.log_std_low
             ) * (log_std_clamped + 1)
             std = log_std_scaled.exp()
-            assert_type(std, Tensor[B, A])
+            assert_type(std, Tensor[[B, A]])
             dist: SquashedNormal | BetaDist = SquashedNormal(
                 mu, std, tanh_transform_clamp=(-0.99, 0.99)
             )
         elif self.dist_impl == "beta":
             out_pos = 1.0 + F.softplus(out)
-            assert_type(out_pos, Tensor[B, 2 * A])
+            assert_type(out_pos, Tensor[[B, 2 * A]])
             alpha, beta = out_pos.chunk(2, dim=1)
-            assert_type(alpha, Tensor[B, A])
-            assert_type(beta, Tensor[B, A])
+            assert_type(alpha, Tensor[[B, A]])
+            assert_type(beta, Tensor[[B, A]])
             dist = BetaDist(alpha, beta)
         else:
             raise ValueError(f"Unknown dist_impl: {self.dist_impl}")
         return dist
 
 
-class GracBaselineActor[S, A](nn.Module):
+class GracBaselineActor[S: SymVar, A: SymVar](nn.Module):
     """Two-headed MLP actor: state → Normal(mean, std).
 
     Architecture: Linear(S, 400) → ReLU → Linear(400, 300) → ReLU →
@@ -326,19 +332,19 @@ class GracBaselineActor[S, A](nn.Module):
         self.fc_mean = nn.Linear(300, action_size)
         self.fc_std = nn.Linear(300, action_size)
 
-    def forward[B](self, state: Tensor[B, S]) -> pyd.Normal:
+    def forward[B: SymVar](self, state: Tensor[[B, S]]) -> pyd.Normal:
         h1 = F.relu(self.fc1(state))
-        assert_type(h1, Tensor[B, 400])
+        assert_type(h1, Tensor[[B, 400]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, 300])
+        assert_type(h2, Tensor[[B, 300]])
         mean = torch.tanh(self.fc_mean(h2))
-        assert_type(mean, Tensor[B, A])
+        assert_type(mean, Tensor[[B, A]])
         std = F.softplus(self.fc_std(h2)) + 1e-3
-        assert_type(std, Tensor[B, A])
+        assert_type(std, Tensor[[B, A]])
         return pyd.Normal(mean, std)
 
 
-class BaselineDiscreteActor[S, A, H](nn.Module):
+class BaselineDiscreteActor[S: SymVar, A: SymVar, H: SymVar](nn.Module):
     """Discrete MLP actor: state → Categorical distribution.
 
     Architecture: Linear(S, H) → ReLU → Linear(H, H) → ReLU →
@@ -353,13 +359,13 @@ class BaselineDiscreteActor[S, A, H](nn.Module):
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.act_p = nn.Linear(hidden_size, action_size)
 
-    def forward[B](self, state: Tensor[B, S]) -> pyd.Categorical:
+    def forward[B: SymVar](self, state: Tensor[[B, S]]) -> pyd.Categorical:
         h1 = F.relu(self.fc1(state))
-        assert_type(h1, Tensor[B, H])
+        assert_type(h1, Tensor[[B, H]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, H])
+        assert_type(h2, Tensor[[B, H]])
         act_p = F.softmax(self.act_p(h2), dim=1)
-        assert_type(act_p, Tensor[B, A])
+        assert_type(act_p, Tensor[[B, A]])
         return pyd.categorical.Categorical(act_p)
 
 
@@ -368,7 +374,7 @@ class BaselineDiscreteActor[S, A, H](nn.Module):
 # ============================================================================
 
 
-class SmallPixelEncoder[C, OutDim](nn.Module):
+class SmallPixelEncoder[C: SymVar, OutDim: SymVar](nn.Module):
     """Small CNN encoder for 84×84 pixel observations.
 
     Architecture:
@@ -384,25 +390,25 @@ class SmallPixelEncoder[C, OutDim](nn.Module):
         self.conv1 = nn.Conv2d(channels, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        self.flatten = nn.Flatten()
+        self.flatten = nn.Flatten(1, -1)
         self.fc = nn.Linear(3136, out_dim)
 
-    def forward[B](self, obs: Tensor[B, C, 84, 84]) -> Tensor[B, OutDim]:
+    def forward[B: SymVar](self, obs: Tensor[[B, C, 84, 84]]) -> Tensor[[B, OutDim]]:
         # obs = obs / 255.0 omitted (scalar div, doesn't change shape)
         h1 = F.relu(self.conv1(obs))
-        assert_type(h1, Tensor[B, 32, 20, 20])
+        assert_type(h1, Tensor[[B, 32, 20, 20]])
         h2 = F.relu(self.conv2(h1))
-        assert_type(h2, Tensor[B, 64, 9, 9])
+        assert_type(h2, Tensor[[B, 64, 9, 9]])
         h3 = F.relu(self.conv3(h2))
-        assert_type(h3, Tensor[B, 64, 7, 7])
-        h3_flat = self.flatten(h3)
-        assert_type(h3_flat, Tensor[B, 3136])
+        assert_type(h3, Tensor[[B, 64, 7, 7]])
+        h3_flat = h3.flatten(1)
+        assert_type(h3_flat, Tensor[[B, 3136]])
         state = self.fc(h3_flat)
-        assert_type(state, Tensor[B, OutDim])
+        assert_type(state, Tensor[[B, OutDim]])
         return state
 
 
-class BigPixelEncoder[C, OutDim](nn.Module):
+class BigPixelEncoder[C: SymVar, OutDim: SymVar](nn.Module):
     """Large CNN encoder for 84×84 pixel observations.
 
     Architecture:
@@ -420,27 +426,27 @@ class BigPixelEncoder[C, OutDim](nn.Module):
         self.conv2 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
         self.conv3 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
         self.conv4 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
-        self.flatten = nn.Flatten()
+        self.flatten = nn.Flatten(1, -1)
         self.fc = nn.Linear(39200, out_dim)
         self.ln = nn.LayerNorm(out_dim)
 
-    def forward[B](self, obs: Tensor[B, C, 84, 84]) -> Tensor[B, OutDim]:
+    def forward[B: SymVar](self, obs: Tensor[[B, C, 84, 84]]) -> Tensor[[B, OutDim]]:
         h1 = F.relu(self.conv1(obs))
-        assert_type(h1, Tensor[B, 32, 41, 41])
+        assert_type(h1, Tensor[[B, 32, 41, 41]])
         h2 = F.relu(self.conv2(h1))
-        assert_type(h2, Tensor[B, 32, 39, 39])
+        assert_type(h2, Tensor[[B, 32, 39, 39]])
         h3 = F.relu(self.conv3(h2))
-        assert_type(h3, Tensor[B, 32, 37, 37])
+        assert_type(h3, Tensor[[B, 32, 37, 37]])
         h4 = F.relu(self.conv4(h3))
-        assert_type(h4, Tensor[B, 32, 35, 35])
-        h4_flat = self.flatten(h4)
-        assert_type(h4_flat, Tensor[B, 39200])
+        assert_type(h4, Tensor[[B, 32, 35, 35]])
+        h4_flat = h4.flatten(1)
+        assert_type(h4_flat, Tensor[[B, 39200]])
         h5 = self.fc(h4_flat)
-        assert_type(h5, Tensor[B, OutDim])
+        assert_type(h5, Tensor[[B, OutDim]])
         h6 = self.ln(h5)
-        assert_type(h6, Tensor[B, OutDim])
+        assert_type(h6, Tensor[[B, OutDim]])
         state = torch.tanh(h6)
-        assert_type(state, Tensor[B, OutDim])
+        assert_type(state, Tensor[[B, OutDim]])
         return state
 
 
@@ -452,41 +458,41 @@ class BigPixelEncoder[C, OutDim](nn.Module):
 def test_baseline_actor():
     """Test simple MLP actor: state(24) → action(4)."""
     actor = BaselineActor(24, 4)
-    state: Tensor[8, 24] = torch.randn(8, 24)
+    state: Tensor[[8, 24]] = torch.randn(8, 24)
     act = actor(state)
-    assert_type(act, Tensor[8, 4])
+    assert_type(act, Tensor[[8, 4]])
 
 
 def test_baseline_critic():
     """Test simple MLP critic: (state(24), action(4)) → Q-value(1)."""
     critic = BaselineCritic(24, 4)
-    state: Tensor[8, 24] = torch.randn(8, 24)
-    action: Tensor[8, 4] = torch.randn(8, 4)
+    state: Tensor[[8, 24]] = torch.randn(8, 24)
+    action: Tensor[[8, 4]] = torch.randn(8, 4)
     val = critic(state, action)
-    assert_type(val, Tensor[8, 1])
+    assert_type(val, Tensor[[8, 1]])
 
 
 def test_big_critic():
     """Test large MLP critic with explicit hidden size."""
     critic = BigCritic(50, 6, 1024)
-    state: Tensor[8, 50] = torch.randn(8, 50)
-    action: Tensor[8, 6] = torch.randn(8, 6)
+    state: Tensor[[8, 50]] = torch.randn(8, 50)
+    action: Tensor[[8, 6]] = torch.randn(8, 6)
     val = critic(state, action)
-    assert_type(val, Tensor[8, 1])
+    assert_type(val, Tensor[[8, 1]])
 
 
 def test_baseline_discrete_critic():
     """Test discrete MLP critic: state(128) → Q-values(18)."""
     critic = BaselineDiscreteCritic(128, 18, 300)
-    state: Tensor[8, 128] = torch.randn(8, 128)
+    state: Tensor[[8, 128]] = torch.randn(8, 128)
     vals = critic(state)
-    assert_type(vals, Tensor[8, 18])
+    assert_type(vals, Tensor[[8, 18]])
 
 
 def test_stochastic_actor():
     """Test stochastic actor MLP: state(50) → distribution (pyd mode)."""
     actor = StochasticActor(50, 6, 1024)
-    state: Tensor[8, 50] = torch.randn(8, 50)
+    state: Tensor[[8, 50]] = torch.randn(8, 50)
     dist = actor(state)
     assert_type(dist, SquashedNormal | BetaDist)
 
@@ -494,7 +500,7 @@ def test_stochastic_actor():
 def test_stochastic_actor_beta():
     """Test stochastic actor MLP: state(50) → distribution (beta mode)."""
     actor = StochasticActor(50, 6, 1024, dist_impl="beta")
-    state: Tensor[8, 50] = torch.randn(8, 50)
+    state: Tensor[[8, 50]] = torch.randn(8, 50)
     dist = actor(state)
     assert_type(dist, SquashedNormal | BetaDist)
 
@@ -502,7 +508,7 @@ def test_stochastic_actor_beta():
 def test_grac_baseline_actor():
     """Test two-headed actor: state(24) → Normal distribution."""
     actor = GracBaselineActor(24, 4)
-    state: Tensor[8, 24] = torch.randn(8, 24)
+    state: Tensor[[8, 24]] = torch.randn(8, 24)
     dist = actor(state)
     assert_type(dist, pyd.Normal)
 
@@ -510,7 +516,7 @@ def test_grac_baseline_actor():
 def test_baseline_discrete_actor():
     """Test discrete actor: state(128) → Categorical distribution."""
     actor = BaselineDiscreteActor(128, 18, 300)
-    state: Tensor[8, 128] = torch.randn(8, 128)
+    state: Tensor[[8, 128]] = torch.randn(8, 128)
     dist = actor(state)
     assert_type(dist, pyd.categorical.Categorical)
 
@@ -518,14 +524,14 @@ def test_baseline_discrete_actor():
 def test_small_pixel_encoder():
     """Test small CNN encoder: (B, 3, 84, 84) → (B, 50)."""
     encoder = SmallPixelEncoder(3, 50)
-    obs: Tensor[4, 3, 84, 84] = torch.randn(4, 3, 84, 84)
+    obs: Tensor[[4, 3, 84, 84]] = torch.randn(4, 3, 84, 84)
     state = encoder(obs)
-    assert_type(state, Tensor[4, 50])
+    assert_type(state, Tensor[[4, 50]])
 
 
 def test_big_pixel_encoder():
     """Test large CNN encoder: (B, 3, 84, 84) → (B, 50)."""
     encoder = BigPixelEncoder(3, 50)
-    obs: Tensor[4, 3, 84, 84] = torch.randn(4, 3, 84, 84)
+    obs: Tensor[[4, 3, 84, 84]] = torch.randn(4, 3, 84, 84)
     state = encoder(obs)
-    assert_type(state, Tensor[4, 50])
+    assert_type(state, Tensor[[4, 50]])
