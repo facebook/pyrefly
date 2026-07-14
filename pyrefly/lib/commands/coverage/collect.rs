@@ -1852,6 +1852,9 @@ pub fn collect_module_reports(
     module_reports.sort_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
     errors.sort_by_key(|e| (e.path().to_string(), e.range().start()));
 
+    // Surface config warnings, like `check` does.
+    config_finder.print_errors();
+
     Ok((module_reports, errors))
 }
 
