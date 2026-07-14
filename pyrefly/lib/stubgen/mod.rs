@@ -237,6 +237,11 @@ class BaseModel:
     }
 
     #[test]
+    fn test_stubgen_literal_import() {
+        assert_stubgen_snapshot("literal_import");
+    }
+
+    #[test]
     fn test_stubgen_typevar() {
         assert_stubgen_snapshot("typevar");
     }

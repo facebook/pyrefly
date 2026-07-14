@@ -10,6 +10,7 @@
 //! Walks the module's AST in source order and uses the binding/answer
 //! system to resolve types for each declaration.
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -58,13 +59,8 @@ pub struct ModuleStub {
     /// Whether any item uses `Incomplete` (so we know whether to
     /// emit `from _typeshed import Incomplete`).
     pub uses_incomplete: bool,
-    pub uses_self: bool,
-    /// Whether any item renders a `Callable[...]` annotation (so we know
-    /// whether to emit `from typing import Callable`).
-    pub uses_callable: bool,
-    /// Whether any item renders a `ClassVar[...]` annotation (so we know
-    /// whether to emit `from typing import ClassVar`).
-    pub uses_classvar: bool,
+    /// Names used by generated annotations that must be imported from `typing`.
+    pub typing_imports: BTreeSet<&'static str>,
 }
 
 pub enum StubItem {
@@ -149,9 +145,7 @@ pub fn extract_module_stub(
         module_info: &module_info,
         config,
         uses_incomplete: false,
-        uses_self: false,
-        uses_callable: false,
-        uses_classvar: false,
+        typing_imports: BTreeSet::new(),
         function_map: &function_map,
         dunder_all: &dunder_all,
     };
@@ -161,9 +155,7 @@ pub fn extract_module_stub(
     Some(ModuleStub {
         items,
         uses_incomplete: ctx.uses_incomplete,
-        uses_self: ctx.uses_self,
-        uses_callable: ctx.uses_callable,
-        uses_classvar: ctx.uses_classvar,
+        typing_imports: ctx.typing_imports,
     })
 }
 
@@ -173,9 +165,7 @@ struct ExtractionContext<'a> {
     module_info: &'a Module,
     config: &'a ExtractConfig,
     uses_incomplete: bool,
-    uses_self: bool,
-    uses_callable: bool,
-    uses_classvar: bool,
+    typing_imports: BTreeSet<&'static str>,
     function_map: &'a HashMap<TextRange, DecoratedFunction>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
@@ -458,7 +448,10 @@ fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
         return Some(s);
     }
     if ty.any(|sub_type| matches!(sub_type, Type::SelfType(_))) {
-        ctx.uses_self = true;
+        ctx.typing_imports.insert("Self");
+    }
+    if ty.any(|sub_type| matches!(sub_type, Type::Literal(_))) {
+        ctx.typing_imports.insert("Literal");
     }
     let mut display = TypeDisplayContext::new(&[ty]);
     display.render_self_type_as_self();
@@ -508,7 +501,7 @@ fn format_callable_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String
 /// explicit-argument form requires exactly those arguments, so an optional param
 /// would over-constrain callers; eliding to `...` avoids that.
 fn callable_from_signature(sig: &Callable, ctx: &mut ExtractionContext) -> String {
-    ctx.uses_callable = true;
+    ctx.typing_imports.insert("Callable");
     let ret = format_type(&sig.ret, ctx).expect("format_type always returns Some");
     match &sig.params {
         Params::List(params)
@@ -532,7 +525,7 @@ fn callable_from_signature(sig: &Callable, ctx: &mut ExtractionContext) -> Strin
 
 /// `Callable[..., Ret]` for cases where the parameters can't be expressed.
 fn callable_ellipsis(ret: &Type, ctx: &mut ExtractionContext) -> String {
-    ctx.uses_callable = true;
+    ctx.typing_imports.insert("Callable");
     let ret = format_type(ret, ctx).expect("format_type always returns Some");
     format!("Callable[..., {ret}]")
 }
@@ -551,7 +544,7 @@ fn format_overload(overload: &Overload, ctx: &mut ExtractionContext) -> String {
     if overload.signatures.iter().all(|s| ret(s) == first) {
         callable_ellipsis(&first, ctx)
     } else {
-        ctx.uses_callable = true;
+        ctx.typing_imports.insert("Callable");
         ctx.uses_incomplete = true;
         "Callable[..., Incomplete]".to_owned()
     }
@@ -716,8 +709,8 @@ fn is_dataclass_or_pydantic_model(class_def: &StmtClassDef, ctx: &ExtractionCont
 
 /// Returns `true` when the class is an `Enum` (or subclass such as `IntEnum`,
 /// `Flag`, etc.), using the resolved `ClassMetadata`. Bare assignments in an
-/// enum body are enum members, not class variables, so they must not be
-/// wrapped in `ClassVar[...]`.
+/// enum body are enum members, not class variables, so they must not have
+/// inferred annotations or be wrapped in `ClassVar[...]`.
 fn is_enum_class(class_def: &StmtClassDef, ctx: &ExtractionContext) -> bool {
     let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
         return false;
@@ -987,6 +980,15 @@ fn extract_assign(
                 continue;
             }
 
+            if in_enum {
+                result.push(StubVariable {
+                    name: name.to_owned(),
+                    annotation: None,
+                    value: Some(format_default(&assign.value, ctx.module_info)),
+                });
+                continue;
+            }
+
             let short_id = ShortIdentifier::expr_name(name_expr);
             let def_key = Key::Definition(short_id);
             let mut annotation = ctx
@@ -997,13 +999,9 @@ fn extract_assign(
 
             // A bare assignment in a class body is an implicit class variable;
             // wrap it in `ClassVar[...]` so the stub doesn't mistype it as an
-            // instance attribute. Enum members are excluded: a bare assignment
-            // in an enum body is a member, not a class variable.
-            if in_class
-                && !in_enum
-                && let Some(ann) = &annotation
-            {
-                ctx.uses_classvar = true;
+            // instance attribute.
+            if in_class && let Some(ann) = &annotation {
+                ctx.typing_imports.insert("ClassVar");
                 annotation = Some(format!("ClassVar[{ann}]"));
             }
 
