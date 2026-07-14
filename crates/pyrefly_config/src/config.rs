@@ -53,6 +53,7 @@ use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -465,6 +466,7 @@ impl ImportLookupPathPart<'_> {
     }
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize, Clone, Derivative)]
 #[serde(rename_all = "kebab-case")]
 #[derivative(PartialEq, Eq)]
@@ -525,7 +527,7 @@ pub struct ConfigFile {
     /// Not exposed to the user. When we aren't able to determine the root of a
     /// project, we guess some fallback search paths that are checked after
     /// typeshed (so we don't clobber the stdlib) and before site_package_path.
-    #[serde(default, skip)]
+    #[serde(skip)]
     pub fallback_search_path: FallbackSearchPath,
 
     /// Disable Pyrefly default heuristics, specifically those around
@@ -543,16 +545,13 @@ pub struct ConfigFile {
     pub enable_fallback_search_path: bool,
 
     /// Override the bundled typeshed with a custom path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typeshed_path: Option<PathBuf>,
 
     /// Path to baseline file for comparing type errors.
     /// Errors matching the baseline are suppressed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<PathBuf>,
 
     /// Default error output format for CLI checks when `--output-format` is not set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_format: Option<OutputFormat>,
 
     /// Pyrefly's configurations around interpreter querying/finding.
@@ -568,11 +567,10 @@ pub struct ConfigFile {
 
     /// Named preset that provides default error severities and behavior settings.
     /// User-specified settings override the preset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
 
     /// The `ConfigBase` values for the whole project.
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub root: ConfigBase,
 
     /// Sub-configs that can override specific `ConfigBase` settings
@@ -595,19 +593,17 @@ pub struct ConfigFile {
     pub use_ignore_files: bool,
 
     /// Should this config use a build system? If so, which one?
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_system: Option<BuildSystem>,
 
     /// Database understanding the mapping between source files and import paths,
     /// especially within the context of a build system. This is used for getting handles
     /// for a path and doing module finding.
-    #[serde(skip, default)]
+    #[serde(skip)]
     #[derivative(PartialEq = "ignore")]
     pub source_db: Option<ArcId<Box<dyn SourceDatabase>>>,
 
     /// Minimum severity level for errors to be displayed.
     /// Errors below this severity will not be shown. Defaults to "error".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_severity: Option<Severity>,
 
     /// Should we let Pyrefly try to index the project's files? Disabling this

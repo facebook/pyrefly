@@ -13,6 +13,7 @@ use enum_iterator::all;
 use pyrefly_python::ignore::Tool;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 use starlark_map::small_set::SmallSet;
 use toml::Table;
 
@@ -208,25 +209,22 @@ impl Preset {
     }
 }
 
+#[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ConfigBase {
     /// Errors to silence (or not) when printing errors.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub errors: Option<ErrorDisplayConfig>,
 
     /// Consider any ignore (including from other tools) to ignore an error.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permissive_ignores: Option<bool>,
 
     /// Respect ignore directives from only these tools.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_ignores: Option<SmallSet<Tool>>,
 
     /// Modules from which import errors should be ignored
     /// and the module should always be replaced with `typing.Any`
     #[serde(
-        default,
         skip_serializing_if = "crate::util::none_or_empty",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
@@ -236,14 +234,12 @@ pub struct ConfigBase {
 
     /// Modules from which import errors should be
     /// ignored. The module is only replaced with `typing.Any` if it can't be found.
-    #[serde(default, skip_serializing_if = "crate::util::none_or_empty")]
+    #[serde(skip_serializing_if = "crate::util::none_or_empty")]
     pub(crate) ignore_missing_imports: Option<Vec<ModuleWildcard>>,
 
     /// Deprecated: use `check-unannotated-defs` and `infer-return-types` instead.
     /// How should we handle analyzing and inferring the function signature if it's untyped?
     #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "untyped_def_behavior"
@@ -252,7 +248,6 @@ pub struct ConfigBase {
 
     /// Whether to type check the bodies of unannotated function definitions.
     /// Defaults to true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_unannotated_defs: Option<bool>,
 
     /// Controls when Pyrefly infers return types for functions without explicit return annotations.
@@ -261,18 +256,14 @@ pub struct ConfigBase {
     /// - `checked`: infer return types for all checked functions (default).
     ///   Only applies to functions whose bodies are checked; unannotated functions
     ///   are only eligible when `check-unannotated-defs` is true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_return_types: Option<InferReturnTypes>,
 
     /// Whether to disable type errors in language server. By default errors will be shown in IDEs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_type_errors_in_ide: Option<bool>,
 
     /// Whether to ignore type errors in generated code. By default this is disabled.
     /// Generated code is defined as code that contains the marker string `@` immediately followed by `generated`.
     #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "ignore_errors_in_generated_code"
@@ -281,47 +272,40 @@ pub struct ConfigBase {
 
     /// Whether to infer empty container types as Any instead of creating type variables.
     /// By default this is enabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
 
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
     /// unless individually overridden in `[errors]`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pytorch_efficiency_lints: Option<bool>,
 
     /// Maximum recursion depth before triggering overflow protection.
     /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recursion_depth_limit: Option<u32>,
 
     /// How to handle when recursion depth limit is exceeded.
     /// Only used when `recursion-depth-limit` is set to a non-zero value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recursion_overflow_handler: Option<RecursionOverflowHandler>,
 
     /// Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.
     /// When false (the default), callables with `*args: Any, **kwargs: Any` are treated as
     /// compatible with any signature (similar to `...` behavior).
     /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
 
     /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
     /// assigned to a callable. When false (the default), the residual is treated as gradual (like
     /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
     /// parameter types and arity are checked precisely.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_partial_subtyping: Option<bool>,
 
     /// Whether to use spec-compliant overload evaluation semantics.
     /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
     /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_compliant_overloads: Option<bool>,
 
     /// Any unknown config items
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub(crate) extras: ExtraConfigs,
 }
 

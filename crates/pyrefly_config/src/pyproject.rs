@@ -22,18 +22,16 @@ const PYTHON_TOOL_NAMES: &[&str] = &["ruff", "mypy", "pyright"];
 /// Wrapper used to (de)serialize pyrefly configs from pyproject.toml files.
 #[derive(Debug, Serialize, Deserialize)]
 struct Tool {
-    #[serde(default)]
     pyrefly: Option<ConfigFile>,
     /// Catch-all for other `[tool.*]` sections. We check this for known
     /// Python tool names (see `PYTHON_TOOL_NAMES`) to detect Python project roots.
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     other_tools: HashMap<String, toml::Value>,
 }
 
 /// Wrapper used to (de)serialize pyrefly configs from pyproject.toml files.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PyProject {
-    #[serde(default)]
     tool: Option<Tool>,
 }
 
