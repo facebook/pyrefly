@@ -455,10 +455,10 @@ impl Transaction<'_> {
             .finding()
         {
             let builtin_exports = self.get_exports(&builtin_handle);
+            let matcher = SkimMatcherV2::default().smart_case();
             for (name, location) in builtin_exports.iter() {
                 if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .smart_case()
+                    && matcher
                         .fuzzy_match(name.as_str(), identifier.as_str())
                         .is_none()
                 {
@@ -516,6 +516,7 @@ impl Transaction<'_> {
         if let Some(bindings) = self.get_bindings(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
+            let matcher = SkimMatcherV2::default();
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
                 let label = match key {
@@ -524,9 +525,7 @@ impl Transaction<'_> {
                     _ => continue,
                 };
                 if let Some(identifier) = identifier
-                    && SkimMatcherV2::default()
-                        .fuzzy_match(label, identifier.as_str())
-                        .is_none()
+                    && matcher.fuzzy_match(label, identifier.as_str()).is_none()
                 {
                     continue;
                 }
