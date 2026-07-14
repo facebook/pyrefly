@@ -29,6 +29,7 @@ use pyrefly_types::types::Forallable;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::OverloadType;
 use pyrefly_types::types::Type;
+use ruff_python_ast::BoolOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Stmt;
@@ -249,6 +250,9 @@ fn extract_stmts(
             Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test) => {
                 items.extend(extract_stmts(&if_stmt.body, ctx, in_class, in_enum));
             }
+            Stmt::Try(try_stmt) => {
+                items.extend(extract_stmts(&try_stmt.body, ctx, in_class, in_enum));
+            }
             _ => {}
         }
     }
@@ -260,6 +264,9 @@ fn is_type_checking_guard(expr: &Expr) -> bool {
     match expr {
         Expr::Name(name) => name.id == "TYPE_CHECKING",
         Expr::Attribute(attr) => attr.attr.as_str() == "TYPE_CHECKING",
+        Expr::BoolOp(bool_op) if bool_op.op == BoolOp::Or => {
+            bool_op.values.iter().any(is_type_checking_guard)
+        }
         _ => false,
     }
 }
