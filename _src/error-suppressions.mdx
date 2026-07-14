@@ -74,6 +74,13 @@ To ignore one error type across a file, add the error code to the file-level com
 # pyrefly: ignore-errors[bad-assignment]
 ```
 
+A file-level `ignore-errors` / `ignore-errors[code]` directive is only honored when it
+appears at the beginning of the file, before any code (comments, blank lines, and the
+module docstring may precede it). Placed after the first line of code it is silently
+inert — it suppresses nothing — and Pyrefly reports a
+[`misplaced-ignore`](../error-kinds#misplaced-ignore) warning pointing at it. To suppress
+errors past the top of a file, use a line-level `# pyrefly: ignore[code]` instead.
+
 Pyrefly can automatically suppress all type errors in your project by running:
 
 ```

@@ -1062,6 +1062,23 @@ def bad_yield_from() -> Generator[int, None, None]:
   yield from 1
 ```
 
+## misplaced-ignore
+
+Default severity: `warn`
+
+A file-level `# pyrefly: ignore-errors` (or `# pyrefly: ignore-errors[code]`) directive
+only takes effect when it appears at the top of the file, before any code. Placed after
+the first line of code it is silently inert — it suppresses nothing — so Pyrefly flags it.
+Move the directive to the top of the file, or use a line-level `# pyrefly: ignore[code]`
+to suppress a single line.
+
+```python
+import os
+
+# pyrefly: ignore-errors  # inert here — flagged as misplaced-ignore
+x: int = "not an int"  # this error is still reported
+```
+
 ## missing-argument
 
 An error caused by calling a function without all the required arguments.
