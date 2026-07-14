@@ -212,6 +212,11 @@ class BaseModel:
     }
 
     #[test]
+    fn test_stubgen_unpack_assignments() {
+        assert_stubgen_snapshot("unpack_assignments");
+    }
+
+    #[test]
     fn test_stubgen_imports() {
         assert_stubgen_snapshot("imports");
     }

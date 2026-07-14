@@ -31,6 +31,7 @@ use pyrefly_types::types::Overload;
 use pyrefly_types::types::OverloadType;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
@@ -958,66 +959,93 @@ fn extract_assign(
     let mut result = Vec::new();
 
     for target in &assign.targets {
-        if let Expr::Name(name_expr) = target {
-            let name = name_expr.id.as_str();
-
-            // Preserve a static `__all__` literal verbatim so the stub keeps the
-            // module's re-export semantics (PEP 484): a name imported without a
-            // redundant `as` alias is re-exported only if listed in `__all__`.
-            // Dropping `__all__` would silently un-export such names. (#3924)
-            if !in_class && name == "__all__" {
-                if let Some(value) = dunder_all_value_text(&assign.value, ctx.module_info) {
-                    result.push(StubVariable {
-                        name: "__all__".to_owned(),
-                        annotation: None,
-                        value: Some(value),
-                    });
-                }
-                continue;
+        match target {
+            Expr::Name(name_expr)
+                if let Some(variable) = extract_assign_name(
+                    name_expr,
+                    Some(assign.value.as_ref()),
+                    ctx,
+                    in_class,
+                    in_enum,
+                ) =>
+            {
+                result.push(variable);
             }
-
-            if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
-                continue;
-            }
-
-            if in_enum {
-                result.push(StubVariable {
-                    name: name.to_owned(),
-                    annotation: None,
-                    value: Some(format_default(&assign.value, ctx.module_info)),
-                });
-                continue;
-            }
-
-            let short_id = ShortIdentifier::expr_name(name_expr);
-            let def_key = Key::Definition(short_id);
-            let mut annotation = ctx
-                .bindings
-                .key_to_idx_hashed_opt(starlark_map::Hashed::new(&def_key))
-                .and_then(|idx| ctx.answers.get_type_at(idx))
-                .and_then(|ty| format_type(&ty, ctx));
-
-            // A bare assignment in a class body is an implicit class variable;
-            // wrap it in `ClassVar[...]` so the stub doesn't mistype it as an
-            // instance attribute.
-            if in_class && let Some(ann) = &annotation {
-                ctx.typing_imports.insert("ClassVar");
-                annotation = Some(format!("ClassVar[{ann}]"));
-            }
-
-            let value = simple_value_text(&assign.value, ctx.module_info);
-
-            if annotation.is_some() || value.is_some() {
-                result.push(StubVariable {
-                    name: name.to_owned(),
-                    annotation,
-                    value,
+            Expr::Tuple(_) | Expr::List(_) => {
+                Ast::expr_lvalue(target, &mut |name_expr| {
+                    if let Some(variable) =
+                        extract_assign_name(name_expr, None, ctx, in_class, in_enum)
+                    {
+                        result.push(variable);
+                    }
                 });
             }
+            _ => {}
         }
     }
 
     result
+}
+
+fn extract_assign_name(
+    name_expr: &ExprName,
+    assigned_value: Option<&Expr>,
+    ctx: &mut ExtractionContext,
+    in_class: bool,
+    in_enum: bool,
+) -> Option<StubVariable> {
+    let name = name_expr.id.as_str();
+
+    // Preserve a static `__all__` literal verbatim so the stub keeps the
+    // module's re-export semantics (PEP 484): a name imported without a
+    // redundant `as` alias is re-exported only if listed in `__all__`.
+    // Dropping `__all__` would silently un-export such names. (#3924)
+    if !in_class
+        && name == "__all__"
+        && let Some(assigned_value) = assigned_value
+    {
+        return dunder_all_value_text(assigned_value, ctx.module_info).map(|value| StubVariable {
+            name: "__all__".to_owned(),
+            annotation: None,
+            value: Some(value),
+        });
+    }
+
+    if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
+        return None;
+    }
+
+    if in_enum {
+        let value = assigned_value.map_or_else(
+            || "...".to_owned(),
+            |value| format_default(value, ctx.module_info),
+        );
+        return Some(StubVariable {
+            name: name.to_owned(),
+            annotation: None,
+            value: Some(value),
+        });
+    }
+
+    let value = assigned_value.and_then(|value| simple_value_text(value, ctx.module_info));
+    let def_key = Key::Definition(ShortIdentifier::expr_name(name_expr));
+    let mut annotation = ctx
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&def_key))
+        .and_then(|idx| ctx.answers.get_type_at(idx))
+        .and_then(|ty| format_type(&ty, ctx));
+
+    // A bare assignment in a class body is an implicit class variable.
+    if in_class && let Some(ann) = &annotation {
+        ctx.typing_imports.insert("ClassVar");
+        annotation = Some(format!("ClassVar[{ann}]"));
+    }
+
+    (annotation.is_some() || value.is_some()).then(|| StubVariable {
+        name: name.to_owned(),
+        annotation,
+        value,
+    })
 }
 
 /// Verbatim text of an `__all__` right-hand side when it's a static list or
