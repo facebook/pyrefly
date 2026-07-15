@@ -59,6 +59,7 @@ use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 
 /// Which constructor-copy builtin `call_dataclasses_replace` is serving. Chosen by the caller so the
@@ -989,6 +990,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let solved = match (converter, annotated_field_ty) {
             (Type::ClassDef(cls), Some(hint)) => self.solve_generic_class_converter(cls, hint),
+            (Type::Forall(_), Some(hint)) => self.solve_generic_function_converter(converter, hint),
             _ => None,
         };
         let converter = solved.as_ref().unwrap_or(converter);
@@ -1031,6 +1033,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // is best-effort param inference with no call site to report them against.
         let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
         matched.then(|| self.heap.mk_type(self.heap.mk_class_type(class_type)))
+    }
+
+    /// A generic function converter is solved by constraining its return type against the declared
+    /// field `hint`, so the `__init__` param is the solved input, not a leaked type variable.
+    fn solve_generic_function_converter(&self, converter: &Type, hint: &Type) -> Option<Type> {
+        let Type::Forall(forall) = converter else {
+            return None;
+        };
+        if !matches!(forall.body, Forallable::Function(_)) {
+            return None;
+        }
+        let (vs, instantiated) = self.solver().fresh_quantified(
+            &forall.tparams,
+            forall.body.clone().as_type(),
+            self.uniques,
+        );
+        if let Some(ret) = instantiated.callable_return_type(self.heap) {
+            self.is_subset_eq(&ret, hint);
+        }
+        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        Some(self.solver().expand(instantiated))
     }
 
     fn get_default(&self, map: &TypeMap) -> Option<Type> {

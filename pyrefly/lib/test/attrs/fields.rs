@@ -287,6 +287,85 @@ Sub(["1", 2, 3])  # E: not assignable to parameter `a` with type `Iterable[int]`
 "#,
 );
 
+// A generic function converter (`def identity[T](x: T) -> T`) is type-preserving, so solving its
+// return against the `int` annotation gives an `__init__` param of `int` rather than a leaked `T`.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter,
+    r#"
+from typing import assert_type, reveal_type
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class C:
+    x: int = field(converter=identity)
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, x: int) -> None
+assert_type(C(42).x, int)
+C("nope")  # E: not assignable to parameter `x`
+"#,
+);
+
+// A stdlib generic function converter is solved the same way, so its input is the field type
+// instead of a leaked type variable.
+attrs_testcase!(
+    test_attrs_field_deepcopy_converter,
+    r#"
+import copy
+from attrs import define, field
+
+@define
+class C:
+    x: int = field(converter=copy.deepcopy)
+
+C(42)     # OK
+C("no")   # E: not assignable to parameter `x`
+"#,
+);
+
+// A type argument is substituted into nested positions of the converter input, so a
+// `(list[T]) -> list[T]` converter against a `list[int]` field gives a `list[int]` param.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_nested_typevar,
+    r#"
+from attrs import define, field
+
+def clone_all[T](xs: list[T]) -> list[T]:
+    return list(xs)
+
+@define
+class C:
+    xs: list[int] = field(converter=clone_all)
+
+C([1, 2])   # OK
+C(["a"])    # E: not assignable to parameter `xs`
+"#,
+);
+
+// The solved generic-function converter input carries over to a field inherited from a base class.
+attrs_testcase!(
+    test_attrs_field_generic_function_converter_inherited,
+    r#"
+from attrs import define, field
+
+def identity[T](x: T) -> T:
+    return x
+
+@define
+class Base:
+    x: int = field(converter=identity)
+
+@define
+class Sub(Base):
+    pass
+
+Sub(5)       # OK
+Sub("nope")  # E: not assignable to parameter `x`
+"#,
+);
+
 // `attr.converters.optional(c)` makes the `__init__` param the inner converter's input type
 // unioned with `None`.
 attrs_testcase!(
