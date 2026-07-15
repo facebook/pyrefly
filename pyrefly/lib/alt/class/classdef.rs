@@ -116,7 +116,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 param.id.clone(),
                                 QuantifiedKind::TypeVar,
                                 None,
-                                Restriction::Unrestricted,
+                                Restriction::Bound(Type::any_implicit()),
                                 PreInferenceVariance::Undefined,
                             )
                         })
