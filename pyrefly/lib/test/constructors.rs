@@ -46,6 +46,26 @@ def test(f: type[A | B]) -> A | B:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1134
+testcase!(
+    test_generic_constructor_union,
+    r#"
+class A[T]:
+    def __init__(self, value: T):
+        self.value = value
+
+def f(value: int | str):
+    _: A[int] | A[str] = A(value)
+
+class Pair[T]:
+    def __init__(self, x: T, y: T): ...
+
+def g(x: int | str, y: int | str):
+    # Expanding both arguments includes mixed pairs, so the union is not safe.
+    _: Pair[int] | Pair[str] = Pair(x, y)  # E: `Pair[int | str]` is not assignable to `Pair[int] | Pair[str]`
+"#,
+);
+
 testcase!(
     test_generic_class,
     r#"
