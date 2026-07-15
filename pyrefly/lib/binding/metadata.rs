@@ -16,6 +16,7 @@ use std::sync::Arc;
 use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::class::ClassFields;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
+use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 
 /// Metadata for a single class definition, populated during binding.
@@ -31,6 +32,8 @@ pub struct ClassMetadata {
     /// because at binding time we cannot know that so we have to treat assignment
     /// as potentially defining a field that would not otherwise exist.
     pub fields: ClassFields,
+    /// Required unannotated `__init__` parameters represented as hidden class type parameters.
+    pub pseudo_generic_params: Box<[Identifier]>,
 }
 
 /// Metadata collected during the binding phase for all classes in a module.
