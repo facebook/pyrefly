@@ -38,7 +38,7 @@ The skill will:
 1. **Audit ops** — check every `nn.Module` and `torch`/`F.` function against
    fixture stubs and the DSL registry, adding missing stubs before proceeding.
 2. **Inventory the original** — list every class, method, and function, noting
-   which constructor parameters are `Dim` vs `int`.
+   which constructor parameters are `SymInt` vs `int`.
 3. **Port each module in dependency order** — for each module, inventory
    parameters, type the constructor, probe the forward with `reveal_type`,
    restructure bare results for tracking, write the forward with `assert_type`,
@@ -105,6 +105,6 @@ domain knowledge:
   for tracking (e.g., separating the first iteration of a loop vs. using a typed
   interface), domain knowledge about the model's invariants can guide the better
   choice.
-- **Config parameterization.** Deciding which config fields should become `Dim`
+- **Config parameterization.** Deciding which config fields should become `SymInt`
   type parameters (and which modules extract which parameters) is often a design
   decision about the model's API.

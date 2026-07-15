@@ -3918,7 +3918,6 @@ Most concrete diagnostics are emitted under one of the more specific sub-kinds:
 - [`implicit-any-lambda`](#implicit-any-lambda)
 - [`implicit-any-parameter`](#implicit-any-parameter)
 - [`implicit-any-type-argument`](#implicit-any-type-argument)
-- [`implicit-any-variable`](#implicit-any-variable)
 
 ## implicit-any-attribute
 
@@ -4005,22 +4004,6 @@ def f(xs: list) -> tuple:  # implicit-any-type-argument on both `list` and `tupl
 # Fix:
 def f(xs: list[int]) -> tuple[int, ...]:
     return tuple(xs)
-```
-
-## implicit-any-variable
-
-Default severity: `ignore`
-
-A variable assigned a value of unknown type without an explicit annotation is inferred as an implicit `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
-
-This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
-
-```python
-def untyped(x):  # unannotated: returns an implicit `Any`
-    return x
-
-y = untyped(1)  # the type of `y` is unknown [implicit-any-variable]
-y2: int = untyped(1)  # OK: `y2` is explicitly annotated
 ```
 
 ## implicit-import
@@ -5104,6 +5087,28 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## unknown-attribute-type
+
+Default severity: `ignore`
+
+An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
+
+This is not a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` does not suppress this error.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x = untyped(1)  # downstream users don't know what type `self.x` is
+        self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
+```
+
+## unknown-column
+
+Accessing a DataFrame column that does not exist in the inferred schema.
+
 ## unknown-name
 
 A name is referenced but does not exist.
@@ -5116,6 +5121,20 @@ Even when no configuration file is present, this diagnostic is shown as a warnin
 def where() -> None:
   # There is no spoon: unknown-name
   global spoon
+```
+
+## unknown-variable-type
+
+Default severity: `ignore`
+
+A variable assigned a value of unknown type without an explicit annotation is inferred as `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+y = untyped(1)  # downstream users don't know what type `y` is
+y2: int = untyped(1)  # downstream users treat `y2` as `int`
 ```
 
 ## unnecessary-comparison
@@ -6425,9 +6444,9 @@ This means users migrating from pyright will see familiar diagnostics even befor
 | reportUndefinedVariable | unknown-name |
 | reportUninitializedInstanceVariable | implicitly-defined-attribute |
 | reportUnknownArgumentType | implicit-any |
-| reportUnknownMemberType | implicit-any-attribute |
+| reportUnknownMemberType | unknown-attribute-type |
 | reportUnknownParameterType | unannotated-parameter |
-| reportUnknownVariableType | implicit-any-variable |
+| reportUnknownVariableType | unknown-variable-type |
 | reportUnnecessaryCast | redundant-cast |
 | reportUnusedCoroutine | unused-coroutine |
 
@@ -7505,7 +7524,7 @@ The skill will:
 1. **Audit ops** — check every `nn.Module` and `torch`/`F.` function against
    fixture stubs and the DSL registry, adding missing stubs before proceeding.
 2. **Inventory the original** — list every class, method, and function, noting
-   which constructor parameters are `Dim` vs `int`.
+   which constructor parameters are `SymInt` vs `int`.
 3. **Port each module in dependency order** — for each module, inventory
    parameters, type the constructor, probe the forward with `reveal_type`,
    restructure bare results for tracking, write the forward with `assert_type`,
@@ -7572,7 +7591,7 @@ domain knowledge:
   for tracking (e.g., separating the first iteration of a loop vs. using a typed
   interface), domain knowledge about the model's invariants can guide the better
   choice.
-- **Config parameterization.** Deciding which config fields should become `Dim`
+- **Config parameterization.** Deciding which config fields should become `SymInt`
   type parameters (and which modules extract which parameters) is often a design
   decision about the model's API.
 
@@ -7614,7 +7633,7 @@ in the repository.
 
 ---
 title: API Reference
-description: Complete reference for Dim, Tensor, and tensor shape type system APIs.
+description: Complete reference for SymInt, Tensor, and tensor shape type system APIs.
 ---
 
 {/*
@@ -7631,57 +7650,57 @@ up pyrefly's tensor shape type system.
 
 ```sandbox
 dir: tensor-shapes-reference
-description: Experiment with Dim operators, type-level arithmetic in shapes, and concatenation.
+description: Experiment with SymInt operators, type-level arithmetic in shapes, and concatenation.
 ```
 
-## `Dim[X]`
+## `SymInt[X]`
 
-`Dim[X]` is a type constructor that bridges runtime integer values to
+`SymInt[X]` is a type constructor that bridges runtime integer values to
 type-level symbols. It is defined in the `shape_extensions` package.
 
 ### Basics
 
-`Dim[X]` denotes the type of an integer value whose type-level identity is
+`SymInt[X]` denotes the type of an integer value whose type-level identity is
 `X`. For example:
 
-- `Dim[5]` is the type of the literal `5`
-- `Dim[N]` (where `N` is a type variable) is the type of an integer whose
+- `SymInt[5]` is the type of the literal `5`
+- `SymInt[N]` (where `N` is a type variable) is the type of an integer whose
   value is bound to `N` at the type level
 
-`Dim` is a subtype of `int`, so `Dim` values can be used anywhere `int` is
+`SymInt` is a subtype of `int`, so `SymInt` values can be used anywhere `int` is
 expected. However, the reverse is not true — passing a plain `int` where
-`Dim[X]` is expected loses tracking.
+`SymInt[X]` is expected loses tracking.
 
 ### Arithmetic
 
-Arithmetic on `Dim` values produces `Dim` results with the corresponding
+Arithmetic on `SymInt` values produces `SymInt` results with the corresponding
 type-level expression:
 
 | Expression | Type |
 |-----------|------|
-| `a + b` where `a: Dim[A]`, `b: Dim[B]` | `Dim[A + B]` |
-| `a - b` | `Dim[A - B]` |
-| `a * b` | `Dim[A * B]` |
-| `a // b` | `Dim[A // B]` |
-| `a ** b` | `Dim[A ** B]` |
+| `a + b` where `a: SymInt[A]`, `b: SymInt[B]` | `SymInt[A + B]` |
+| `a - b` | `SymInt[A - B]` |
+| `a * b` | `SymInt[A * B]` |
+| `a // b` | `SymInt[A // B]` |
+| `a ** b` | `SymInt[A ** B]` |
 
-**Caution:** `int * Dim` produces `Unknown` because the `int` side has no
-type-level identity. Use `Dim * Dim` or literal `* Dim` instead.
+**Caution:** `int * SymInt` produces `Unknown` because the `int` side has no
+type-level identity. Use `SymInt * SymInt` or literal `* SymInt` instead.
 
-### `Dim[X] | None`
+### `SymInt[X] | None`
 
 For optional dimensions — parameters that may or may not be present — use
-`Dim[X] | None`. In the forward method, narrow with
-`if param is not None:` to recover `Dim[X]` inside the branch:
+`SymInt[X] | None`. In the forward method, narrow with
+`if param is not None:` to recover `SymInt[X]` inside the branch:
 
 ```python
 class Attention[D, RK](nn.Module):
-    def __init__(self, dim: Dim[D], rank_k: Dim[RK] | None = None):
+    def __init__(self, dim: SymInt[D], rank_k: SymInt[RK] | None = None):
         ...
 
     def forward[B, T](self, x: Tensor[B, T, D]) -> Tensor[B, T, D]:
         if self.rank_k is not None:
-            # rank_k is Dim[RK] here
+            # rank_k is SymInt[RK] here
             ...
 ```
 
@@ -7689,10 +7708,10 @@ class Attention[D, RK](nn.Module):
 
 | Pattern | Purpose |
 |---------|---------|
-| `def __init__(self, dim: Dim[D])` | Accept a dimension as a constructor parameter |
+| `def __init__(self, dim: SymInt[D])` | Accept a dimension as a constructor parameter |
 | `class Model[D](nn.Module)` | Make a dimension a class-level type parameter |
 | `def forward[B](self, x: Tensor[B, D])` | Bind a per-call dimension |
-| `self.head_dim = dim // n_head` | Compute a derived dimension (`Dim[D // NHead]`) |
+| `self.head_dim = dim // n_head` | Compute a derived dimension (`SymInt[D // NHead]`) |
 
 ## `Tensor[D1, D2, ...]`
 
@@ -7723,15 +7742,15 @@ This accepts any number of leading dimensions (batch, sequence, etc.) and
 preserves them in the output.
 
 **Don't hide known class dims inside variadic params.** If the module has a
-class-level Dim `D`, use `Tensor[*Bs, D]` not `Tensor[*S]`.
+class-level SymInt `D`, use `Tensor[*Bs, D]` not `Tensor[*S]`.
 
 ### `.shape` and `.size()`
 
 When `x: Tensor[B, C, H, W]`:
 
-- `x.shape` has type `tuple[Dim[B], Dim[C], Dim[H], Dim[W]]`
-- `x.size(0)` has type `Dim[B]`
-- `x.size()` has type `tuple[Dim[B], Dim[C], Dim[H], Dim[W]]`
+- `x.shape` has type `tuple[SymInt[B], SymInt[C], SymInt[H], SymInt[W]]`
+- `x.size(0)` has type `SymInt[B]`
+- `x.size()` has type `tuple[SymInt[B], SymInt[C], SymInt[H], SymInt[W]]`
 
 This means you can extract dimensions from tensors and use them to construct
 new tensors with matching shapes.
@@ -7887,7 +7906,7 @@ To use them in your project, copy the `tensor-shapes/` directory into your
 project and set `search_path` to point to it. The path is relative to the
 location of your `pyrefly.toml`.
 
-The fixtures also provide the `shape_extensions` package, which exports `Dim` — the
+The fixtures also provide the `shape_extensions` package, which exports `SymInt` — the
 bridge between runtime integer values and type-level symbols.
 
 ## Imports and runtime considerations
@@ -7909,7 +7928,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import Dim
+from shape_extensions import SymInt
 ```
 
 This works with both old-style and new-style generics (PEP 695
@@ -7925,7 +7944,7 @@ Note that `assert_type` forces evaluation of its type argument, so the
 file will crash if you try to *run* it with `assert_type` calls still
 present. This is fine — just remove them when the port is complete.
 
-You can also guard `Tensor` and `Dim` under `TYPE_CHECKING` if you prefer
+You can also guard `Tensor` and `SymInt` under `TYPE_CHECKING` if you prefer
 to keep shape imports invisible at runtime:
 
 ```python
@@ -7937,19 +7956,19 @@ import torch.nn as nn
 
 if TYPE_CHECKING:
     from torch import Tensor
-    from shape_extensions import Dim
+    from shape_extensions import SymInt
 ```
 
-### Option 2: `shape_extensions.SymVar` (runtime-compatible)
+### Option 2: `shape_extensions.SymIntVar` (runtime-compatible)
 
 If you need annotations to evaluate at runtime (e.g., for runtime shape
 validation or keeping `assert_type` in production code), import
 `shape_extensions` directly. The package patches
 `torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
-syntax at runtime without crashing. It also provides a `SymVar` that
+syntax at runtime without crashing. It also provides a `SymIntVar` that
 supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
 
-Use old-style generics with `shape_extensions.SymVar`:
+Use old-style generics with `shape_extensions.SymIntVar`:
 
 ```python
 from typing import assert_type
@@ -7957,13 +7976,13 @@ from typing import assert_type
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import Dim, SymVar
+from shape_extensions import SymInt, SymIntVar
 
-N = SymVar("N")
-M = SymVar("M")
+N = SymIntVar("N")
+M = SymIntVar("M")
 
 class Linear(nn.Module):
-    def __init__(self, n: Dim[N], m: Dim[M]):
+    def __init__(self, n: SymInt[N], m: SymInt[M]):
         ...
 ```
 
@@ -7973,7 +7992,7 @@ option requires old-style generics.
 
 ```sandbox
 dir: tensor-shapes-setup
-description: Experiment with Dim arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
+description: Experiment with SymInt arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
 ```
 
 ## Hello world
@@ -7991,15 +8010,15 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import Dim
+from shape_extensions import SymInt
 
 
 class TwoLayerNet[InDim, HidDim, OutDim](nn.Module):
     def __init__(
         self,
-        in_dim: Dim[InDim],
-        hid_dim: Dim[HidDim],
-        out_dim: Dim[OutDim],
+        in_dim: SymInt[InDim],
+        hid_dim: SymInt[HidDim],
+        out_dim: SymInt[OutDim],
     ):
         super().__init__()
         self.fc1 = nn.Linear(in_dim, hid_dim)
@@ -8027,7 +8046,7 @@ module shows shapes flowing through linear layers and activations:
 The forward method signature shows how `x.size()` unpacks into typed
 dimensions:
 
-<img src="/img/tensor-shapes/nanogpt-forward-signature.png" alt="NanoGPT forward signature with x.size() unpacking to b: Dim[B], t: Dim[T], c: Dim[NEmbedding]" />
+<img src="/img/tensor-shapes/nanogpt-forward-signature.png" alt="NanoGPT forward signature with x.size() unpacking to b: SymInt[B], t: SymInt[T], c: SymInt[NEmbedding]" />
 
 And the attention module, where view/transpose reshapes for multi-head
 attention are fully tracked:
@@ -8068,11 +8087,11 @@ modules, make it generic so dimensions propagate through constructors:
 ```python
 @dataclass
 class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
-    block_size: Dim[BlockSize]
-    vocab_size: Dim[VocabSize]
-    n_layer: Dim[NLayer]
-    n_head: Dim[NHead]
-    n_embd: Dim[NEmbedding]
+    block_size: SymInt[BlockSize]
+    vocab_size: SymInt[VocabSize]
+    n_layer: SymInt[NLayer]
+    n_head: SymInt[NHead]
+    n_embd: SymInt[NEmbedding]
     dropout: float = 0.0
     bias: bool = True
 ```
@@ -8168,7 +8187,7 @@ Fix: use a class with a typed `forward` method:
 ```python
 # Good: class preserves shape contract
 class Block[InC, OutC](nn.Module):
-    def __init__(self, in_c: Dim[InC], out_c: Dim[OutC]) -> None:
+    def __init__(self, in_c: SymInt[InC], out_c: SymInt[OutC]) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...)
@@ -8186,16 +8205,16 @@ class Block[InC, OutC](nn.Module):
 
 ```python
 hidden_units = [512, 256, 128]
-last_dim = hidden_units[-1]  # type is int, not Dim[128]
+last_dim = hidden_units[-1]  # type is int, not SymInt[128]
 ```
 
-Fix: add an explicit `Dim` field to the config:
+Fix: add an explicit `SymInt` field to the config:
 
 ```python
 @dataclass
 class Config[K, MlpOut]:
-    num_output_features: Dim[K]
-    mlp_output_dim: Dim[MlpOut]        # explicit — was hidden_units[-1]
+    num_output_features: SymInt[K]
+    mlp_output_dim: SymInt[MlpOut]        # explicit — was hidden_units[-1]
     mlp_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
 ```
 
@@ -8207,7 +8226,7 @@ the shape contract, and `type: ignore` narrows the internal result:
 
 ```python
 class DynamicMLP[InDim, OutDim](nn.Module):
-    def __init__(self, in_dim: Dim[InDim], out_dim: Dim[OutDim],
+    def __init__(self, in_dim: SymInt[InDim], out_dim: SymInt[OutDim],
                  hidden: list[int]) -> None:
         super().__init__()
         layers = []
@@ -8235,11 +8254,11 @@ they're the fallback, not the first move.
 ## Key concepts
 
 - **Parameterized configs** propagate dimensions across modules without
-  threading every `Dim` through every constructor.
+  threading every `SymInt` through every constructor.
 - **`Final` class attributes** let the checker resolve constants at the type
   level.
 - **Dynamic construction** (`Sequential(*list)`, factory functions,
-  `list[int]` access) breaks tracking — restructure or add explicit `Dim`
+  `list[int]` access) breaks tracking — restructure or add explicit `SymInt`
   fields.
 - **Typed interfaces** provide a clean shape contract when internals are
   dynamic, but should be the last resort.
@@ -8310,7 +8329,7 @@ class UNet[NChannels, NClasses](nn.Module):
         return up(deep, skip)
 
     def recurse[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
+        self, x: Tensor[B, C, H, W], depth: SymInt[I]
     ) -> Tensor[B, C, H, W]:
         if depth == 0:
             return x
@@ -8369,16 +8388,16 @@ class Generator(nn.Module):
 
     @overload
     def _chain[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[1]
+        self, x: Tensor[B, C, H, W], depth: SymInt[1]
     ) -> Tensor[B, C // 2, H * 2, W * 2]: ...
 
     @overload
     def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
+        self, x: Tensor[B, C, H, W], depth: SymInt[I]
     ) -> Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]: ...
 
     def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
+        self, x: Tensor[B, C, H, W], depth: SymInt[I]
     ) -> (Tensor[B, C // 2, H * 2, W * 2]
          | Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]):
         y = self._apply_stage(x, depth)
@@ -8387,7 +8406,7 @@ class Generator(nn.Module):
         return self._chain(y, depth - 1)
 ```
 
-The base-case overload (`depth: Dim[1]`) handles the single-stage case
+The base-case overload (`depth: SymInt[1]`) handles the single-stage case
 where the formula simplifies concretely. The recursive overload uses `2**I`
 to express the exponential relationship.
 
@@ -8446,7 +8465,7 @@ description: Learn the basics of tensor shape annotations by typing a simple mul
 # Tutorial 1: Your First Port
 
 In this tutorial, you'll add tensor shape annotations to a simple multi-layer perceptron (MLP) model.
-By the end, you'll understand `Dim`, `Tensor[...]`, class-level type
+By the end, you'll understand `SymInt`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
 ```sandbox
@@ -8484,8 +8503,8 @@ The constructor takes two parameters that determine tensor dimensions:
 - `state_size` — the input dimension (flows into `nn.Linear`)
 - `action_size` — the output dimension (flows into `nn.Linear`)
 
-Both flow to sub-module constructors, so both must be `Dim`, not `int`.
-(`Dim[X]` is a type that bridges a runtime integer value to a type-level
+Both flow to sub-module constructors, so both must be `SymInt`, not `int`.
+(`SymInt[X]` is a type that bridges a runtime integer value to a type-level
 symbol `X` — see [Getting Started](./tensor-shapes-setup.mdx) for details.)
 
 There are also two fixed constants: `400` (hidden dimension). These are
@@ -8493,12 +8512,12 @@ literal values, not parameters, so they don't need type params.
 
 ## Step 2: Type the constructor
 
-Make the dimension parameters into `Dim[...]` and add class-level type
+Make the dimension parameters into `SymInt[...]` and add class-level type
 parameters:
 
 ```python
 class BaselineActor[S, A](nn.Module):
-    def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+    def __init__(self, state_size: SymInt[S], action_size: SymInt[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size, 400)
         self.fc2 = nn.Linear(400, 400)
@@ -8579,11 +8598,11 @@ import TabItem from '@theme/TabItem';
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-    from shape_extensions import Dim
+    from shape_extensions import SymInt
 
 
     class BaselineActor[S, A](nn.Module):
-        def __init__(self, state_size: Dim[S], action_size: Dim[A]) -> None:
+        def __init__(self, state_size: SymInt[S], action_size: SymInt[A]) -> None:
             super().__init__()
             self.fc1 = nn.Linear(state_size, 400)
             self.fc2 = nn.Linear(400, 400)
@@ -8626,15 +8645,15 @@ import TabItem from '@theme/TabItem';
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
 hints in your IDE. If you want `assert_type` for runtime regression guards,
-see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionssymvar-runtime-compatible)
-for the `shape_extensions.SymVar` import style, which requires old-style
+see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionssymintvar-runtime-compatible)
+for the `shape_extensions.SymIntVar` import style, which requires old-style
 generics.
 :::
 
 ## Key concepts
 
-- **`Dim[X]`** bridges runtime integer values to type-level symbols. Constructor
-  parameters that determine tensor dimensions should be `Dim[X]`, not `int`.
+- **`SymInt[X]`** bridges runtime integer values to type-level symbols. Constructor
+  parameters that determine tensor dimensions should be `SymInt[X]`, not `int`.
 - **Class type parameters** (`class Foo[S, A]`) represent dimensions fixed at
   construction time.
 - **Method type parameters** (`def forward[B]`) represent dimensions that vary
@@ -8683,9 +8702,9 @@ Here's a Transformer encoder that stacks `n_layers` identical
 class Encoder[NHead, DK, DInner](nn.Module):
     def __init__(
         self,
-        n_head: Dim[NHead],
-        d_k: Dim[DK],
-        d_inner: Dim[DInner],
+        n_head: SymInt[NHead],
+        d_k: SymInt[DK],
+        d_inner: SymInt[DInner],
         n_layers: int = 6,
     ) -> None:
         super().__init__()
@@ -8703,9 +8722,9 @@ class Encoder[NHead, DK, DInner](nn.Module):
         return enc_output
 ```
 
-Notice that `n_layers` is `int`, not `Dim` — it's an iteration count that
+Notice that `n_layers` is `int`, not `SymInt` — it's an iteration count that
 doesn't flow into any tensor dimension. Only values that determine tensor
-shapes need to be `Dim`.
+shapes need to be `SymInt`.
 
 Each `EncoderLayer` takes `Tensor[B, T, NHead * DK]` and returns the same
 shape, so the loop preserves the invariant and the type checker is
@@ -8755,7 +8774,7 @@ ShapePreservingActivation = (
 )
 
 class ResBlock[C](nn.Module):
-    def __init__(self, c: Dim[C], act_fn: ShapePreservingActivation) -> None:
+    def __init__(self, c: SymInt[C], act_fn: ShapePreservingActivation) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(c, c, kernel_size=3, padding=1, bias=False),
@@ -8777,8 +8796,8 @@ directly in annotations:
 class CausalSelfAttention[NEmbedding, NHead](nn.Module):
     def __init__(
         self,
-        n_embd: Dim[NEmbedding],
-        n_head: Dim[NHead],
+        n_embd: SymInt[NEmbedding],
+        n_head: SymInt[NHead],
     ) -> None:
         super().__init__()
         self.c_attn = nn.Linear(n_embd, 3 * n_embd)
@@ -8807,7 +8826,7 @@ The type checker tracks the reshape and transpose, verifying that
 
 ## Key concepts
 
-- **`int` for iteration counts, `Dim` for tensor dimensions.** `n_layers`
+- **`int` for iteration counts, `SymInt` for tensor dimensions.** `n_layers`
   doesn't flow into tensor shapes, so it stays `int`.
 - **Derived dimensions** express relationships: `NHead * DK`, not
   independent `D`.
@@ -8900,17 +8919,17 @@ You can write tensor types with integer dimensions — `Tensor[3, 4]` is a
 2D tensor with shape `(3, 4)`. This works for modules too: `nn.Linear[3, 4]`
 takes `Tensor[..., 3]` as input and returns `Tensor[..., 4]`.
 
-**`Dim[X]`** bridges runtime integer values to the type level. When
-`x: Tensor[3, 4]`, then `x.shape` has type `tuple[Dim[3], Dim[4]]` — you
+**`SymInt[X]`** bridges runtime integer values to the type level. When
+`x: Tensor[3, 4]`, then `x.shape` has type `tuple[SymInt[3], SymInt[4]]` — you
 can extract dimensions from tensors and use them to construct new ones.
-Arithmetic works too: if `a: Dim[3]` and `b: Dim[4]`, then
-`a * b: Dim[12]`.
+Arithmetic works too: if `a: SymInt[3]` and `b: SymInt[4]`, then
+`a * b: SymInt[12]`.
 
 **Generic type parameters** let you write shape-polymorphic modules:
 
 ```python
 class Linear[N, M]:
-    def __init__(self, n: Dim[N], m: Dim[M]):
+    def __init__(self, n: SymInt[N], m: SymInt[M]):
         ...
 
     def forward[*Xs](self, inp: Tensor[*Xs, N]) -> Tensor[*Xs, M]:
@@ -8921,12 +8940,12 @@ inp: Tensor[2, 5, 3] = ...
 x: Tensor[2, 5, 4] = linear(inp)
 ```
 
-`Dim` encodes symbolic shapes at the type level throughout PyTorch, covering modules as well as tensors.
+`SymInt` encodes symbolic shapes at the type level throughout PyTorch, covering modules as well as tensors.
 
 **Arithmetic on type variables** lets you write custom shape transforms:
 
 ```python
-def custom_rand_tensor[A, B](a: Dim[A], b: Dim[B]) -> Tensor[(A + B) // 2]:
+def custom_rand_tensor[A, B](a: SymInt[A], b: SymInt[B]) -> Tensor[(A + B) // 2]:
     return torch.randn((a + b) // 2)
 
 x: Tensor[3] = custom_rand_tensor(2, 4)

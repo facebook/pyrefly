@@ -25,11 +25,11 @@ modules, make it generic so dimensions propagate through constructors:
 ```python
 @dataclass
 class GPTConfig[VocabSize, BlockSize, NEmbedding, NHead, NLayer]:
-    block_size: Dim[BlockSize]
-    vocab_size: Dim[VocabSize]
-    n_layer: Dim[NLayer]
-    n_head: Dim[NHead]
-    n_embd: Dim[NEmbedding]
+    block_size: SymInt[BlockSize]
+    vocab_size: SymInt[VocabSize]
+    n_layer: SymInt[NLayer]
+    n_head: SymInt[NHead]
+    n_embd: SymInt[NEmbedding]
     dropout: float = 0.0
     bias: bool = True
 ```
@@ -125,7 +125,7 @@ Fix: use a class with a typed `forward` method:
 ```python
 # Good: class preserves shape contract
 class Block[InC, OutC](nn.Module):
-    def __init__(self, in_c: Dim[InC], out_c: Dim[OutC]) -> None:
+    def __init__(self, in_c: SymInt[InC], out_c: SymInt[OutC]) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(in_c, 128, ...), nn.Conv2d(128, out_c, ...)
@@ -143,16 +143,16 @@ class Block[InC, OutC](nn.Module):
 
 ```python
 hidden_units = [512, 256, 128]
-last_dim = hidden_units[-1]  # type is int, not Dim[128]
+last_dim = hidden_units[-1]  # type is int, not SymInt[128]
 ```
 
-Fix: add an explicit `Dim` field to the config:
+Fix: add an explicit `SymInt` field to the config:
 
 ```python
 @dataclass
 class Config[K, MlpOut]:
-    num_output_features: Dim[K]
-    mlp_output_dim: Dim[MlpOut]        # explicit — was hidden_units[-1]
+    num_output_features: SymInt[K]
+    mlp_output_dim: SymInt[MlpOut]        # explicit — was hidden_units[-1]
     mlp_hidden_units: list[int] = field(default_factory=lambda: [512, 256])
 ```
 
@@ -164,7 +164,7 @@ the shape contract, and `type: ignore` narrows the internal result:
 
 ```python
 class DynamicMLP[InDim, OutDim](nn.Module):
-    def __init__(self, in_dim: Dim[InDim], out_dim: Dim[OutDim],
+    def __init__(self, in_dim: SymInt[InDim], out_dim: SymInt[OutDim],
                  hidden: list[int]) -> None:
         super().__init__()
         layers = []
@@ -192,11 +192,11 @@ they're the fallback, not the first move.
 ## Key concepts
 
 - **Parameterized configs** propagate dimensions across modules without
-  threading every `Dim` through every constructor.
+  threading every `SymInt` through every constructor.
 - **`Final` class attributes** let the checker resolve constants at the type
   level.
 - **Dynamic construction** (`Sequential(*list)`, factory functions,
-  `list[int]` access) breaks tracking — restructure or add explicit `Dim`
+  `list[int]` access) breaks tracking — restructure or add explicit `SymInt`
   fields.
 - **Typed interfaces** provide a clean shape contract when internals are
   dynamic, but should be the last resort.

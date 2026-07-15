@@ -61,7 +61,7 @@ class UNet[NChannels, NClasses](nn.Module):
         return up(deep, skip)
 
     def recurse[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
+        self, x: Tensor[B, C, H, W], depth: SymInt[I]
     ) -> Tensor[B, C, H, W]:
         if depth == 0:
             return x
@@ -120,16 +120,16 @@ class Generator(nn.Module):
 
     @overload
     def _chain[B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[1]
+        self, x: Tensor[B, C, H, W], depth: SymInt[1]
     ) -> Tensor[B, C // 2, H * 2, W * 2]: ...
 
     @overload
     def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
+        self, x: Tensor[B, C, H, W], depth: SymInt[I]
     ) -> Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]: ...
 
     def _chain[I, B, C, H, W](
-        self, x: Tensor[B, C, H, W], depth: Dim[I]
+        self, x: Tensor[B, C, H, W], depth: SymInt[I]
     ) -> (Tensor[B, C // 2, H * 2, W * 2]
          | Tensor[B, C // 2 ** I, H * 2 ** I, W * 2 ** I]):
         y = self._apply_stage(x, depth)
@@ -138,7 +138,7 @@ class Generator(nn.Module):
         return self._chain(y, depth - 1)
 ```
 
-The base-case overload (`depth: Dim[1]`) handles the single-stage case
+The base-case overload (`depth: SymInt[1]`) handles the single-stage case
 where the formula simplifies concretely. The recursive overload uses `2**I`
 to express the exponential relationship.
 
