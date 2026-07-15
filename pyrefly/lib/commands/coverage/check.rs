@@ -100,12 +100,13 @@ impl CheckArgs {
             number_thousands(total.n_typable),
         );
 
+        let root = std::env::current_dir().unwrap_or_default();
+        write_errors_to_console(self.output_format.unwrap_or_default(), &root, &errors)?;
+
         if coverage + 1e-9 >= self.fail_under {
             eprintln!("{} {summary}", Severity::Info.painted());
             Ok(CommandExitStatus::Success)
         } else {
-            let root = std::env::current_dir().unwrap_or_default();
-            write_errors_to_console(self.output_format.unwrap_or_default(), &root, &errors)?;
             eprintln!(
                 "{} {summary} is below the {:.2}% threshold",
                 Severity::Error.painted(),
