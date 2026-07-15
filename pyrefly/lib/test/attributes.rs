@@ -97,6 +97,23 @@ A[int]  # E: Expected 0 type arguments for `A`, got 1
 );
 
 testcase!(
+    test_pseudo_generic_attribute_use_in_method,
+    r#"
+class A:
+    def __init__(self, x):
+        self.x = x
+        self.flag = False
+
+    def call_member(self):
+        self.x.foo()
+
+    def compare(self):
+        if self.x == 0:
+            self.flag = True
+    "#,
+);
+
+testcase!(
     test_pseudo_generic_constructor_eligibility,
     r#"
 from typing import Any, assert_type

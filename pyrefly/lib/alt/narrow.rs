@@ -1194,7 +1194,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         &FacetChain::new(Vec1::new(facet.clone())),
                         range,
                     );
-                    if Self::is_literal(&right) && !self.is_subset_eq(&right, &facet_ty) {
+                    // A pseudo-generic facet may have any constructor-inferred specialization,
+                    // so it cannot prove that the receiver is impossible.
+                    if Self::is_literal(&right)
+                        && !matches!(&facet_ty, Type::Quantified(q) if q.is_pseudo_generic())
+                        && !self.is_subset_eq(&right, &facet_ty)
+                    {
                         self.heap.mk_never()
                     } else {
                         t.clone()
