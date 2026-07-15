@@ -48,8 +48,8 @@ pub struct CheckArgs {
     public_only: bool,
 
     /// Format for the untyped-symbol findings.
-    #[arg(long, value_enum)]
-    output_format: Option<OutputFormat>,
+    #[arg(long, value_enum, default_value_t)]
+    output_format: OutputFormat,
 }
 
 impl CheckArgs {
@@ -101,7 +101,7 @@ impl CheckArgs {
         );
 
         let root = std::env::current_dir().unwrap_or_default();
-        write_errors_to_console(self.output_format.unwrap_or_default(), &root, &errors)?;
+        write_errors_to_console(self.output_format, &root, &errors)?;
 
         if coverage + 1e-9 >= self.fail_under {
             eprintln!("{} {summary}", Severity::Info.painted());
