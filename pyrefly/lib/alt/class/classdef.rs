@@ -10,8 +10,14 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::quantified::AnchorIndex;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedIdentity;
+use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::type_var::PreInferenceVariance;
+use pyrefly_types::type_var::Restriction;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
@@ -71,10 +77,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Class {
         let name = &x.name;
+        let pseudo_generic_params = self
+            .bindings()
+            .get_pseudo_generic_params(def_index)
+            .expect("class definition must have binding metadata");
         let precomputed_tparams = if tparams_require_binding {
+            assert!(
+                pseudo_generic_params.is_empty(),
+                "legacy generic classes cannot be pseudo-generic"
+            );
             None
         } else {
-            Some(self.calculate_class_tparams_no_legacy(name, x.type_params.as_deref(), errors))
+            let tparams =
+                self.calculate_class_tparams_no_legacy(name, x.type_params.as_deref(), errors);
+            if pseudo_generic_params.is_empty() {
+                Some(tparams)
+            } else {
+                assert!(
+                    tparams.is_empty(),
+                    "pseudo-generic classes cannot have declared type parameters"
+                );
+                Some(Arc::new(TParams::new(
+                    pseudo_generic_params
+                        .iter()
+                        .map(|param| {
+                            Quantified::new(
+                                QuantifiedIdentity::new(
+                                    self.module().name(),
+                                    AnchorIndex::first(param.range),
+                                    QuantifiedOrigin::SyntheticPseudoGeneric,
+                                ),
+                                param.id.clone(),
+                                QuantifiedKind::TypeVar,
+                                None,
+                                Restriction::Unrestricted,
+                                PreInferenceVariance::Undefined,
+                            )
+                        })
+                        .collect(),
+                )))
+            }
         };
         Class::new(
             def_index,

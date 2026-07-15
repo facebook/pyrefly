@@ -163,6 +163,11 @@ impl TParams {
         self.0.is_empty()
     }
 
+    /// Whether these are the hidden parameters of a pseudo-generic class.
+    pub fn is_pseudo_generic(&self) -> bool {
+        !self.0.is_empty() && self.0.iter().all(Quantified::is_pseudo_generic)
+    }
+
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Quantified> {
         self.0.iter()
     }
@@ -289,6 +294,9 @@ impl TArgs {
     /// Returns the number of type arguments to display, stripping trailing args
     /// that match their parameter defaults (WYSIWYG display per issue #2461).
     pub fn display_count(&self) -> usize {
+        if self.tparams().is_pseudo_generic() {
+            return 0;
+        }
         let mut last_non_default = 0;
         for (i, (param, arg)) in self.iter_paired().enumerate() {
             if param.default().is_none() || arg != &param.as_gradual_type() {
