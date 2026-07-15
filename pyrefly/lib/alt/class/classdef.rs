@@ -110,7 +110,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 param.id.clone(),
                                 QuantifiedKind::TypeVar,
                                 None,
-                                Restriction::Unrestricted,
+                                Restriction::Bound(Type::any_implicit()),
                                 PreInferenceVariance::Undefined,
                             )
                         })
