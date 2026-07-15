@@ -12,7 +12,9 @@ use dupe::Dupe as _;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
+use pyrefly_python::dunder;
 use pyrefly_python::keywords::is_valid_identifier;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
@@ -258,6 +260,34 @@ impl<'a> BindingsBuilder<'a> {
             .map(Box::new);
         let mut pydantic_config_dict = PydanticConfigDict::default();
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
+        // Required parameters of a wholly unannotated `__init__` act as hidden class type
+        // parameters, provided the class is not already generic.
+        let mut init_methods = x.body.iter().filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(def) if def.name.id == dunder::INIT => Some(def),
+            _ => None,
+        });
+        let pseudo_generic_params = if self.module_info.path().style() == ModuleStyle::Executable
+            && x.type_params.is_none()
+            && let Some(init) = init_methods.next()
+            && init_methods.next().is_none()
+            && init.parameters.len() > 1
+            && init
+                .parameters
+                .iter()
+                .all(|param| param.annotation().is_none())
+        {
+            init.parameters
+                .posonlyargs
+                .iter()
+                .chain(&init.parameters.args)
+                .skip(1)
+                .chain(&init.parameters.kwonlyargs)
+                .filter(|param| param.default.is_none())
+                .map(|param| param.parameter.name.clone())
+                .collect::<Box<[_]>>()
+        } else {
+            Box::default()
+        };
         let body = mem::take(&mut x.body);
         let field_docstrings = self.extract_field_docstrings(&body);
         let pydantic_before_validator_fields = self.extract_field_validator_fields(&body);
@@ -565,6 +595,11 @@ impl<'a> BindingsBuilder<'a> {
         fields.reserve(0); // Attempt to shrink to capacity
         let metadata = self.metadata.get_class_mut(class_indices.def_index);
         metadata.fields = ClassFields::new(fields);
+        metadata.pseudo_generic_params = if tparams_require_binding {
+            Box::default()
+        } else {
+            pseudo_generic_params
+        };
         self.insert_binding_idx(
             class_indices.class_idx,
             BindingClass::ClassDef(ClassBinding {
