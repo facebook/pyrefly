@@ -84,16 +84,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> ClassType {
+        let tparams = self.get_class_tparams(cls);
+        let pseudo_targs =
+            self.create_pseudo_generic_targs(cls.name(), tparams.dupe(), &targs, range, errors);
         ClassType::new(
             cls.dupe(),
-            self.create_targs(
-                cls.name(),
-                self.get_class_tparams(cls),
-                targs,
-                range,
-                true,
-                errors,
-            ),
+            pseudo_targs.unwrap_or_else(|| {
+                self.create_targs(cls.name(), tparams, targs, range, true, errors)
+            }),
         )
     }
 
@@ -107,6 +105,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let metadata = self.get_metadata_for_class(cls);
         let tparams = self.get_class_tparams(cls);
+
+        if let Some(targs) =
+            self.create_pseudo_generic_targs(cls.name(), tparams.dupe(), &targs, range, errors)
+        {
+            return self.type_of_instance(cls, targs);
+        }
 
         // We didn't find any type parameters for this class, but it may have ones we don't know about if:
         // - the class inherits from Any, or
@@ -213,16 +217,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
         let tparams = self.get_class_tparams(cls);
         let tparams_for_error = tparams.dupe();
+        let on_fallback_to_gradual = |tparam: &Quantified| {
+            Self::add_implicit_any_error(
+                errors,
+                range,
+                format_generic_entity("class", cls.name(), &tparams_for_error),
+                Some(tparam.name().as_str()),
+            );
+        };
         let targs = self.create_default_targs(
             tparams,
-            Some(&|tparam: &Quantified| {
-                Self::add_implicit_any_error(
-                    errors,
-                    range,
-                    format_generic_entity("class", cls.name(), &tparams_for_error),
-                    Some(tparam.name().as_str()),
-                );
-            }),
+            if tparams_for_error.is_pseudo_generic() {
+                None
+            } else {
+                Some(&on_fallback_to_gradual)
+            },
         );
         self.type_of_instance(cls, targs)
     }
@@ -417,6 +426,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .collect();
             TArgs::new(tparams, tys)
         }
+    }
+
+    /// Pseudo-generic parameters participate in inference but cannot be explicitly specialized.
+    fn create_pseudo_generic_targs(
+        &self,
+        name: &Name,
+        tparams: Arc<TParams>,
+        explicit_targs: &[Type],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Option<TArgs> {
+        if !tparams.is_pseudo_generic() {
+            return None;
+        }
+        if !explicit_targs.is_empty() {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadSpecialization,
+                format!(
+                    "Expected {} for `{}`, got {}",
+                    count(0, "type argument"),
+                    name,
+                    explicit_targs.len(),
+                ),
+            );
+        }
+        Some(self.create_default_targs(tparams, None))
     }
 
     fn type_of_instance(&self, cls: &Class, targs: TArgs) -> Type {
