@@ -44,7 +44,7 @@ To use them in your project, copy the `tensor-shapes/` directory into your
 project and set `search_path` to point to it. The path is relative to the
 location of your `pyrefly.toml`.
 
-The fixtures also provide the `shape_extensions` package, which exports `SymInt` — the
+The fixtures also provide the `shape_extensions` package, which exports `Int` — the
 bridge between runtime integer values and type-level symbols.
 
 ## Imports and runtime considerations
@@ -66,7 +66,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import SymInt
+from shape_extensions import Int
 ```
 
 This works with both old-style and new-style generics (PEP 695
@@ -82,7 +82,7 @@ Note that `assert_type` forces evaluation of its type argument, so the
 file will crash if you try to *run* it with `assert_type` calls still
 present. This is fine — just remove them when the port is complete.
 
-You can also guard `Tensor` and `SymInt` under `TYPE_CHECKING` if you prefer
+You can also guard `Tensor` and `Int` under `TYPE_CHECKING` if you prefer
 to keep shape imports invisible at runtime:
 
 ```python
@@ -94,19 +94,19 @@ import torch.nn as nn
 
 if TYPE_CHECKING:
     from torch import Tensor
-    from shape_extensions import SymInt
+    from shape_extensions import Int
 ```
 
-### Option 2: `shape_extensions.SymIntVar` (runtime-compatible)
+### Option 2: `shape_extensions.IntVar` (runtime-compatible)
 
 If you need annotations to evaluate at runtime (e.g., for runtime shape
 validation or keeping `assert_type` in production code), import
 `shape_extensions` directly. The package patches
 `torch.Tensor`, `nn.Conv2d`, and other torch classes to accept subscript
-syntax at runtime without crashing. It also provides a `SymIntVar` that
+syntax at runtime without crashing. It also provides a `IntVar` that
 supports arithmetic (`N + 1` returns `self` instead of raising `TypeError`).
 
-Use old-style generics with `shape_extensions.SymIntVar`:
+Use old-style generics with `shape_extensions.IntVar`:
 
 ```python
 from typing import assert_type
@@ -114,13 +114,13 @@ from typing import assert_type
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import SymInt, SymIntVar
+from shape_extensions import Int, IntVar
 
-N = SymIntVar("N")
-M = SymIntVar("M")
+N = IntVar("N")
+M = IntVar("M")
 
 class Linear(nn.Module):
-    def __init__(self, n: SymInt[N], m: SymInt[M]):
+    def __init__(self, n: Int[N], m: Int[M]):
         ...
 ```
 
@@ -130,7 +130,7 @@ option requires old-style generics.
 
 ```sandbox
 dir: tensor-shapes-setup
-description: Experiment with SymInt arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
+description: Experiment with Int arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
 ```
 
 ## Hello world
@@ -148,15 +148,15 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
-from shape_extensions import SymInt
+from shape_extensions import Int
 
 
 class TwoLayerNet[InDim, HidDim, OutDim](nn.Module):
     def __init__(
         self,
-        in_dim: SymInt[InDim],
-        hid_dim: SymInt[HidDim],
-        out_dim: SymInt[OutDim],
+        in_dim: Int[InDim],
+        hid_dim: Int[HidDim],
+        out_dim: Int[OutDim],
     ):
         super().__init__()
         self.fc1 = nn.Linear(in_dim, hid_dim)
@@ -184,7 +184,7 @@ module shows shapes flowing through linear layers and activations:
 The forward method signature shows how `x.size()` unpacks into typed
 dimensions:
 
-<img src="/img/tensor-shapes/nanogpt-forward-signature.png" alt="NanoGPT forward signature with x.size() unpacking to b: SymInt[B], t: SymInt[T], c: SymInt[NEmbedding]" />
+<img src="/img/tensor-shapes/nanogpt-forward-signature.png" alt="NanoGPT forward signature with x.size() unpacking to b: Int[B], t: Int[T], c: Int[NEmbedding]" />
 
 And the attention module, where view/transpose reshapes for multi-head
 attention are fully tracked:

@@ -1,6 +1,6 @@
 ---
 title: API Reference
-description: Complete reference for SymInt, Tensor, and tensor shape type system APIs.
+description: Complete reference for Int, Tensor, and tensor shape type system APIs.
 ---
 
 {/*
@@ -17,57 +17,57 @@ up pyrefly's tensor shape type system.
 
 ```sandbox
 dir: tensor-shapes-reference
-description: Experiment with SymInt operators, type-level arithmetic in shapes, and concatenation.
+description: Experiment with Int operators, type-level arithmetic in shapes, and concatenation.
 ```
 
-## `SymInt[X]`
+## `Int[X]`
 
-`SymInt[X]` is a type constructor that bridges runtime integer values to
+`Int[X]` is a type constructor that bridges runtime integer values to
 type-level symbols. It is defined in the `shape_extensions` package.
 
 ### Basics
 
-`SymInt[X]` denotes the type of an integer value whose type-level identity is
+`Int[X]` denotes the type of an integer value whose type-level identity is
 `X`. For example:
 
-- `SymInt[5]` is the type of the literal `5`
-- `SymInt[N]` (where `N` is a type variable) is the type of an integer whose
+- `Int[5]` is the type of the literal `5`
+- `Int[N]` (where `N` is a type variable) is the type of an integer whose
   value is bound to `N` at the type level
 
-`SymInt` is a subtype of `int`, so `SymInt` values can be used anywhere `int` is
+`Int` is a subtype of `int`, so `Int` values can be used anywhere `int` is
 expected. However, the reverse is not true — passing a plain `int` where
-`SymInt[X]` is expected loses tracking.
+`Int[X]` is expected loses tracking.
 
 ### Arithmetic
 
-Arithmetic on `SymInt` values produces `SymInt` results with the corresponding
+Arithmetic on `Int` values produces `Int` results with the corresponding
 type-level expression:
 
 | Expression | Type |
 |-----------|------|
-| `a + b` where `a: SymInt[A]`, `b: SymInt[B]` | `SymInt[A + B]` |
-| `a - b` | `SymInt[A - B]` |
-| `a * b` | `SymInt[A * B]` |
-| `a // b` | `SymInt[A // B]` |
-| `a ** b` | `SymInt[A ** B]` |
+| `a + b` where `a: Int[A]`, `b: Int[B]` | `Int[A + B]` |
+| `a - b` | `Int[A - B]` |
+| `a * b` | `Int[A * B]` |
+| `a // b` | `Int[A // B]` |
+| `a ** b` | `Int[A ** B]` |
 
-**Caution:** `int * SymInt` produces `Unknown` because the `int` side has no
-type-level identity. Use `SymInt * SymInt` or literal `* SymInt` instead.
+**Caution:** `int * Int` produces `Unknown` because the `int` side has no
+type-level identity. Use `Int * Int` or literal `* Int` instead.
 
-### `SymInt[X] | None`
+### `Int[X] | None`
 
 For optional dimensions — parameters that may or may not be present — use
-`SymInt[X] | None`. In the forward method, narrow with
-`if param is not None:` to recover `SymInt[X]` inside the branch:
+`Int[X] | None`. In the forward method, narrow with
+`if param is not None:` to recover `Int[X]` inside the branch:
 
 ```python
 class Attention[D, RK](nn.Module):
-    def __init__(self, dim: SymInt[D], rank_k: SymInt[RK] | None = None):
+    def __init__(self, dim: Int[D], rank_k: Int[RK] | None = None):
         ...
 
     def forward[B, T](self, x: Tensor[B, T, D]) -> Tensor[B, T, D]:
         if self.rank_k is not None:
-            # rank_k is SymInt[RK] here
+            # rank_k is Int[RK] here
             ...
 ```
 
@@ -75,10 +75,10 @@ class Attention[D, RK](nn.Module):
 
 | Pattern | Purpose |
 |---------|---------|
-| `def __init__(self, dim: SymInt[D])` | Accept a dimension as a constructor parameter |
+| `def __init__(self, dim: Int[D])` | Accept a dimension as a constructor parameter |
 | `class Model[D](nn.Module)` | Make a dimension a class-level type parameter |
 | `def forward[B](self, x: Tensor[B, D])` | Bind a per-call dimension |
-| `self.head_dim = dim // n_head` | Compute a derived dimension (`SymInt[D // NHead]`) |
+| `self.head_dim = dim // n_head` | Compute a derived dimension (`Int[D // NHead]`) |
 
 ## `Tensor[D1, D2, ...]`
 
@@ -109,15 +109,15 @@ This accepts any number of leading dimensions (batch, sequence, etc.) and
 preserves them in the output.
 
 **Don't hide known class dims inside variadic params.** If the module has a
-class-level SymInt `D`, use `Tensor[*Bs, D]` not `Tensor[*S]`.
+class-level Int `D`, use `Tensor[*Bs, D]` not `Tensor[*S]`.
 
 ### `.shape` and `.size()`
 
 When `x: Tensor[B, C, H, W]`:
 
-- `x.shape` has type `tuple[SymInt[B], SymInt[C], SymInt[H], SymInt[W]]`
-- `x.size(0)` has type `SymInt[B]`
-- `x.size()` has type `tuple[SymInt[B], SymInt[C], SymInt[H], SymInt[W]]`
+- `x.shape` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`
+- `x.size(0)` has type `Int[B]`
+- `x.size()` has type `tuple[Int[B], Int[C], Int[H], Int[W]]`
 
 This means you can extract dimensions from tensors and use them to construct
 new tensors with matching shapes.

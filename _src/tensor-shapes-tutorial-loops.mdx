@@ -30,9 +30,9 @@ Here's a Transformer encoder that stacks `n_layers` identical
 class Encoder[NHead, DK, DInner](nn.Module):
     def __init__(
         self,
-        n_head: SymInt[NHead],
-        d_k: SymInt[DK],
-        d_inner: SymInt[DInner],
+        n_head: Int[NHead],
+        d_k: Int[DK],
+        d_inner: Int[DInner],
         n_layers: int = 6,
     ) -> None:
         super().__init__()
@@ -50,9 +50,9 @@ class Encoder[NHead, DK, DInner](nn.Module):
         return enc_output
 ```
 
-Notice that `n_layers` is `int`, not `SymInt` — it's an iteration count that
+Notice that `n_layers` is `int`, not `Int` — it's an iteration count that
 doesn't flow into any tensor dimension. Only values that determine tensor
-shapes need to be `SymInt`.
+shapes need to be `Int`.
 
 Each `EncoderLayer` takes `Tensor[B, T, NHead * DK]` and returns the same
 shape, so the loop preserves the invariant and the type checker is
@@ -102,7 +102,7 @@ ShapePreservingActivation = (
 )
 
 class ResBlock[C](nn.Module):
-    def __init__(self, c: SymInt[C], act_fn: ShapePreservingActivation) -> None:
+    def __init__(self, c: Int[C], act_fn: ShapePreservingActivation) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(c, c, kernel_size=3, padding=1, bias=False),
@@ -124,8 +124,8 @@ directly in annotations:
 class CausalSelfAttention[NEmbedding, NHead](nn.Module):
     def __init__(
         self,
-        n_embd: SymInt[NEmbedding],
-        n_head: SymInt[NHead],
+        n_embd: Int[NEmbedding],
+        n_head: Int[NHead],
     ) -> None:
         super().__init__()
         self.c_attn = nn.Linear(n_embd, 3 * n_embd)
@@ -154,7 +154,7 @@ The type checker tracks the reshape and transpose, verifying that
 
 ## Key concepts
 
-- **`int` for iteration counts, `SymInt` for tensor dimensions.** `n_layers`
+- **`int` for iteration counts, `Int` for tensor dimensions.** `n_layers`
   doesn't flow into tensor shapes, so it stays `int`.
 - **Derived dimensions** express relationships: `NHead * DK`, not
   independent `D`.

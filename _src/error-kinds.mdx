@@ -461,6 +461,16 @@ def two_elems() -> tuple:
 a, b, c = two_elems()
 ```
 
+## column-type-mismatch
+
+A Polars DataFrame column literal has an element whose type does not fit the column's dtype. Polars infers the dtype from the first element and requires every later element to fit it, so a mismatch raises `TypeError` at runtime.
+
+```python
+import polars as pl
+
+pl.DataFrame({"a": [1, 2.0]})  # column `a` is `int`, so the `float` does not fit
+```
+
 ## deprecated
 
 Default severity: `warn`

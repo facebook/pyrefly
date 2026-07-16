@@ -13,7 +13,7 @@ description: Learn the basics of tensor shape annotations by typing a simple mul
 # Tutorial 1: Your First Port
 
 In this tutorial, you'll add tensor shape annotations to a simple multi-layer perceptron (MLP) model.
-By the end, you'll understand `SymInt`, `Tensor[...]`, class-level type
+By the end, you'll understand `Int`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
 ```sandbox
@@ -51,8 +51,8 @@ The constructor takes two parameters that determine tensor dimensions:
 - `state_size` — the input dimension (flows into `nn.Linear`)
 - `action_size` — the output dimension (flows into `nn.Linear`)
 
-Both flow to sub-module constructors, so both must be `SymInt`, not `int`.
-(`SymInt[X]` is a type that bridges a runtime integer value to a type-level
+Both flow to sub-module constructors, so both must be `Int`, not `int`.
+(`Int[X]` is a type that bridges a runtime integer value to a type-level
 symbol `X` — see [Getting Started](./tensor-shapes-setup.mdx) for details.)
 
 There are also two fixed constants: `400` (hidden dimension). These are
@@ -60,12 +60,12 @@ literal values, not parameters, so they don't need type params.
 
 ## Step 2: Type the constructor
 
-Make the dimension parameters into `SymInt[...]` and add class-level type
+Make the dimension parameters into `Int[...]` and add class-level type
 parameters:
 
 ```python
 class BaselineActor[S, A](nn.Module):
-    def __init__(self, state_size: SymInt[S], action_size: SymInt[A]) -> None:
+    def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(state_size, 400)
         self.fc2 = nn.Linear(400, 400)
@@ -146,11 +146,11 @@ import TabItem from '@theme/TabItem';
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-    from shape_extensions import SymInt
+    from shape_extensions import Int
 
 
     class BaselineActor[S, A](nn.Module):
-        def __init__(self, state_size: SymInt[S], action_size: SymInt[A]) -> None:
+        def __init__(self, state_size: Int[S], action_size: Int[A]) -> None:
             super().__init__()
             self.fc1 = nn.Linear(state_size, 400)
             self.fc2 = nn.Linear(400, 400)
@@ -193,15 +193,15 @@ import TabItem from '@theme/TabItem';
 This example uses `from __future__ import annotations` with new-style
 generics — the simplest setup. Pyrefly shows inferred shapes as inlay type
 hints in your IDE. If you want `assert_type` for runtime regression guards,
-see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionssymintvar-runtime-compatible)
-for the `shape_extensions.SymIntVar` import style, which requires old-style
+see [Getting Started](./tensor-shapes-setup.mdx#option-2-shape_extensionsintvar-runtime-compatible)
+for the `shape_extensions.IntVar` import style, which requires old-style
 generics.
 :::
 
 ## Key concepts
 
-- **`SymInt[X]`** bridges runtime integer values to type-level symbols. Constructor
-  parameters that determine tensor dimensions should be `SymInt[X]`, not `int`.
+- **`Int[X]`** bridges runtime integer values to type-level symbols. Constructor
+  parameters that determine tensor dimensions should be `Int[X]`, not `int`.
 - **Class type parameters** (`class Foo[S, A]`) represent dimensions fixed at
   construction time.
 - **Method type parameters** (`def forward[B]`) represent dimensions that vary
