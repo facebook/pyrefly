@@ -637,6 +637,7 @@ impl Errors {
                 let severity = error_config.display_config.severity(error.error_kind());
                 match severity {
                     Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
+                    Severity::Hint => result.ordinary.push(error.with_severity(Severity::Hint)),
                     Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
                     Severity::Info => result.ordinary.push(error.with_severity(Severity::Info)),
                     Severity::Ignore => result.disabled.push(error),

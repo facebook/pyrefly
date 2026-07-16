@@ -289,6 +289,7 @@ impl ErrorCollector {
                 } else {
                     match error_config.display_config.severity(err.error_kind()) {
                         Severity::Error => result.ordinary.push(err.with_severity(Severity::Error)),
+                        Severity::Hint => result.ordinary.push(err.with_severity(Severity::Hint)),
                         Severity::Warn => result.ordinary.push(err.with_severity(Severity::Warn)),
                         Severity::Info => result.ordinary.push(err.with_severity(Severity::Info)),
                         Severity::Ignore => result.disabled.push(err.clone()),

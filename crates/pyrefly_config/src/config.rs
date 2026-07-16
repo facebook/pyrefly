@@ -547,7 +547,7 @@ pub struct ConfigFile {
     pub typeshed_path: Option<PathBuf>,
 
     /// Path to baseline file for comparing type errors.
-    /// Errors matching the baseline are suppressed.
+    /// Errors matching the baseline are shown as hint in the console.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<PathBuf>,
 

@@ -39,16 +39,18 @@ pub enum Severity {
     Ignore,
     Info,
     Warn,
+    Hint,
     Error,
 }
 
 impl Severity {
     pub fn label(self) -> &'static str {
         match self {
-            // INFO and WARN are padded out to five characters to visually align with ERROR in messages
+            // INFO, WARN and HINT are padded out to five characters to visually align with ERROR in messages
             Severity::Info => " INFO",
             Severity::Warn => " WARN",
             Severity::Error => "ERROR",
+            Severity::Hint => " Hint",
             Severity::Ignore => "",
         }
     }
@@ -58,6 +60,7 @@ impl Severity {
             Severity::Info => Paint::green,
             Severity::Warn => Paint::yellow,
             Severity::Error => Paint::red,
+            Severity::Hint => Paint::blue,
             Severity::Ignore => Paint::conceal,
         })(self.label())
     }
@@ -602,6 +605,7 @@ mod tests {
             Severity::Info => "info",
             Severity::Warn => "warn",
             Severity::Error => "error",
+            Severity::Hint => "hint",
         }
     }
 
