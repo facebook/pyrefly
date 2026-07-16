@@ -14,9 +14,9 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 # Test 1: Parameter with known shape
-x: Tensor[10, 20] = torch.randn(10, 20)
+x: Tensor[[10, 20]] = torch.randn(10, 20)
 p1 = nn.Parameter(x)
-assert_type(p1, Tensor[10, 20])
+assert_type(p1, Tensor[[10, 20]])
 
 
 # Test 2: Parameter with unknown shape (from runtime value)

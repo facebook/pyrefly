@@ -16,8 +16,10 @@ use lsp_types::InsertTextFormat;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::deprecated_aliases::is_deprecated_stdlib_alias;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
+use pyrefly_python::keywords::get_expression_keywords;
 use pyrefly_python::keywords::get_keywords;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
@@ -37,6 +39,7 @@ use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::attr::AttrInfo;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
@@ -155,6 +158,8 @@ pub struct CompletionOptions {
     pub supports_completion_item_details: bool,
     pub complete_function_parens: bool,
     pub supports_snippet_completions: bool,
+    /// When false, suppress completions that would insert a new import.
+    pub auto_import: bool,
 }
 
 /// Returns true if the client supports snippet completions in completion items.
@@ -271,16 +276,27 @@ impl Transaction<'_> {
     }
 
     /// Adds completions for Python keywords (e.g., `if`, `for`, `class`, etc.).
-    fn add_keyword_completions(handle: &Handle, completions: &mut Vec<RankedCompletion>) {
-        get_keywords(handle.sys_info().version())
-            .iter()
-            .for_each(|name| {
-                completions.push(RankedCompletion::new(CompletionItem {
-                    label: (*name).to_owned(),
-                    kind: Some(CompletionItemKind::KEYWORD),
-                    ..Default::default()
-                }))
-            });
+    /// When `expression_only` is set, statement-only keywords (`while`, `try`,
+    /// `def`, ...) are omitted because the cursor is in a nested expression
+    /// position where they would be invalid.
+    fn add_keyword_completions(
+        handle: &Handle,
+        expression_only: bool,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        let version = handle.sys_info().version();
+        let keywords = if expression_only {
+            get_expression_keywords(version)
+        } else {
+            get_keywords(version)
+        };
+        keywords.iter().for_each(|name| {
+            completions.push(RankedCompletion::new(CompletionItem {
+                label: (*name).to_owned(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            }))
+        });
     }
 
     /// Adds function/method completion inserts with parentheses, using snippets when supported.
@@ -368,6 +384,37 @@ impl Transaction<'_> {
                 }
             }
         }
+    }
+
+    /// Returns true when the cursor is at a position where only a keyword-argument
+    /// *name* is syntactically valid: inside a call whose argument list already
+    /// contains a keyword argument before the cursor, and where the cursor is not
+    /// itself inside a keyword argument's value.
+    fn is_typing_keyword_argument_name(covering_nodes: &[AnyNodeRef], position: TextSize) -> bool {
+        let Some(arguments) = covering_nodes.iter().find_map(|node| match node {
+            AnyNodeRef::ExprCall(call) => Some(&call.arguments),
+            _ => None,
+        }) else {
+            return false;
+        };
+        // If a keyword argument is an ancestor of the cursor, the user is typing
+        // that keyword's value (or a `**unpacking` expression).
+        let in_keyword_value = covering_nodes.iter().any(|node| match node {
+            AnyNodeRef::Keyword(keyword) => match &keyword.arg {
+                // `name=value`: being past the name means we are in the value.
+                Some(arg) => position > arg.range().end(),
+                // `**mapping`: the whole node is a value expression.
+                None => true,
+            },
+            _ => false,
+        });
+        if in_keyword_value {
+            return false;
+        }
+        arguments
+            .keywords
+            .iter()
+            .any(|keyword| keyword.range().end() <= position)
     }
 
     /// Gets docstring documentation for an attribute to display in completion items.
@@ -472,8 +519,12 @@ impl Transaction<'_> {
         {
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
+                let binding = bindings.get(idx);
                 let label = match key {
                     Key::Definition(id) => module_info.code_at(id.range()),
+                    Key::Import(import) if matches!(binding, Binding::Module(_)) => {
+                        import.0.as_str()
+                    }
                     Key::Anywhere(x, ..) => &x.0,
                     _ => continue,
                 };
@@ -484,7 +535,6 @@ impl Transaction<'_> {
                 {
                     continue;
                 }
-                let binding = bindings.get(idx);
                 let ty = self.get_type(handle, key);
                 let export_info = self.key_to_export(handle, key, FindPreference::default());
 
@@ -591,7 +641,7 @@ impl Transaction<'_> {
             if identifier_text.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
                 return;
             }
-            for (handle_to_import_from, name, export) in self
+            for (_, handle_to_import_from, name, export) in self
                 .search_exports_fuzzy(identifier_text, custom_thread_pool)
                 .unwrap_or_default()
             {
@@ -608,7 +658,7 @@ impl Transaction<'_> {
                         self.config_finder(),
                         handle.dupe(),
                         handle_to_import_from,
-                        &name,
+                        name.as_str(),
                         import_format,
                     );
                     let import_text_edit = TextEdit {
@@ -622,10 +672,16 @@ impl Transaction<'_> {
                     )
                 };
                 let auto_import_label_detail = format!(" (import {imported_module})");
+                let is_deprecated = export.deprecation.is_some()
+                    || is_deprecated_stdlib_alias(
+                        handle.sys_info().version(),
+                        &imported_module,
+                        name.as_str(),
+                    );
 
                 completions.push(RankedCompletion {
                     item: CompletionItem {
-                        label: name,
+                        label: name.to_string(),
                         detail: Some(detail_text),
                         kind: export
                             .symbol_kind
@@ -639,7 +695,7 @@ impl Transaction<'_> {
                                 description: Some(module_description),
                             },
                         ),
-                        tags: if export.deprecation.is_some() {
+                        tags: if is_deprecated {
                             Some(vec![CompletionItemTag::DEPRECATED])
                         } else {
                             None
@@ -962,6 +1018,7 @@ impl Transaction<'_> {
             supports_completion_item_details,
             complete_function_parens,
             supports_snippet_completions,
+            auto_import,
         } = options;
         let mut result: Vec<RankedCompletion> = Vec::new();
         let mut is_incomplete = false;
@@ -984,6 +1041,10 @@ impl Transaction<'_> {
             .as_deref()
             .and_then(Self::identifier_from_covering_nodes)
         {
+            Some(IdentifierWithContext {
+                context: IdentifierContext::AliasDefinition,
+                ..
+            }) => return (Vec::new(), false),
             Some(IdentifierWithContext {
                 identifier,
                 context:
@@ -1121,38 +1182,58 @@ impl Transaction<'_> {
                     }
                 }
                 self.add_kwargs_completions(handle, position, &mut result);
-                Self::add_keyword_completions(handle, &mut result);
-                let has_local_completions = self.add_local_variable_completions(
-                    handle,
-                    Some(&identifier),
-                    position,
-                    expected_type.as_ref(),
-                    &mut result,
-                );
-                if !has_local_completions {
-                    self.add_autoimport_completions(
+                // In `func(foo=1, ba|` the cursor can only be a keyword-argument
+                // name, so suppress unrelated completions.
+                let skip_value_completions = covering_nodes
+                    .as_deref()
+                    .is_some_and(|nodes| Self::is_typing_keyword_argument_name(nodes, position));
+                if !skip_value_completions {
+                    let at_statement_start = matches!(
+                        covering_nodes.as_deref().and_then(|nodes| nodes.get(1)),
+                        Some(AnyNodeRef::StmtExpr(_))
+                    );
+                    let expression_only =
+                        matches!(context, IdentifierContext::Expr(_)) && !at_statement_start;
+                    Self::add_keyword_completions(handle, expression_only, &mut result);
+                    let has_local_completions = self.add_local_variable_completions(
                         handle,
-                        &identifier,
+                        Some(&identifier),
+                        position,
+                        expected_type.as_ref(),
                         &mut result,
-                        import_format,
-                        supports_completion_item_details,
-                        custom_thread_pool,
+                    );
+                    if auto_import && !has_local_completions {
+                        self.add_autoimport_completions(
+                            handle,
+                            &identifier,
+                            &mut result,
+                            import_format,
+                            supports_completion_item_details,
+                            custom_thread_pool,
+                        );
+                    }
+                    // Mark results as incomplete in the following cases so clients keep asking
+                    // for completions as the user types more:
+                    // 1. If identifier is below MIN_CHARACTERS_TYPED_AUTOIMPORT threshold,
+                    //    autoimport completions are skipped and will be checked once threshold
+                    //    is reached.
+                    // 2. If local completions exist and blocked autoimport completions,
+                    //    the local completions might not match as the user continues typing,
+                    //    and autoimport completions should then be shown.
+                    // Both reasons only apply when autoimport is enabled; otherwise there are
+                    // no deferred autoimport completions to wait for.
+                    if auto_import
+                        && (identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT
+                            || has_local_completions)
+                    {
+                        is_incomplete = true;
+                    }
+                    self.add_builtins_autoimport_completions(
+                        handle,
+                        Some(&identifier),
+                        &mut result,
                     );
                 }
-                // Mark results as incomplete in the following cases so clients keep asking
-                // for completions as the user types more:
-                // 1. If identifier is below MIN_CHARACTERS_TYPED_AUTOIMPORT threshold,
-                //    autoimport completions are skipped and will be checked once threshold
-                //    is reached.
-                // 2. If local completions exist and blocked autoimport completions,
-                //    the local completions might not match as the user continues typing,
-                //    and autoimport completions should then be shown.
-                if identifier.as_str().len() < MIN_CHARACTERS_TYPED_AUTOIMPORT
-                    || has_local_completions
-                {
-                    is_incomplete = true;
-                }
-                self.add_builtins_autoimport_completions(handle, Some(&identifier), &mut result);
             }
             None => {
                 // todo(kylei): optimization, avoid duplicate ast walkss
@@ -1172,7 +1253,7 @@ impl Transaction<'_> {
                     } else {
                         let expected_type = self.get_expected_type_at(handle, position);
                         if nodes.is_empty() {
-                            Self::add_keyword_completions(handle, &mut result);
+                            Self::add_keyword_completions(handle, false, &mut result);
                             self.add_local_variable_completions(
                                 handle,
                                 None,

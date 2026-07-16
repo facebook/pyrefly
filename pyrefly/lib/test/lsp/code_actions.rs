@@ -3838,7 +3838,36 @@ def greet(name, param):
     )
 
 def caller():
-    greet("Ada", "Hello " + ("Ada"))
+    greet("Ada", "Hello " + "Ada")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_parenthesizes_int_before_attribute() {
+    let code = r#"
+def f(x):
+    return (
+        # EXTRACT-START
+        x.bit_length()
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def f(x, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42, (42).bit_length())
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3869,7 +3898,7 @@ def add_one(x, param):
     return param
 
 def caller():
-    add_one(3, (3) + 1)
+    add_one(3, 3 + 1)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3908,7 +3937,7 @@ class Greeter:
 
 def caller():
     greeter = Greeter()
-    greeter.greet("Ada", greeter.prefix + ("Ada"))
+    greeter.greet("Ada", greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3937,7 +3966,7 @@ def mix(x, *, param, y):
     )
 
 def caller():
-    mix(1, param=(1) + (2), y=2)
+    mix(1, param=1 + 2, y=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3999,7 +4028,7 @@ class Utils:
         )
 
 def caller():
-    Utils.join("Hi ", "Ada", ("Hi ") + ("Ada"))
+    Utils.join("Hi ", "Ada", "Hi " + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4028,7 +4057,7 @@ def add(a, b, param):
     )
 
 def caller():
-    add(1, param=(1) + (2), b=2)
+    add(1, param=1 + 2, b=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4065,7 +4094,7 @@ class Greeter:
         )
 
 def caller():
-    Greeter.greet("Ada", Greeter.prefix + ("Ada"))
+    Greeter.greet("Ada", Greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4695,7 +4724,7 @@ def compute():
     let expected = r#"
 def add(a):
 #          ^
-    return a + (2)
+    return a + 2
 
 def compute():
     return add(1)

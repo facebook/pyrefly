@@ -11,6 +11,6 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_comparison(x: Tensor[2, 3]):
+def test_comparison(x: Tensor[[2, 3]]):
     y = x == 0
-    assert_type(y, Tensor[2, 3])
+    assert_type(y, Tensor[[2, 3]])

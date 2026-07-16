@@ -9,6 +9,7 @@ use num_traits::ToPrimitive;
 use pyrefly_python::dunder;
 use pyrefly_types::lit_int::LitInt;
 use pyrefly_types::literal::Lit;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::tuple::Tuple;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprSlice;
@@ -54,6 +55,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn infer_int_tuple_subscript(
+        &self,
+        int_tuple: &IntTuple,
+        index: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+        context: Option<&dyn Fn() -> ErrorContext>,
+    ) -> Type {
+        let tuple = int_tuple.to_tuple();
+        let fallback = || self.infer_tuple_subscript(tuple.clone(), index, range, errors, context);
+        match index {
+            Expr::Slice(_) => fallback(),
+            _ => self
+                .infer_int_tuple_index(&tuple, index, errors)
+                .unwrap_or_else(fallback),
+        }
+    }
+
     fn infer_tuple_slice(&self, tuple: &Tuple, slice: &ExprSlice) -> Option<Type> {
         if slice.step.is_some() {
             return None;
@@ -87,6 +106,31 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    fn infer_int_tuple_index(
+        &self,
+        tuple: &Tuple,
+        index: &Expr,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let idx_type = self.expr_infer(index, errors);
+        match &idx_type {
+            Type::Literal(lit) if let Some(idx) = lit.value.as_index_i64() => match tuple {
+                Tuple::Unpacked(f) => {
+                    let (prefix, middle, suffix) = &**f;
+                    Some(self.infer_int_tuple_unpacked_index(prefix, middle, suffix, idx))
+                }
+                _ => self.infer_tuple_index(tuple, index, errors),
+            },
+            _ => match tuple {
+                Tuple::Unpacked(f) => {
+                    let (prefix, middle, suffix) = &**f;
+                    Some(self.int_tuple_unpacked_element_type(prefix, middle, suffix))
+                }
+                _ => None,
+            },
         }
     }
 
@@ -257,7 +301,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    // Handle a positive index within the prefix or a negative index within the suffix
     fn infer_unpacked_index(&self, prefix: &[Type], suffix: &[Type], idx: i64) -> Option<Type> {
         if idx >= 0 {
             let elt_idx = idx as usize;
@@ -272,6 +315,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(suffix[suffix.len() - neg_idx].clone())
             } else {
                 None
+            }
+        }
+    }
+
+    fn infer_int_tuple_unpacked_index(
+        &self,
+        prefix: &[Type],
+        middle: &Type,
+        suffix: &[Type],
+        idx: i64,
+    ) -> Type {
+        if idx >= 0 {
+            let elt_idx = idx as usize;
+            prefix
+                .get(elt_idx)
+                .cloned()
+                .unwrap_or_else(|| self.int_tuple_unpacked_element_type(prefix, middle, suffix))
+        } else {
+            let neg_idx = (-idx) as usize;
+            if neg_idx > 0 && neg_idx <= suffix.len() {
+                suffix[suffix.len() - neg_idx].clone()
+            } else {
+                self.int_tuple_unpacked_element_type(prefix, middle, suffix)
             }
         }
     }

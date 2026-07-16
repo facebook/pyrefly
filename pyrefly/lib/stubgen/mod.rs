@@ -217,6 +217,16 @@ class BaseModel:
     }
 
     #[test]
+    fn test_stubgen_try_except_imports() {
+        assert_stubgen_snapshot("try_except_imports");
+    }
+
+    #[test]
+    fn test_stubgen_type_checking_or_guard() {
+        assert_stubgen_snapshot("type_checking_or_guard");
+    }
+
+    #[test]
     fn test_stubgen_mixed() {
         assert_stubgen_snapshot("mixed");
     }
@@ -234,6 +244,11 @@ class BaseModel:
     #[test]
     fn test_stubgen_class_vars() {
         assert_stubgen_snapshot("class_vars");
+    }
+
+    #[test]
+    fn test_stubgen_literal_import() {
+        assert_stubgen_snapshot("literal_import");
     }
 
     #[test]

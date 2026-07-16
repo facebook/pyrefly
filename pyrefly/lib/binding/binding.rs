@@ -894,6 +894,8 @@ pub enum Key {
     BoundName(ShortIdentifier),
     /// I am an expression that does not have a simple name but needs its type inferred.
     Anon(TextRange),
+    /// I am the assigned value for a structurally invalid assignment target.
+    InvalidTarget(TextRange),
     /// I am a narrowing operation created by a pattern in a match statement
     PatternNarrow(TextRange),
     /// I am an expression that appears in a statement. The range for this key is the range of the expr itself, which is different than the range of the stmt expr.
@@ -955,6 +957,7 @@ impl Ranged for Key {
             Self::ReturnType(x) => x.range(),
             Self::BoundName(x) => x.range(),
             Self::Anon(r) => *r,
+            Self::InvalidTarget(r) => *r,
             Self::StmtExpr(r) => *r,
             Self::ContextExpr(r) => *r,
             Self::Phi(x) => x.1,
@@ -984,6 +987,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::FacetAssign(x) => write!(f, "Key::FacetAssign({})", short(x)),
             Self::BoundName(x) => write!(f, "Key::BoundName({})", short(x)),
             Self::Anon(r) => write!(f, "Key::Anon({})", ctx.display(r)),
+            Self::InvalidTarget(r) => write!(f, "Key::InvalidTarget({})", ctx.display(r)),
             Self::StmtExpr(r) => write!(f, "Key::StmtExpr({})", ctx.display(r)),
             Self::ContextExpr(r) => write!(f, "Key::ContextExpr({})", ctx.display(r)),
             Self::Phi(x) => write!(f, "Key::Phi({} {})", x.0, ctx.display(&x.1)),
@@ -1150,14 +1154,16 @@ pub enum BindingExpect {
     /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
     MatchExhaustiveness {
         subject_idx: Idx<Key>,
-        narrowing_subject: NarrowingSubject,
+        narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_fall_through: (Box<NarrowOp>, TextRange),
         subject_range: TextRange,
+        // Should we show the raw expression of the match subject instead of the name?
+        show_subject_expr: bool,
     },
     /// A match case whose pattern may not overlap with the current subject type.
     MatchCaseReachability {
         subject_idx: Idx<Key>,
-        narrowing_subject: NarrowingSubject,
+        narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
     },
@@ -2073,6 +2079,17 @@ pub enum TypeAliasParams {
     },
 }
 
+/// attrs specifier info for a class-body assignment whose RHS is a `field()` / `attr.ib()` call.
+/// The in-body value is typed `Any` so `@<field>.default`/`.validator`/`.converter` accesses resolve.
+#[derive(Clone, Copy, Debug)]
+pub struct AttrsSpecifier {
+    /// Legacy `attr.ib` accepts a positional `default`; kw-only `field` does not.
+    pub kind: AttrsFieldSpecifierKind,
+    /// The enclosing class, so solving can look up whether the field has a `@<field>.converter`
+    /// decorator (which intercepts the `default=` value, exempting it from the field-type check).
+    pub class_def_index: ClassDefIndex,
+}
+
 /// Data for a name assignment binding.
 #[derive(Clone, Debug)]
 pub struct NameAssign {
@@ -2081,6 +2098,8 @@ pub struct NameAssign {
     pub expr: Box<Expr>,
     pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     pub is_in_function_scope: bool,
+    /// True if this assignment is directly in a class body.
+    pub is_class_body_assignment: bool,
     pub first_use: FirstUse,
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
@@ -2097,10 +2116,8 @@ pub struct NameAssign {
     /// the textual assignment is still bound as a real `NameAssign` so the
     /// RHS remains available for its own diagnostics and bookkeeping.
     pub receiver_idx: Option<Idx<Key>>,
-    /// `Some(kind)` if the RHS is an attrs field specifier call (`field()` / `attr.ib()`). The
-    /// in-body value is then `Any` so `@<field>.default` / `@<field>.validator` accesses resolve.
-    /// The kind distinguishes legacy `attr.ib` (positional `default`) from kw-only `field`.
-    pub attrs_field_specifier: Option<AttrsFieldSpecifierKind>,
+    /// `Some` if the RHS is an attrs field specifier call (`field()` / `attr.ib()`).
+    pub attrs_field_specifier: Option<AttrsSpecifier>,
 }
 
 impl NameAssign {
@@ -2232,8 +2249,15 @@ pub enum Binding {
         TextRange,
         Option<Box<MultiTargetReceiver>>,
     ),
-    /// TypeVar, ParamSpec, or TypeVarTuple
-    TypeVar(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
+    /// TypeVar or IntVar
+    TypeVar(
+        Box<(
+            Option<Idx<KeyAnnotation>>,
+            Identifier,
+            Box<ExprCall>,
+            QuantifiedKind,
+        )>,
+    ),
     ParamSpec(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     TypeVarTuple(Box<(Option<Idx<KeyAnnotation>>, Identifier, Box<ExprCall>)>),
     /// An expression returned from a function.
@@ -2413,8 +2437,8 @@ impl DisplayWith<Bindings> for Binding {
                 write!(f, ")")
             }
             Self::TypeVar(x) => {
-                let (a, name, call) = x.as_ref();
-                write!(f, "TypeVar({}, {name}, {})", ann(a), m.display(call))
+                let (a, name, call, kind) = x.as_ref();
+                write!(f, "{kind}({}, {name}, {})", ann(a), m.display(call))
             }
             Self::ParamSpec(x) => {
                 let (a, name, call) = x.as_ref();

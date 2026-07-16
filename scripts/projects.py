@@ -1489,6 +1489,20 @@ def get_mypy_primer_projects() -> list[Project]:
             ],
         ),
         Project(
+            location="https://github.com/JakobGM/patito",
+            mypy_cmd="{mypy} src/patito",
+            pyright_cmd="{pyright} src/patito",
+            pyrefly_cmd="{pyrefly} src/patito",
+            deps=["polars", "pydantic", "typing-extensions"],
+        ),
+        Project(
+            location="https://github.com/quantco/dataframely",
+            mypy_cmd="{mypy} dataframely",
+            pyright_cmd="{pyright} dataframely",
+            pyrefly_cmd="{pyrefly} dataframely",
+            deps=["polars", "numpy", "fsspec", "pydantic"],
+        ),
+        Project(
             location="https://github.com/pytorch/helion",
             mypy_cmd="{mypy}",
             pyright_cmd="{pyright}",

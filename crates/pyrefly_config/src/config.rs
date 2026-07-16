@@ -156,6 +156,8 @@ pub enum OutputFormat {
     #[default]
     /// Full, verbose text output
     FullText,
+    /// Full, verbose text output followed by GitHub Actions workflow commands
+    FullTextWithGithub,
     /// JSON output
     Json,
     /// Emit GitHub Actions workflow commands
@@ -977,6 +979,14 @@ impl ConfigFile {
                  self.root.strict_callable_subtyping.unwrap())
     }
 
+    pub fn strict_partial_subtyping(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_strict_partial_subtyping, path)
+            .unwrap_or_else(||
+                 // we can use unwrap here, because the value in the root config must
+                 // be set in `ConfigFile::configure()`.
+                 self.root.strict_partial_subtyping.unwrap())
+    }
+
     pub fn spec_compliant_overloads(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_spec_compliant_overloads, path)
             .unwrap_or_else(||
@@ -1325,6 +1335,7 @@ impl ConfigFile {
             apply_preset_default!(infer_return_types);
             apply_preset_default!(infer_with_first_use);
             apply_preset_default!(strict_callable_subtyping);
+            apply_preset_default!(strict_partial_subtyping);
             apply_preset_default!(spec_compliant_overloads);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
@@ -1382,6 +1393,10 @@ impl ConfigFile {
 
         if self.root.strict_callable_subtyping.is_none() {
             self.root.strict_callable_subtyping = Some(false);
+        }
+
+        if self.root.strict_partial_subtyping.is_none() {
+            self.root.strict_partial_subtyping = Some(false);
         }
 
         if self.root.spec_compliant_overloads.is_none() {
@@ -1766,6 +1781,7 @@ mod tests {
                     infer_with_first_use: None,
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
+                    strict_partial_subtyping: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
@@ -1791,6 +1807,7 @@ mod tests {
                         infer_with_first_use: Some(false),
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
+                        strict_partial_subtyping: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
@@ -2168,6 +2185,13 @@ output-format = "omit-errors"
     }
 
     #[test]
+    fn test_output_format_full_text_with_github_config_parsing() {
+        let config_str = r#"output-format = "full-text-with-github""#;
+        let config = ConfigFile::parse_config(config_str).unwrap();
+        assert_eq!(config.output_format, Some(OutputFormat::FullTextWithGithub));
+    }
+
+    #[test]
     fn test_expect_all_fields_set_in_root_config() {
         let root = TempDir::new().unwrap();
         let mut config = ConfigFile::init_at_root(root.path(), &ProjectLayout::default(), false);
@@ -2218,6 +2242,7 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
+                strict_partial_subtyping: Some(false),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
@@ -2468,13 +2493,13 @@ output-format = "omit-errors"
         let errors = config.root.errors.as_ref().unwrap();
         assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
         // Setting `implicit-any` cascades to every sub-kind via parent_kind,
-        // so strict mode covers parameters, attributes, type arguments, and
-        // empty containers without listing them individually.
+        // so strict mode covers them without listing them individually.
         for kind in [
             ErrorKind::ImplicitAnyParameter,
             ErrorKind::ImplicitAnyAttribute,
             ErrorKind::ImplicitAnyTypeArgument,
             ErrorKind::ImplicitAnyEmptyContainer,
+            ErrorKind::ImplicitAnyLambda,
         ] {
             assert_eq!(
                 errors.severity(kind),
@@ -2482,6 +2507,14 @@ output-format = "omit-errors"
                 "strict should enable {kind:?} via the implicit-any parent"
             );
         }
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownAttributeType),
+            Severity::Ignore
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownVariableType),
+            Severity::Ignore
+        );
         assert_eq!(
             errors.severity(ErrorKind::MissingOverrideDecorator),
             Severity::Error
@@ -2493,6 +2526,7 @@ output-format = "omit-errors"
             Severity::Ignore
         );
         assert_eq!(config.root.strict_callable_subtyping, Some(true));
+        assert_eq!(config.root.strict_partial_subtyping, Some(true));
     }
 
     #[test]
@@ -3014,6 +3048,7 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
+                strict_partial_subtyping: Some(false),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
@@ -3053,6 +3088,7 @@ output-format = "omit-errors"
                 infer_with_first_use: Some(true),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
+                strict_partial_subtyping: Some(false),
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,

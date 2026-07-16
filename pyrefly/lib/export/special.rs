@@ -19,6 +19,7 @@ pub enum SpecialExport {
     TypeAlias,
     TypeAliasType,
     TypeVar,
+    IntVar,
     ParamSpec,
     TypeVarTuple,
     Annotated,
@@ -30,6 +31,7 @@ pub enum SpecialExport {
     CollectionsNamedTuple,
     TypingNamedTuple,
     AssertType,
+    RevealType,
     NewType,
     Union,
     Optional,
@@ -89,6 +91,7 @@ impl SpecialExport {
             "classmethod" => Some(Self::ClassMethod),
             "abstractclassmethod" => Some(Self::AbstractClassMethod),
             "TypeVar" => Some(Self::TypeVar),
+            "IntVar" => Some(Self::IntVar),
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
             "Annotated" => Some(Self::Annotated),
@@ -100,6 +103,7 @@ impl SpecialExport {
             "namedtuple" => Some(Self::CollectionsNamedTuple),
             "NamedTuple" => Some(Self::TypingNamedTuple),
             "assert_type" => Some(Self::AssertType),
+            "reveal_type" => Some(Self::RevealType),
             "NewType" => Some(Self::NewType),
             "Union" => Some(Self::Union),
             "Optional" => Some(Self::Optional),
@@ -157,7 +161,9 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
-            Self::TypeVar | Self::TypeVarTuple => {
+            Self::IntVar => matches!(m.as_str(), "shape_extensions"),
+            Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
+            Self::TypeVarTuple => {
                 matches!(
                     m.as_str(),
                     "typing" | "typing_extensions" | "shape_extensions"
@@ -173,6 +179,7 @@ impl SpecialExport {
             | Self::Union
             | Self::Optional
             | Self::AssertType
+            | Self::RevealType
             | Self::TypeAliasType
             | Self::NoTypeCheck
             | Self::Overload
