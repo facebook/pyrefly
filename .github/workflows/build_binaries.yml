@@ -258,6 +258,43 @@ jobs:
           name: wheels-${{ matrix.target }}
           path: pyrefly/dist
 
+  wasm:
+    name: Build pyrefly-wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-wasm
+      - name: Install wasm-pack and wasm-opt
+        run: cargo install wasm-pack wasm-opt
+      - name: Build wasm
+        run: chmod +x pyrefly_wasm/build.sh && pyrefly_wasm/build.sh
+      - name: Package wasm
+        run: |
+          mkdir -p staging
+          cp pyrefly_wasm/target/pyrefly_wasm.js staging/
+          # build.sh writes the optimized binary to *.wasm.opt; ship it under the
+          # name the JS glue imports so the tarball loads as-is.
+          cp pyrefly_wasm/target/pyrefly_wasm_bg.wasm.opt staging/pyrefly_wasm_bg.wasm
+          cd staging
+          tar -czvf ../pyrefly-wasm.tar.gz pyrefly_wasm.js pyrefly_wasm_bg.wasm
+      - name: Generate checksum
+        run: sha256sum pyrefly-wasm.tar.gz > pyrefly-wasm.tar.gz.sha256
+      - name: Upload wasm
+        uses: actions/upload-artifact@v6
+        with:
+          name: wasm
+          path: |
+            pyrefly-wasm.tar.gz
+            pyrefly-wasm.tar.gz.sha256
+
   merge:
     name: Merge artifacts
     runs-on: ubuntu-latest
@@ -267,6 +304,7 @@ jobs:
       - windows
       - linux
       - musllinux
+      - wasm
     steps:
       - name: Merge artifacts
         uses: actions/upload-artifact/merge@v4
