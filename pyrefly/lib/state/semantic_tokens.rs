@@ -17,23 +17,27 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::token::TokenKind;
+use ruff_python_ast::token::Tokens;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
 
@@ -123,39 +127,41 @@ impl SemanticTokensLegends {
         &self,
         tokens: &[SemanticTokenWithFullRange],
         module_info: Module,
+        limit_range: Option<TextRange>,
         limit_cell_idx: Option<usize>,
     ) -> Vec<SemanticToken> {
         let mut previous_line = 0;
         let mut previous_col = 0;
         let mut lsp_semantic_tokens = Vec::new();
+        let source = module_info.contents().as_str();
         for token in tokens {
-            let cell_idx = module_info.to_cell_for_lsp(token.range.start());
-            // Skip tokens in different cells if we're filtering for a particular cell
-            if cell_idx != limit_cell_idx {
-                continue;
-            }
-            let start_pos = module_info.to_lsp_position(token.range.start());
-            let end_pos = module_info.to_lsp_position(token.range.end());
-            let length = if start_pos.line == end_pos.line {
-                end_pos.character.saturating_sub(start_pos.character)
-            } else {
-                // LSP semantic tokens must be expressed within a single line; we currently
-                // generate only single-line ranges, so treat any multi-line span as invalid
-                // and skip it. (Today this effectively never happens, but the guard keeps us
-                // from emitting malformed data if it does.)
-                debug_assert!(
-                    false,
-                    "Unexpected multi-line semantic token range (from line {} to line {}, with token type {:?})",
-                    start_pos.line, end_pos.line, token.token_type,
+            let mut push_segment = |segment_range: TextRange| {
+                if segment_range.is_empty() {
+                    return;
+                }
+                if !range_overlaps(limit_range, segment_range) {
+                    return;
+                }
+                let cell_idx = module_info.to_cell_for_lsp(segment_range.start());
+                // Skip tokens in different cells if we're filtering for a particular cell
+                if cell_idx != limit_cell_idx {
+                    return;
+                }
+                let start_pos = module_info.to_lsp_position(segment_range.start());
+                let end_pos = module_info.to_lsp_position(segment_range.end());
+                debug_assert_eq!(
+                    start_pos.line, end_pos.line,
+                    "Semantic token segment should be on a single line"
                 );
-                0
-            };
-            if length == 0 {
-                continue;
-            }
-            let current_line = start_pos.line;
-            let current_col = start_pos.character;
-            let (delta_line, delta_start) = {
+                if start_pos.line != end_pos.line {
+                    return;
+                }
+                let length = end_pos.character.saturating_sub(start_pos.character);
+                if length == 0 {
+                    return;
+                }
+                let current_line = start_pos.line;
+                let current_col = start_pos.character;
                 let delta_line = current_line - previous_line;
                 let delta_start = if previous_line == current_line {
                     current_col - previous_col
@@ -164,21 +170,37 @@ impl SemanticTokensLegends {
                 };
                 previous_line = current_line;
                 previous_col = current_col;
-                (delta_line, delta_start)
+                let token_type = *self.token_types_index.get(&token.token_type).unwrap();
+                let mut token_modifiers_bitset = 0;
+                for modifier in &token.token_modifiers {
+                    let index = *self.token_modifiers_index.get(modifier).unwrap();
+                    token_modifiers_bitset |= 1 << index;
+                }
+                lsp_semantic_tokens.push(SemanticToken {
+                    delta_line,
+                    delta_start,
+                    length,
+                    token_type,
+                    token_modifiers_bitset,
+                });
             };
-            let token_type = *self.token_types_index.get(&token.token_type).unwrap();
-            let mut token_modifiers_bitset = 0;
-            for modifier in &token.token_modifiers {
-                let index = *self.token_modifiers_index.get(modifier).unwrap();
-                token_modifiers_bitset |= 1 << index;
+            let mut segment_start = token.range.start();
+            let start = token.range.start().to_usize();
+            let end = token.range.end().to_usize();
+            let token_source = &source[start..end];
+            for line in token_source.split_inclusive('\n') {
+                let line_without_lf = line.strip_suffix('\n').unwrap_or(line);
+                let line_without_ending = line_without_lf
+                    .strip_suffix('\r')
+                    .unwrap_or(line_without_lf);
+                let segment_end = segment_start
+                    + TextSize::try_from(line_without_ending.len())
+                        .expect("semantic token segment length must fit in TextSize");
+                let segment_range = TextRange::new(segment_start, segment_end);
+                segment_start += TextSize::try_from(line.len())
+                    .expect("semantic token line length must fit in TextSize");
+                push_segment(segment_range);
             }
-            lsp_semantic_tokens.push(SemanticToken {
-                delta_line,
-                delta_start,
-                length,
-                token_type,
-                token_modifiers_bitset,
-            });
         }
         lsp_semantic_tokens.dedup_by(|current, previous| {
             current.delta_line == 0 && current.delta_start == 0 && current.length == previous.length
@@ -198,6 +220,66 @@ impl SemanticTokensLegends {
         // needed for a deterministic print ordering in tests
         modifiers.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         modifiers
+    }
+}
+
+fn syntax_token_type(kind: TokenKind) -> Option<SemanticTokenType> {
+    if kind.is_keyword() {
+        Some(SemanticTokenType::KEYWORD)
+    } else if kind.is_operator() {
+        Some(SemanticTokenType::OPERATOR)
+    } else {
+        match kind {
+            TokenKind::Comment => Some(SemanticTokenType::COMMENT),
+            TokenKind::String
+            | TokenKind::FStringStart
+            | TokenKind::FStringMiddle
+            | TokenKind::FStringEnd
+            | TokenKind::TStringStart
+            | TokenKind::TStringMiddle
+            | TokenKind::TStringEnd => Some(SemanticTokenType::STRING),
+            TokenKind::Int | TokenKind::Float | TokenKind::Complex => {
+                Some(SemanticTokenType::NUMBER)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn range_overlaps(limit_range: Option<TextRange>, range: TextRange) -> bool {
+    limit_range.is_none_or(|limit| {
+        limit
+            .intersect(range)
+            .is_some_and(|intersection| !intersection.is_empty())
+    })
+}
+
+/// Classify an attribute's resolved type into a semantic token kind. For a union,
+/// every member must agree on the same kind; any disagreement (or a member that is
+/// a plain attribute) falls back to `PROPERTY`.
+fn attribute_semantic_token_type(ty: Type) -> SemanticTokenType {
+    match ty {
+        Type::Union(union) => {
+            let mut members = union.members.into_iter();
+            let Some(first) = members.next() else {
+                return SemanticTokenType::PROPERTY;
+            };
+            let kind = attribute_semantic_token_type(first);
+            if kind == SemanticTokenType::PROPERTY {
+                return SemanticTokenType::PROPERTY;
+            }
+            if members.all(|member| attribute_semantic_token_type(member) == kind) {
+                kind
+            } else {
+                SemanticTokenType::PROPERTY
+            }
+        }
+        Type::Literal(lit) if matches!(lit.value, Lit::Enum(_)) => SemanticTokenType::ENUM_MEMBER,
+        _ => {
+            attribute_symbol_kind_from_type(&ty)
+                .to_lsp_semantic_token_type_with_modifiers()
+                .0
+        }
     }
 }
 
@@ -233,7 +315,7 @@ impl SemanticTokenBuilder {
         token_type: SemanticTokenType,
         token_modifiers: Vec<SemanticTokenModifier>,
     ) {
-        if self.limit_range.is_none_or(|x| x.contains_range(range)) {
+        if range_overlaps(self.limit_range, range) {
             self.tokens.push(SemanticTokenWithFullRange {
                 range,
                 token_type,
@@ -248,12 +330,34 @@ impl SemanticTokenBuilder {
             .any(|disabled| disabled.contains_range(range))
     }
 
+    pub fn process_syntax_tokens(&mut self, tokens: &Tokens) {
+        for token in tokens.iter() {
+            if let Some(token_type) = syntax_token_type(token.kind()) {
+                self.push_if_in_range(token.range(), token_type, Vec::new());
+            }
+        }
+    }
+
     fn process_arguments(&mut self, args: &Arguments) {
         for keyword in &args.keywords {
             if let Some(arg) = &keyword.arg {
                 self.push_if_in_range(arg.range, SemanticTokenType::PARAMETER, Vec::new());
             }
         }
+    }
+
+    fn process_attribute_expr(
+        &mut self,
+        attr: &ExprAttribute,
+        get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
+        get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
+    ) {
+        let kind = get_type_of_attribute(attr.range())
+            .map(attribute_semantic_token_type)
+            .unwrap_or(SemanticTokenType::PROPERTY);
+        self.push_if_in_range(attr.attr.range(), kind, Vec::new());
+        attr.value
+            .visit(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
     }
 
     fn process_expr(
@@ -290,30 +394,7 @@ impl SemanticTokenBuilder {
                 x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
             }
             Expr::Attribute(attr) => {
-                let kind = match get_type_of_attribute(attr.range()) {
-                    Some(Type::Literal(lit)) if matches!(lit.value, Lit::Enum(_)) => {
-                        SemanticTokenType::ENUM_MEMBER
-                    }
-                    Some(ty) if ty.is_toplevel_callable() => {
-                        let is_method = ty.visit_toplevel_func_metadata(&|meta| {
-                            matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some())
-                        });
-                        if is_method {
-                            SemanticTokenType::METHOD
-                        } else {
-                            SemanticTokenType::FUNCTION
-                        }
-                    }
-                    Some(Type::ClassDef(_) | Type::Type(_)) => SemanticTokenType::CLASS,
-                    Some(Type::TypeAlias(_) | Type::UntypedAlias(_)) => {
-                        SemanticTokenType::INTERFACE
-                    }
-                    Some(Type::Module(_)) => SemanticTokenType::NAMESPACE,
-                    _ => SemanticTokenType::PROPERTY,
-                };
-                self.push_if_in_range(attr.attr.range(), kind, Vec::new());
-                attr.value
-                    .visit(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+                self.process_attribute_expr(attr, get_type_of_attribute, get_symbol_kind);
             }
             // Comprehensions need special handling because the Visit trait doesn't visit targets
             Expr::ListComp(list_comp) => {
@@ -447,7 +528,7 @@ impl SemanticTokenBuilder {
             }
             Stmt::With(with) => {
                 for with_item in with.items.iter() {
-                    if let Some(box name) = &with_item.optional_vars {
+                    if let Some(name) = &with_item.optional_vars {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
                 }
@@ -543,7 +624,7 @@ impl SemanticTokenBuilder {
 
     pub fn all_tokens_sorted(self) -> Vec<SemanticTokenWithFullRange> {
         let mut tokens = self.tokens;
-        tokens.sort_by(|a, b| a.range.start().cmp(&b.range.start()));
+        tokens.sort_by_key(|a| a.range.start());
         tokens
     }
 }

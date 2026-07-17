@@ -11,7 +11,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
-    bug = "conformance: Type quotes incorrectly referring to shadowing class member. Note that this test is likely to be removed: https://github.com/python/typing/pull/2144",
     test_class_scope_quoted_annotation_bypasses_shadowing,
     r#"
 from typing import assert_type
@@ -20,6 +19,15 @@ class D:
         ...
     x: "int" = 0  # E: Expected a type form
 assert_type(D.x, int)  # E: assert_type(Unknown, int) failed
+"#,
+);
+
+testcase!(
+    test_raw_string_type_annotation,
+    r#"
+def f(x: r"int") -> R"str":  # E: Raw string literals are not allowed in type expressions  # E: Raw string literals are not allowed in type expressions
+    y: r"bool" = True  # E: Raw string literals are not allowed in type expressions
+    return ""
 "#,
 );
 
@@ -171,6 +179,89 @@ testcase!(
 class C[T]: pass
 type IntAlias = C[int]
 bad: IntAlias | "str" = "foo"  # E: `|` union syntax does not work with string literals
+"#,
+);
+
+testcase!(
+    test_unquoted_forward_reference_before_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from dataclasses import dataclass
+from typing import Optional, Union
+
+@dataclass
+class Leaf:
+    value: int
+
+@dataclass
+class Node:
+    left: Optional[Tree]  # E: `Tree` is uninitialized
+    right: Optional[Tree]  # E: `Tree` is uninitialized
+
+type Tree = Union[Leaf, Node]
+"#,
+);
+
+testcase!(
+    test_unquoted_class_self_reference_before_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+class C:
+    c: list[C]  # E: `C` is uninitialized
+"#,
+);
+
+testcase!(
+    bug =
+        "Function annotations routed through legacy tparam lookup still miss unquoted forward refs",
+    test_unquoted_function_annotation_forward_reference_before_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+def f(x: Alias) -> Alias:
+    return x
+
+type Alias = int
+"#,
+);
+
+testcase!(
+    test_unquoted_forward_reference_ok_py314,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from dataclasses import dataclass
+from typing import Optional, Union
+
+@dataclass
+class Leaf:
+    value: int
+
+@dataclass
+class Node:
+    left: Optional[Tree]
+    right: Optional[Tree]
+
+type Tree = Union[Leaf, Node]
+"#,
+);
+
+testcase!(
+    test_unquoted_forward_reference_ok_future_annotations,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional, Union
+
+@dataclass
+class Leaf:
+    value: int
+
+@dataclass
+class Node:
+    left: Optional[Tree]
+    right: Optional[Tree]
+
+type Tree = Union[Leaf, Node]
 "#,
 );
 

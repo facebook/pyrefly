@@ -464,7 +464,6 @@ match y:
 );
 
 testcase!(
-    bug = "does not detect unreachable branches based on nested patterns",
     test_match_narrow_len,
     r#"
 from typing import assert_type, Never
@@ -481,9 +480,9 @@ def foo(x: tuple[int, int] | tuple[str]):
             assert_type(x1, int)
     match x:
         # these two cases should be impossible to match
-        case [str(), str()]:
+        case [str(), str()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[int, int])
-        case [int()]:
+        case [int()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[str])
 "#,
 );
@@ -1052,6 +1051,144 @@ while E.B:  # E: Enum literal `E.B` used as condition
 );
 
 testcase!(
+    test_redundant_condition_instance_always_truthy,
+    r#"
+class NoBool:
+    pass
+
+class HasBool:
+    def __bool__(self) -> bool: ...
+
+class HasLen:
+    def __len__(self) -> int: ...
+
+class InheritsHasBool(HasBool):
+    pass
+
+class InheritsHasLen(HasLen):
+    pass
+
+def test(x: NoBool, y: HasBool, z: HasLen, a: InheritsHasBool, b: InheritsHasLen) -> None:
+    if x:  # E: Instance of `NoBool` used as condition
+        ...
+    while x:  # E: Instance of `NoBool` used as condition
+        ...
+    [i for i in range(10) if x]  # E: Instance of `NoBool` used as condition
+    if y:
+        ...
+    if z:
+        ...
+    if a:
+        ...
+    if b:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_abstract_types,
+    r#"
+from typing import Hashable, Iterable
+from collections.abc import Sized
+import abc
+
+class MyABC(abc.ABC):
+    pass
+
+# Custom metaclass that mixes ABCMeta with other type-level behavior.
+# Real-world frameworks (e.g. Home Assistant's `ABCCachedProperties`) define
+# such metaclasses, and classes using them should be treated as abstract.
+class MyMixedMeta(abc.ABCMeta):
+    pass
+
+class WithMixedMeta(metaclass=MyMixedMeta):
+    pass
+
+class WithMixedMetaSub(WithMixedMeta):
+    pass
+
+def test(
+    o: object,
+    h: Hashable,
+    it: Iterable[int],
+    sz: Sized,
+    ab: MyABC,
+    mm: WithMixedMeta,
+    mms: WithMixedMetaSub,
+) -> None:
+    # None of these should warn: static type is abstract/protocol/object,
+    # so the concrete runtime instance may define __bool__ or __len__.
+    if o:
+        ...
+    if h:
+        ...
+    if it:
+        ...
+    if sz:
+        ...
+    if ab:
+        ...
+    if mm:
+        ...
+    if mms:
+        ...
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_no_false_positives_for_descriptors_and_special_classes,
+    r#"
+from dataclasses import dataclass
+from datetime import datetime
+import asyncio
+
+class Descriptor:
+    def __get__(self, obj, objtype=None) -> int: ...
+
+class HasGetattr:
+    def __getattr__(self, name: str) -> object: ...
+
+class HasGetattribute:
+    def __getattribute__(self, name: str) -> object: ...
+
+@dataclass
+class MyData:
+    x: int
+    y: str
+
+def test(
+    d: Descriptor,
+    g1: HasGetattr,
+    g2: HasGetattribute,
+    md: MyData,
+    dt: datetime,
+    fut: asyncio.Future[int],
+    lk: asyncio.Lock,
+) -> None:
+    # None of these should warn:
+    # - descriptor classes (with __get__) might intercept attribute access
+    # - classes with __getattr__/__getattribute__ have dynamic attribute behavior
+    # - dataclasses are commonly used with `if obj:` as a defensive guard
+    # - stdlib types come from bundled stubs and often have runtime behavior
+    #   not modeled in the stubs
+    if d:
+        ...
+    if g1:
+        ...
+    if g2:
+        ...
+    if md:
+        ...
+    if dt:
+        ...
+    if fut:
+        ...
+    if lk:
+        ...
+    "#,
+);
+
+testcase!(
     crash_no_try_type,
     r#"
 # Used to crash, https://github.com/facebook/pyrefly/issues/766
@@ -1484,6 +1621,96 @@ def f(a: int) -> int:
     if (x := a) > 0:
         return x
     return x
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_post_loop,
+    r#"
+from typing import Callable, Any
+
+class Cat:
+    def equals(self, other: Any) -> bool:
+        return False
+
+def main(f: Callable[[], Cat]) -> None:
+    while (a := f()).equals(1):
+        break
+    print(a)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_simple,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    while (x := f()) > 0:
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_with_else,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    while (x := f()) > 0:
+        pass
+    else:
+        pass
+    print(x)
+    "#,
+);
+
+testcase!(
+    test_walrus_in_while_pre_declared_uninitialized,
+    r#"
+def f() -> int:
+    return 1
+
+def main() -> None:
+    x: int
+    while (x := f()) > 0:
+        break
+    print(x)
+    "#,
+);
+
+testcase!(
+    bug = "walrus in while overwrites pre-bound type instead of narrowing; yields str | int",
+    test_walrus_in_while_pre_bound_type_precision,
+    r#"
+from typing import assert_type
+
+def f_int() -> int:
+    return 1
+
+def main() -> None:
+    x = ""
+    while (x := f_int()) > 0:
+        break
+    assert_type(x, int)  # E: assert_type(Literal[''] | int, int) failed
+    "#,
+);
+
+testcase!(
+    bug =
+        "BoolOp laxness causes false negative for walrus in while short-circuit context, see #1251",
+    test_walrus_in_while_bool_op,
+    r#"
+def cond() -> bool: ...
+def get() -> int: ...
+
+def main() -> None:
+    while cond() and (x := get()):
+        break
+    print(x)
     "#,
 );
 
@@ -2195,7 +2422,6 @@ import types
 from dataclasses import dataclass
 from typing import Any, TypeIs, assert_never
 
-
 def is_instance_union_aware[T](
     value: Any, target_type: type[T] | tuple[type[T], ...]
 ) -> TypeIs[T]: ...
@@ -2524,5 +2750,52 @@ def f(a: int) -> int:
     if a > 0:
         return b  # E: `b` may be uninitialized
     return 9
+    "#,
+);
+
+fn env_try_except_typevar() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "compat_typing",
+        r#"
+from typing import TypeVar
+try:
+    from typing import AnyStr
+except ImportError:
+    AnyStr = TypeVar("AnyStr", str, bytes)
+__all__ = ["AnyStr"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_merge_compatible_typevars,
+    env_try_except_typevar(),
+    r#"
+from typing import assert_type
+from collections.abc import Iterable
+from compat_typing import AnyStr
+
+def process(lines: Iterable[AnyStr]) -> None:
+    pass
+
+patterns: list[str] = ["*.pyc"]
+process(lines=patterns)
+    "#,
+);
+
+testcase!(
+    test_do_not_merge_incompatible_typevars,
+    r#"
+from typing import TypeVar
+
+try:
+    T = TypeVar("T", str, bytes)
+except:
+    T = TypeVar("T", int, float)
+
+def f(x: T) -> T:  # E: not in scope  # E: not in scope
+    return x
     "#,
 );

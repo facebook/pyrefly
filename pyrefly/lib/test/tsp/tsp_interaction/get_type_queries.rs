@@ -20,7 +20,26 @@ use crate::test::tsp::tsp_interaction::object_model::write_pyproject;
 fn setup_project(file_content: &str) -> (TspInteraction, String, i32) {
     let temp_dir = TempDir::new().unwrap();
     write_pyproject(temp_dir.path());
+    setup_project_in_dir(temp_dir, file_content)
+}
 
+fn setup_project_with_pyrefly_config(
+    file_content: &str,
+    pyrefly_config: &str,
+) -> (TspInteraction, String, i32) {
+    let temp_dir = TempDir::new().unwrap();
+    write_pyproject(temp_dir.path());
+
+    let pyproject = temp_dir.path().join("pyproject.toml");
+    let mut content = std::fs::read_to_string(&pyproject).unwrap();
+    content.push_str("\n[tool.pyrefly]\n");
+    content.push_str(pyrefly_config);
+    std::fs::write(pyproject, content).unwrap();
+
+    setup_project_in_dir(temp_dir, file_content)
+}
+
+fn setup_project_in_dir(temp_dir: TempDir, file_content: &str) -> (TspInteraction, String, i32) {
     let test_file = temp_dir.path().join("main.py");
     std::fs::write(&test_file, file_content).unwrap();
 
@@ -60,6 +79,84 @@ fn get_computed_type_ok(
 ) -> serde_json::Value {
     tsp.server
         .get_computed_type(file_uri, line, character, snapshot);
+    let resp = tsp.client.receive_response_skip_notifications();
+    assert!(
+        resp.error.is_none(),
+        "Expected success, got error: {:?}",
+        resp.error
+    );
+    let result = resp.result.expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null type result");
+    result
+}
+
+/// Helper to send a range-based getComputedType request and return a successful result.
+fn get_computed_type_range_ok(
+    tsp: &mut TspInteraction,
+    file_uri: &str,
+    start_line: u32,
+    start_character: u32,
+    end_line: u32,
+    end_character: u32,
+    snapshot: i32,
+) -> serde_json::Value {
+    tsp.server.get_computed_type_range(
+        file_uri,
+        start_line,
+        start_character,
+        end_line,
+        end_character,
+        snapshot,
+    );
+    let resp = tsp.client.receive_response_skip_notifications();
+    assert!(
+        resp.error.is_none(),
+        "Expected success, got error: {:?}",
+        resp.error
+    );
+    let result = resp.result.expect("Expected result");
+    assert!(!result.is_null(), "Expected non-null type result");
+    result
+}
+
+/// Like `get_computed_type_range_ok` but returns the raw result value, which may
+/// be JSON `null`. Used to document ranges that resolve to no type.
+fn get_computed_type_range_raw(
+    tsp: &mut TspInteraction,
+    file_uri: &str,
+    start_line: u32,
+    start_character: u32,
+    end_line: u32,
+    end_character: u32,
+    snapshot: i32,
+) -> serde_json::Value {
+    tsp.server.get_computed_type_range(
+        file_uri,
+        start_line,
+        start_character,
+        end_line,
+        end_character,
+        snapshot,
+    );
+    let resp = tsp.client.receive_response_skip_notifications();
+    assert!(
+        resp.error.is_none(),
+        "Expected success, got error: {:?}",
+        resp.error
+    );
+    resp.result.expect("Expected result field")
+}
+
+/// Helper to send a getExpectedType request and return a successful (non-null) result.
+fn get_expected_type_ok(
+    tsp: &mut TspInteraction,
+    file_uri: &str,
+    line: u32,
+    character: u32,
+    snapshot: i32,
+) -> serde_json::Value {
+    tsp.server
+        .get_expected_type(file_uri, line, character, snapshot);
     let resp = tsp.client.receive_response_skip_notifications();
     assert!(
         resp.error.is_none(),
@@ -183,14 +280,67 @@ fn test_get_computed_type_string_is_class() {
 }
 
 #[test]
-fn test_get_computed_type_none_is_builtin() {
+fn test_get_computed_type_none_is_class() {
+    // Regression test for https://github.com/facebook/pyrefly/issues/4035:
+    // `None` must be a `NoneType` `ClassType`, not an off-spec `none`
+    // `BuiltInType`, so consumers can reconstruct unions like `str | None`.
+    // The declaration is sourced from the stdlib's `NoneType` class, so it
+    // carries a real location (e.g. `types.pyi`) that matches goto-definition
+    // rather than a synthesized stub. This asserts the wire shape; the
+    // downstream Pylance hover fix (`str | Unknown` → `str | None`) should be
+    // confirmed against a real client, which this test harness cannot drive.
     let (mut tsp, file_uri, snapshot) = setup_project("x = None\n");
 
     let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
-    assert_kind(&result, TypeKind::Builtin);
+    assert_kind(&result, TypeKind::Class);
 
-    let name = result.get("name").and_then(|v| v.as_str());
-    assert_eq!(name, Some("none"), "Expected builtin name 'none'");
+    let declaration = result.get("declaration").expect("Expected declaration");
+    let name = declaration.get("name").and_then(|v| v.as_str());
+    assert_eq!(name, Some("NoneType"), "Expected class name 'NoneType'");
+
+    // The declaration points at NoneType's real definition, not an empty stub.
+    let uri = declaration
+        .get("node")
+        .and_then(|n| n.get("uri"))
+        .and_then(|v| v.as_str())
+        .expect("Expected declaration node URI");
+    assert!(
+        !uri.is_empty(),
+        "Expected a real NoneType definition URI, got empty"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_str_or_none_union_reconstructs_none() {
+    // The concrete #4035 symptom: `str | None` must round-trip with its `None`
+    // member encoded as a reconstructable `NoneType` `ClassType` (previously an
+    // off-spec `none` `BuiltInType` that Pylance rendered as `Unknown`).
+    let code = "x: str | None = None\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    tsp.server.get_declared_type(&file_uri, 0, 0, snapshot);
+    let resp = tsp.client.receive_response_skip_notifications();
+    let result = resp.result.expect("Expected result");
+    assert_kind(&result, TypeKind::Union);
+
+    let sub_types = result
+        .get("subTypes")
+        .and_then(|v| v.as_array())
+        .expect("Expected subTypes array");
+    let has_none_class = sub_types.iter().any(|member| {
+        member.get("kind").and_then(|v| v.as_u64()) == Some(TypeKind::Class as u64)
+            && member
+                .get("declaration")
+                .and_then(|d| d.get("name"))
+                .and_then(|v| v.as_str())
+                == Some("NoneType")
+    });
+    assert!(
+        has_none_class,
+        "Expected a NoneType Class member in the union, got {sub_types:?}"
+    );
 
     tsp.shutdown();
 }
@@ -444,6 +594,98 @@ fn test_get_computed_type_module_import() {
 }
 
 #[test]
+fn test_get_computed_type_module_import_includes_package_init_uri() {
+    let temp_dir = TempDir::new().unwrap();
+    write_pyproject(temp_dir.path());
+
+    let package_dir = temp_dir.path().join("pkg");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("__init__.pyi"), "value: int\n").unwrap();
+
+    let test_file = temp_dir.path().join("main.py");
+    std::fs::write(&test_file, "import pkg\npkg\n").unwrap();
+
+    let mut tsp = TspInteraction::new();
+    tsp.set_root(temp_dir.path().to_path_buf());
+    tsp.initialize(Default::default());
+
+    tsp.server.did_open("main.py");
+    tsp.client.expect_any_message();
+
+    let snapshot = get_current_snapshot(&mut tsp, 2);
+    let file_uri = Url::from_file_path(&test_file).unwrap().to_string();
+
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 1, 0, snapshot);
+    assert_kind(&result, TypeKind::Module);
+
+    let uri = result.get("uri").and_then(|v| v.as_str());
+    assert!(
+        uri.is_some_and(|u| u.contains("pkg/__init__.pyi") || u.contains("pkg\\__init__.pyi")),
+        "Expected package module URI to point at __init__.pyi, got: {uri:?}"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_reexported_class() {
+    // `getComputedType` over the range of a member-access expression `pkg.Foo`,
+    // where `Foo` is re-exported by the package, must return the re-exported
+    // *class* — not the left-hand-side *module*. The handler resolves the type of
+    // the whole node the range covers, rather than the identifier at
+    // `range.start()` (which lands on `pkg`). Matches pyright, which returns Class.
+    //
+    // Self-contained: a local two-module package re-export, not the real unittest.
+    let temp_dir = TempDir::new().unwrap();
+    write_pyproject(temp_dir.path());
+
+    let package_dir = temp_dir.path().join("pkg");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(package_dir.join("sub.pyi"), "class Foo: ...\n").unwrap();
+    std::fs::write(
+        package_dir.join("__init__.pyi"),
+        "from .sub import Foo as Foo\n",
+    )
+    .unwrap();
+
+    let test_file = temp_dir.path().join("main.py");
+    std::fs::write(
+        &test_file,
+        "import pkg\nclass MyClass(pkg.Foo):\n    pass\n",
+    )
+    .unwrap();
+
+    let mut tsp = TspInteraction::new();
+    tsp.set_root(temp_dir.path().to_path_buf());
+    tsp.initialize(Default::default());
+
+    tsp.server.did_open("main.py");
+    tsp.client.expect_any_message();
+
+    let snapshot = get_current_snapshot(&mut tsp, 2);
+    let file_uri = Url::from_file_path(&test_file).unwrap().to_string();
+
+    // `pkg.Foo` spans line 1, chars 14..21 in `class MyClass(pkg.Foo):`.
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 1, 14, 1, 21, snapshot);
+
+    // The re-exported class `Foo`, followed through `from .sub import Foo as Foo`.
+    assert_kind(&result, TypeKind::Class);
+    // A class object referenced as a base is Instantiable (INSTANTIABLE = 1).
+    let flags = result.get("flags").and_then(|v| v.as_i64());
+    assert!(
+        flags.is_some_and(|f| f & 1 != 0),
+        "Expected INSTANTIABLE flag (1) for re-exported class, got flags={flags:?}"
+    );
+    let name = result
+        .get("declaration")
+        .and_then(|d| d.get("name"))
+        .and_then(|n| n.as_str());
+    assert_eq!(name, Some("Foo"), "Expected class name 'Foo'");
+
+    tsp.shutdown();
+}
+
+#[test]
 fn test_get_computed_type_bound_method_is_function() {
     // `m = x.append` — querying `m` (position 0 on line 1) gives bound method type
     let (mut tsp, file_uri, snapshot) = setup_project("x = [1, 2]\nm = x.append\n");
@@ -641,6 +883,266 @@ fn test_get_computed_type_function_has_return_type() {
         Some(TypeKind::Class as u64),
         "Expected return type to be Class"
     );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_definition_site_uses_inferred_return_type() {
+    let code = "\
+def plain():
+    return True
+
+class C:
+    def method(self):
+        return 1
+
+    @property
+    def ok(self):
+        return True
+
+plain
+";
+    let (mut tsp, file_uri, snapshot) = setup_project_with_pyrefly_config(
+        code,
+        "untyped-def-behavior = \"check-and-infer-return-type\"\n",
+    );
+
+    for (start_line, start_character, end_line, end_character, label) in [
+        (0, 4, 0, 9, "plain function definition"),
+        (4, 8, 4, 14, "method definition"),
+        (8, 8, 8, 10, "property getter definition"),
+        (11, 0, 11, 5, "plain function reference"),
+    ] {
+        let result = get_computed_type_range_ok(
+            &mut tsp,
+            &file_uri,
+            start_line,
+            start_character,
+            end_line,
+            end_character,
+            snapshot,
+        );
+        assert_kind(&result, TypeKind::Function);
+
+        let return_type = result
+            .get("returnType")
+            .unwrap_or_else(|| panic!("Expected returnType for {label}: {result}"));
+        assert_kind(return_type, TypeKind::Class);
+    }
+
+    tsp.shutdown();
+}
+
+// =======================================================================
+// getComputedType range routing: an identifier-name range resolves through
+// the declaration-preserving binding path, matching a point query at the
+// same position, rather than falling through to the (empty) expression trace.
+// =======================================================================
+
+#[test]
+fn test_get_computed_type_class_def_name_range() {
+    // A class-def name is the same category of identifier as a function-def
+    // name; its range resolves to the class through the binding path.
+    let (mut tsp, file_uri, snapshot) = setup_project("class Foo:\n    x: int = 0\n");
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 0, 6, 0, 9, snapshot);
+    assert_kind(&result, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_parameter_name_range() {
+    let (mut tsp, file_uri, snapshot) = setup_project("def f(x: int) -> int:\n    return x\n");
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 0, 6, 0, 7, snapshot);
+    assert_kind(&result, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_imported_name_range() {
+    let (mut tsp, file_uri, snapshot) = setup_project("from os import getcwd\n");
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 0, 15, 0, 21, snapshot);
+    assert_kind(&result, TypeKind::Function);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_type_parameter_range() {
+    let (mut tsp, file_uri, snapshot) = setup_project("def f[T](x: T) -> T:\n    return x\n");
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 0, 6, 0, 7, snapshot);
+    assert_kind(&result, TypeKind::Typevar);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_imported_module_range() {
+    let (mut tsp, file_uri, snapshot) = setup_project("import os\n");
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 0, 7, 0, 9, snapshot);
+    assert_kind(&result, TypeKind::Module);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_exception_handler_range() {
+    let code = "try:\n    pass\nexcept Exception as e:\n    pass\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 2, 20, 2, 21, snapshot);
+    assert_kind(&result, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_global_capture_range() {
+    // `global x` inside a function is a MutableCapture identifier.
+    let code = "x = 1\ndef f():\n    global x\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 2, 11, 2, 12, snapshot);
+    assert_kind(&result, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_match_capture_range() {
+    let code = "x = 1\nmatch x:\n    case y:\n        pass\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 2, 9, 2, 10, snapshot);
+    assert_kind(&result, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_keyword_argument_label_range() {
+    // A keyword-argument label maps to the matched parameter's declaration, so
+    // its range resolves to the parameter's type through the binding path. A
+    // label that matches no parameter has no type of its own and falls back to
+    // the (empty) trace path.
+    let code = "def f(x: int) -> int:\n    return x\n\nf(x=1)\nf(y=1)\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // `x` label in `f(x=1)` resolves to parameter `x`'s type.
+    let matched = get_computed_type_range_ok(&mut tsp, &file_uri, 3, 2, 3, 3, snapshot);
+    assert_kind(&matched, TypeKind::Class);
+
+    // `y` label in `f(y=1)` matches no parameter, so it falls through to the
+    // trace path, which has no recorded type for the label.
+    let unmatched = get_computed_type_range_raw(&mut tsp, &file_uri, 4, 2, 4, 3, snapshot);
+    assert!(
+        unmatched.is_null(),
+        "unmatched keyword label should fall back to the trace path (null), got: {unmatched}"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_overload_def_and_call_range() {
+    // Overloaded defs already route through the declaration-preserving path
+    // (FunctionDef context for the def, Expr context for the reference), so
+    // both sites resolve to the overloaded type rather than a synthesized
+    // callable for the selected overload.
+    let code = "\
+from typing import overload
+
+@overload
+def f(x: int) -> int: ...
+@overload
+def f(x: str) -> str: ...
+def f(x):
+    return x
+
+f(1)
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Implementation def-site name range.
+    let def_site = get_computed_type_range_ok(&mut tsp, &file_uri, 6, 4, 6, 5, snapshot);
+    assert_kind(&def_site, TypeKind::Overloaded);
+
+    // Call-site name range.
+    let call_site = get_computed_type_range_ok(&mut tsp, &file_uri, 9, 0, 9, 1, snapshot);
+    assert_kind(&call_site, TypeKind::Overloaded);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_classmethod_staticmethod_inferred_return() {
+    let code = "\
+class C:
+    @classmethod
+    def cm(cls):
+        return 1
+
+    @staticmethod
+    def sm():
+        return True
+";
+    let (mut tsp, file_uri, snapshot) = setup_project_with_pyrefly_config(
+        code,
+        "untyped-def-behavior = \"check-and-infer-return-type\"\n",
+    );
+
+    for (start_line, start_character, end_line, end_character, label) in [
+        (2, 8, 2, 10, "classmethod definition"),
+        (6, 8, 6, 10, "staticmethod definition"),
+    ] {
+        let result = get_computed_type_range_ok(
+            &mut tsp,
+            &file_uri,
+            start_line,
+            start_character,
+            end_line,
+            end_character,
+            snapshot,
+        );
+        assert_kind(&result, TypeKind::Function);
+
+        let return_type = result
+            .get("returnType")
+            .unwrap_or_else(|| panic!("Expected returnType for {label}: {result}"));
+        assert_kind(return_type, TypeKind::Class);
+    }
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_compound_expression_range_is_value() {
+    // A compound (non-identifier) range asks "what does this evaluate to";
+    // it must keep using the trace path and return the value type. This
+    // locks in the negative case so a future "always preserve declaration"
+    // change cannot silently break it.
+    let code = "\
+def g(a: int, b: int) -> int:
+    return a + b
+
+g(1, 2)
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // `a + b`
+    let binop = get_computed_type_range_ok(&mut tsp, &file_uri, 1, 11, 1, 16, snapshot);
+    assert_kind(&binop, TypeKind::Class);
+
+    // `g(1, 2)` — the call's return value, not the callee.
+    let call = get_computed_type_range_ok(&mut tsp, &file_uri, 3, 0, 3, 7, snapshot);
+    assert_kind(&call, TypeKind::Class);
 
     tsp.shutdown();
 }
@@ -884,6 +1386,451 @@ fn test_get_computed_type_literal_bool_has_literal_value() {
         Some(true),
         "Expected literalValue=true"
     );
+
+    tsp.shutdown();
+}
+
+// =======================================================================
+// Regression: identifiers in call position preserve the original declaration
+//
+// `typeServer/getComputedType` must return the raw declared type for an
+// identifier even when that identifier appears in a call position. The LSP
+// `get_type_at` path coerces callees (substitutes the chosen-overload trace
+// or applies `coerce_type_to_callable`), which strips the original
+// `Declaration::Regular` link. TSP clients (e.g. Pylance) rely on the
+// declaration to re-resolve signatures on their side, so the TSP endpoint
+// uses `get_type_at_preserving_declaration` instead.
+//
+// Pylance bug: https://github.com/microsoft/pylance-release/issues/8020
+// =======================================================================
+
+#[test]
+fn test_get_computed_type_builtin_print_at_call_position_preserves_declaration() {
+    // Regression for pylance-release#8020. Querying `print` inside a call
+    // expression must return the underlying Function with a Regular
+    // declaration pointing at `builtins.pyi`, not a synthesized Callable
+    // and not the return type of the matched overload.
+    let (mut tsp, file_uri, snapshot) = setup_project("print(\"foo\", sep=\"x\")\n");
+
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
+
+    let kind = result
+        .get("kind")
+        .and_then(|v| v.as_u64())
+        .expect("Expected kind on print");
+    assert!(
+        kind == TypeKind::Function as u64 || kind == TypeKind::Overloaded as u64,
+        "Expected Function or Overloaded for `print` in call position, got kind={kind} (result={result})"
+    );
+
+    // The first function-shaped result (the type itself, or the first
+    // overload entry) must carry a Regular declaration that points back
+    // to a real source file (typeshed's builtins.pyi).
+    let function_like = if kind == TypeKind::Overloaded as u64 {
+        result
+            .get("overloads")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .cloned()
+            .expect("Expected at least one entry in overloads array")
+    } else {
+        result.clone()
+    };
+
+    let decl = function_like
+        .get("declaration")
+        .expect("Expected declaration on `print`");
+
+    // DeclarationKind::Regular = 0
+    let decl_kind = decl.get("kind").and_then(|v| v.as_u64());
+    assert_eq!(
+        decl_kind,
+        Some(0),
+        "Expected Regular declaration (kind=0) for `print`, got {decl_kind:?}. \
+         A Synthesized declaration here means the callee was coerced and the \
+         original typeshed declaration was lost."
+    );
+
+    let uri = decl
+        .get("node")
+        .and_then(|n| n.get("uri"))
+        .and_then(|v| v.as_str());
+    assert!(
+        uri.is_some_and(|u| u.contains("builtins.pyi")),
+        "Expected declaration URI to point at builtins.pyi for `print`, got: {uri:?}"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_overloaded_callee_returns_overloaded_not_return_type() {
+    // Querying an overloaded function at a call site must return the full
+    // Overloaded type (so clients see every signature), not the return type
+    // of the matched overload.
+    let code = "\
+from typing import overload
+
+@overload
+def process(value: int) -> str: ...
+@overload
+def process(value: str) -> int: ...
+def process(value):
+    return value
+
+process(1)
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 9 (0-indexed): `process(1)` — query the `process` identifier.
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 9, 0, snapshot);
+    assert_kind(&result, TypeKind::Overloaded);
+
+    let overloads = result
+        .get("overloads")
+        .and_then(|v| v.as_array())
+        .expect("Expected overloads array on `process` at call site");
+    assert_eq!(
+        overloads.len(),
+        2,
+        "Expected 2 overload signatures for `process`, got {}",
+        overloads.len()
+    );
+}
+
+#[test]
+fn test_get_computed_type_local_def_callee_preserves_declaration() {
+    // Querying a locally-defined function at its call site must return a
+    // Function with a Regular declaration that names the function and
+    // points back at the source file.
+    let code = "\
+def greet(name: str) -> str:
+    return name
+
+greet(\"world\")
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 3 (0-indexed): `greet("world")` — query the `greet` identifier.
+    let result = get_computed_type_ok(&mut tsp, &file_uri, 3, 0, snapshot);
+    assert_kind(&result, TypeKind::Function);
+
+    let decl = result
+        .get("declaration")
+        .expect("Expected declaration on `greet` at call site");
+
+    // DeclarationKind::Regular = 0
+    let decl_kind = decl.get("kind").and_then(|v| v.as_u64());
+    assert_eq!(
+        decl_kind,
+        Some(0),
+        "Expected Regular declaration (kind=0) for `greet`, got {decl_kind:?}"
+    );
+
+    let name = decl.get("name").and_then(|v| v.as_str());
+    assert_eq!(name, Some("greet"), "Expected declaration name 'greet'");
+
+    let uri = decl
+        .get("node")
+        .and_then(|n| n.get("uri"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        uri,
+        Some(file_uri.as_str()),
+        "Expected declaration URI to match the source file"
+    );
+
+    tsp.shutdown();
+}
+
+// =======================================================================
+// Regression: a whole call-expression range returns the call's result
+//
+// `typeServer/getComputedType` is range-aware. When the requested range
+// exactly covers a call expression (`Foo()`), it returns the call's
+// *result* type (the constructed instance / return value) rather than the
+// callee declaration sitting at the range start. This complements the
+// call-position behavior above: an empty range (or a range that only spans
+// the callee identifier) still preserves the callee declaration, but the
+// full call range resolves to the value the call produces.
+//
+// Pylance bug: https://github.com/microsoft/pylance-release/issues/8016
+// ("[TSP] Goto def doesn't work on special methods"). Operator go-to-def
+// needs the left operand of `ClassWithMagicMethod() < 1` to resolve to a
+// class *instance* so the `__lt__` magic method can be found.
+// =======================================================================
+
+/// Assert the result is a class type carrying the INSTANCE flag (2).
+fn assert_class_instance(result: &serde_json::Value) {
+    assert_kind(result, TypeKind::Class);
+    let flags = result.get("flags").and_then(|v| v.as_i64());
+    assert!(
+        flags.is_some_and(|f| f & 2 != 0),
+        "Expected INSTANCE flag (2), got flags={flags:?} in: {result}"
+    );
+}
+
+#[test]
+fn test_get_computed_type_call_expr_range_returns_instance() {
+    // Repro for pylance-release#8016. `ClassWithMagicMethod()` is a call
+    // expression on line 4. Querying the *whole* call range must return the
+    // constructed instance (Class + INSTANCE flag), not the constructor.
+    let code = "\
+class ClassWithMagicMethod:
+    def __lt__(self, v: int) -> bool:
+        return True
+
+a = ClassWithMagicMethod()
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 4: `a = ClassWithMagicMethod()` — the call spans chars 4..26.
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 4, 4, 4, 26, snapshot);
+    assert_class_instance(&result);
+
+    let decl = result.get("declaration").expect("Expected declaration");
+    let name = decl.get("name").and_then(|v| v.as_str());
+    assert_eq!(name, Some("ClassWithMagicMethod"), "Expected class name");
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_call_expr_range_vs_callee_position() {
+    // The range-aware behavior must distinguish the whole call expression
+    // from the callee identifier:
+    //   - whole call range  -> the constructed instance (INSTANCE flag set)
+    //   - callee position    -> the class itself (instantiable, no INSTANCE)
+    let code = "\
+class Foo:
+    pass
+
+a = Foo()
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 3: `a = Foo()` — the call `Foo()` spans chars 4..9.
+    let whole_call = get_computed_type_range_ok(&mut tsp, &file_uri, 3, 4, 3, 9, snapshot);
+    assert_class_instance(&whole_call);
+
+    // Callee identifier position (empty range at the start of `Foo`) keeps
+    // the declaration-preserving behavior: the class object, not an instance.
+    let callee = get_computed_type_ok(&mut tsp, &file_uri, 3, 4, snapshot);
+    assert_kind(&callee, TypeKind::Class);
+    let callee_flags = callee.get("flags").and_then(|v| v.as_i64()).unwrap_or(0);
+    assert!(
+        callee_flags & 2 == 0,
+        "Expected callee `Foo` to be the class itself (no INSTANCE flag), got flags={callee_flags}"
+    );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_builtin_call_expr_range_returns_instance() {
+    // A builtin call expression range (`str()`) likewise resolves to the
+    // produced instance rather than the `str` class/constructor.
+    let code = "x = str()\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(code);
+
+    // Line 0: `x = str()` — the call `str()` spans chars 4..9.
+    let result = get_computed_type_range_ok(&mut tsp, &file_uri, 0, 4, 0, 9, snapshot);
+    assert_class_instance(&result);
+
+    tsp.shutdown();
+}
+
+// =======================================================================
+// getExpectedType
+// =======================================================================
+
+#[test]
+fn test_get_expected_type_on_rhs_returns_lhs_annotation_union() {
+    // For `x: int | str = 42`, the expected type at the RHS position is
+    // the union `int | str` declared on the LHS, NOT the inferred type
+    // (Literal[42]) of the RHS expression.
+    //                          1111111
+    //                0123456789012345678
+    let source = "x: int | str = 42\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Position 15 is the `4` in `42`.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 0, 15, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    // Sanity check: getComputedType at the same position narrows to the
+    // RHS literal type (Class), confirming the two methods disagree here.
+    let computed = get_computed_type_ok(&mut tsp, &file_uri, 0, 15, snapshot);
+    assert_kind(&computed, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_on_rhs_string_literal_annotation() {
+    // For `e: Literal["a", "b"] = "a"`, the expected type at the RHS
+    // string literal should be the annotated `Literal["a", "b"]` (a
+    // Union of literal classes), not just `Literal["a"]`.
+    //                                     1111111111222222
+    //                           01234567890123456789012345
+    let source = "from typing import Literal\ne: Literal[\"a\", \"b\"] = \"a\"\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Line 1, position 24 lands inside the RHS string literal `"a"`.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 1, 24, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_falls_back_outside_annotated_rhs() {
+    // No annotated assignment surrounds the cursor → expected type
+    // falls back to the type at the cursor (`Literal[42]` → Class).
+    let (mut tsp, file_uri, snapshot) = setup_project("x = 42\n");
+
+    // Position 4 is the `4` in `42`.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 0, 4, snapshot);
+    assert_kind(&expected, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_on_lhs_returns_declared_type() {
+    // When the cursor is on the LHS target of an annotated assignment,
+    // the value range does not contain it, so the expected type is just
+    // the declared type at that position (which is the annotation).
+    let (mut tsp, file_uri, snapshot) = setup_project("x: int | str = 42\n");
+
+    // Position 0 is the `x` target.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 0, 0, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_call_positional_argument() {
+    // For `foo(4)` where `foo(a: int | str)`, the expected type at the
+    // argument `4` is the union `int | str`, not the inferred Literal[4].
+    //                                                       111111111
+    //                                            0123456789012345678
+    let source = "def foo(a: int | str) -> None: ...\nfoo(4)\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Line 1, position 4 lands on the `4` argument.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 1, 4, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    // Sanity check: getComputedType at the same position narrows to Literal[4].
+    let computed = get_computed_type_ok(&mut tsp, &file_uri, 1, 4, snapshot);
+    assert_kind(&computed, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_call_keyword_argument() {
+    // For `foo(a=4)` where `foo(a: int | str)`, the expected type at `4`
+    // should be the union `int | str` (matched by parameter name).
+    let source = "def foo(a: int | str) -> None: ...\nfoo(a=4)\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Line 1, position 6 lands on the `4` value of the kwarg.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 1, 6, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_return_statement_value() {
+    // For `def f() -> int | str: return 4`, the expected type of the
+    // return value `4` is the function's declared return annotation
+    // `int | str`, not the inferred Literal[4].
+    let source = "def f() -> int | str:\n    return 4\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Line 1 is `    return 4`. Position 11 is the `4`.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 1, 11, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_default_parameter_value() {
+    // For `def f(x: int | str = 4): ...`, the expected type of the
+    // default value `4` is the parameter's annotation `int | str`.
+    //              1111111111222
+    //    01234567890123456789012
+    let source = "def f(x: int | str = 4) -> None: ...\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Position 21 is the `4` default value.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 0, 21, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_yield_returns_element_type() {
+    // For `def g() -> Iterator[int | str]: yield 4`, the contextually
+    // expected type of the yielded value `4` is the iterator's element
+    // type `int | str` (a Union), which the solver records at the yield.
+    let source = "\
+from typing import Iterator
+def g() -> Iterator[int | str]:
+    yield 4
+";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Line 2 is `    yield 4`. Position 10 is the `4`.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 2, 10, snapshot);
+    assert_kind(&expected, TypeKind::Union);
+
+    tsp.shutdown();
+}
+
+// ---- Container element / dict value contexts -------------------------
+//
+// These cases would ideally also return the contextual element/value type
+// from the surrounding annotation (e.g. for `xs: list[int | str] = [4]`,
+// the expected type at `4` should be `int | str`). We currently fall back
+// to the outer assignment's declared type in these cases. The tests below
+// pin the current behavior so a future improvement will deliberately fail
+// them and force an update.
+
+#[test]
+fn test_get_expected_type_list_element_falls_back_to_container_type() {
+    // `xs: list[int | str] = [4]` — ideally the expected type at `4`
+    // would be `int | str`, but we currently return the container type
+    // `list[int | str]` (a Class) because the AnnAssign branch fires.
+    let source = "xs: list[int | str] = [4]\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Position 23 is the `4` inside `[4]`.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 0, 23, snapshot);
+    // TODO: should be TypeKind::Union (the element type). For now we
+    // verify the response is a well-formed class type (the container).
+    assert_kind(&expected, TypeKind::Class);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_expected_type_dict_value_falls_back_to_container_type() {
+    // `d: dict[str, int | str] = {"k": 4}` — ideally the expected type
+    // at `4` would be `int | str`, but we currently return `dict[...]`.
+    let source = "d: dict[str, int | str] = {\"k\": 4}\n";
+    let (mut tsp, file_uri, snapshot) = setup_project(source);
+
+    // Position 32 is the `4` value in the dict literal.
+    let expected = get_expected_type_ok(&mut tsp, &file_uri, 0, 32, snapshot);
+    // TODO: should be TypeKind::Union for the value type.
+    assert_kind(&expected, TypeKind::Class);
 
     tsp.shutdown();
 }

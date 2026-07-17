@@ -20,7 +20,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::docstring::Docstring;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::types::Union;
 use pyrefly_util::visit::Visit;
 use regex::RegexBuilder;
 use ruff_python_ast::Decorator;
@@ -43,6 +42,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
+use thin_vec::ThinVec;
 use vec1::Vec1;
 
 use crate::module::module_info::ModuleInfo;
@@ -128,11 +128,11 @@ fn all_modules_with_range(
 }
 
 fn range_without_decorators(range: TextRange, decorators: &[Decorator]) -> TextRange {
-    let decorators_range = decorators
-        .first()
-        .map(|first| first.range().cover(decorators.last().unwrap().range()));
-
-    decorators_range.map_or(range, |x| range.add_start(x.len() + TextSize::from(1)))
+    let Some(last) = decorators.last() else {
+        return range;
+    };
+    let new_start = (last.range().end() + TextSize::from(1)).min(range.end());
+    TextRange::new(new_start, range.end())
 }
 
 fn to_span(range: TextRange) -> src::ByteSpan {
@@ -255,7 +255,7 @@ struct GleanState<'a> {
 
 struct AssignInfo<'a> {
     range: TextRange,
-    annotation: Option<&'a Expr>,
+    type_info: Option<python::TypeInfo>,
     value: Option<&'a Expr>,
 }
 
@@ -755,8 +755,8 @@ impl GleanState<'_> {
                     let completions = |ty| solver.completions(ty, Some(attr_name), false);
 
                     let tys = match base_type.clone() {
-                        Type::Union(box Union { members: tys, .. })
-                        | Type::Intersect(box (tys, _)) => tys,
+                        Type::Union(u) => u.members,
+                        Type::Intersect(i) => i.0,
                         ty => vec![ty],
                     };
 
@@ -889,26 +889,16 @@ impl GleanState<'_> {
         include_str_lit_xrefs: bool,
     ) -> Vec<(DefinitionLocation, TextRange)> {
         match expr {
-            Expr::Attribute(attr) => {
-                if attr.ctx.is_load() {
-                    self.find_definition_for_expr_attribute(attr)
-                        .into_iter()
-                        .map(|name| (name, attr.attr.range()))
-                        .collect()
-                } else {
-                    vec![]
-                }
-            }
-            Expr::Name(name) => {
-                if name.ctx.is_load() {
-                    self.find_definition_for_expr_name(name, false)
-                        .into_iter()
-                        .map(|x| (x, name.range()))
-                        .collect()
-                } else {
-                    vec![]
-                }
-            }
+            Expr::Attribute(attr) if attr.ctx.is_load() => self
+                .find_definition_for_expr_attribute(attr)
+                .into_iter()
+                .map(|name| (name, attr.attr.range()))
+                .collect(),
+            Expr::Name(name) if name.ctx.is_load() => self
+                .find_definition_for_expr_name(name, false)
+                .into_iter()
+                .map(|x| (x, name.range()))
+                .collect(),
             Expr::StringLiteral(str_lit) if include_str_lit_xrefs => {
                 self.get_xrefs_for_str_lit(str_lit)
             }
@@ -1199,8 +1189,13 @@ impl GleanState<'_> {
             let fqname = self.make_fq_name_for_declaration(&name_id, &ctx.container, scope_type);
             let docstring_range =
                 next.and_then(|stmt| Docstring::range_from_stmts(slice::from_ref(stmt)));
-            let type_info = self.visit_annotation_exprs(info.annotation, &ctx.container);
-            def_infos.push(self.variable_info(fqname, info.range, type_info, docstring_range, ctx));
+            def_infos.push(self.variable_info(
+                fqname,
+                info.range,
+                info.type_info.clone(),
+                docstring_range,
+                ctx,
+            ));
 
             if name.id == dunder::ALL
                 && let Some(Expr::List(list_expr)) = info.value
@@ -1518,7 +1513,7 @@ impl GleanState<'_> {
         node.visit(&mut |expr| self.visit_expr(expr, container));
     }
 
-    fn generate_facts(&mut self, ast: &Vec<Stmt>, range: TextRange) {
+    fn generate_facts(&mut self, ast: &ThinVec<Stmt>, range: TextRange) {
         self.module_facts(range);
         let mut nodes = VecDeque::new();
 
@@ -1592,7 +1587,7 @@ impl GleanState<'_> {
             Stmt::Assign(assign) => {
                 let info = AssignInfo {
                     range: assign.range(),
-                    annotation: None,
+                    type_info: None,
                     value: Some(assign.value.as_ref()),
                 };
                 assign.targets.visit(&mut |target| {
@@ -1602,9 +1597,10 @@ impl GleanState<'_> {
                 self.visit_exprs(&assign.value, container);
             }
             Stmt::AnnAssign(assign) => {
+                let type_info = self.visit_annotation_exprs(Some(&assign.annotation), container);
                 let info = AssignInfo {
                     range: assign.range(),
-                    annotation: Some(&assign.annotation),
+                    type_info,
                     value: assign.value.as_ref().map(|v| v.as_ref()),
                 };
                 self.variable_facts(&assign.target, &info, context, next, &mut decl_infos);
@@ -1614,7 +1610,7 @@ impl GleanState<'_> {
             Stmt::AugAssign(assign) => {
                 let info = AssignInfo {
                     range: assign.range(),
-                    annotation: None,
+                    type_info: None,
                     value: Some(assign.value.as_ref()),
                 };
                 self.variable_facts(&assign.target, &info, context, next, &mut decl_infos);
@@ -1633,7 +1629,7 @@ impl GleanState<'_> {
                 let range = TextRange::new(stmt_for.range().start(), stmt_for.iter.range().end());
                 let info = AssignInfo {
                     range,
-                    annotation: None,
+                    type_info: None,
                     value: None,
                 };
                 stmt_for.target.visit(&mut |target| {
@@ -1654,7 +1650,7 @@ impl GleanState<'_> {
                     item.optional_vars.visit(&mut |target| {
                         let info = AssignInfo {
                             range: target.range(),
-                            annotation: None,
+                            type_info: None,
                             value: None,
                         };
                         self.variable_facts(target, &info, context, next, &mut decl_infos)

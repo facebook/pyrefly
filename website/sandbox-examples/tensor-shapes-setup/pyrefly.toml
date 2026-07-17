@@ -1,0 +1,4 @@
+python-version = "3.12"
+[errors]
+unimported-directive = 'ignore'
+not-required-key-access = 'warn'

@@ -144,6 +144,62 @@ class Triangle(Shape):
 );
 
 testcase!(
+    test_super_method_assigned_to_self_attribute,
+    r#"
+class Parent:
+    def meth1(self) -> None: ...
+    @classmethod
+    def meth2(cls) -> None: ...
+    @staticmethod
+    def meth3() -> None: ...
+
+class Child(Parent):
+    def __init__(self) -> None:
+        self.meth1 = super().meth1
+        self.meth2 = super().meth2
+        self.meth3 = super().meth3
+
+Parent().meth1()
+Child().meth1()
+Parent().meth2()
+Child().meth2()
+Parent().meth3()
+Child().meth3()
+"#,
+);
+
+testcase!(
+    test_instance_method_assigned_to_incompatible_inherited_classmethod,
+    r#"
+from typing import assert_type
+
+class Parent:
+    @classmethod
+    def meth1(self) -> int:
+        return 2
+
+    @classmethod
+    def meth2(self) -> str:
+        return "'4'"
+
+
+class Child(Parent):
+    def __init__(self) -> None:
+        self.meth2 = super().meth1  # E: `(self: type[Self@Child]) -> int` is not assignable to attribute `meth2` with type `(self: type[Self@Child]) -> str`
+
+# At runtime, this is a call to the inherited `Parent.meth2` classmethod.
+# We don't have a good way of modeling this, so we treat this as an (illegal) class access of the
+# `Child.meth2` instance attribute.
+Child.meth2()  # E: Instance-only attribute `meth2` of class `Child` is not visible on the class
+
+# At runtime, this is a call to the `Child.meth2` instance attribute, which returns ` int` because
+# it was assigned to `Parent.meth1`. However, we rejected the assignment above due to incompatible
+# signatures, so we get the inherited return type of `Parent.meth2`.
+assert_type(Child().meth2(), str)
+    "#,
+);
+
+testcase!(
     test_illegal_location,
     r#"
 class A:
@@ -325,5 +381,62 @@ class Foo(bob):
 class Bar(bob):
     def __new__(cls):
         return super().__new__(cls, 1)
+    "#,
+);
+
+// Verify super().__init__() correctly handles kwargs forwarding with default params.
+testcase!(
+    test_super_init_kwargs_forwarding,
+    r#"
+class Parent:
+    def __init__(self, x: int, y: int = 0) -> None: ...
+
+class Child(Parent):
+    def __init__(self, x: int, **kwargs) -> None:
+        super().__init__(x, **kwargs)
+
+class OnlyKwargs(Parent):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+
+class NoArgsOptionalParent:
+    def __init__(self, x: int = 0, y: int = 0) -> None: ...
+
+class NoArgsChild(NoArgsOptionalParent):
+    def __init__(self) -> None:
+        super().__init__()
+    "#,
+);
+
+// Verify super().__init__() works with explicit kwargs alongside **kwargs.
+testcase!(
+    test_super_init_explicit_and_kwargs,
+    r#"
+class Parent:
+    def __init__(self, size: dict, **kwargs) -> None: ...
+
+class Child(Parent):
+    def __init__(self, size: dict = {}, **kwargs) -> None:
+        super().__init__(size=size, **kwargs)
+    "#,
+);
+
+// Verify super().__init__() works with all positional args, including unannotated.
+testcase!(
+    test_super_init_all_positional,
+    r#"
+class AnnotatedParent:
+    def __init__(self, config: int, layer_idx: int) -> None: ...
+
+class AnnotatedChild(AnnotatedParent):
+    def __init__(self, config: int, layer_idx: int) -> None:
+        super().__init__(config, layer_idx)
+
+class UnannotatedParent:
+    def __init__(self, config, layer_idx): ...
+
+class UnannotatedChild(UnannotatedParent):
+    def __init__(self, config, layer_idx):
+        super().__init__(config, layer_idx)
     "#,
 );

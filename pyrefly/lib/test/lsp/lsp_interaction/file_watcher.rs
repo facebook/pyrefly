@@ -12,6 +12,7 @@ use lsp_types::Url;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Request as _;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use pyrefly::lsp::non_wasm::protocol::Message;
 use serde::Deserialize;
 use serde_json::json;
@@ -19,6 +20,7 @@ use tempfile::TempDir;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::object_model::LspMessageError;
 use crate::util::get_test_files_root;
 
@@ -126,7 +128,13 @@ fn test_incremental_pattern_addition() {
 fn test_consecutive_file_watcher_events() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {

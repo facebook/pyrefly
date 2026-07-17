@@ -79,17 +79,18 @@ use pyrefly::lsp::non_wasm::protocol::Notification;
 use pyrefly::lsp::non_wasm::protocol::Request;
 use pyrefly::lsp::non_wasm::protocol::Response;
 use pyrefly::lsp::non_wasm::server::Connection;
+use pyrefly::lsp::non_wasm::server::TypeErrorDisplayStatusRequest;
 use pyrefly::lsp::wasm::provide_type::ProvideType;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::lock::FinishHandle;
 use pyrefly_util::telemetry::NoTelemetry;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::thread_pool::ThreadCount;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::init::TEST_THREAD_COUNT;
 use crate::init::init_test;
 
 #[derive(Debug)]
@@ -119,6 +120,13 @@ impl std::fmt::Display for LspMessageError {
 }
 
 impl std::error::Error for LspMessageError {}
+
+/// Kind of a notebook cell, sidestepping boolean-blindness at call sites.
+#[derive(Clone, Copy)]
+pub enum CellKind {
+    Code,
+    Markdown,
+}
 
 #[derive(Default)]
 pub struct InitializeSettings {
@@ -911,7 +919,7 @@ impl TestClient {
                         && params
                             .diagnostics
                             .iter()
-                            .any(|d| d.message.contains(message))
+                            .any(|d| matches!(&d.message, lsp_types::DiagnosticMessage::String(s) if s.contains(message)))
                     {
                         Some(Ok(()))
                     } else {
@@ -1274,7 +1282,10 @@ pub struct RecordedTelemetryEvent {
 /// ```ignore
 /// let telemetry = TestTelemetry::new();
 /// let rx = telemetry.subscribe();
-/// let interaction = LspInteraction::new_with_args(args, telemetry);
+/// let interaction = LspInteraction::new_with_args(LspInteractionArgs {
+///     telemetry,
+///     ..LspInteractionArgs::default()
+/// });
 ///
 /// // ... trigger an LSP operation ...
 ///
@@ -1287,7 +1298,10 @@ pub struct RecordedTelemetryEvent {
 /// ```ignore
 /// let telemetry = TestTelemetry::new();
 /// let rx = telemetry.subscribe();
-/// let interaction = LspInteraction::new_with_args(args, telemetry);
+/// let interaction = LspInteraction::new_with_args(LspInteractionArgs {
+///     telemetry,
+///     ..LspInteractionArgs::default()
+/// });
 ///
 /// // .. wait for a sourcedb rebuild to complete before opening a file ...
 ///
@@ -1349,43 +1363,45 @@ impl Telemetry for TestTelemetry {
     }
 }
 
+pub struct LspInteractionArgs {
+    pub args: LspArgs,
+    pub telemetry: Box<dyn Telemetry>,
+    pub thread_count: ThreadCount,
+    pub thrift_remapper: Option<ThriftRemapper>,
+}
+
+impl Default for LspInteractionArgs {
+    fn default() -> Self {
+        Self {
+            args: LspArgs {
+                indexing_mode: IndexingMode::None,
+                workspace_indexing_limit: 50,
+                build_system_blocking: false,
+            },
+            telemetry: Box::new(NoTelemetry),
+            thread_count: TEST_THREAD_COUNT,
+            thrift_remapper: None,
+        }
+    }
+}
+
 impl LspInteraction {
     pub fn new() -> Self {
-        Self::new_with_indexing_mode(IndexingMode::None)
-    }
-
-    pub fn new_with_indexing_mode(indexing_mode: IndexingMode) -> Self {
-        let args = LspArgs {
-            indexing_mode,
-            workspace_indexing_limit: 50,
-            build_system_blocking: false,
-            enable_external_references: false,
-        };
-        Self::new_with_args(args, NoTelemetry, None, None)
-    }
-
-    pub fn new_with_thrift_remapper(thrift_remapper: Option<ThriftRemapper>) -> Self {
-        let args = LspArgs {
-            indexing_mode: IndexingMode::None,
-            workspace_indexing_limit: 50,
-            build_system_blocking: false,
-            enable_external_references: false,
-        };
-        Self::new_with_args(args, NoTelemetry, None, thrift_remapper)
+        Self::new_with_args(LspInteractionArgs::default())
     }
 
     /// Create an `LspInteraction` with custom [`LspArgs`] and a custom
     /// [`Telemetry`] implementation. The telemetry value is moved into the
     /// spawned server thread.
-    pub fn new_with_args<T: Telemetry + 'static>(
-        args: LspArgs,
-        telemetry: T,
-        thread_count: Option<ThreadCount>,
-        thrift_remapper: Option<ThriftRemapper>,
-    ) -> Self {
+    pub fn new_with_args(args: LspInteractionArgs) -> Self {
         init_test();
 
-        let thread_count = thread_count.unwrap_or(TEST_THREAD_COUNT);
+        let LspInteractionArgs {
+            args,
+            telemetry,
+            thread_count,
+            thrift_remapper,
+        } = args;
 
         let ((conn_client, _client_reader), (conn_server, server_reader)) = Connection::memory();
 
@@ -1401,7 +1417,7 @@ impl LspInteraction {
                 None,
                 None,
                 thrift_remapper,
-                &telemetry,
+                &*telemetry,
                 Arc::new(NoExternalProvider),
                 None,
                 thread_count,
@@ -1461,34 +1477,50 @@ impl LspInteraction {
         &self,
         file_name: &str,
         cell_number: usize,
+        kind: CellKind,
         cell_contents: &str,
     ) -> (Value, Value) {
         let cell_uri = self.cell_uri(file_name, &format!("cell{}", cell_number + 1));
+        // LSP notebook cell kinds: Code = 2, Markup = 1.
+        let (kind_id, language_id) = match kind {
+            CellKind::Code => (2, "python"),
+            CellKind::Markdown => (1, "markdown"),
+        };
         let cell = json!({
-            "kind": 2,
+            "kind": kind_id,
             "document": cell_uri,
         });
         let doc = json!({
             "uri": cell_uri,
-            "languageId": "python",
+            "languageId": language_id,
             "version": 1,
             "text": *cell_contents
         });
         (cell, doc)
     }
 
-    /// Opens a notebook document with the given cell contents.
-    /// Each string in `cell_contents` becomes a separate code cell in the notebook.
+    /// Opens a notebook document whose cells are all code cells.
     pub fn open_notebook(&self, file_name: &str, cell_contents: Vec<&str>) {
+        self.open_notebook_with_kinds(
+            file_name,
+            cell_contents
+                .into_iter()
+                .map(|text| (CellKind::Code, text))
+                .collect(),
+        );
+    }
+
+    /// Opens a notebook document with mixed cell kinds. Each entry is
+    /// `(kind, text)`. Cells are addressed by fragment `cell{i+1}`.
+    pub fn open_notebook_with_kinds(&self, file_name: &str, cells_spec: Vec<(CellKind, &str)>) {
         let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
         let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
 
         let mut cells = Vec::new();
         let mut cell_text_documents = Vec::new();
-
-        for (i, text) in cell_contents.iter().enumerate() {
-            let (cell, doc) = self.create_notebook_cell(file_name, i, text);
+        for (i, (kind, text)) in cells_spec.iter().enumerate() {
+            let (cell, doc) = self.create_notebook_cell(file_name, i, *kind, text);
             cells.push(cell);
             cell_text_documents.push(doc);
         }
@@ -1896,7 +1928,7 @@ impl LspInteraction {
         let id = self.client.next_request_id();
         self.client.send_message(Message::Request(Request {
             id: id.clone(),
-            method: "pyrefly/textDocument/typeErrorDisplayStatus".to_owned(),
+            method: TypeErrorDisplayStatusRequest::METHOD.to_owned(),
             params: json!({
                 "uri": cell_uri
             }),

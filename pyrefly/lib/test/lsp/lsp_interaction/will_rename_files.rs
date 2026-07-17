@@ -7,16 +7,18 @@
 
 use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::util::get_test_files_root;
 
 #[test]
 fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
+    let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings::default())
@@ -62,7 +64,13 @@ fn test_will_rename_files_changes_open_files_when_indexing_disabled() {
 #[test]
 fn test_will_rename_files_with_marker_file_no_config() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     let root_path = root.path().join("marker_file_no_config");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
 
@@ -116,7 +124,7 @@ fn test_will_rename_files_with_marker_file_no_config() {
 #[test]
 fn test_will_rename_files_changes_folder() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
+    let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings::default())
@@ -162,7 +170,13 @@ fn test_will_rename_files_changes_folder() {
 #[test]
 fn test_will_rename_files_changes_nothing_when_no_files_open() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings::default())
@@ -184,7 +198,13 @@ fn test_will_rename_files_changes_nothing_when_no_files_open() {
 #[test]
 fn test_will_rename_files_changes_everything_when_indexed() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings::default())
@@ -265,7 +285,7 @@ fn test_will_rename_files_changes_everything_when_indexed() {
 #[test]
 fn test_will_rename_files_without_config() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
+    let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().join("basic"));
     interaction
         .initialize(InitializeSettings::default())
@@ -309,7 +329,13 @@ fn test_will_rename_files_without_config() {
 #[test]
 fn test_will_rename_files_without_config_with_workspace_folder() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     let root_path = root.path().join("basic");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
 
@@ -366,7 +392,13 @@ fn test_will_rename_files_without_config_with_workspace_folder() {
 #[test]
 fn test_will_rename_files_document_changes() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root.path().to_path_buf());
 
     let settings = InitializeSettings {

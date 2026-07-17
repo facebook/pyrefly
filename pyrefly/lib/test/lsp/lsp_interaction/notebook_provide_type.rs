@@ -37,3 +37,33 @@ fn test_notebook_provide_type() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_notebook_provide_type_second_cell() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.open_notebook(
+        "notebook.ipynb",
+        vec!["foo = \"bar\"\nfoo", "x = 1\nbar = x"],
+    );
+
+    // `bar` is at cell2 line 1; its type is the value of `x`.
+    interaction
+        .provide_type_cell("notebook.ipynb", "cell2", 1, 0)
+        .expect_response(json!({
+            "contents": [{
+                "kind": "plaintext",
+                "value": "typing.Literal[1]",
+            }]
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

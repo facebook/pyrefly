@@ -187,6 +187,8 @@ pub struct RuleOverrides {
     // Type annotation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_invalid_type_form: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_explicit_any: Option<Severity>,
 
     // Abstract/instantiation rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -202,7 +204,6 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_attribute_access_issue: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_call_issue: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_inconsistent_overload: Option<Severity>,
@@ -215,27 +216,20 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_operator_issue: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_optional_subscript: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_optional_member_access: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_optional_call: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_optional_iterable: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_optional_context_manager: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_optional_operand: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_return_type: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_typed_dict_not_required_access: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_private_usage: Option<Severity>,
@@ -259,7 +253,6 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unknown_argument_type: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_unknown_lambda_type: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unknown_variable_type: Option<Severity>,
@@ -274,12 +267,10 @@ pub struct RuleOverrides {
 
     // Redundancy/unnecessary code rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_unnecessary_is_instance: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unnecessary_cast: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_unnecessary_comparison: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     #[expect(unused)]
@@ -300,6 +291,45 @@ pub struct RuleOverrides {
     // Coroutine rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unused_coroutine: Option<Severity>,
+
+    // Attribute/override rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_function_member_access: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_implicit_override: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_incompatible_unannotated_override: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
+    pub report_unannotated_class_attribute: Option<Severity>,
+
+    // Decorator rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_untyped_class_decorator: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_untyped_function_decorator: Option<Severity>,
+
+    // Name/redeclaration rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_redeclaration: Option<Severity>,
+
+    // Match/reachability rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_match_not_exhaustive: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unreachable: Option<Severity>,
+
+    // Import rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_implicit_relative_import: Option<Severity>,
+
+    // Type argument rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_missing_type_argument: Option<Severity>,
+
+    // __all__ rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_unsupported_dunder_all: Option<Severity>,
 }
 
 impl RuleOverrides {
@@ -320,19 +350,40 @@ impl RuleOverrides {
         // The value of that ErrorKind's entry is found by or'ing together the present RuleOverrides.
         add(self.report_missing_imports, ErrorKind::MissingImport);
         add(self.report_missing_module_source, ErrorKind::MissingSource);
+        add(
+            self.report_missing_module_source,
+            ErrorKind::MissingSourceForStubs,
+        );
         add(self.report_missing_type_stubs, ErrorKind::UntypedImport);
         add(self.report_invalid_type_form, ErrorKind::InvalidAnnotation);
+        add(self.report_invalid_type_form, ErrorKind::InvalidLiteral);
+        add(self.report_invalid_type_form, ErrorKind::InvalidTypeAlias);
+        add(self.report_invalid_type_form, ErrorKind::NotAType);
+        add(self.report_explicit_any, ErrorKind::ExplicitAny);
         add(self.report_abstract_usage, ErrorKind::BadInstantiation);
         add(self.report_argument_type, ErrorKind::BadArgumentType);
+        add(self.report_argument_type, ErrorKind::InvalidArgument);
         add(self.report_assert_type_failure, ErrorKind::AssertType);
         add(self.report_assignment_type, ErrorKind::BadAssignment);
+        add(self.report_assignment_type, ErrorKind::BadUnpacking);
+        add(self.report_assignment_type, ErrorKind::BadTypedDictKey);
         add(
             self.report_attribute_access_issue,
             ErrorKind::MissingAttribute,
         );
         add(
+            self.report_attribute_access_issue,
+            ErrorKind::MissingModuleAttribute,
+        );
+        add(self.report_attribute_access_issue, ErrorKind::NoAccess);
+        add(self.report_attribute_access_issue, ErrorKind::ReadOnly);
+        add(
             self.report_inconsistent_overload,
             ErrorKind::InconsistentOverload,
+        );
+        add(
+            self.report_inconsistent_overload,
+            ErrorKind::InvalidOverload,
         );
         add(self.report_index_issue, ErrorKind::BadIndex);
         add(
@@ -344,7 +395,10 @@ impl RuleOverrides {
             ErrorKind::InvalidOverload,
         );
         add(self.report_operator_issue, ErrorKind::UnsupportedOperation);
+        add(self.report_operator_issue, ErrorKind::InvalidArgument);
+        add(self.report_operator_issue, ErrorKind::NotCallable);
         add(self.report_return_type, ErrorKind::BadReturn);
+        add(self.report_return_type, ErrorKind::InvalidYield);
         add(self.report_private_usage, ErrorKind::NoAccess);
         add(self.report_deprecated, ErrorKind::Deprecated);
         add(
@@ -365,20 +419,140 @@ impl RuleOverrides {
         );
         add(
             self.report_unknown_parameter_type,
-            ErrorKind::UnannotatedParameter,
+            ErrorKind::ImplicitAnyParameter,
         );
         add(
             self.report_missing_parameter_type,
-            ErrorKind::UnannotatedParameter,
+            ErrorKind::ImplicitAnyParameter,
         );
         add(self.report_unknown_argument_type, ErrorKind::ImplicitAny);
-        add(self.report_unknown_variable_type, ErrorKind::ImplicitAny);
-        add(self.report_unknown_member_type, ErrorKind::ImplicitAny);
+        add(
+            self.report_unknown_variable_type,
+            ErrorKind::UnknownVariableType,
+        );
+        add(
+            self.report_unknown_member_type,
+            ErrorKind::UnknownAttributeType,
+        );
+        add(
+            self.report_unknown_lambda_type,
+            ErrorKind::ImplicitAnyLambda,
+        );
         add(self.report_invalid_type_var_use, ErrorKind::InvalidTypeVar);
         add(self.report_unnecessary_cast, ErrorKind::RedundantCast);
         add(self.report_undefined_variable, ErrorKind::UnknownName);
         add(self.report_unbound_variable, ErrorKind::UnboundName);
         add(self.report_unused_coroutine, ErrorKind::UnusedCoroutine);
+
+        // Call rules
+        add(self.report_call_issue, ErrorKind::MissingArgument);
+        add(self.report_call_issue, ErrorKind::BadArgumentCount);
+        add(
+            self.report_call_issue,
+            ErrorKind::UnexpectedPositionalArgument,
+        );
+        add(self.report_call_issue, ErrorKind::UnexpectedKeyword);
+        add(self.report_call_issue, ErrorKind::BadKeywordArgument);
+        add(self.report_call_issue, ErrorKind::NoMatchingOverload);
+        add(
+            self.report_call_issue,
+            ErrorKind::IncompatibleOverloadResidual,
+        );
+        add(self.report_call_issue, ErrorKind::NotCallable);
+
+        // Optional (None-related) rules
+        add(
+            self.report_optional_subscript,
+            ErrorKind::UnsupportedOperation,
+        );
+        add(
+            self.report_optional_operand,
+            ErrorKind::UnsupportedOperation,
+        );
+        add(
+            self.report_optional_member_access,
+            ErrorKind::MissingAttribute,
+        );
+        add(self.report_optional_call, ErrorKind::NotCallable);
+        add(self.report_optional_iterable, ErrorKind::NotIterable);
+        add(
+            self.report_optional_context_manager,
+            ErrorKind::BadContextManager,
+        );
+
+        // TypedDict rules
+        add(
+            self.report_typed_dict_not_required_access,
+            ErrorKind::NotRequiredKeyAccess,
+        );
+
+        // Redundancy/unnecessary code rules
+        add(
+            self.report_unnecessary_is_instance,
+            ErrorKind::RedundantCondition,
+        );
+        add(
+            self.report_unnecessary_comparison,
+            ErrorKind::IncompatibleComparison,
+        );
+        add(
+            self.report_unnecessary_comparison,
+            ErrorKind::UnnecessaryComparison,
+        );
+
+        // Attribute/override rules
+        add(
+            self.report_function_member_access,
+            ErrorKind::MissingAttribute,
+        );
+        add(
+            self.report_implicit_override,
+            ErrorKind::MissingOverrideDecorator,
+        );
+        add(
+            self.report_incompatible_unannotated_override,
+            ErrorKind::BadOverrideMutableAttribute,
+        );
+
+        // Decorator rules
+        add(
+            self.report_untyped_class_decorator,
+            ErrorKind::UntypedClassDecorator,
+        );
+        add(
+            self.report_untyped_function_decorator,
+            ErrorKind::UntypedFunctionDecorator,
+        );
+
+        // Name/redeclaration rules
+        add(self.report_redeclaration, ErrorKind::Redefinition);
+
+        // Match/reachability rules
+        add(
+            self.report_match_not_exhaustive,
+            ErrorKind::NonExhaustiveMatch,
+        );
+        add(self.report_unreachable, ErrorKind::Unreachable);
+        add(self.report_unreachable, ErrorKind::UnreachableMatchCase);
+
+        // Import rules
+        add(
+            self.report_implicit_relative_import,
+            ErrorKind::MissingImport,
+        );
+
+        // Type argument rules
+        add(
+            self.report_missing_type_argument,
+            ErrorKind::ImplicitAnyTypeArgument,
+        );
+
+        // __all__ rules
+        add(self.report_unsupported_dunder_all, ErrorKind::BadDunderAll);
+        add(
+            self.report_unsupported_dunder_all,
+            ErrorKind::UnresolvableDunderAll,
+        );
 
         if map.is_empty() {
             None

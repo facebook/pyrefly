@@ -5,8 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::Url;
+use lsp_types::notification::DidOpenNotebookDocument;
 use serde_json::json;
 
+use crate::object_model::CellKind;
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::get_test_files_root;
@@ -499,8 +502,10 @@ fn test_notebook_did_change_add_cell() {
     );
 
     // Open cells 4 and 5
-    let (cell4, cell4_doc) = interaction.create_notebook_cell("notebook.ipynb", 3, "x += 1");
-    let (cell5, cell5_doc) = interaction.create_notebook_cell("notebook.ipynb", 4, "x += 2");
+    let (cell4, cell4_doc) =
+        interaction.create_notebook_cell("notebook.ipynb", 3, CellKind::Code, "x += 1");
+    let (cell5, cell5_doc) =
+        interaction.create_notebook_cell("notebook.ipynb", 4, CellKind::Code, "x += 2");
 
     interaction.change_notebook(
         "notebook.ipynb",
@@ -550,6 +555,64 @@ fn test_notebook_did_change_add_cell() {
     interaction
         .diagnostic_for_cell("notebook.ipynb", "cell5")
         .expect_response(json!({"items": [], "kind": "full"}))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// Regression test: unsaved notebooks (with `untitled:` URIs) should be
+/// accepted and type-checked. Previously, `notebookDocument/didOpen` failed
+/// because `url.to_file_path()` does not support `untitled:` schemes.
+#[test]
+fn test_unsaved_notebook_did_open() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let notebook_uri = "untitled:Untitled-1.ipynb";
+    let cell1_uri_str = "vscode-notebook-cell://Untitled-1.ipynb#cell1";
+    let cell2_uri_str = "vscode-notebook-cell://Untitled-1.ipynb#cell2";
+    let cell1_url = Url::parse(cell1_uri_str).unwrap();
+    let cell2_url = Url::parse(cell2_uri_str).unwrap();
+
+    interaction
+        .client
+        .send_notification::<DidOpenNotebookDocument>(json!({
+            "notebookDocument": {
+                "uri": notebook_uri,
+                "notebookType": "jupyter-notebook",
+                "version": 1,
+                "metadata": {
+                    "language_info": { "name": "python" }
+                },
+                "cells": [
+                    { "kind": 2, "document": cell1_uri_str },
+                    { "kind": 2, "document": cell2_uri_str },
+                ]
+            },
+            "cellTextDocuments": [
+                { "uri": cell1_uri_str, "languageId": "python", "version": 1, "text": "x: int = 1" },
+                { "uri": cell2_uri_str, "languageId": "python", "version": 1, "text": "y: str = 1" },
+            ]
+        }));
+
+    // Cell 1 is valid — expect 0 diagnostics.
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell1_url, 0)
+        .unwrap();
+    // Cell 2 has `y: str = 1` — expect 1 type error.
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell2_url, 1)
         .unwrap();
 
     interaction.shutdown().unwrap();

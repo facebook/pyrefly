@@ -406,6 +406,7 @@ class ContributorAnalyzer:
                         "type": contributor_type,
                         "commit_count": 0,
                     }
+                # pyrefly: ignore [unsupported-operation]
                 contributors[contributor_id]["commit_count"] += 1
 
         return contributors
@@ -532,8 +533,8 @@ def get_tag_date(client: GitHubClient, owner: str, repo: str, tag: str) -> datet
     url = f"{client.base_url}/repos/{owner}/{repo}/git/refs/tags/{tag}"
     try:
         ref = client._make_request(url)
-    except Exception:
-        raise ValueError(f"Tag '{tag}' not found")
+    except Exception as e:
+        raise ValueError(f"Tag '{tag}' not found: {e}")
 
     obj_type = ref["object"]["type"]
     obj_sha = ref["object"]["sha"]

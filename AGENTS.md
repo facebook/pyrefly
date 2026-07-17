@@ -55,9 +55,9 @@ Coding style: All code must be clean, documented and minimal. That means:
   complicated work at all.
 - If some code looks heavyweight, perhaps with lots of conditionals, then think
   harder for a more elegant way of achieving it.
-- Code should have comments and functions should have docstrings. The best
-  comments are ones that introduce invariants, or prove that invariants are
-  being upheld, or indicate which invariants the code relies upon. Don't duplicate comments, or write unnecessary comments for code that is obvious.
+- Code should have comments and functions should have docstrings, but both should be
+  concise. The best comments are ones that introduce invariants, or prove that invariants are being upheld, or indicate which invariants the code relies upon. Don't write duplicate comments, overly long comments, or comments for things that are obvious from
+  reading the code.
 - **Unreachable states must panic, not silently degrade.** Do not use defensive
   programming to handle states that should be impossible. If a match arm, Option,
   or Result should never occur given the surrounding invariants, use
@@ -139,7 +139,7 @@ Running `buck test pyrefly:pyrefly` triggers both test targets.
   You can override this with `--mode buck` or `--mode cargo`.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-conformance --no-jsonschema`
+  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
 
 ### After modifying BUCK files (internal only)
 
@@ -149,7 +149,7 @@ Running `buck test pyrefly:pyrefly` triggers both test targets.
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-conformance --no-jsonschema`
+`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.
@@ -179,4 +179,5 @@ a test captures undesirable behavior. Important points:
   has become stale.
 - **Message length:** Keep the `bug` message concise. For complicated bugs, add
   detailed explanations as comments inside the test body rather than making the
-  marker message very long.
+  marker message very long. If there is an associated Github issue, linking to it
+  in a comment is often sufficient without paraphrasing the issue in the test.

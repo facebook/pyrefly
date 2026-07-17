@@ -5,7 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
+
 use clap::ValueEnum;
+use enum_iterator::Sequence;
+use enum_iterator::all;
 use pyrefly_python::ignore::Tool;
 use serde::Deserialize;
 use serde::Serialize;
@@ -13,6 +17,8 @@ use starlark_map::small_set::SmallSet;
 use toml::Table;
 
 use crate::error::ErrorDisplayConfig;
+use crate::error_kind::ErrorKind;
+use crate::error_kind::Severity;
 use crate::module_wildcard::ModuleWildcard;
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
@@ -59,6 +65,147 @@ pub struct RecursionLimitConfig {
     pub limit: u32,
     /// How to handle when the depth limit is exceeded.
     pub handler: RecursionOverflowHandler,
+}
+
+/// A named collection of error severities and behavior settings that serves as
+/// the base configuration. User-specified settings merge on top, overriding
+/// the preset. Explicit configuration always wins over the preset regardless
+/// of order in the config file.
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Sequence)]
+#[derive(ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum Preset {
+    /// Silences every error kind. Other settings (scalars, behavior flags) are
+    /// left at their defaults. Useful when Pyrefly is running only for IDE
+    /// features like hover and go-to-definition, without diagnostics.
+    Off,
+    /// Minimal checking preset for unconfigured projects and LSP users.
+    /// Enables diagnostics covering parse errors and a small set of
+    /// high-confidence, locally-fixable checks. Stricter checks like
+    /// override validation, annotation completeness, and broader call-shape
+    /// or assignment validation are disabled.
+    Basic,
+    /// A looser, less-strict preset useful for codebases migrating from mypy.
+    /// Pyrefly does not aim to mimic mypy's behavior precisely — this preset
+    /// just disables a few checks that mypy does not have, so migrating users
+    /// aren't hit with new errors for classes of issues mypy never flagged.
+    Legacy,
+    /// The default Pyrefly configuration. Equivalent to having no preset at all.
+    Default,
+    /// Enables additional error codes on top of the default for stricter checking.
+    Strict,
+    /// Enables every error kind at `Error` severity. Directives like
+    /// `reveal-type` keep their default severity.
+    All,
+}
+
+impl Preset {
+    /// Returns a `ConfigBase` carrying this preset's defaults. Only sets fields
+    /// the preset explicitly controls — leaves others as `None` so the
+    /// per-field defaults in `configure()` still apply. Applied to
+    /// `ConfigFile::root` only; sub-configs inherit these values through the
+    /// usual root-fallback pattern in the per-field accessors.
+    pub fn apply(self) -> ConfigBase {
+        match self {
+            Preset::Off => {
+                // Silence every error kind. Leave all other settings at their
+                // defaults so behavior flags still apply — only diagnostics
+                // are disabled.
+                let errors: HashMap<ErrorKind, Severity> = all::<ErrorKind>()
+                    .map(|kind| (kind, Severity::Ignore))
+                    .collect();
+                ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(errors)),
+                    ..Default::default()
+                }
+            }
+            Preset::Basic => {
+                // Basic is an opt-in preset: a small set of high-confidence,
+                // locally-fixable diagnostics fire. Every other error kind is
+                // silenced so unconfigured projects and LSP users see a
+                // low-noise baseline.
+                let mut errors = HashMap::from([
+                    (ErrorKind::BadClassDefinition, Severity::Error),
+                    (ErrorKind::BadInstantiation, Severity::Error),
+                    (ErrorKind::BadKeywordArgument, Severity::Error),
+                    (ErrorKind::BadRaise, Severity::Error),
+                    (ErrorKind::BadUnpacking, Severity::Error),
+                    (ErrorKind::DivisionByZero, Severity::Error),
+                    (ErrorKind::InvalidAnnotation, Severity::Error),
+                    (ErrorKind::InvalidLiteral, Severity::Error),
+                    (ErrorKind::InvalidSuperCall, Severity::Error),
+                    (ErrorKind::InvalidSyntax, Severity::Error),
+                    (ErrorKind::MissingImport, Severity::Error),
+                    (ErrorKind::NotAsync, Severity::Error),
+                    (ErrorKind::ParseError, Severity::Error),
+                    (ErrorKind::UnexpectedKeyword, Severity::Error),
+                    (ErrorKind::UnexpectedPositionalArgument, Severity::Error),
+                    (ErrorKind::UnknownName, Severity::Error),
+                    (ErrorKind::UnusedCoroutine, Severity::Error),
+                ]);
+                // Silence every other error kind. Explicitly setting each one
+                // (rather than relying on `severity()`'s default fallback) is
+                // required because the preset's errors map becomes the sole
+                // source of truth after merging with user overrides.
+                for kind in all::<ErrorKind>() {
+                    errors.entry(kind).or_insert(Severity::Ignore);
+                }
+                ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(errors)),
+                    check_unannotated_defs: Some(false),
+                    infer_return_types: Some(InferReturnTypes::Never),
+                    infer_with_first_use: Some(false),
+                    permissive_ignores: Some(true),
+                    ..Default::default()
+                }
+            }
+            Preset::Legacy => {
+                let errors = HashMap::from([
+                    (ErrorKind::BadOverrideMutableAttribute, Severity::Ignore),
+                    (ErrorKind::BadOverrideParamName, Severity::Ignore),
+                    (ErrorKind::UnboundName, Severity::Ignore),
+                ]);
+                ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(errors)),
+                    check_unannotated_defs: Some(false),
+                    infer_return_types: Some(InferReturnTypes::Never),
+                    ..Default::default()
+                }
+            }
+            Preset::Default => ConfigBase::default(),
+            Preset::Strict => {
+                let errors = HashMap::from([
+                    (ErrorKind::ImplicitAny, Severity::Error),
+                    (ErrorKind::MissingOverrideDecorator, Severity::Error),
+                    (ErrorKind::PotentialBadKeywordArgument, Severity::Error),
+                    (ErrorKind::UnusedIgnore, Severity::Error),
+                ]);
+                ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(errors)),
+                    strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
+                    ..Default::default()
+                }
+            }
+            Preset::All => {
+                // Promote every non-Error kind to Error. Directives (e.g.
+                // RevealType) are left at their default severity so they
+                // remain informational rather than becoming hard errors.
+                let errors: HashMap<ErrorKind, Severity> = all::<ErrorKind>()
+                    .filter_map(|kind| {
+                        (!kind.is_directive() && kind.default_severity() != Severity::Error)
+                            .then_some((kind, Severity::Error))
+                    })
+                    .collect();
+                ConfigBase {
+                    errors: Some(ErrorDisplayConfig::new(errors)),
+                    strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
+                    ..Default::default()
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
@@ -137,10 +284,11 @@ pub struct ConfigBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
 
-    /// (Experimental) Enable tensor shape type inference.
-    /// Supports both native (Tensor[N, M]) and jaxtyping (Float[Tensor, "batch channels"]) syntax.
+    /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
+    /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
+    /// unless individually overridden in `[errors]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tensor_shapes: Option<bool>,
+    pub pytorch_efficiency_lints: Option<bool>,
 
     /// Maximum recursion depth before triggering overflow protection.
     /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
@@ -158,6 +306,13 @@ pub struct ConfigBase {
     /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
+
+    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
+    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
+    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// parameter types and arity are checked precisely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_partial_subtyping: Option<bool>,
 
     /// Whether to use spec-compliant overload evaluation semantics.
     /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
@@ -195,7 +350,9 @@ impl ConfigBase {
     /// (`check_unannotated_defs` and `infer_return_types`).
     /// New fields take precedence; the old field only fills in unset values.
     pub fn resolve_legacy_untyped_def_behavior(&mut self) {
-        let behavior = self.untyped_def_behavior.unwrap_or_default();
+        let Some(behavior) = self.untyped_def_behavior else {
+            return;
+        };
         if self.check_unannotated_defs.is_none() {
             self.check_unannotated_defs = Some(!matches!(
                 behavior,
@@ -243,10 +400,6 @@ impl ConfigBase {
         base.infer_with_first_use
     }
 
-    pub fn get_tensor_shapes(base: &Self) -> Option<bool> {
-        base.tensor_shapes
-    }
-
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
     }
@@ -272,7 +425,186 @@ impl ConfigBase {
         base.strict_callable_subtyping
     }
 
+    pub fn get_strict_partial_subtyping(base: &Self) -> Option<bool> {
+        base.strict_partial_subtyping
+    }
+
     pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
         base.spec_compliant_overloads
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use enum_iterator::all;
+    use pulldown_cmark::Event;
+    use pulldown_cmark::HeadingLevel;
+    use pulldown_cmark::Parser;
+    use pulldown_cmark::Tag;
+    use pulldown_cmark::TagEnd;
+
+    use super::*;
+
+    /// Canonical kebab-case name for a preset, matching the serde/clap form
+    /// (e.g., `StrictPlus` → `"strict-plus"`). Derived from clap's `ValueEnum`
+    /// rather than `Debug` so multi-word variants work correctly.
+    fn preset_name(preset: Preset) -> String {
+        preset
+            .to_possible_value()
+            .expect("Preset is a ValueEnum")
+            .get_name()
+            .to_owned()
+    }
+
+    /// Verifies that every Preset variant has a corresponding `#### Preset: \`name\``
+    /// section in the configuration docs and that the documented error codes match
+    /// what `Preset::apply()` actually produces.
+    #[test]
+    fn test_preset_doc() {
+        let doc_path = std::env::var("CONFIG_DOC_PATH")
+            .expect("CONFIG_DOC_PATH env var not set: cargo or buck should set this automatically");
+        let doc_contents = std::fs::read_to_string(&doc_path)
+            .unwrap_or_else(|e| panic!("Failed to read {doc_path}: {e}"));
+
+        // Parse the doc to collect preset names and their error codes. We only
+        // treat an H4 as a preset section if its heading text starts with
+        // `Preset:` — that way unrelated H4s elsewhere in the doc can't be
+        // mistaken for preset declarations.
+        #[derive(Default)]
+        struct H4Content {
+            text: String,
+            code: Option<String>,
+        }
+        let mut documented_presets: Vec<String> = Vec::new();
+        let mut preset_error_codes: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut current_preset: Option<String> = None;
+        let mut h4_content: Option<H4Content> = None;
+
+        for event in Parser::new(&doc_contents) {
+            match event {
+                Event::Start(Tag::Heading {
+                    level: HeadingLevel::H1 | HeadingLevel::H2 | HeadingLevel::H3,
+                    ..
+                }) => {
+                    // Any higher-level heading ends the current preset section.
+                    current_preset = None;
+                }
+                Event::Start(Tag::Heading {
+                    level: HeadingLevel::H4,
+                    ..
+                }) => {
+                    // Entering a new H4 ends any previous preset section and
+                    // starts accumulating this heading's content.
+                    current_preset = None;
+                    h4_content = Some(H4Content::default());
+                }
+                Event::End(TagEnd::Heading(HeadingLevel::H4)) => {
+                    if let Some(content) = h4_content.take()
+                        && content.text.trim_start().starts_with("Preset:")
+                        && let Some(name) = content.code
+                    {
+                        documented_presets.push(name.clone());
+                        preset_error_codes.entry(name.clone()).or_default();
+                        current_preset = Some(name);
+                    }
+                }
+                Event::Text(t) if h4_content.is_some() => {
+                    h4_content.as_mut().unwrap().text.push_str(&t);
+                }
+                Event::Code(c) if h4_content.is_some() => {
+                    let content = h4_content.as_mut().unwrap();
+                    content.text.push_str(&c);
+                    // The first inline code span inside a `Preset: `...`` heading
+                    // is the preset name.
+                    if content.code.is_none() {
+                        content.code = Some(c.to_string());
+                    }
+                }
+                // Collect error code names from links like [bad-override](./error-kinds.mdx#bad-override)
+                Event::Start(Tag::Link { dest_url, .. })
+                    if current_preset.is_some() && dest_url.contains("error-kinds") =>
+                {
+                    if let Some(fragment) = dest_url.split('#').nth(1)
+                        && let Some(preset_name) = &current_preset
+                    {
+                        preset_error_codes
+                            .entry(preset_name.clone())
+                            .or_default()
+                            .insert(fragment.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Verify every preset variant is documented
+        for preset in all::<Preset>() {
+            let name = preset_name(preset);
+            assert!(
+                documented_presets.contains(&name),
+                "Preset `{name}` is not documented in {doc_path}. \
+                 Add a `#### Preset: \\`{name}\\`` section."
+            );
+        }
+
+        // Verify no extra presets are documented
+        for doc_name in &documented_presets {
+            assert!(
+                all::<Preset>().any(|p| preset_name(p) == *doc_name),
+                "Documentation has preset `{doc_name}` but no such Preset variant exists."
+            );
+        }
+
+        // Verify documented error codes are consistent with Preset::apply().
+        //
+        // Direction 1 (doc → code): every documented code must exist as an
+        // entry in the preset's errors map. Catches docs referencing a code
+        // that the preset doesn't actually touch.
+        //
+        // Direction 2 (code → doc): every code with a non-Ignore severity must
+        // be documented. Catches presets that enable or raise a new error kind
+        // without updating the doc. We intentionally skip Ignore-severity
+        // entries because opt-in presets like Basic exhaustively set every
+        // other kind to Ignore, and documenting all of them would be noise.
+        for preset in all::<Preset>() {
+            let name = preset_name(preset);
+            let config = preset.apply();
+            let (all_codes, enabled_codes): (HashSet<String>, HashSet<String>) = config
+                .errors
+                .as_ref()
+                .map(|e| {
+                    let all: HashSet<String> =
+                        e.iter().map(|(k, _)| k.to_name().to_owned()).collect();
+                    let enabled: HashSet<String> = e
+                        .iter()
+                        .filter(|(_, s)| *s != Severity::Ignore)
+                        .map(|(k, _)| k.to_name().to_owned())
+                        .collect();
+                    (all, enabled)
+                })
+                .unwrap_or_default();
+            let documented_codes = preset_error_codes.get(&name).cloned().unwrap_or_default();
+            if preset == Preset::All {
+                // `All` turns everything on; we don't document the individual errors
+                assert!(documented_codes.is_empty());
+            } else {
+                for code in &documented_codes {
+                    assert!(
+                        all_codes.contains(code),
+                        "Preset `{name}`: error code `{code}` is documented in {doc_path} \
+                        but not in Preset::apply()."
+                    );
+                }
+                for code in &enabled_codes {
+                    assert!(
+                        documented_codes.contains(code),
+                        "Preset `{name}`: error code `{code}` is enabled by Preset::apply() \
+                        but not documented in {doc_path}."
+                    );
+                }
+            }
+        }
     }
 }

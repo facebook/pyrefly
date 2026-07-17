@@ -43,6 +43,30 @@ circle = Circle()
 );
 
 testcase!(
+    test_direct_abc_without_abstract_methods_instantiation_error,
+    r#"
+from abc import ABC, ABCMeta
+
+class DirectABC(ABC):
+    pass
+
+class IndirectABC(DirectABC):
+    pass
+
+class DirectABCMeta(metaclass=ABCMeta):
+    pass
+
+class IndirectABCMeta(DirectABCMeta):
+    pass
+
+direct_abc = DirectABC()  # E: Cannot instantiate `DirectABC`
+indirect_abc = IndirectABC()
+direct_abc_meta = DirectABCMeta()  # E: Cannot instantiate `DirectABCMeta`
+indirect_abc_meta = IndirectABCMeta()
+"#,
+);
+
+testcase!(
     test_polymorphic_calls_ok,
     r#"
 from abc import ABC, abstractmethod
@@ -482,7 +506,7 @@ from typing import ClassVar, final
 @final
 class A(ABC):
     x: ClassVar[int]
-a = A()
+a = A()  # E: Cannot instantiate `A`
 "#,
 );
 
@@ -555,5 +579,19 @@ class A(ABC):
     def f(self, x: bool) -> int:  # E: one or more paths are missing an explicit `return`
         if x:
             return 0
+    "#,
+);
+
+testcase!(
+    test_metaclass_extends_abcmeta,
+    r#"
+from abc import ABCMeta, abstractmethod
+class Meta2(ABCMeta):
+    pass
+class A(metaclass=Meta2):
+    @abstractmethod
+    def f(self) -> None:
+        pass
+A()  # E: Cannot instantiate `A`
     "#,
 );

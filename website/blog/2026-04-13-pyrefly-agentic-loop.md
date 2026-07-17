@@ -15,7 +15,7 @@ Type checking sits right in the sweet spot for agents. It's fast enough for iter
 
 **TL;DR**: We recommend:
 
-- Adding a skill file for your agent with an `agent.md` directive to ensure the project checks clean before finishing a feature.
+- Adding a skill file for your agent with an `AGENTS.md` directive to ensure the project checks clean before finishing a feature.
 - If your model doesn't trigger this reliably, set up a hook on the Stop event.
 
 <!-- truncate -->

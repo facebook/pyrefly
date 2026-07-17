@@ -19,7 +19,6 @@ ERROR `Literal['hello']` is not assignable to `int` [bad-assignment]
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY snippet "x: int = 42"
- INFO Checking current directory with default configuration
  INFO 0 errors
 [0]
 ```
@@ -28,7 +27,6 @@ $ $PYREFLY snippet "x: int = 42"
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY snippet "import sys; print(sys.version)"
- INFO Checking current directory with default configuration
  INFO 0 errors
 [0]
 ```
@@ -123,7 +121,19 @@ $ $PYREFLY snippet "x: int = 'hello'" --output-format=json
 
 ```scrut {output_stream: stderr}
 $ echo "python_version = \"3.11\"" > pyrefly.toml && $PYREFLY snippet "x: int = 42" --config pyrefly.toml
- INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO 0 errors
+[0]
+```
+
+## Snippet picks up config from current directory
+
+When a `pyrefly.toml` exists in the current directory and no `--config` flag
+is passed, `pyrefly snippet` should discover and use it — the same way
+`pyrefly check` does.
+
+```scrut {output_stream: stderr}
+$ echo 'errors = { bad-assignment = false }' > $TMPDIR/pyrefly.toml && cd $TMPDIR && \
+> $PYREFLY snippet "x: int = 'hello'"
  INFO 0 errors
 [0]
 ```

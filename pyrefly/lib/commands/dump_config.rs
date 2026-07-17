@@ -103,10 +103,10 @@ fn dump_config(
     wrapper: Option<ConfigConfigurerWrapper>,
 ) -> anyhow::Result<CommandExitStatus> {
     config_override.validate()?;
-    let (files_to_check, config_finder) = files.resolve(config_override, wrapper)?;
+    let (files_to_check, config_finder, _) = files.resolve(config_override, wrapper)?;
 
     let mut configs_to_files: SmallMap<ArcId<ConfigFile>, Vec<ModulePath>> = SmallMap::new();
-    let handles = Handles::new(config_finder.checkpoint(files_to_check.files())?);
+    let handles = Handles::new(config_finder.checkpoint(files_to_check.files_iter())?);
     let (mut handles, _, sourcedb_errors) = handles.all(&config_finder);
     for error in sourcedb_errors {
         error.print();
@@ -120,9 +120,7 @@ fn dump_config(
             .or_default()
             .push(path.clone());
     }
-    for error in config_finder.errors() {
-        error.print();
-    }
+    config_finder.print_errors();
     for (config, files) in configs_to_files.into_iter() {
         let config_env = clap_env("CONFIG");
         match &config.source {

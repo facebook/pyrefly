@@ -11,8 +11,12 @@
 //! This module stores per-class metadata (starting with field information)
 //! in a `Vec` indexed by `ClassDefIndex`, enabling efficient lookups.
 
+use std::sync::Arc;
+
 use pyrefly_types::class::ClassDefIndex;
 use pyrefly_types::class::ClassFields;
+use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
+use ruff_python_ast::name::Name;
 
 /// Metadata for a single class definition, populated during binding.
 #[derive(Debug, Clone, Default)]
@@ -38,12 +42,14 @@ pub struct ClassMetadata {
 #[derive(Debug, Clone)]
 pub struct BindingsMetadata {
     classes: Vec<ClassMetadata>,
+    shape_dsl_functions: Vec<(Name, Arc<ShapeDslFunction>)>,
 }
 
 impl BindingsMetadata {
     pub fn new() -> Self {
         Self {
             classes: Vec::new(),
+            shape_dsl_functions: Vec::new(),
         }
     }
 
@@ -66,5 +72,16 @@ impl BindingsMetadata {
 
     pub fn get_class_mut(&mut self, idx: ClassDefIndex) -> &mut ClassMetadata {
         &mut self.classes[idx.0 as usize]
+    }
+
+    /// Record a `@shape_dsl_function` definition so sibling DSL functions
+    /// can be discovered for cross-function helper resolution.
+    pub fn push_shape_dsl(&mut self, name: Name, dsl_fn: Arc<ShapeDslFunction>) {
+        self.shape_dsl_functions.push((name, dsl_fn));
+    }
+
+    /// All `@shape_dsl_function` definitions recorded in this module.
+    pub fn shape_dsl_functions(&self) -> &[(Name, Arc<ShapeDslFunction>)] {
+        &self.shape_dsl_functions
     }
 }

@@ -16,7 +16,6 @@ from typing import override, Any
 class ParentB(Any):
     pass
 
-
 class ChildB(ParentB):
     @override
     def method1(self) -> None:
@@ -27,7 +26,6 @@ class ChildB(ParentB):
 testcase!(
     test_override_basic_method,
     r#"
-
 class A:
     def f(self, x:str, y:str) -> str:
         return x + y
@@ -131,7 +129,6 @@ class A:
     def method(self, x: int | str) -> int | str:
         return 0
 
-
 class B(A):
 
     @overload
@@ -158,6 +155,29 @@ class B(A):
 
 class C(A):
     def m(self, x: int) -> int: ...  # E: `C.m` overrides parent class `A` in an inconsistent manner
+    "#,
+);
+
+testcase!(
+    test_override_typevartuple_varargs,
+    r#"
+from typing import Callable
+
+class Base[*Ts]:
+    def encode(self, *values: *Ts) -> str:
+        raise NotImplementedError
+
+class Child[*Ts](Base[*Ts]):
+    def encode(self, *values: *Ts) -> str:
+        return "".join(str(v) for v in values)
+
+def f[*Ts](b: Base[*Ts]) -> None:
+    fn: Callable[[*Ts], str] = b.encode
+
+def sink[*Ts](cb: Callable[[*Ts], str]) -> None: ...
+
+def g[*Ts](b: Base[*Ts]) -> None:
+    sink(b.encode)
     "#,
 );
 
@@ -401,7 +421,6 @@ class A:
     def method1(self) -> int:
         return 1
 
-
 class B(A):
     @override
     def method2(self) -> int: # E: Class member `B.method2` is marked as an override, but no parent class has a matching attribute
@@ -488,7 +507,6 @@ def wrapper(func: Callable[..., Any], /) -> Any:
 
     return wrapped
 
-
 class ParentA:
 
     @staticmethod
@@ -529,7 +547,6 @@ class ChildA(ParentA):
 testcase!(
     test_overload_override_error,
     r#"
-
 from typing import overload, override
 
 class ParentA:
@@ -689,6 +706,18 @@ class A:
     d: D = D()
 class B(A):
     d: int = 42  # E: `B.d` and `A.d` must both be descriptors
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3141
+testcase!(
+    test_property_constructor_override,
+    r#"
+class A:
+    @property
+    def p(self): ...
+class B(A):
+    p = property(lambda self: None)
     "#,
 );
 
@@ -1176,7 +1205,7 @@ testcase!(
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"
 class Base:
-    def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
+    def __str__(self) -> str: ...  # OK
 
 class Derived(Base):
     def __str__(self) -> str: ...  # E: overrides a member in a parent class but is missing an `@override` decorator
@@ -1198,6 +1227,25 @@ class B(A):
 );
 
 testcase!(
+    test_missing_override_decorator_property_setter_assignment,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    @property
+    def prop(self) -> int:
+        return 0
+
+    @prop.setter
+    def prop(self, value: int) -> None:
+        pass
+
+class Child(Base):
+    def __init__(self):
+        self.prop = 42  # OK - using inherited property setter, not overriding
+    "#,
+);
+
+testcase!(
     test_missing_override_decorator_nested_class,
     TestEnv::new().enable_missing_override_decorator_error(),
     r#"
@@ -1207,6 +1255,36 @@ class A:
 
 class B(A):
     class C(A.C): pass  # OK - nested class, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_dunder_from_object,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class A:
+    def __repr__(self) -> str:
+        return "A"
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __str__(self) -> str:
+        return "A"
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_dunder_from_non_object,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+class Base:
+    def __len__(self) -> int:
+        return 0
+
+class Child(Base):
+    def __len__(self) -> int:  # E: overrides a member in a parent class but is missing an `@override` decorator
+        return 1
     "#,
 );
 
@@ -1222,6 +1300,31 @@ class A:
 
 class B(A):
     x: ClassVar[int]  # OK - ClassVar, @override cannot be applied
+    "#,
+);
+
+testcase!(
+    test_missing_override_decorator_classproperty,
+    TestEnv::new().enable_missing_override_decorator_error(),
+    r#"
+from typing import override, Callable
+
+class classproperty[T, R]:
+    def __init__(self, fget: Callable[[type[T]], R]) -> None: ...
+    def __get__(self, obj: object, obj_cls_type: type[T]) -> R: ...
+
+class Base:
+    @classproperty
+    def foo(cls) -> None: ...
+
+class DerivedValid(Base):
+    @override
+    @classproperty
+    def foo(cls) -> None: ...
+
+class Derived(Base):
+    @classproperty
+    def foo(cls) -> None: ...  # E: Class member `Derived.foo` overrides a member in a parent class but is missing an `@override` decorator
     "#,
 );
 

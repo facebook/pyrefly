@@ -316,7 +316,6 @@ def test[*Ts](prefix_only: tuple[int, str, *Ts], prefix_and_suffix: tuple[int, s
     prefix_only[-5]
     prefix_and_suffix[-5]
     prefix_and_suffix[10]
-
 "#,
 );
 

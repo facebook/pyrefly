@@ -18,13 +18,13 @@
 #![deny(clippy::mem_replace_option_with_some)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
-#![feature(box_patterns)]
-#![feature(if_let_guard)]
 
 pub mod alias;
 pub mod annotation;
 pub mod callable;
+pub mod callable_residual;
 pub mod class;
+pub mod data_frame;
 pub mod dimension;
 pub mod display;
 pub mod equality;
@@ -39,11 +39,11 @@ pub mod module;
 pub mod param_spec;
 pub mod quantified;
 pub mod read_only;
+pub mod sentinel;
+pub mod shaped_array;
 pub mod simplify;
 pub mod special_form;
 pub mod stdlib;
-pub mod tensor;
-pub mod tensor_ops_registry;
 pub mod tuple;
 pub mod type_alias;
 pub mod type_info;

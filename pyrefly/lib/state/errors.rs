@@ -12,8 +12,11 @@ use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
+use pyrefly_python::ignore::Suppression;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::ignore::misplaced_ignore_errors;
+use pyrefly_python::ignore::parse_ignore_all;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
@@ -21,18 +24,20 @@ use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_expr;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
-use vec1::vec1;
 
 use crate::config::config::ConfigFile;
 use crate::error::baseline::BaselineProcessor;
 use crate::error::collector::CollectedErrors;
 use crate::error::error::Error;
 use crate::error::expectation::Expectation;
+use crate::error::style::ErrorStyle;
 use crate::state::load::Load;
 
 /// Extracts `(start_line, end_line)` ranges for all multi-line strings from
@@ -45,24 +50,41 @@ pub fn sorted_multi_line_string_ranges(
 ) -> Vec<(LineNumber, LineNumber)> {
     let mut ranges = Vec::new();
     ast.visit(&mut |expr: &Expr| {
-        let text_range = match expr {
-            Expr::FString(x) => Some(x.range),
-            Expr::TString(x) => Some(x.range),
-            Expr::StringLiteral(x) => Some(x.range),
-            Expr::BytesLiteral(x) => Some(x.range),
-            _ => None,
-        };
-        if let Some(range) = text_range {
-            let display = module.display_range(range);
-            let start = display.start.line_within_file();
-            let end = display.end.line_within_file();
-            if start != end {
-                ranges.push((start, end));
-            }
-        }
+        collect_string_ranges(expr, module, &mut ranges);
     });
     ranges.sort();
     ranges
+}
+
+/// Recursively collects multi-line string ranges from an expression and all
+/// of its sub-expressions. The `Visit<Expr> for Stmt` implementation only
+/// visits top-level expressions in statements, so nested strings (e.g., an
+/// f-string inside a function call's arguments) would be missed without
+/// explicit recursion here.
+fn collect_string_ranges(expr: &Expr, module: &Module, ranges: &mut Vec<(LineNumber, LineNumber)>) {
+    let text_range = match expr {
+        Expr::FString(x) => Some(x.range),
+        Expr::TString(x) => Some(x.range),
+        Expr::StringLiteral(x) => Some(x.range),
+        Expr::BytesLiteral(x) => Some(x.range),
+        _ => None,
+    };
+    if let Some(range) = text_range {
+        let display = module.display_range(range);
+        let start = display.start.line_within_file();
+        let end = display.end.line_within_file();
+        if start != end {
+            // Multi-line string found. Record its range but skip recursing
+            // into its children — for nested f-strings we want errors to
+            // remap to the outermost string's start line, and the outer
+            // range already covers the inner one.
+            ranges.push((start, end));
+            return;
+        }
+    }
+    expr.recurse(&mut |child: &Expr| {
+        collect_string_ranges(child, module, ranges);
+    });
 }
 
 /// Finds contiguous backslash continuation blocks in the source lines.
@@ -139,24 +161,112 @@ pub fn find_containing_range(
     }
 }
 
+/// Extracts `(start_line, end_line)` line ranges for multi-line expressions
+/// where a suppression comment placed on the line *above* an interior line
+/// would be relocated by a formatter (e.g. Black) out of the bracketed group,
+/// so the checker would no longer associate it with the error. These are the
+/// conditional and operator expressions — ternaries (`a if c else b`), boolean
+/// operators (`a and b`), binary operators (`a + b`), and comparisons
+/// (`a < b`) — split across physical lines via bracketed continuation. Errors
+/// on a non-first line of such a range must be suppressed inline instead.
+///
+/// Collection literals (dicts, lists, sets, tuples, comprehensions) are
+/// intentionally *not* recorded: each element sits on its own line, so a
+/// comment on the line above an element is stable under formatting and should
+/// be kept. We still recurse into them, so an operator expression used *as* an
+/// element (e.g. a multi-line ternary dict value) is still captured.
+///
+/// The returned list is sorted by start line and non-overlapping: nested
+/// expressions (e.g. a binary operator inside a ternary) are merged into a
+/// single enclosing range, preserving the binary-search invariant of
+/// `find_containing_range`.
+pub fn sorted_bracketed_continuation_ranges(
+    ast: &ModModule,
+    module: &Module,
+) -> Vec<(LineNumber, LineNumber)> {
+    struct Collector<'a> {
+        module: &'a Module,
+        ranges: Vec<(LineNumber, LineNumber)>,
+    }
+    impl<'a> Visitor<'a> for Collector<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            // Conditional/operator expressions float an interior own-line
+            // comment when split across lines; collection literals do not.
+            if matches!(
+                expr,
+                Expr::If(_) | Expr::BoolOp(_) | Expr::BinOp(_) | Expr::Compare(_)
+            ) {
+                let display = self.module.display_range(expr.range());
+                let start = display.start.line_within_file();
+                let end = display.end.line_within_file();
+                if start != end {
+                    self.ranges.push((start, end));
+                }
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut collector = Collector {
+        module,
+        ranges: Vec::new(),
+    };
+    collector.visit_body(&ast.body);
+    collector.ranges.sort();
+
+    // Merge overlapping/nested ranges so the result stays non-overlapping and
+    // sorted, as `find_containing_range` requires.
+    let mut merged: Vec<(LineNumber, LineNumber)> = Vec::new();
+    for (start, end) in collector.ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => {
+                if end > last.1 {
+                    last.1 = end;
+                }
+            }
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
 /// Per-module multi-line ranges and ignore-all directives, computed after parsing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleRanges {
     /// Multi-line string and backslash-continuation ranges.
     pub multi_line: Vec<(LineNumber, LineNumber)>,
     /// Top-level ignore-all directives (e.g. `# pyrefly: ignore-errors`).
-    pub ignore_all: SmallMap<Tool, LineNumber>,
+    pub ignore_all: Vec<Suppression>,
+    /// Lines of pyrefly `ignore-errors` directives placed after the preamble,
+    /// where they are inert. Surfaced as `misplaced-ignore` warnings.
+    pub misplaced_ignore_all: Vec<LineNumber>,
+}
+
+impl ModuleRanges {
+    /// Compute multi-line ranges and ignore-all directives from the AST and module source.
+    pub fn compute(ast: &ModModule, module_info: &Module) -> Self {
+        let mut multi_line = sorted_multi_line_string_ranges(ast, module_info);
+        let lines: Vec<&str> = module_info.contents().lines().collect();
+        multi_line.extend(sorted_backslash_continuation_ranges(&lines, &multi_line));
+        multi_line.sort();
+        let ignore_all = parse_ignore_all(module_info.contents(), &multi_line);
+        let misplaced_ignore_all = misplaced_ignore_errors(module_info.contents(), &multi_line);
+        Self {
+            multi_line,
+            ignore_all,
+            misplaced_ignore_all,
+        }
+    }
 }
 
 /// The errors from a collection of modules.
 #[derive(Debug)]
 pub struct Errors {
     // Sorted by module name and path (so deterministic display order)
-    loads: Vec<(Arc<Load>, ArcId<ConfigFile>, ModuleRanges)>,
+    loads: Vec<(Arc<Load>, Option<Arc<ModuleRanges>>, ArcId<ConfigFile>)>,
 }
 
 impl Errors {
-    pub fn new(mut loads: Vec<(Arc<Load>, ArcId<ConfigFile>, ModuleRanges)>) -> Self {
+    pub fn new(mut loads: Vec<(Arc<Load>, Option<Arc<ModuleRanges>>, ArcId<ConfigFile>)>) -> Self {
         loads.sort_by_key(|x| (x.0.module_info.name(), x.0.module_info.path().dupe()));
         Self { loads }
     }
@@ -176,28 +286,28 @@ impl Errors {
 
     pub fn collect_errors(&self) -> CollectedErrors {
         let mut errors = CollectedErrors::default();
-        for (load, config, ranges) in &self.loads {
+        for (load, module_ranges, config) in &self.loads {
+            if load.errors.style() == ErrorStyle::Never {
+                continue;
+            }
             let error_config = config.get_error_config(load.module_info.path().as_path());
+            let ranges = module_ranges
+                .as_ref()
+                .expect("module_ranges must be present when error style is not Never");
             load.errors.collect_into(
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut errors,
             );
         }
         errors
     }
 
-    pub fn collect_errors_with_baseline(
-        &self,
-        baseline_path: Option<&Path>,
-        relative_to: &Path,
-    ) -> CollectedErrors {
-        let errors = self.collect_errors();
-        self.apply_baseline(errors, baseline_path, relative_to)
-    }
-
     /// Apply baseline filtering to already-collected errors.
+    /// `relative_to` is the resolved `--relative-to` directory so that
+    /// relative paths stored in the baseline file are resolved correctly.
     pub fn apply_baseline(
         &self,
         mut errors: CollectedErrors,
@@ -205,11 +315,62 @@ impl Errors {
         relative_to: &Path,
     ) -> CollectedErrors {
         if let Some(baseline_path) = baseline_path
-            && let Ok(processor) = BaselineProcessor::from_file(baseline_path)
+            && let Ok(processor) = BaselineProcessor::from_file(baseline_path, relative_to)
         {
-            processor.process_errors(&mut errors.ordinary, &mut errors.baseline, relative_to);
+            processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
         }
         errors
+    }
+
+    /// Collect display errors for the language server, partitioned by whether or not they
+    /// appear in a baseline file. Returns `(normal, baselined)`.
+    ///
+    /// Each baseline is loaded once (cached per config) and resolved relative to its
+    /// config's source root, falling back to the baseline file's own directory.
+    pub fn collect_lsp_errors_with_baselines(&self) -> (Vec<Error>, Vec<Error>) {
+        let collected = self.collect_errors();
+        let unused = self.collect_unused_ignore_errors_for_display(&collected);
+        let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
+            .loads
+            .iter()
+            .map(|(load, _, config)| (load.module_info.path(), config))
+            .collect();
+        let mut baseline_processors: SmallMap<usize, Option<BaselineProcessor>> = SmallMap::new();
+        let mut errors = collected;
+        let mut ordinary = Vec::new();
+
+        for error in errors.ordinary.drain(..) {
+            let Some(config) = config_by_path.get(&error.path()) else {
+                ordinary.push(error);
+                continue;
+            };
+            let Some(baseline_path) = config.baseline.as_deref() else {
+                ordinary.push(error);
+                continue;
+            };
+            let processor = baseline_processors.entry(config.id()).or_insert_with(|| {
+                let relative_to = config
+                    .source
+                    .root()
+                    .or_else(|| baseline_path.parent())
+                    .unwrap_or_else(|| Path::new(""));
+                BaselineProcessor::from_file(baseline_path, relative_to).ok()
+            });
+            if processor
+                .as_ref()
+                .is_some_and(|processor| processor.matches_baseline(&error))
+            {
+                errors.baseline.push(error);
+            } else {
+                ordinary.push(error);
+            }
+        }
+
+        ordinary.extend(unused.ordinary);
+        (
+            Self::merge_display_errors(ordinary, errors.directives),
+            Self::merge_display_errors(errors.baseline, Vec::new()),
+        )
     }
 
     pub fn collect_display_errors(&self) -> Vec<Error> {
@@ -250,16 +411,28 @@ impl Errors {
         > = SmallMap::new();
 
         // Build per-module lookup maps for f-string ranges and enabled ignores.
+        // Skip modules that never computed errors — they have no suppressed
+        // errors and no module_ranges.
         let fstring_ranges_by_module: SmallMap<&ModulePath, &[(LineNumber, LineNumber)]> = self
             .loads
             .iter()
-            .map(|(load, _, ranges)| (load.module_info.path(), ranges.multi_line.as_slice()))
+            .filter(|(load, _, _)| load.errors.style() != ErrorStyle::Never)
+            .map(|(load, module_ranges, _)| {
+                (
+                    load.module_info.path(),
+                    module_ranges
+                        .as_ref()
+                        .expect("module_ranges must be present when error style is not Never")
+                        .multi_line
+                        .as_slice(),
+                )
+            })
             .collect();
 
         let enabled_ignores_by_module: SmallMap<&ModulePath, SmallSet<Tool>> = self
             .loads
             .iter()
-            .map(|(load, config, _)| {
+            .map(|(load, _, config)| {
                 let path = load.module_info.path();
                 (path, config.enabled_ignores(path.as_path()).clone())
             })
@@ -315,7 +488,7 @@ impl Errors {
         }
 
         // Iterate over each module and check for unused ignores
-        for (load, config, _) in &self.loads {
+        for (load, _, config) in &self.loads {
             let module = &load.module_info;
             let module_path = module.path();
             let ignore = module.ignore();
@@ -333,7 +506,7 @@ impl Errors {
                         continue;
                     }
                     match tool {
-                        Tool::Pyrefly | Tool::Pyre => {}
+                        Tool::Pyrefly | Tool::Pyre | Tool::Type => {}
                         _ => continue,
                     }
 
@@ -357,8 +530,27 @@ impl Errors {
                         unused_errors.push(Error::new(
                             module.dupe(),
                             range,
-                            vec1!["Unused pyre-fixme comment".to_owned()],
+                            "Unused pyre-fixme comment".to_owned(),
+                            Vec::new(),
                             ErrorKind::UnusedIgnore,
+                        ));
+                        continue;
+                    }
+
+                    // For `# type: ignore`, unused if no errors were suppressed on this line.
+                    if tool == Tool::Type {
+                        if !used_codes.is_empty() {
+                            continue; // type: ignore is used
+                        }
+                        let comment_line = supp.comment_line();
+                        let line_start = module.lined_buffer().line_start(comment_line);
+                        let range = TextRange::new(line_start, line_start + TextSize::new(1));
+                        unused_errors.push(Error::new(
+                            module.dupe(),
+                            range,
+                            "Unused `# type: ignore` comment".to_owned(),
+                            Vec::new(),
+                            ErrorKind::UnusedTypeIgnore,
                         ));
                         continue;
                     }
@@ -410,7 +602,8 @@ impl Errors {
                     unused_errors.push(Error::new(
                         module.dupe(),
                         range,
-                        vec1![msg],
+                        msg,
+                        Vec::new(),
                         ErrorKind::UnusedIgnore,
                     ));
                 }
@@ -435,15 +628,13 @@ impl Errors {
         let config_by_path: SmallMap<&ModulePath, &ArcId<ConfigFile>> = self
             .loads
             .iter()
-            .map(|(load, config, _)| (load.module_info.path(), config))
+            .map(|(load, _, config)| (load.module_info.path(), config))
             .collect();
 
         for error in unused_errors {
             if let Some(config) = config_by_path.get(&error.path()) {
                 let error_config = config.get_error_config(error.path().as_path());
-                let severity = error_config
-                    .display_config
-                    .severity(ErrorKind::UnusedIgnore);
+                let severity = error_config.display_config.severity(error.error_kind());
                 match severity {
                     Severity::Error => result.ordinary.push(error.with_severity(Severity::Error)),
                     Severity::Warn => result.ordinary.push(error.with_severity(Severity::Warn)),
@@ -457,13 +648,20 @@ impl Errors {
     }
 
     pub fn check_against_expectations(&self) -> anyhow::Result<()> {
-        for (load, config, ranges) in &self.loads {
+        for (load, module_ranges, config) in &self.loads {
+            if load.errors.style() == ErrorStyle::Never {
+                continue;
+            }
             let error_config = config.get_error_config(load.module_info.path().as_path());
+            let ranges = module_ranges
+                .as_ref()
+                .expect("module_ranges must be present when error style is not Never");
             let mut result = CollectedErrors::default();
             load.errors.collect_into(
                 &error_config,
                 &ranges.multi_line,
                 &ranges.ignore_all,
+                &ranges.misplaced_ignore_all,
                 &mut result,
             );
             let output_errors = Self::merge_display_errors(result.ordinary, result.directives);
@@ -486,6 +684,7 @@ mod tests {
     use pyrefly_python::sys_info::SysInfo;
     use pyrefly_util::arc_id::ArcId;
     use pyrefly_util::fs_anyhow;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use regex::Regex;
     use tempfile::TempDir;
 
@@ -495,12 +694,11 @@ mod tests {
     use crate::state::load::FileContents;
     use crate::state::require::Require;
     use crate::state::state::State;
-    use crate::test::util::TEST_THREAD_COUNT;
 
     impl Errors {
         pub fn check_var_leak(&self) -> anyhow::Result<()> {
             let regex = Regex::new(r"@\d+").unwrap();
-            for (load, config, _) in &self.loads {
+            for (load, _, config) in &self.loads {
                 let error_config = config.get_error_config(load.module_info.path().as_path());
                 let errors = load.errors.collect(&error_config).ordinary;
                 for error in errors {
@@ -638,6 +836,45 @@ def g() -> str:
         let collected = errors.collect_errors();
         let unused = errors.collect_unused_ignore_errors(&collected);
         assert_eq!(unused.len(), 2);
+    }
+
+    #[test]
+    fn test_unused_type_ignore_no_error() {
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
+    }
+
+    #[test]
+    fn test_used_type_ignore_suppresses_error() {
+        let contents = r#"
+def f() -> int:
+    return "hello"  # type: ignore
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_unused_type_ignore_with_codes() {
+        // mypy-style codes are not pyrefly codes; treat as blanket ignore
+        let contents = r#"
+def f() -> int:
+    return 1  # type: ignore[assignment]
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
+        assert!(unused[0].msg().contains("type: ignore"));
     }
 
     #[test]

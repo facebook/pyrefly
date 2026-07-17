@@ -15,6 +15,7 @@ use lsp_types::Position;
 use lsp_types::Range;
 use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use pyrefly::lsp::non_wasm::protocol::Message;
 use pyrefly::lsp::non_wasm::protocol::Request;
 use serde_json::json;
@@ -22,6 +23,7 @@ use tempfile::TempDir;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::util::bundled_typeshed_path;
 use crate::util::expect_definition_points_to_symbol;
 use crate::util::get_test_files_root;
@@ -167,23 +169,6 @@ fn test_go_to_def_no_folder_capability() {
 
 #[test]
 fn test_go_to_def_relative_path() {
-    let root = get_test_files_root();
-    let basic_root = root.path().join("basic");
-    test_go_to_def(
-        basic_root,
-        None,
-        "foo_relative.py",
-        vec![
-            (5, 14, "bar.py", 0, 0, 0, 0),
-            (6, 17, "bar.py", 6, 6, 6, 9),
-            (8, 9, "bar.py", 7, 4, 7, 7),
-            (9, 7, "bar.py", 6, 6, 6, 9),
-        ],
-    );
-}
-
-#[test]
-fn test_go_to_def_relative_path_helper() {
     let root = get_test_files_root();
     let basic_root = root.path().join("basic");
     test_go_to_def(
@@ -668,7 +653,13 @@ fn definition_relative_import_with_nested_config() {
         .join("nested_config_relative_import/src")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -727,7 +718,10 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
         None
     });
 
-    let mut interaction = LspInteraction::new_with_thrift_remapper(Some(thrift_remapper));
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        thrift_remapper: Some(thrift_remapper),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -782,7 +776,13 @@ fn definition_relative_import_with_nested_config_workspace_at_root() {
         .join("nested_config_relative_import")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -819,7 +819,13 @@ fn definition_relative_import_outside_search_path() {
         .join("relative_import_outside_search_path")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -846,6 +852,60 @@ fn definition_relative_import_outside_search_path() {
         .expect_hover_response_with_markup(|value| {
             value
                 .is_some_and(|text| text.contains("(class) MyClass: def MyClass() -> MyClass: ..."))
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// Relative imports in site-packages nested under the project root (e.g. in a
+/// venv) should resolve correctly for go-to-definition, even when a
+/// pyproject.toml establishes the project root as import_root.
+#[test]
+fn definition_site_packages_relative_import() {
+    let root = get_test_files_root();
+    let root_path = root
+        .path()
+        .join("site_packages_relative_import")
+        .to_path_buf();
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let init_file = "venv/lib/python3.13/site-packages/fake_site_package/__init__.py";
+    interaction.client.did_open(init_file);
+
+    // Go-to-definition on `relative` in `from .relative import Foo` (line 0, char 6).
+    interaction
+        .client
+        .definition(init_file, 0, 6)
+        .expect_definition_response_from_root(
+            "venv/lib/python3.13/site-packages/fake_site_package/relative.py",
+            0,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+
+    // Hover on `Foo` in `from .relative import Foo` (line 0, char 22).
+    interaction
+        .client
+        .hover(init_file, 0, 22)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("(class) Foo") && !text.contains("Unknown"))
         })
         .unwrap();
 

@@ -28,8 +28,17 @@ name with the `--config`/`-c` flag, but they will not be automatically found by
 
 Both absolute and config-relative paths are supported.
 
+## Unconfigured projects
+
+On the command-line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly synthesizes a configuration on the fly:
+
+- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly automatically migrates it and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
+- Otherwise Pyrefly uses the same [**basic preset**](#preset-basic) the IDE uses. This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.). Other diagnostics are silenced.
+
+For the IDE equivalent of this behavior, including how to override it, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
+
 :::info
-Want all type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+Want full type-check squiggles by default? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
 :::
 
 ## Simple Configuration Example
@@ -276,6 +285,25 @@ The two heuristics that are currently supported are:
 
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
+### `enable-fallback-search-path`
+
+When enabled, Pyrefly resolves an otherwise-unresolved import by searching each
+directory from the importing file up to the directory that contains your
+config, using the first match it finds. This is a best-effort way to make
+imports resolve when a module is importable relative to one of its parent
+directories but that directory isn't listed in [`search-path`](#search-path).
+
+- Type: bool
+- Default: false
+- Flag equivalent: `--enable-fallback-search-path`
+- Equivalent configs: none
+- Notes:
+    - Has no effect when [`disable-search-path-heuristics`](#disable-search-path-heuristics)
+      is `true` — that flag suppresses all fallback-path consumption.
+    - The search is bounded by the config root, so it cannot escape the project.
+    - To see the search path Pyrefly resolves for a given file, run
+      `pyrefly dump-config <file>`.
+
 ### `site-package-path`
 
 A file path describing a root from which imports should
@@ -453,7 +481,9 @@ more details on how baseline files work.
 ### `min-severity`
 
 The minimum severity level for diagnostics to be displayed by `pyrefly check`. Diagnostics
-below this threshold are hidden from output and do not affect the exit code.
+below this threshold are hidden from output. Diagnostics at or above the threshold are
+displayed and cause a nonzero exit code — for example, `--min-severity warn` makes
+warnings cause a nonzero exit.
 
 ```toml
 # pyrefly.toml — show warnings and errors
@@ -472,7 +502,7 @@ min-severity = "warn"
 - Notes:
     - `min-severity` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
-    - This setting controls CLI display only. To change the severity of individual
+    - This setting only controls CLI display and exit code. To change the severity of individual
       error kinds, use the [`errors`](#errors) table instead.
     - In the IDE, diagnostics below error severity are only shown for files that
       are currently open in the editor, regardless of this setting.
@@ -484,20 +514,77 @@ min-severity = "warn"
 Default format for `pyrefly check` error output when `--output-format` is not
 set on the CLI.
 
-- Type: `"min-text" | "full-text" | "json" | "github" | "omit-errors"`
+- Type: `"min-text" | "full-text" | "json" | "github" | "junit-xml" | "omit-errors"`
 - Default: `full-text`
 - Flag equivalent: `--output-format`
 - Notes:
     - `output-format` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - A CLI `--output-format` flag still takes precedence over the config value.
+    - `"junit-xml"` emits a JUnit XML `<testsuites>` report suitable for CI
+      dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).
+
+### `preset`
+
+A named collection of error severities and behavior settings that serves as the base configuration.
+Any explicit settings you specify override the preset.
+
+- Type: string (`"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`, `"all"`)
+- Default: none (equivalent to `"default"`)
+- Flag equivalent: `-p`/`--preset`
+
+#### Preset: `off`
+
+Silences every error kind. Other settings (scalar flags, behavior settings) are left at their defaults. Useful when Pyrefly is running only for IDE features like hover and go-to-definition, without diagnostics.
+
+- Disables every error kind.
+
+#### Preset: `basic`
+
+A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.
+
+- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
+- Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
+- All other error kinds are silenced.
+
+#### Preset: `legacy`
+
+A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely — type-checking behavior will still differ between the two tools — this preset just disables a few checks that mypy does not have, so migrating users aren't hit with new errors for classes of issues mypy never flagged.
+
+- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`
+- Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
+
+#### Preset: `default`
+
+The default Pyrefly configuration. Equivalent to having no preset at all.
+
+- Overrides no error codes or behavior settings — each error kind uses its own default severity (see [error kinds](./error-kinds.mdx)).
+
+#### Preset: `strict`
+
+Enables additional error codes on top of the default for stricter checking.
+
+- Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
+- Enables (as errors): [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
+
+#### Preset: `all`
+
+:::info
+For most users, we recommend using the `strict` preset and enabling individual additional errors as desired,
+for more stability and an opt-in experience for new errors.
+:::
+
+Enables every error kind at `error` severity. Directives like `reveal-type` remain informational.
+
+- Sets [`strict-callable-subtyping`](#strict-callable-subtyping) `= true`
+- Enables every error kind at `error` severity
 
 ### `errors`
 
 Configure the severity for each kind of error that Pyrefly emits: `error`, `warn`, `ignore`.
 
 :::info
-Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+Want full type-check squiggles in your editor? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
 :::
 
 - Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
@@ -647,6 +734,8 @@ See [Migrating from Mypy](migrating-from-mypy.mdx#mypy-config-migration) for mor
 - Equivalent configs:
     - `true` emulates mypy's `check_untyped_defs` flag.
     - `false` emulates mypy's default behavior.
+- Related options:
+    - [`infer-return-types`](#infer-return-types): Controls when Pyrefly infers return types for unannotated functions.
 
 ### `infer-return-types`
 
@@ -658,9 +747,11 @@ unannotated functions are only eligible when `check-unannotated-defs` is `true`.
   completely unannotated ones.
 - `"annotated"`: Infer return types only for functions that have at least one
   parameter or return annotation. This is useful when combined with
-  `check-unannotated-defs = false` to still get return type inference for
+  [`check-unannotated-defs = false`](#check-unannotated-defs) to still get return type inference for
   partially annotated functions.
 - `"never"`: Never infer return types; unannotated returns are treated as `Any`.
+  This is often combined with [`check-unannotated-defs = false`](#check-unannotated-defs)
+  for a more permissive setup.
 
 :::info
 To provide inferred return types with `"checked"` or `"annotated"`, especially
@@ -869,7 +960,7 @@ Path to the root of the repository.
 
 ### `permissive-ignores`
 
-Should Pyrefly ignore errors based on annotations from other tools, e.g. `# pyre-ignore` or `# mypy: ignore`?
+Should Pyrefly ignore errors based on annotations from other tools, e.g. `# pyright: ignore` or `# ty: ignore`?
 By default, respects `# pyrefly: ignore` and `# type: ignore`.
 Enabling this option is equivalent to passing the names of all tools to `enabled-ignores`.
 
@@ -897,18 +988,25 @@ and values that can be overridden here.
 - Flag equivalent: none
 - Equivalent configs: `executionEnvironments` in Pyright, per-module config options in mypy
 
-### `tensor-shapes`
+### `pytorch-efficiency-lints`
 
-:::warning
-This feature is experimental and may change without notice.
-:::
-
-Enable tensor shape type inference. Supports both native (`Tensor[N, M]`) and
-jaxtyping (`Float[Tensor, "batch channels"]`) syntax.
+Enable PyTorch efficiency lints that detect common GPU performance anti-patterns
+in training code. When `true`, all `pytorch-efficiency-lint-*` error kinds are
+enabled at `warn` severity. You can override individual lint severities in
+[`[errors]`](#errors).
 
 - Type: `bool`
 - Default: `false`
-- Flag equivalent: `--tensor-shapes`
+- Flag equivalent: `--pytorch-efficiency-lints`
+
+The following lints are enabled by this flag:
+
+| Lint | What it detects |
+|---|---|
+| [`pytorch-efficiency-lint-cuda-call`](./error-kinds.mdx#pytorch-efficiency-lint-cuda-call) | `Tensor.cuda()` — hard-coded device |
+| [`pytorch-efficiency-lint-item-call`](./error-kinds.mdx#pytorch-efficiency-lint-item-call) | `Tensor.item()` — GPU→CPU sync stall |
+| [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
+| [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
 
 ### `spec-compliant-overloads`
 
@@ -988,13 +1086,13 @@ you've configured yourself, either through CLI flags or a config file.
 We look for an interpreter with the following logic:
 
 1. Use [`python-interpreter-path`](#python-interpreter-path),
-   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
+   [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set by a flag.
    More than one cannot be set in flags at the same time.
 2. Determine if there's an active `venv` or `conda` environment. If both are active at
    the same time, we take `venv` over `conda`.
 3. Use [`python-interpreter-path`](#python-interpreter-path),
-   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
+   [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if either are set in a config file.
    Both cannot be set in a config at the same time.
 4. Find a `venv` at the root of the project by searching for something that looks like a
@@ -1045,7 +1143,7 @@ directories under `src/`, so therefore, we will recursively match everything und
 Examples:
 
 - `src/**/*.py`: only match `.py` files under `src/`
-- `src`, `src/`, `src/*`, `src/**`, and `src/**/*`: match all `.py` and `.pyi` files under `src/
+- `src`, `src/`, `src/*`, `src/**`, and `src/**/*`: match all `.py` and `.pyi` files under `src/`
 - `?.py` and `[A-z].py`: match any file that looks like `<letter>.py`
 - `src/path/to/my/file.py`: only match `src/path/to/my/file.py`
 - `src/**/tests`, `src/**/tests/`, `src/**/tests/**`, and `src/**/tests/**/*`: match all `.py` and `.pyi` files in `src/`
@@ -1240,6 +1338,9 @@ use-ignore-files = true
 search-path = ["."]
 # let Pyrefly try to guess your search path
 disable-search-path-heuristics = false
+# do not search parent directories of each file to resolve imports; opt in if
+# imports in your project should resolve relative to any parent directories under root
+enable-fallback-search-path = false
 # do not include any third-party packages (except those provided by an interpreter)
 site-package-path = []
 

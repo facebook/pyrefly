@@ -916,7 +916,8 @@ fn set_project_module(
     builder.reborrow().set_is_test(module.is_test);
     builder.reborrow().set_is_interface(module.is_interface);
     builder.reborrow().set_is_init(module.is_init);
-    builder.set_is_internal(module.is_internal);
+    builder.reborrow().set_is_internal(module.is_internal);
+    builder.set_failed_to_load(module.failed_to_load);
 }
 
 /// Write the project file in Cap'n Proto format.

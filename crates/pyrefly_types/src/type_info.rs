@@ -22,6 +22,7 @@ use starlark_map::smallmap;
 use vec1::Vec1;
 
 use crate::facet::FacetKind;
+use crate::type_var::TypeVar;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -114,11 +115,29 @@ impl TypeInfo {
         }
     }
 
+    /// Record that the facet chain `facets` is known to be present, without a narrowed value.
+    pub fn record_present(&mut self, facets: &Vec1<FacetKind>) {
+        self.facets
+            .get_or_insert_with(|| Box::new(NarrowedFacets::default()))
+            .record_present(facets);
+    }
+
     pub fn type_at_facet(&self, facet: &FacetKind) -> Option<&Type> {
         match self.get_at_facet(facet) {
             None | Some(NarrowedFacet::WithoutRoot { .. }) => None,
             Some(NarrowedFacet::Leaf(ty)) | Some(NarrowedFacet::WithRoot(ty, _)) => Some(ty),
         }
+    }
+
+    /// Whether `facet` has a presence marker but no narrowed value of its own.
+    ///
+    /// Value narrows also imply presence, but callers should use the stored value directly instead
+    /// of recomputing with presence-specific rules.
+    pub fn has_value_less_presence(&self, facet: &FacetKind) -> bool {
+        matches!(
+            self.get_at_facet(facet),
+            Some(NarrowedFacet::WithoutRoot { present: true, .. })
+        )
     }
 
     pub fn at_facet(&self, facet: &FacetKind, fallback: impl Fn() -> Type) -> Self {
@@ -388,6 +407,24 @@ impl NarrowedFacets {
         };
     }
 
+    fn record_present(&mut self, facets: &Vec1<FacetKind>) {
+        let Some((facet, rest)) = facets.split_first() else {
+            unreachable!("facets is non-empty");
+        };
+        self.record_present_at(facet, rest);
+    }
+
+    fn record_present_at(&mut self, facet: &FacetKind, rest: &[FacetKind]) {
+        self.0
+            .entry(facet.clone())
+            .or_insert_with(|| NarrowedFacet::WithoutRoot {
+                completion_ty: None,
+                facets: NarrowedFacets::default(),
+                present: false,
+            })
+            .record_present(rest);
+    }
+
     fn clear_index_narrows(&mut self, facets: &[FacetKind]) {
         match facets {
             [] => {
@@ -455,6 +492,7 @@ impl NarrowedFacets {
                 NarrowedFacet::WithoutRoot {
                     completion_ty: None,
                     facets: NarrowedFacets::default(),
+                    present: false,
                 }
             } else {
                 let mut nested = NarrowedFacets::default();
@@ -462,6 +500,7 @@ impl NarrowedFacets {
                 NarrowedFacet::WithoutRoot {
                     completion_ty: None,
                     facets: nested,
+                    present: false,
                 }
             }
         });
@@ -609,10 +648,11 @@ enum NarrowedFacet {
     Leaf(Type),
     /// This facet is narrowed, and has one or more narrowed sub-facet (WithRoot)
     WithRoot(Type, NarrowedFacets),
-    /// This facet is not narrowed, and has one or more narrowed sub-facet (WithoutRoot)
+    /// This facet has no narrowed value, but carries auxiliary facet state.
     WithoutRoot {
         completion_ty: Option<Type>,
         facets: NarrowedFacets,
+        present: bool,
     },
 }
 
@@ -623,6 +663,7 @@ impl NarrowedFacet {
             [facet, more_facets @ ..] => Self::WithoutRoot {
                 completion_ty: None,
                 facets: NarrowedFacets::of_narrow((*facet).clone(), more_facets, ty),
+                present: false,
             },
         }
     }
@@ -632,6 +673,59 @@ impl NarrowedFacet {
         let mut current = NarrowedFacet::Leaf(Type::None);
         mem::swap(self, &mut current);
         *self = current.with_narrow(facets, narrowed_ty)
+    }
+
+    fn record_present(&mut self, facets: &[FacetKind]) {
+        let mut current = NarrowedFacet::Leaf(Type::None);
+        mem::swap(self, &mut current);
+        *self = current.with_present(facets);
+    }
+
+    fn with_present(self, facets: &[FacetKind]) -> Self {
+        match facets {
+            [] => match self {
+                Self::WithoutRoot {
+                    completion_ty,
+                    facets,
+                    ..
+                } => Self::WithoutRoot {
+                    completion_ty,
+                    facets,
+                    present: true,
+                },
+                Self::Leaf(_) | Self::WithRoot(_, _) => self,
+            },
+            [facet, more_facets @ ..] => match self {
+                Self::WithRoot(root_ty, mut nested) => {
+                    nested.record_present_at(facet, more_facets);
+                    Self::WithRoot(root_ty, nested)
+                }
+                Self::WithoutRoot {
+                    completion_ty,
+                    mut facets,
+                    present,
+                } => {
+                    facets.record_present_at(facet, more_facets);
+                    Self::WithoutRoot {
+                        completion_ty,
+                        facets,
+                        present,
+                    }
+                }
+                Self::Leaf(root_ty) => {
+                    let mut nested = NarrowedFacets::default();
+                    nested.record_present_at(facet, more_facets);
+                    Self::WithRoot(root_ty, nested)
+                }
+            },
+        }
+    }
+
+    fn implies_presence(&self) -> bool {
+        matches!(
+            self,
+            Self::Leaf(_) | Self::WithRoot(..) | Self::WithoutRoot { present: true, .. }
+        )
     }
 
     fn clear_index_narrows(&mut self, facets: &[FacetKind]) {
@@ -661,11 +755,16 @@ impl NarrowedFacet {
                         NarrowedFacets::of_narrow((*facet).clone(), more_facets, narrowed_ty);
                     Self::WithRoot(root_ty, narrowed_facets)
                 }
-                Self::WithoutRoot { mut facets, .. } => {
+                Self::WithoutRoot {
+                    mut facets,
+                    present,
+                    ..
+                } => {
                     facets.add_narrow(facet, more_facets, narrowed_ty);
                     Self::WithoutRoot {
                         completion_ty: None,
                         facets,
+                        present,
                     }
                 }
                 Self::WithRoot(root_ty, mut narrowed_facets) => {
@@ -719,6 +818,7 @@ impl NarrowedFacet {
                 }
             }
         }
+        let all_present = branches.iter().all(Self::implies_presence);
         let mut ty_branches = Some(Vec::with_capacity(branches.len()));
         let mut facets_branches = Some(Vec::with_capacity(branches.len()));
         for branch in branches {
@@ -729,7 +829,7 @@ impl NarrowedFacet {
             };
             monadic_push_option(&mut ty_branches, ty);
             monadic_push_option(&mut facets_branches, facets);
-            if let (None, None) = (&ty_branches, &facets_branches) {
+            if !all_present && matches!((&ty_branches, &facets_branches), (None, None)) {
                 return None;
             }
         }
@@ -763,12 +863,18 @@ impl NarrowedFacet {
             )
         });
         match (ty, facets) {
+            (None, None) if all_present => Some(Self::WithoutRoot {
+                completion_ty: None,
+                facets: NarrowedFacets::default(),
+                present: true,
+            }),
             (None, None) => None,
             (Some(ty), None) => Some(Self::Leaf(ty)),
             (Some(ty), Some(facets)) => Some(Self::WithRoot(ty, facets)),
             (None, Some(facets)) => Some(Self::WithoutRoot {
                 completion_ty: None,
                 facets,
+                present: all_present,
             }),
         }
     }
@@ -784,7 +890,7 @@ fn join_types(
     join_style: JoinStyle<Type>,
 ) -> Type {
     match join_style {
-        JoinStyle::SimpleMerge => union_types(types),
+        JoinStyle::SimpleMerge => union_types(dedup_compatible_type_vars(types)),
         JoinStyle::NarrowOf(base_ty) => {
             join_types_impl(types, base_ty, true, union_types, is_subset_eq)
         }
@@ -832,8 +938,29 @@ fn join_types_impl(
             }
         }
     } else {
-        union_types(types)
+        union_types(dedup_compatible_type_vars(types))
     }
+}
+
+/// Deduplicate TypeVars that have the same short name, restriction, variance, and default.
+/// When duplicates are found, the first TypeVar encountered is kept.
+fn dedup_compatible_type_vars(mut types: Vec<Type>) -> Vec<Type> {
+    let mut seen_type_vars: Vec<TypeVar> = Vec::new();
+    types.retain(|ty| {
+        if let Type::TypeVar(tv) = ty {
+            if seen_type_vars.iter().any(|seen| {
+                seen.qname().id() == tv.qname().id()
+                    && seen.restriction() == tv.restriction()
+                    && seen.variance() == tv.variance()
+                    && seen.default() == tv.default()
+            }) {
+                return false;
+            }
+            seen_type_vars.push(tv.clone());
+        }
+        true
+    });
+    types
 }
 
 #[cfg(test)]

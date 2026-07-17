@@ -8,6 +8,7 @@
 // @lint-ignore-every SPELL
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use dupe::Dupe;
 use lsp_types::Hover;
@@ -22,6 +23,7 @@ use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::find_comment_start_in_line;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::FunctionKind;
@@ -29,10 +31,15 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
+use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::type_var::Variance;
 use pyrefly_types::types::Type;
+use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::visit::Visit;
+use regex::Regex;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
@@ -42,8 +49,10 @@ use ruff_text_size::TextSize;
 use vec1::Vec1;
 
 use crate::alt::answers_solver::AnswersSolver;
+use crate::binding::binding::Key;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
+use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::wasm::signature_help::CallInfo;
 use crate::lsp::wasm::signature_help::is_constructor_call;
 use crate::lsp::wasm::signature_help::override_constructor_return_type;
@@ -53,8 +62,15 @@ use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::IdentifierWithContext;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
+
+/// Matches Sphinx cross-references like `:meth:`target``, `:class:`MyClass``, etc.
+/// The role name is captured but ignored — all roles resolve uniformly.
+static SPHINX_REFERENCE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r":([a-zA-Z0-9_-]+):`([^`]+)`").expect("invalid regex"));
 
 pub struct HoverValue {
     pub kind: Option<SymbolKind>,
@@ -99,22 +115,118 @@ impl HoverValue {
 
     fn resolve_symbol_kind(&self) -> Option<SymbolKind> {
         match self.kind {
-            Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
-                .type_
-                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
-                    FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
-                    _ => Some(SymbolKind::Function),
-                })
-                .unwrap_or(SymbolKind::Method)
-                .into(),
+            Some(SymbolKind::Attribute) => Some(attribute_symbol_kind_from_type(&self.type_)),
             Some(other) => Some(other),
             None => None,
         }
     }
 
-    pub fn format(&self) -> Hover {
-        let docstring_formatted = match self.docstring.as_ref().map(|d| d.resolve()) {
-            Some(content) => format!("\n---\n{}", content.trim()),
+    /// Replace `:role:`target`` patterns in docstring text with markdown links or inline code.
+    /// On non-WASM, attempts to resolve targets as same-class attributes to clickable links.
+    /// On WASM, all targets become inline code since file:// URLs aren't supported.
+    fn resolve_sphinx_references(
+        text: String,
+        transaction: &Transaction,
+        handle: &Handle,
+        context_type: &Type,
+    ) -> String {
+        SPHINX_REFERENCE_PATTERN
+            .replace_all(&text, |caps: &regex::Captures| {
+                let target = &caps[2];
+                Self::format_sphinx_target(target, transaction, handle, context_type)
+            })
+            .into_owned()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn format_sphinx_target(
+        target: &str,
+        transaction: &Transaction,
+        handle: &Handle,
+        context_type: &Type,
+    ) -> String {
+        Self::try_resolve_sphinx_target(target, transaction, handle, context_type)
+            .map(|url| format!("[{target}]({url})"))
+            .unwrap_or_else(|| format!("`{target}`"))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn format_sphinx_target(
+        target: &str,
+        _transaction: &Transaction,
+        _handle: &Handle,
+        _context_type: &Type,
+    ) -> String {
+        format!("`{target}`")
+    }
+
+    /// Resolve a Sphinx target to a file URL by looking up the attribute on the
+    /// enclosing class. Only supports unqualified same-class references.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_resolve_sphinx_target(
+        target: &str,
+        transaction: &Transaction,
+        handle: &Handle,
+        context_type: &Type,
+    ) -> Option<String> {
+        if target.contains('.') {
+            return None;
+        }
+
+        // For methods, search in parent class; for constructors, use the return type
+        let search_type = context_type
+            .visit_toplevel_func_metadata(&|meta| {
+                if let FunctionKind::Def(func) = &meta.kind
+                    && let Some(class) = &func.cls
+                {
+                    Some(Type::ClassType(ClassType::new(
+                        class.clone(),
+                        Default::default(),
+                    )))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if let Type::Callable(callable) = context_type
+                    && let Type::ClassType(_) = callable.ret
+                {
+                    Some(callable.ret.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| context_type.clone());
+
+        let defs = transaction
+            .find_attribute_definition_for_base_type(
+                handle,
+                FindPreference::default(),
+                search_type,
+                &Name::new(target),
+            )
+            .ok()?;
+
+        let def = defs.into_vec().into_iter().next()?;
+        let file_path = to_real_path(def.module.path())
+            .unwrap_or_else(|| def.module.path().as_path().to_path_buf());
+        let abs_path = file_path.absolutize();
+        let mut url = Url::from_file_path(&abs_path).ok()?;
+        set_display_pos_fragment(
+            &mut url,
+            def.module.display_range(def.definition_range).start,
+        );
+        Some(url.to_string())
+    }
+
+    pub fn format(&self, transaction: &Transaction, handle: &Handle) -> Hover {
+        let docstring_formatted = match &self.docstring {
+            Some(docstring) => {
+                let content = docstring.resolve();
+                let resolved_content =
+                    Self::resolve_sphinx_references(content, transaction, handle, &self.type_);
+                format!("\n---\n{}", resolved_content.trim())
+            }
             None => String::new(),
         };
         let parameter_doc_formatted =
@@ -271,15 +383,15 @@ fn position_is_in_docstring(
         }
         for stmt in body {
             match stmt {
-                Stmt::FunctionDef(func) => {
-                    if body_contains_docstring(func.body.as_slice(), position) {
-                        return true;
-                    }
+                Stmt::FunctionDef(func)
+                    if body_contains_docstring(func.body.as_slice(), position) =>
+                {
+                    return true;
                 }
-                Stmt::ClassDef(class_def) => {
-                    if body_contains_docstring(class_def.body.as_slice(), position) {
-                        return true;
-                    }
+                Stmt::ClassDef(class_def)
+                    if body_contains_docstring(class_def.body.as_slice(), position) =>
+                {
+                    return true;
                 }
                 _ => {}
             }
@@ -391,6 +503,117 @@ fn expand_callable_kwargs_for_hover<'a>(
             *param_list = ParamList::new(expanded);
         }
     }
+}
+
+/// Given the position, if it corresponds to a class-scoped PEP695 type var declaration
+/// return the class. This only applies to the declaration of the type var, not to
+/// any usages.
+fn get_owner_class_of_pep695_type_parameter_at(
+    id: &IdentifierWithContext,
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+) -> Option<Class> {
+    if !matches!(id.context, IdentifierContext::TypeParameter) {
+        return None;
+    }
+    let module = transaction.get_ast(handle)?;
+    let owner = Ast::locate_node(&module, position)
+        .into_iter()
+        .rev()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtClassDef(class_def)
+                if class_def
+                    .type_params
+                    .as_ref()
+                    .is_some_and(|type_params| type_params.range().contains(position)) =>
+            {
+                Some(class_def.name.clone())
+            }
+            _ => None,
+        });
+    let key = Key::Definition(ShortIdentifier::new(&owner?));
+    match transaction.get_type_for_display(handle, &key)? {
+        Type::ClassDef(class) => Some(class),
+        _ => None,
+    }
+}
+
+fn display_variance_for_hover(variance: Variance) -> &'static str {
+    match variance {
+        Variance::Covariant => "covariant",
+        Variance::Contravariant => "contravariant",
+        // Bivariant is an internal result, it's treated as invariant.
+        Variance::Invariant | Variance::Bivariant => "invariant",
+    }
+}
+
+fn type_parameter_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    owner: &Class,
+) -> Option<String> {
+    let quantified = match type_ {
+        Type::Quantified(q) | Type::QuantifiedValue(q) => q,
+        _ => return None,
+    };
+    let variance = solver.type_order().get_variance_from_class(owner);
+    Some(format!(
+        "{}@{} ({})",
+        quantified.name(),
+        owner.name(),
+        display_variance_for_hover(variance.get(quantified.name()))
+    ))
+}
+
+fn class_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    name_for_display: Option<&str>,
+) -> Option<String> {
+    let enum_class = match type_ {
+        Type::ClassDef(cls) => Some(cls),
+        Type::ClassType(cls) => Some(cls.class_object()),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(cls.class_object()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(cls) = enum_class
+        && solver.get_metadata_for_class(cls).is_enum()
+    {
+        let members: Vec<Type> = solver
+            .get_enum_members(cls)
+            .into_iter()
+            .map(|lit| lit.to_implicit_type())
+            .collect();
+        let enum_display_type = if members.is_empty() {
+            type_.clone()
+        } else {
+            solver.heap.mk_union(members)
+        };
+        return Some(
+            enum_display_type
+                .as_lsp_string_with_fallback_name(name_for_display, LspDisplayMode::Hover),
+        );
+    }
+
+    let mut constructor = match type_ {
+        Type::ClassDef(cls) if !solver.get_metadata_for_class(cls).is_typed_dict() => Some(
+            solver
+                .type_order()
+                .constructor_to_callable(&solver.promote_nontypeddict_silently_to_classtype(cls)),
+        ),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(solver.type_order().constructor_to_callable(cls)),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    constructor = solver.for_display(constructor);
+    Some(constructor.as_lsp_string_with_fallback_name(name_for_display, LspDisplayMode::Hover))
 }
 
 fn parameter_documentation_for_callee(
@@ -538,7 +761,8 @@ pub fn get_hover(
     // Check if hovering over `in` keyword in for loop or comprehension. These `in`s are different
     // from using `in` as a binary comparison operator and therefore needs some special handling.
     if let Some(iterable_range) = in_keyword_in_iteration_at(transaction, handle, position)
-        && let Some(iterable_type) = transaction.get_type_at(handle, iterable_range.start())
+        && let Some(iterable_type) =
+            transaction.get_type_at_for_display(handle, iterable_range.start())
     {
         return Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -552,8 +776,10 @@ pub fn get_hover(
         });
     }
 
-    // Otherwise, fall through to the existing type hover logic
-    let mut type_ = transaction.get_type_at(handle, position)?;
+    let mut type_ = transaction
+        .subscript_operator_type_at(handle, position)
+        .or_else(|| transaction.get_type_at_for_display(handle, position))
+        .or_else(|| transaction.operator_type_at(handle, position))?;
 
     // Helper function to check if we're hovering over a callee and get its range
     let find_callee_range_at_position = || -> Option<TextRange> {
@@ -628,36 +854,27 @@ pub fn get_hover(
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
     let name_for_display = name.clone();
+    let hover_identifier = transaction.identifier_at(handle, position);
+    let type_parameter_owner_class = hover_identifier.as_ref().and_then(|id| {
+        get_owner_class_of_pep695_type_parameter_at(id, transaction, handle, position)
+    });
     let show_constructor = kind == Some(SymbolKind::Class)
-        && !transaction
-            .identifier_at(handle, position)
-            .is_some_and(|id| matches!(id.context, IdentifierContext::ClassDef { .. }));
+        && hover_identifier
+            .as_ref()
+            .is_some_and(|id| !matches!(id.context, IdentifierContext::ClassDef { .. }));
     let type_display = transaction.ad_hoc_solve(handle, "hover_display", {
         let mut cloned = type_.clone();
         move |solver| {
-            if show_constructor {
-                let constructor = match cloned {
-                    Type::ClassDef(ref cls)
-                        if !solver.get_metadata_for_class(cls).is_typed_dict() =>
-                    {
-                        Some(solver.type_order().constructor_to_callable(
-                            &solver.promote_nontypeddict_silently_to_classtype(cls),
-                        ))
-                    }
-                    Type::Type(box Type::ClassType(ref cls)) => {
-                        Some(solver.type_order().constructor_to_callable(cls))
-                    }
-                    _ => None,
-                };
-                if let Some(mut constructor) = constructor {
-                    constructor.transform_toplevel_callable(|c| {
-                        expand_callable_kwargs_for_hover(&solver, c)
-                    });
-                    return constructor.as_lsp_string_with_fallback_name(
-                        name_for_display.as_deref(),
-                        LspDisplayMode::Hover,
-                    );
-                }
+            if let Some(owner) = &type_parameter_owner_class
+                && let Some(display) = type_parameter_hover_display(&solver, &cloned, owner)
+            {
+                return display;
+            }
+            if show_constructor
+                && let Some(display) =
+                    class_hover_display(&solver, &cloned, name_for_display.as_deref())
+            {
+                return display;
             }
             cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
             cloned.as_lsp_string_with_fallback_name(
@@ -709,7 +926,7 @@ pub fn get_hover(
             display: type_display,
             show_go_to_links,
         }
-        .format(),
+        .format(transaction, handle),
     )
 }
 
@@ -722,11 +939,8 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_types::callable::Callable;
-    use pyrefly_types::callable::FuncFlags;
-    use pyrefly_types::callable::FuncId;
     use pyrefly_types::callable::FuncMetadata;
     use pyrefly_types::callable::Function;
-    use pyrefly_types::callable::FunctionKind;
     use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
 
@@ -738,16 +952,7 @@ mod tests {
             ModulePath::filesystem(PathBuf::from(format!("{module_name}.pyi"))),
             Arc::new(String::new()),
         );
-        let metadata = FuncMetadata {
-            kind: FunctionKind::Def(Arc::new(FuncId {
-                module,
-                cls: None,
-                name: Name::new(func_name),
-                def_index: None,
-                outer_funcs: None,
-            })),
-            flags: FuncFlags::default(),
-        };
+        let metadata = FuncMetadata::def(&module, None, Name::new(func_name));
         heap.mk_function(Function {
             signature: Callable::ellipsis(heap.mk_none()),
             metadata,

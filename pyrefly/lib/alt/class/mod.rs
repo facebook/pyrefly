@@ -5,16 +5,19 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+pub mod attrs;
 pub mod class_field;
 pub mod class_metadata;
 pub mod classdef;
 pub mod dataclass;
 pub mod django;
 pub mod enums;
+pub mod factory_boy;
 pub mod named_tuple;
 pub mod new_type;
 pub mod pydantic;
 pub mod pydantic_lax;
+pub mod synthesized_classes_shared;
 pub mod targs;
 pub mod targs_cursor;
 pub mod total_ordering;

@@ -17,6 +17,9 @@ on:
       - ".github/workflows/test_action.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test-action:
     runs-on: ubuntu-latest

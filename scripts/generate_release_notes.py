@@ -47,6 +47,7 @@ try:
         GitHubClient,
         load_env_file,
     )
+    from pyrefly.scripts.version_helpers import is_prerelease
 except ImportError:
     # Standalone / GitHub Actions: fall back to relative import via sys.path
     sys.path.insert(0, str(_SCRIPT_DIR))
@@ -56,6 +57,33 @@ except ImportError:
         GitHubClient,  # pyrefly: ignore
         load_env_file,  # pyrefly: ignore
     )
+    from version_helpers import (  # type: ignore[import-not-found]  # noqa: F811  # pyrefly: ignore
+        is_prerelease,
+    )
+
+
+_DEV_DISCLAIMER: str = (
+    "> **About dev releases**\n"
+    "> Dev releases (versions like `X.Y.Z-dev.N`) are non-stable snapshots "
+    "cut periodically from trunk. They give early adopters a chance to try "
+    "in-progress features and surface issues before the next stable release, "
+    "but they don't carry the same stability or compatibility guarantees as "
+    "a stable release — don't pin production projects to a dev version."
+)
+
+
+def _dev_disclaimer_for(version: str) -> str:
+    """Return the dev-release disclaimer markdown for `version`, or empty.
+
+    Stripping the leading `v` from a tag-shaped version is intentional:
+    `is_prerelease` parses canonical semver and rejects the `v` prefix.
+    Stable releases (no `-dev.N`) get no disclaimer.
+    """
+    canonical = version.lstrip("v")
+    try:
+        return _DEV_DISCLAIMER if is_prerelease(canonical) else ""
+    except ValueError:
+        return ""
 
 
 def resolve_ref_date(
@@ -303,59 +331,6 @@ markdown — no commentary, no code fences wrapping the entire document.
 # ---------------------------------------------------------------------------
 
 
-def _fix_table_bullets(content: str) -> Tuple[str, List[str]]:
-    """Ensure each item in New & Improved table cells starts with '- '.
-
-    The LLM sometimes omits the bullet prefix on some items or uses an
-    inconsistent marker (e.g. '•').  This normalises every item to '- '.
-    """
-    warnings: List[str] = []
-    lines = content.split("\n")
-    result: List[str] = []
-
-    for line in lines:
-        if not (line.startswith("|") and "**" in line):
-            result.append(line)
-            continue
-
-        cells = line.split("|")
-        if len(cells) < 4:
-            result.append(line)
-            continue
-
-        area_cell = cells[1]
-        content_cell = cells[2]
-
-        items = content_cell.split("<br><br>")
-        fixed_items: List[str] = []
-        needs_fix = False
-
-        for item in items:
-            stripped = item.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("- "):
-                fixed_items.append(stripped)
-            elif stripped.startswith("\u2022 "):
-                fixed_items.append("- " + stripped[2:])
-                needs_fix = True
-            else:
-                fixed_items.append("- " + stripped)
-                needs_fix = True
-
-        if needs_fix:
-            new_content = " <br><br>".join(fixed_items)
-            new_line = f"|{area_cell}| {new_content} |"
-            result.append(new_line)
-            warnings.append(
-                f"Fixed bullet formatting in table row: {area_cell.strip()}"
-            )
-        else:
-            result.append(line)
-
-    return "\n".join(result), warnings
-
-
 def _fix_bug_fix_count(content: str, max_fixes: int = 10) -> Tuple[str, List[str]]:
     """Ensure no more than *max_fixes* detailed bug-fix bullet points.
 
@@ -449,23 +424,13 @@ def validate_and_fix_release_notes(
 ) -> Tuple[str, List[str]]:
     """Run post-generation formatting checks and fixes on the release notes.
 
-    Fixes applied:
-    1. Ensures all items in "New & Improved" table cells have a '- ' prefix.
-    2. Caps detailed bug-fix bullet points at *max_bug_fixes*, moving extras
-       into the "And more!" line.
+    Caps detailed bug-fix bullet points at *max_bug_fixes*, moving extras
+    into the "And more!" line.
 
     Returns:
         Tuple of (fixed_content, list_of_warnings).
     """
-    warnings: List[str] = []
-
-    content, w = _fix_table_bullets(content)
-    warnings.extend(w)
-
-    content, w = _fix_bug_fix_count(content, max_bug_fixes)
-    warnings.extend(w)
-
-    return content, warnings
+    return _fix_bug_fix_count(content, max_bug_fixes)
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +621,11 @@ def run_generate(
             archived_notes = archived_notes_path.read_text()
             print("  Loaded archived release notes for style reference")
 
+        # Pre-substitute the dev-release disclaimer so the LLM treats the
+        # filled-in text as fixed boilerplate. Stable releases get an empty
+        # string here, which collapses the placeholder line cleanly.
+        template = template.replace("{{DEV_DISCLAIMER}}", _dev_disclaimer_for(version))
+
         user_prompt = build_user_prompt(
             template,
             commits,
@@ -678,6 +648,8 @@ def run_generate(
             for w in fix_warnings:
                 print(f"    - {w}")
 
+        if not release_notes.endswith("\n"):
+            release_notes += "\n"
         output_path.write_text(release_notes)
         print(f"\n  Release notes written to: {output_path}\n")
 
