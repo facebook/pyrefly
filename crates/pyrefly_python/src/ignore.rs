@@ -32,6 +32,11 @@ use clap::ValueEnum;
 use dupe::Dupe;
 use enum_iterator::Sequence;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::token::TokenKind;
+use ruff_python_parser::Mode;
+use ruff_python_parser::ParseOptions;
+use ruff_python_parser::parse_unchecked;
+use ruff_text_size::Ranged;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
@@ -308,10 +313,27 @@ impl Ignore {
         // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
+        let lines = code.lines().collect::<Vec<_>>();
+        let mut comment_starts = Vec::with_capacity(lines.len());
         let mut in_triple_quote = None;
-        for (idx, line_str) in code.lines().enumerate() {
+        let mut needs_token_fallback = false;
+        for line_str in &lines {
             let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
             in_triple_quote = new_state;
+            needs_token_fallback |= comment_start.is_none()
+                && in_triple_quote.is_some()
+                && line_str.contains('#')
+                && line_str.split('#').skip(1).any(|text| {
+                    Self::parse_ignore_comment(text, LineNumber::default(), 0).is_some()
+                });
+            comment_starts.push(comment_start);
+        }
+
+        if needs_token_fallback {
+            comment_starts = comment_starts_from_tokens(code, lines.len());
+        }
+
+        for (idx, (line_str, comment_start)) in lines.into_iter().zip(comment_starts).enumerate() {
             let is_comment_only_line = comment_start
                 .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
             line = LineNumber::from_zero_indexed(idx as u32);
@@ -463,6 +485,32 @@ impl Ignore {
     pub fn is_empty(&self) -> bool {
         self.ignores.is_empty()
     }
+}
+
+/// Use Ruff's parser tokens for the rare case where the lightweight string scanner
+/// may have mistaken an f-string's nested multiline string for a top-level string.
+fn comment_starts_from_tokens(code: &str, line_count: usize) -> Vec<Option<usize>> {
+    let mut line_starts = Vec::with_capacity(line_count);
+    line_starts.push(0);
+    line_starts.extend(
+        code.bytes()
+            .enumerate()
+            .filter_map(|(idx, byte)| (byte == b'\n').then_some(idx + 1)),
+    );
+    line_starts.truncate(line_count);
+
+    let mut comment_starts = vec![None; line_count];
+    let parsed = parse_unchecked(code, ParseOptions::from(Mode::Module));
+    for token in parsed
+        .tokens()
+        .into_iter()
+        .filter(|token| token.kind() == TokenKind::Comment)
+    {
+        let start = token.start().to_usize();
+        let line = line_starts.partition_point(|line_start| *line_start <= start) - 1;
+        comment_starts[line] = Some(start - line_starts[line]);
+    }
+    comment_starts
 }
 
 /// Returns true if `line` falls inside one of the sorted multiline string ranges.
@@ -739,6 +787,18 @@ x = """
             &[(Tool::Pyrefly, 3)],
         );
         f("x = ''''''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
+        f(
+            "_ = f'start{\"\"\"message\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "_ = f'start{\"\"\"message\n\"\"\"}end'\ny: int = \"hello\"  # pyre-fixme[7]",
+            &[(Tool::Pyre, 3)],
+        );
+        f(
+            "x = \"\"\"message\n+# pyrefly: ignore[bad-assignment]\n+\"\"\"",
+            &[],
+        );
     }
 
     #[test]
