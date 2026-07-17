@@ -1167,8 +1167,7 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
+    bug = "conformance: Should error on unbound TypeVars in class bases, TypeAlias, expressions",
     test_typevar_scoping_restrictions,
     r#"
 from typing import TypeVar, Generic, TypeAlias

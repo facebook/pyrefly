@@ -11,16 +11,18 @@ use lsp_types::RegistrationParams;
 use lsp_types::Url;
 use lsp_types::request::RegisterCapability;
 use lsp_types::request::Request as _;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_lsp_test::object_model::LspMessageError;
 use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspMessageError;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 pub fn expect_watched_files(
     interaction: &LspInteraction,
@@ -126,7 +128,13 @@ fn test_incremental_pattern_addition() {
 fn test_consecutive_file_watcher_events() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {

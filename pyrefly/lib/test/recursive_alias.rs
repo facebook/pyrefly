@@ -86,8 +86,7 @@ def f(x: X) -> Y:
 );
 
 testcase!(
-    bug =
-        "Iterative fixpoint reports non-convergent-recursion for recursive class attribute aliases",
+    bug = "fixpoint reports non-convergent-recursion for recursive class attribute aliases",
     test_class_attr,
     r#"
 class C:
@@ -196,7 +195,7 @@ type X[K, V] = dict[K, V] | list[X[str, V]]
 
 x1: X = {0: 1}
 x2: X[int, int] = {0: 1}
-x3: X[str, int] = {0: 1}  # E: `dict[int, int]` is not assignable to `dict[str, int] | list[X[str, int]]`
+x3: X[str, int] = {0: 1}  # E: `Literal[0]` is not assignable to dict key type `str`
 
 x4: X = [{'ok': 1}]
 x5: X[int, int] = [{'ok': 1}]
@@ -233,7 +232,7 @@ testcase!(
     test_error_implicit_any,
     TestEnv::new().enable_implicit_any_error(),
     r#"
-type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X`
+type X[T] = int | list[X]  # E: Cannot determine the type parameter `T` for generic type alias `X[T]`
 def f(x: X[str]) -> X[int]:
     return [x]
     "#,
@@ -267,6 +266,19 @@ type T = U  # E: cyclic self-reference in `T`
 type U = T  # E: cyclic self-reference in `U`
 
 x: T = 1
+not x
+    "#,
+);
+
+testcase!(
+    test_cyclic_alias_through_type_parameter_bound,
+    r#"
+# Regression test for #2851: resolving `Y`'s scoped type parameter bound closes
+# a cycle through `X`. Using the alias used to make the solver recurse forever.
+type X = Y  # E: cyclic self-reference in `X`
+type Y[T: X] = X  # E: cyclic self-reference in `Y`
+
+x: X = 1
 not x
     "#,
 );
@@ -380,5 +392,68 @@ Outer: TypeAlias = dict[str, Inner[int]]
 
 def f(x: Outer) -> None:
     reveal_type(x)  # E: dict[str, int | list[int]]
+    "#,
+);
+
+testcase!(
+    test_nested_literal_against_recursive_alias_branch,
+    r#"
+from collections.abc import Mapping
+from typing import TypeAlias
+
+class A: ...
+class B(A): ...
+
+IncEx: TypeAlias = Mapping[int, int] | Mapping[str, "IncEx | list[A]"]
+
+ok: IncEx = {"a": {"__all__": [B()]}}
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4324: a
+// self-referential alias reached *through* another alias used to leave a live
+// reference into the cycle, so attribute lookup recursed until the stack
+// overflowed. Contrast with `type T2 = T2` alone, which was already detected.
+testcase!(
+    test_cyclic_indirect_self_reference,
+    r#"
+type T1 = T2  # E: cyclic self-reference in `T1`
+type T2 = T2  # E: cyclic self-reference in `T2`
+
+x: T1 = 1
+x.__str__
+    "#,
+);
+
+// Indirection depth is irrelevant: the cycle is reachable from `T1` without
+// `T1` participating in it.
+testcase!(
+    test_cyclic_indirect_self_reference_multi_hop,
+    r#"
+type T1 = T2  # E: cyclic self-reference in `T1`
+type T2 = T3  # E: cyclic self-reference in `T2`
+type T3 = T3  # E: cyclic self-reference in `T3`
+
+x: T1 = 1
+x.foo
+    "#,
+);
+
+// Guard for the fix above: recording the names of recursive references must not
+// flag an alias that merely *points at* a well-founded recursive alias, nor one
+// whose cycle runs through a user-defined generic that can be inhabited.
+testcase!(
+    test_alias_referencing_valid_recursive_alias_is_not_cyclic,
+    r#"
+type Inner = int | list[Inner]
+type Outer = Inner
+
+class C[T]:
+    x: T | None = None
+type A = C[A]
+type B = A
+
+v: Outer = 1
+w: B = C()
     "#,
 );

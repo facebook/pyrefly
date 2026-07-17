@@ -44,7 +44,6 @@ use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
-use crate::tsp::type_conversion::convert_type_with_resolvers;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::snapshot_outdated_error;
@@ -166,22 +165,6 @@ impl<T: TspInterface> TspConnection<T> {
     /// Convenience accessor for the inner LSP server.
     pub(crate) fn inner(&self) -> &T {
         &self.server.inner
-    }
-
-    /// Convert a pyrefly `Type` to a TSP protocol `Type`, resolving function
-    /// declaration ranges via the binding table.
-    pub(crate) fn convert_type(
-        &self,
-        ty: &pyrefly_types::types::Type,
-        source_uri: Option<&str>,
-    ) -> tsp_types::Type {
-        let resolver = |func_id: &pyrefly_types::callable::FuncId| {
-            self.inner().resolve_func_def_range(func_id)
-        };
-        let module_path_resolver = |module: &pyrefly_types::module::ModuleType| {
-            source_uri.and_then(|uri| self.inner().resolve_module_uri(uri, module))
-        };
-        convert_type_with_resolvers(ty, Some(&resolver), Some(&module_path_resolver))
     }
 
     fn send_response(&self, response: Response) {

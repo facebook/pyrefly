@@ -26,6 +26,33 @@ class Author(models.Model):
     env
 }
 
+fn django_env_without_auto_field() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add("django", "");
+    env.add("django.db", "");
+    env.add(
+        "django.db.models",
+        r#"
+from django.db.models.base import Model
+"#,
+    );
+    env.add("django.db.models.base", "class Model: pass");
+    env
+}
+
+testcase!(
+    test_missing_auto_field_does_not_panic,
+    django_env_without_auto_field(),
+    r#"
+from django.db import models
+
+class Author(models.Model):
+    pass
+
+Author()
+"#,
+);
+
 django_testcase!(
     bug = "Reverse relations not yet implemented",
     test_foreign_key_reverse_default_name,

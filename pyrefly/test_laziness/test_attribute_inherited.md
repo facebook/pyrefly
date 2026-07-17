@@ -5,12 +5,15 @@ module `c`), inherited by `Child` (in module `b`).
 
 All necessary demands:
 - `a -> b::KeyExport("Child")` — resolve the import
-- `a -> b::KeyClassMetadata(0)` — needed to know Child's bases for MRO
+- `a -> b::KeyClassMetadata(0)` — needed to know Child's bases for MRO.
+  Computing Child's metadata also validates class-header keywords against
+  any inherited `__init_subclass__`, which walks Child's bases and
+  re-demands Base's (already-cached) `c::KeyClassMetadata`.
 - `b -> c::KeyExport("Base")` and `b -> c::KeyClassMetadata(0)` —
   resolving Child's MRO requires knowing Base
 - `a -> b::KeyClassMro(0)` — compute MRO to walk ancestors
 - `a -> c::KeyClassField(0, "base_attr")` — the actual attribute
-  resolution; children (`c -> builtins::*`) resolve `int`
+  resolution; children include the lazy builtin lookup for `int`
 - `a -> b::KeyClassSynthesizedFields(0)` and `a -> c::KeyClassSynthesizedFields(0)`
   — MRO walk checks synthesized fields on each ancestor
 
@@ -47,17 +50,20 @@ a: Solutions
 b: Answers
 c: Answers
 
-(171 builtin demands hidden)
+(64 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
+a -> b::Exports(is_implicit_reexport)
 a -> b::Exports(get_deprecated)
 a -> b::KeyExport(Name("Child"))
   b -> c::Exports(is_special_export)
 a -> b::KeyClassMetadata(ClassDefIndex(0))
   b -> c::Exports(export_exists)
+  b -> c::Exports(is_implicit_reexport)
   b -> c::Exports(get_deprecated)
   b -> c::KeyExport(Name("Base"))
+  b -> c::KeyClassMetadata(ClassDefIndex(0))
   b -> c::KeyClassMetadata(ClassDefIndex(0))
   b -> c::KeyClassMetadata(ClassDefIndex(0))
   b -> c::KeyClassMetadata(ClassDefIndex(0))

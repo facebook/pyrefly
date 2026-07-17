@@ -18,7 +18,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
@@ -1772,12 +1771,12 @@ impl<'a> CallGraphVisitor<'a> {
         // name-based lookup. This handles module-level function aliases (e.g.,
         // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
         // original definition's index.
-        let (module, def_index) = match &function.metadata.kind {
-            FunctionKind::Def(func_id) if func_id.cls.is_none() && func_id.def_index.is_some() => {
-                (&func_id.module, func_id.def_index.unwrap())
-            }
-            _ => return None,
-        };
+        let func_id = function.metadata.kind.definition_id()?;
+        if func_id.cls.is_some() {
+            return None;
+        }
+        let module = &func_id.module;
+        let def_index = func_id.def_index?;
 
         let function_ref = self
             .module_context
@@ -2321,7 +2320,7 @@ impl<'a> CallGraphVisitor<'a> {
                 }
                 _ => CallCallees::new_unresolved(UnresolvedReason::UnexpectedPyreflyTarget),
             },
-            Some(CallTargetLookup::Error(targets)) => {
+            Some(CallTargetLookup::Error(_, targets)) => {
                 if targets.is_empty() {
                     debug_println!(
                         self.debug,

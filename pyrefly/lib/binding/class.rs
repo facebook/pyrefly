@@ -34,6 +34,8 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
+use crate::binding::attrs::AttrsDecoratorMethods;
+use crate::binding::attrs::collect_attrs_decorator_methods;
 use crate::binding::base_class::BaseClass;
 use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::base_class::BaseClassGenericKind;
@@ -248,6 +250,8 @@ impl<'a> BindingsBuilder<'a> {
         let body = mem::take(&mut x.body);
         let field_docstrings = self.extract_field_docstrings(&body);
         let pydantic_before_validator_fields = self.extract_field_validator_fields(&body);
+        let mut attrs_decorators = AttrsDecoratorMethods::default();
+        collect_attrs_decorator_methods(&body, &mut attrs_decorators);
         let capture_init = self.extract_capture_init(&body);
         let shaped_array_metadata = self.extract_shaped_array_metadata(&x.decorator_list);
         let decorators =
@@ -384,7 +388,7 @@ impl<'a> BindingsBuilder<'a> {
             args.keywords.iter_mut().for_each(|keyword| {
                 if let Some(name) = &keyword.arg {
                     self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.id.clone(), keyword.value.clone()));
+                    keywords.push((name.clone(), keyword.value.clone()));
                 } else {
                     self.error(
                         keyword.range(),
@@ -468,12 +472,16 @@ impl<'a> BindingsBuilder<'a> {
 
             let docstring_range = field_docstrings.get(&range).copied();
 
+            let attrs_field_specifier =
+                self.attrs_field_specifier(&definition, name.key(), range, &attrs_decorators);
+
             fields.insert_hashed(
                 name.clone(),
                 ClassFieldProperties::new(
                     is_annotated,
                     is_initialized_on_class,
                     is_defined_in_class_body,
+                    attrs_field_specifier,
                     range,
                     docstring_range,
                 ),
@@ -533,6 +541,7 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: class_indices.def_index,
                 def: ClassDefData::new(x),
                 parent: parent.dupe(),
+                is_protocol: has_protocol_base,
                 tparams_require_binding,
                 docstring_range,
             }),
@@ -739,6 +748,7 @@ impl<'a> BindingsBuilder<'a> {
         use ruff_python_ast::Stmt;
 
         let mut field_docstrings = SmallMap::new();
+        let mut first_function_ranges = SmallMap::new();
         let mut i = 0;
 
         while i < body.len() {
@@ -747,8 +757,14 @@ impl<'a> BindingsBuilder<'a> {
             let is_field = matches!(stmt, Stmt::AnnAssign(_) | Stmt::Assign(_));
 
             if let Stmt::FunctionDef(func_def) = stmt {
+                let first_range = *first_function_ranges
+                    .entry(func_def.name.id.clone())
+                    .or_insert(func_def.name.range);
                 if let Some(docstring_range) = Docstring::range_from_stmts(&func_def.body) {
                     field_docstrings.insert(func_def.name.range, docstring_range);
+                    // Class field metadata points at the first declaration in an overload chain,
+                    // while its documentation belongs to the implementation.
+                    field_docstrings.insert(first_range, docstring_range);
                 }
             } else if let Stmt::ClassDef(class_def) = stmt {
                 if let Some(docstring_range) = Docstring::range_from_stmts(&class_def.body) {
@@ -1079,6 +1095,7 @@ impl<'a> BindingsBuilder<'a> {
                     member_annotation.is_some() || class_kind == SynthesizedClassKind::NamedTuple,
                     member_value.is_some(),
                     true, // Synthesized fields are class body fields
+                    None, // Synthesized fields are never attrs field specifiers
                     range,
                     None, // Synthesized fields don't have docstrings
                 ),
@@ -1134,7 +1151,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Name, Expr)]>,
+        keywords: Box<[(Identifier, Expr)]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1582,8 +1599,12 @@ impl<'a> BindingsBuilder<'a> {
                 (Some(name), _) if name == "extra_items" => Some(name),
                 _ => None,
             };
-            if let Some(kw_name) = recognized_kw {
-                base_class_keywords.push((kw_name.clone(), kw.value.clone()));
+            if recognized_kw.is_some() {
+                let kw_name = kw
+                    .arg
+                    .clone()
+                    .expect("recognized TypedDict keyword must have a name");
+                base_class_keywords.push((kw_name, kw.value.clone()));
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")
