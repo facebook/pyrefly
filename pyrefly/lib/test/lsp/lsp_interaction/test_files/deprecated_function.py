@@ -11,3 +11,11 @@ def old_function() -> None: ...
 
 
 old_function()
+
+
+class WithDeprecatedOperator:
+    @deprecated("use the add method instead")
+    def __add__(self, other: int) -> int: ...
+
+
+WithDeprecatedOperator() + 1

@@ -193,6 +193,18 @@ impl<T> FindingOrError<T> {
             x => x,
         }
     }
+
+    pub fn with_error_opt(self, error: Option<FindError>) -> Self {
+        if let Some(error) = error {
+            self.with_error(error)
+        } else {
+            self
+        }
+    }
+
+    pub fn from_error_opt(error: Option<FindError>) -> Self {
+        Self::Error(error.unwrap_or(FindError::Ignored))
+    }
 }
 
 #[derive(Debug)]
@@ -213,7 +225,7 @@ pub struct LoaderFindCache {
 }
 
 impl LoaderFindCache {
-    pub fn new(config: ArcId<ConfigFile>, dir_cache_enabled: bool) -> Self {
+    pub fn new(config: ArcId<ConfigFile>) -> Self {
         // When no config feature uses origin, all import resolutions produce
         // the same result regardless of which file is importing. We can then
         // cache by ModuleName alone, reducing millions of cache entries
@@ -229,7 +241,7 @@ impl LoaderFindCache {
             is_origin_independent,
             cache: Default::default(),
             executable_cache: Default::default(),
-            dir_cache: DirEntryCache::new(dir_cache_enabled),
+            dir_cache: DirEntryCache::new(),
         }
     }
 
@@ -384,7 +396,7 @@ mod tests {
         config.source_db = Some(ArcId::new(Box::new(sourcedb)));
         config.configure();
 
-        let loader = LoaderFindCache::new(ArcId::new(config), true);
+        let loader = LoaderFindCache::new(ArcId::new(config));
         let origin_a = ModulePath::memory(PathBuf::from("a.py"));
         let origin_b = ModulePath::memory(PathBuf::from("b.py"));
 

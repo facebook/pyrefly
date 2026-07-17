@@ -5,8 +5,29 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::LazyLock;
+
+use itertools::Itertools;
+use pyrefly_config::error_kind::ErrorKind;
+use regex::Regex;
+
 use crate::error::error::Error;
 use crate::module::module_info::ModuleInfo;
+
+static REVEAL_TYPE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)^revealed type: (.*)$").expect("invalid regex"));
+
+#[derive(Clone, Copy, Debug)]
+enum ExpectationKind {
+    Error,
+    NotError,
+}
+
+#[derive(Clone, Debug)]
+struct PendingExpectation {
+    kind: ExpectationKind,
+    parts: Vec<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct Expectation {
@@ -18,16 +39,65 @@ pub struct Expectation {
 }
 
 impl Expectation {
-    fn parse_line(&mut self, line_no: usize, mut s: &str) {
+    fn push(&mut self, line_no: usize, kind: ExpectationKind, msg: String) {
+        match kind {
+            ExpectationKind::Error => self.error.push((line_no, msg)),
+            ExpectationKind::NotError => self.not_error.push((line_no, msg)),
+        }
+    }
+
+    fn parse_line(&mut self, line_no: usize, s: &str) {
+        for marker in Self::parse_markers(s) {
+            self.push(line_no, marker.kind, marker.parts.join(" "));
+        }
+    }
+
+    fn parse_markers(mut s: &str) -> Vec<PendingExpectation> {
+        let mut markers = Vec::new();
         // Parse negative assertions (# !E:) first, since they appear after positive assertions
         // on the same line: `# E: error msg # !E: should not contain`
         while let Some((prefix, err)) = s.trim().rsplit_once("# !E:") {
-            self.not_error.push((line_no, err.trim().to_owned()));
+            markers.push(PendingExpectation {
+                kind: ExpectationKind::NotError,
+                parts: vec![err.trim().to_owned()],
+            });
             s = prefix.trim_end();
         }
         while let Some((prefix, err)) = s.trim().rsplit_once("# E:") {
-            self.error.push((line_no, err.trim().to_owned()));
+            markers.push(PendingExpectation {
+                kind: ExpectationKind::Error,
+                parts: vec![err.trim().to_owned()],
+            });
             s = prefix.trim_end();
+        }
+        markers.reverse();
+        markers
+    }
+
+    fn parse_leading_markers(line: &str) -> Vec<PendingExpectation> {
+        let Some(comment) = line.trim_start().strip_prefix('#') else {
+            return Vec::new();
+        };
+        let comment = comment.trim_start();
+        if comment.starts_with("E:") || comment.starts_with("!E:") {
+            Self::parse_markers(&format!("# {comment}"))
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn parse_leading_continuation(line: &str) -> Option<String> {
+        let comment = line.trim_start().strip_prefix('#')?;
+        // A single-space comment remains an ordinary ignored comment. Two
+        // spaces, or a tab, opt into continuing the preceding expectation.
+        if !comment.starts_with("  ") && !comment.starts_with('\t') {
+            return None;
+        }
+        let msg = comment.trim();
+        if msg.is_empty() {
+            None
+        } else {
+            Some(msg.to_owned())
         }
     }
 
@@ -37,8 +107,35 @@ impl Expectation {
             error: Vec::new(),
             not_error: Vec::new(),
         };
+        let mut pending = Vec::<(usize, PendingExpectation)>::new();
         for (line_no, line) in s.lines().enumerate() {
-            res.parse_line(line_no + 1, line)
+            let line_no = line_no + 1;
+            let markers = Self::parse_leading_markers(line);
+            if !markers.is_empty() {
+                pending.extend(markers.into_iter().map(|marker| (line_no, marker)));
+                continue;
+            }
+            if !pending.is_empty() {
+                if let Some(part) = Self::parse_leading_continuation(line) {
+                    pending
+                        .last_mut()
+                        .expect("pending expectations must be nonempty")
+                        .1
+                        .parts
+                        .push(part);
+                    continue;
+                }
+                if line.trim().is_empty() || line.trim_start().starts_with('#') {
+                    continue;
+                }
+                for (_, expectation) in std::mem::take(&mut pending) {
+                    res.push(line_no, expectation.kind, expectation.parts.join(" "));
+                }
+            }
+            res.parse_line(line_no, line)
+        }
+        for (line_no, expectation) in pending {
+            res.push(line_no, expectation.kind, expectation.parts.join(" "));
         }
         res
     }
@@ -52,14 +149,56 @@ impl Expectation {
                 errors.len(),
             ))
         } else {
-            for (line_no, msg) in &self.error {
-                if !errors.iter().any(|e| {
-                    e.msg().replace("\n", "\\n").contains(msg)
-                        && e.display_range().start.line_within_file().get() as usize == *line_no
-                }) {
+            'outer: for (line_no, expected_msg) in &self.error {
+                let mut partial_reveal_type_match = None;
+                for e in errors.iter() {
+                    if e.display_range().start.line_within_file().get() as usize != *line_no {
+                        continue;
+                    }
+                    match e.error_kind() {
+                        ErrorKind::RevealType => {
+                            // Collapse a multi-line type to a single line. Expectations test what
+                            // type is obtained, not how it is displayed.
+                            let actual_msg = e.msg_header().lines().map(str::trim).join(" ");
+                            assert!(e.msg_details().is_none());
+                            // For reveal_type, we require the expectation to contain the *entire* serialized type,
+                            // to avoid an easy failure mode: if we use `reveal_type` to test the result of a
+                            // narrowing op, and pyrefly doesn't actually narrow, allowing a partial match would
+                            // let the test spuriously pass.
+                            let full_actual_type = REVEAL_TYPE_RE
+                                .captures(&actual_msg)
+                                .unwrap()
+                                .get(1)
+                                .unwrap();
+                            if actual_msg.contains(expected_msg) {
+                                if expected_msg.contains(full_actual_type.as_str()) {
+                                    continue 'outer; // successful match
+                                } else if partial_reveal_type_match.is_none() {
+                                    partial_reveal_type_match =
+                                        Some(full_actual_type.as_str().to_owned());
+                                }
+                            }
+                        }
+                        _ => {
+                            let actual_msg = e.msg().replace("\n", "\\n");
+                            if actual_msg.contains(expected_msg) {
+                                continue 'outer; // successful match
+                            }
+                        }
+                    }
+                }
+                if let Some(actual_type) = partial_reveal_type_match {
+                    let expected_type = expected_msg
+                        .strip_prefix("revealed type: ")
+                        .unwrap_or(expected_msg);
                     return Err(anyhow::anyhow!(
-                        "Expectations failed for {}: can't find error (line {line_no}): {msg}",
-                        self.module.path()
+                        "Expectations failed for {}: reveal_type expectation (line {line_no}) must contain the full revealed type. Expectation: `{expected_type}`, actual revealed type: `{actual_type}`",
+                        self.module.path(),
+                    ));
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Expectations failed for {}: can't find error (line {line_no}): {expected_msg}",
+                        self.module.path(),
                     ));
                 }
             }
@@ -138,6 +277,82 @@ mod tests {
         assert_eq!(exp.error[0], (1, "some error".to_owned()));
         assert_eq!(exp.not_error.len(), 1);
         assert_eq!(exp.not_error[0], (1, "unwanted".to_owned()));
+    }
+
+    #[test]
+    fn test_parse_leading_expectation() {
+        let contents = "# E: some error\nx = 1\n";
+        let module = make_module(contents);
+        let exp = Expectation::parse(module, contents);
+        assert_eq!(exp.error, vec![(2, "some error".to_owned())]);
+        assert_eq!(exp.not_error.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_multiline_leading_expectation() {
+        let contents = "\
+# E: first part
+#    second part
+x = 1
+";
+        let module = make_module(contents);
+        let exp = Expectation::parse(module, contents);
+        assert_eq!(exp.error, vec![(3, "first part second part".to_owned())]);
+        assert_eq!(exp.not_error.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_leading_expectation_skips_comments_and_blank_lines() {
+        let contents = "\
+# E: some error
+
+# This comment explains why the next line errors.
+x = 1
+";
+        let module = make_module(contents);
+        let exp = Expectation::parse(module, contents);
+        assert_eq!(exp.error, vec![(4, "some error".to_owned())]);
+        assert_eq!(exp.not_error.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_leading_negative_assertion() {
+        let contents = "# !E: unwanted\nx = 1  # E: some error\n";
+        let module = make_module(contents);
+        let exp = Expectation::parse(module, contents);
+        assert_eq!(exp.error, vec![(2, "some error".to_owned())]);
+        assert_eq!(exp.not_error, vec![(2, "unwanted".to_owned())]);
+    }
+
+    #[test]
+    fn test_parse_leading_positive_and_negative_assertion() {
+        let contents = "# E: some error # !E: unwanted\nx = 1\n";
+        let module = make_module(contents);
+        let exp = Expectation::parse(module, contents);
+        assert_eq!(exp.error, vec![(2, "some error".to_owned())]);
+        assert_eq!(exp.not_error, vec![(2, "unwanted".to_owned())]);
+    }
+
+    #[test]
+    fn test_parse_leading_continuation_attaches_to_last_marker() {
+        let contents = "\
+# E: some error # !E: unwanted
+#    detail
+x = 1
+";
+        let module = make_module(contents);
+        let exp = Expectation::parse(module, contents);
+        assert_eq!(exp.error, vec![(3, "some error".to_owned())]);
+        assert_eq!(exp.not_error, vec![(3, "unwanted detail".to_owned())]);
+    }
+
+    #[test]
+    fn test_parse_leading_expectation_without_target_preserves_line() {
+        let contents = "# E: some error\n";
+        let module = make_module(contents);
+        let exp = Expectation::parse(module, contents);
+        assert_eq!(exp.error, vec![(1, "some error".to_owned())]);
+        assert_eq!(exp.not_error.len(), 0);
     }
 
     #[test]

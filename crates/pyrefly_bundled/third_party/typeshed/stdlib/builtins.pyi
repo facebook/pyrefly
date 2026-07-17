@@ -46,7 +46,7 @@ from _typeshed import (
 from collections.abc import Awaitable, Callable, Iterable, Iterator, MutableSet, Reversible, Set as AbstractSet, Sized
 from io import BufferedRandom, BufferedReader, BufferedWriter, FileIO, TextIOWrapper
 from os import PathLike
-from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplementedType, TracebackType
+from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplementedType, TracebackType, UnionType
 
 # mypy crashes if any of {ByteString, Sequence, MutableSequence, Mapping, MutableMapping}
 # are imported from collections.abc in builtins.pyi
@@ -421,7 +421,7 @@ class int:
     int(x, base=10) -> integer
 
     Convert a number or string to an integer, or return 0 if no arguments
-    are given.  If x is a number, return x.__int__().  For floating point
+    are given.  If x is a number, return x.__int__().  For floating-point
     numbers, this truncates towards zero.
 
     If x is not a number or if base is given, then x must be a string,
@@ -733,7 +733,7 @@ class int:
 
 @disjoint_base
 class float:
-    """Convert a string or number to a floating point number, if possible."""
+    """Convert a string or number to a floating-point number, if possible."""
     def __new__(cls, x: ConvertibleToFloat = 0, /) -> Self: ...
     def as_integer_ratio(self) -> tuple[int, int]:
         """
@@ -931,9 +931,12 @@ class float:
 @disjoint_base
 class complex:
     """
-    Create a complex number from a real part and an optional imaginary part.
+    Create a complex number from a string or numbers.
 
-    This is equivalent to (real + imag*1j) where imag defaults to 0.
+    If a string is given, parse it as a complex number.
+    If a single number is given, convert it to a complex number.
+    If the 'real' or 'imag' arguments are given, create a complex number
+    with the specified real and imaginary components.
     """
     # Python doesn't currently accept SupportsComplex for the second argument
     @overload
@@ -1259,10 +1262,9 @@ class str(Sequence[str]):
         ...
     def isprintable(self) -> bool:
         """
-        Return True if the string is printable, False otherwise.
+        Return True if all characters in the string are printable, False otherwise.
 
-        A string is printable if all of its characters are considered printable in
-        repr() or if it is empty.
+        A character is printable if repr() may use it in its output.
         """
         ...
     def isspace(self) -> bool:
@@ -1539,7 +1541,7 @@ class str(Sequence[str]):
             character (including \n \r \t \f and spaces) and will discard
             empty strings from the result.
           maxsplit
-            Maximum number of splits (starting from the left).
+            Maximum number of splits.
             -1 (the default value) means no limit.
 
         Splitting starts at the end of the string and works to the front.
@@ -1557,7 +1559,7 @@ class str(Sequence[str]):
             character (including \n \r \t \f and spaces) and will discard
             empty strings from the result.
           maxsplit
-            Maximum number of splits (starting from the left).
+            Maximum number of splits.
             -1 (the default value) means no limit.
 
         Splitting starts at the end of the string and works to the front.
@@ -1593,8 +1595,10 @@ class str(Sequence[str]):
             character (including \n \r \t \f and spaces) and will discard
             empty strings from the result.
           maxsplit
-            Maximum number of splits (starting from the left).
+            Maximum number of splits.
             -1 (the default value) means no limit.
+
+        Splitting starts at the front of the string and works to the end.
 
         Note, str.split() is mainly useful for data that has been intentionally
         delimited.  With natural text that includes punctuation, consider using
@@ -1613,8 +1617,10 @@ class str(Sequence[str]):
             character (including \n \r \t \f and spaces) and will discard
             empty strings from the result.
           maxsplit
-            Maximum number of splits (starting from the left).
+            Maximum number of splits.
             -1 (the default value) means no limit.
+
+        Splitting starts at the front of the string and works to the end.
 
         Note, str.split() is mainly useful for data that has been intentionally
         delimited.  With natural text that includes punctuation, consider using
@@ -3890,10 +3896,10 @@ class set(MutableSet[_T]):
         """Return True if two sets have a null intersection."""
         ...
     def issubset(self, s: Iterable[object], /) -> bool:
-        """Report whether another set contains this set."""
+        """Test whether every element in the set is in other."""
         ...
     def issuperset(self, s: Iterable[object], /) -> bool:
-        """Report whether this set contains another set."""
+        """Test whether every element in other is in the set."""
         ...
     def remove(self, element: _T, /) -> None:
         """
@@ -4009,10 +4015,10 @@ class frozenset(AbstractSet[_T_co]):
         """Return True if two sets have a null intersection."""
         ...
     def issubset(self, s: Iterable[object], /) -> bool:
-        """Report whether another set contains this set."""
+        """Test whether every element in the set is in other."""
         ...
     def issuperset(self, s: Iterable[object], /) -> bool:
-        """Report whether this set contains another set."""
+        """Test whether every element in other is in the set."""
         ...
     def symmetric_difference(self, s: Iterable[_S], /) -> frozenset[_T_co | _S]:
         """
@@ -4494,7 +4500,7 @@ def delattr(obj: object, name: str, /) -> None:
     ...
 def dir(o: object = ..., /) -> list[str]:
     """
-    Show attributes of an object.
+    dir([object]) -> list of strings
 
     If called without an argument, return the names in the current scope.
     Else, return an alphabetized list of names comprising (some of) the attributes
@@ -4647,9 +4653,9 @@ def format(value: object, format_spec: str = "", /) -> str:
 @overload
 def getattr(o: object, name: str, /) -> Any:
     """
-    Get a named attribute from an object.
+    getattr(object, name[, default]) -> value
 
-    getattr(x, 'y') is equivalent to x.y
+    Get a named attribute from an object; getattr(x, 'y') is equivalent to x.y.
     When a default argument is given, it is returned when the attribute doesn't
     exist; without it, an exception is raised in that case.
     """
@@ -4661,9 +4667,9 @@ def getattr(o: object, name: str, /) -> Any:
 @overload
 def getattr(o: object, name: str, default: None, /) -> Any | None:
     """
-    Get a named attribute from an object.
+    getattr(object, name[, default]) -> value
 
-    getattr(x, 'y') is equivalent to x.y
+    Get a named attribute from an object; getattr(x, 'y') is equivalent to x.y.
     When a default argument is given, it is returned when the attribute doesn't
     exist; without it, an exception is raised in that case.
     """
@@ -4671,9 +4677,9 @@ def getattr(o: object, name: str, default: None, /) -> Any | None:
 @overload
 def getattr(o: object, name: str, default: bool, /) -> Any | bool:
     """
-    Get a named attribute from an object.
+    getattr(object, name[, default]) -> value
 
-    getattr(x, 'y') is equivalent to x.y
+    Get a named attribute from an object; getattr(x, 'y') is equivalent to x.y.
     When a default argument is given, it is returned when the attribute doesn't
     exist; without it, an exception is raised in that case.
     """
@@ -4681,9 +4687,9 @@ def getattr(o: object, name: str, default: bool, /) -> Any | bool:
 @overload
 def getattr(o: object, name: str, default: list[Any], /) -> Any | list[Any]:
     """
-    Get a named attribute from an object.
+    getattr(object, name[, default]) -> value
 
-    getattr(x, 'y') is equivalent to x.y
+    Get a named attribute from an object; getattr(x, 'y') is equivalent to x.y.
     When a default argument is given, it is returned when the attribute doesn't
     exist; without it, an exception is raised in that case.
     """
@@ -4691,9 +4697,9 @@ def getattr(o: object, name: str, default: list[Any], /) -> Any | list[Any]:
 @overload
 def getattr(o: object, name: str, default: dict[Any, Any], /) -> Any | dict[Any, Any]:
     """
-    Get a named attribute from an object.
+    getattr(object, name[, default]) -> value
 
-    getattr(x, 'y') is equivalent to x.y
+    Get a named attribute from an object; getattr(x, 'y') is equivalent to x.y.
     When a default argument is given, it is returned when the attribute doesn't
     exist; without it, an exception is raised in that case.
     """
@@ -4701,9 +4707,9 @@ def getattr(o: object, name: str, default: dict[Any, Any], /) -> Any | dict[Any,
 @overload
 def getattr(o: object, name: str, default: _T, /) -> Any | _T:
     """
-    Get a named attribute from an object.
+    getattr(object, name[, default]) -> value
 
-    getattr(x, 'y') is equivalent to x.y
+    Get a named attribute from an object; getattr(x, 'y') is equivalent to x.y.
     When a default argument is given, it is returned when the attribute doesn't
     exist; without it, an exception is raised in that case.
     """
@@ -4775,36 +4781,44 @@ class _GetItemIterable(Protocol[_T_co]):
 @overload
 def iter(object: SupportsIter[_SupportsNextT_co], /) -> _SupportsNextT_co:
     """
-    Get an iterator from an object.
+    iter(iterable) -> iterator
+    iter(callable, sentinel) -> iterator
 
-    In the first form, the argument must supply its own iterator, or be a sequence.
+    Get an iterator from an object.  In the first form, the argument must
+    supply its own iterator, or be a sequence.
     In the second form, the callable is called until it returns the sentinel.
     """
     ...
 @overload
 def iter(object: _GetItemIterable[_T], /) -> Iterator[_T]:
     """
-    Get an iterator from an object.
+    iter(iterable) -> iterator
+    iter(callable, sentinel) -> iterator
 
-    In the first form, the argument must supply its own iterator, or be a sequence.
+    Get an iterator from an object.  In the first form, the argument must
+    supply its own iterator, or be a sequence.
     In the second form, the callable is called until it returns the sentinel.
     """
     ...
 @overload
 def iter(object: Callable[[], _T | None], sentinel: None, /) -> Iterator[_T]:
     """
-    Get an iterator from an object.
+    iter(iterable) -> iterator
+    iter(callable, sentinel) -> iterator
 
-    In the first form, the argument must supply its own iterator, or be a sequence.
+    Get an iterator from an object.  In the first form, the argument must
+    supply its own iterator, or be a sequence.
     In the second form, the callable is called until it returns the sentinel.
     """
     ...
 @overload
 def iter(object: Callable[[], _T], sentinel: object, /) -> Iterator[_T]:
     """
-    Get an iterator from an object.
+    iter(iterable) -> iterator
+    iter(callable, sentinel) -> iterator
 
-    In the first form, the argument must supply its own iterator, or be a sequence.
+    Get an iterator from an object.  In the first form, the argument must
+    supply its own iterator, or be a sequence.
     In the second form, the callable is called until it returns the sentinel.
     """
     ...
@@ -5115,19 +5129,19 @@ def min(iterable: Iterable[_T1], /, *, key: Callable[[_T1], SupportsRichComparis
 @overload
 def next(i: SupportsNext[_T], /) -> _T:
     """
-    Return the next item from the iterator.
+    next(iterator[, default])
 
-    If default is given and the iterator is exhausted,
-    it is returned instead of raising StopIteration.
+    Return the next item from the iterator. If default is given and the iterator
+    is exhausted, it is returned instead of raising StopIteration.
     """
     ...
 @overload
 def next(i: SupportsNext[_T], default: _VT, /) -> _T | _VT:
     """
-    Return the next item from the iterator.
+    next(iterator[, default])
 
-    If default is given and the iterator is exhausted,
-    it is returned instead of raising StopIteration.
+    Return the next item from the iterator. If default is given and the iterator
+    is exhausted, it is returned instead of raising StopIteration.
     """
     ...
 
@@ -6329,11 +6343,13 @@ if sys.version_info >= (3, 15):
     class sentinel:
         __name__: str
         __module__: str
-        def __new__(cls, name: str, /) -> Self: ...
-        def __copy__(self, /) -> Self: ...
-        def __deepcopy__(self, memo: Any, /) -> Self: ...
-        def __or__(self, other: Any, /) -> Any: ...
-        def __ror__(self, other: Any, /) -> Any: ...
+        def __new__(cls, name: str, /, *, repr: str | None = None) -> sentinel: ...
+        def __copy__(self, /) -> sentinel: ...
+        def __deepcopy__(self, memo: Any, /) -> sentinel: ...
+        # `other` can be any legal form for unions.
+        # `x | x` creates a `sentinel` instance if `x` is a sentinel, not a `UnionType` instance.
+        def __or__(self, other: Any, /) -> UnionType | sentinel: ...
+        def __ror__(self, other: Any, /) -> UnionType | sentinel: ...
 
 @overload
 def sorted(
@@ -6404,7 +6420,7 @@ def sum(iterable: Iterable[_AddableT1], /, start: _AddableT2) -> _AddableT1 | _A
 @overload
 def vars(object: type, /) -> types.MappingProxyType[str, Any]:
     """
-    Show vars.
+    vars([object]) -> dictionary
 
     Without arguments, equivalent to locals().
     With an argument, equivalent to object.__dict__.
@@ -6413,7 +6429,7 @@ def vars(object: type, /) -> types.MappingProxyType[str, Any]:
 @overload
 def vars(object: Any = ..., /) -> dict[str, Any]:
     """
-    Show vars.
+    vars([object]) -> dictionary
 
     Without arguments, equivalent to locals().
     With an argument, equivalent to object.__dict__.
@@ -6708,7 +6724,7 @@ class ValueError(Exception):
     """Inappropriate argument value (of correct type)."""
     ...
 class FloatingPointError(ArithmeticError):
-    """Floating point operation failed."""
+    """Floating-point operation failed."""
     ...
 class OverflowError(ArithmeticError):
     """Result too large to be represented."""

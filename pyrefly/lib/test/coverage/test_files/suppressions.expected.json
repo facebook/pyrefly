@@ -4,9 +4,10 @@
   "names": [
     "test.x",
     "test.y",
-    "test.z"
+    "test.z",
+    "test.s"
   ],
-  "line_count": 9,
+  "line_count": 10,
   "symbol_reports": [
     {
       "kind": "attr",
@@ -43,6 +44,18 @@
         "line": 8,
         "column": 1
       }
+    },
+    {
+      "kind": "attr",
+      "name": "test.s",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 9,
+        "column": 1
+      }
     }
   ],
   "type_ignores": [
@@ -66,10 +79,18 @@
         "line": 8,
         "column": 8
       }
+    },
+    {
+      "kind": "type",
+      "codes": [],
+      "location": {
+        "line": 9,
+        "column": 19
+      }
     }
   ],
-  "n_typable": 0,
-  "n_typed": 0,
+  "n_typable": 1,
+  "n_typed": 1,
   "n_any": 0,
   "n_untyped": 0,
   "coverage": 100.0,
@@ -79,7 +100,7 @@
   "n_function_params": 0,
   "n_method_params": 0,
   "n_classes": 0,
-  "n_attrs": 3,
+  "n_attrs": 4,
   "n_properties": 0,
-  "n_type_ignores": 2
+  "n_type_ignores": 3
 }

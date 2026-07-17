@@ -198,3 +198,52 @@ x = Annotated[int, "meta"]
 dict.__dict__["fromkeys"]
     "#,
 );
+
+testcase!(
+    test_type_alias_form,
+    r#"
+from typing import Literal
+from typing_extensions import TypeForm
+type Mode = Literal["A", "B"]
+X: TypeForm = Mode
+Y: TypeForm[Literal["A", "B"]] = Mode
+Z: TypeForm[Literal["C"]] = Mode # E:
+    "#,
+);
+
+// Even though a value of type `TypeForm` is a legal type form, we do not allow values to be used
+// as types as a general rule. This matches mypy, pyright, and ty.
+testcase!(
+    test_type_form_value_is_not_type,
+    r#"
+from typing_extensions import TypeForm
+X: TypeForm[int] = int
+x: X = 0  # E: Expected a type form, got instance of `TypeForm[int]`
+    "#,
+);
+
+testcase!(
+    test_typeform_attribute_access,
+    r#"
+import typing
+from typing import TypeVar
+from typing_extensions import TypeForm
+
+T = TypeVar("T")
+
+def field_names(tp: TypeForm[T]):
+    if typing.is_typeddict(tp):
+        return tp.__annotations__.keys()
+    return ()
+    "#,
+);
+
+testcase!(
+    test_typeform_attribute_access_unknown,
+    r#"
+from typing_extensions import TypeForm
+
+def f(tp: TypeForm[int]):
+    tp.not_a_real_attribute  # E: Object of class `object` has no attribute `not_a_real_attribute`
+    "#,
+);

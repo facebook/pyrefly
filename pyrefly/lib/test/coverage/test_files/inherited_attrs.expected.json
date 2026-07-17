@@ -4,17 +4,24 @@
   "names": [
     "test.Base.x",
     "test.Base.y",
+    "test.Base.a",
     "test.Child.z",
     "test.OverridingChild.x",
+    "test.OverridingChild.a",
     "test.OverridingChild.w",
+    "test.AttrChild.attrs",
+    "test.AttrChild.extra",
     "test.Base.__init__",
     "test.Child.__init__",
     "test.OverridingChild.__init__",
+    "test.AttrChild.__init__",
+    "test.AttrBase",
+    "test.AttrChild",
     "test.Base",
     "test.Child",
     "test.OverridingChild"
   ],
-  "line_count": 28,
+  "line_count": 47,
   "symbol_reports": [
     {
       "kind": "attr",
@@ -24,7 +31,7 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 13,
+        "line": 17,
         "column": 14
       }
     },
@@ -36,7 +43,19 @@
       "n_any": 0,
       "n_untyped": 1,
       "location": {
-        "line": 14,
+        "line": 18,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.Base.a",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 1,
+      "n_untyped": 0,
+      "location": {
+        "line": 19,
         "column": 14
       }
     },
@@ -48,7 +67,7 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 20,
+        "line": 25,
         "column": 14
       }
     },
@@ -56,11 +75,23 @@
       "kind": "attr",
       "name": "test.OverridingChild.x",
       "n_typable": 1,
-      "n_typed": 0,
+      "n_typed": 1,
       "n_any": 0,
-      "n_untyped": 1,
+      "n_untyped": 0,
       "location": {
-        "line": 26,
+        "line": 31,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.OverridingChild.a",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 1,
+      "n_untyped": 0,
+      "location": {
+        "line": 32,
         "column": 14
       }
     },
@@ -72,7 +103,31 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 27,
+        "line": 33,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.AttrChild.attrs",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 45,
+        "column": 14
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.AttrChild.extra",
+      "n_typable": 1,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 1,
+      "location": {
+        "line": 46,
         "column": 14
       }
     },
@@ -84,7 +139,7 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 12,
+        "line": 16,
         "column": 5
       }
     },
@@ -96,7 +151,7 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 18,
+        "line": 23,
         "column": 5
       }
     },
@@ -108,8 +163,44 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 25,
+        "line": 30,
         "column": 5
+      }
+    },
+    {
+      "kind": "function",
+      "name": "test.AttrChild.__init__",
+      "n_typable": 1,
+      "n_typed": 1,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 44,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.AttrBase",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 39,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.AttrChild",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 43,
+        "column": 1
       }
     },
     {
@@ -120,7 +211,7 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 11,
+        "line": 15,
         "column": 1
       }
     },
@@ -132,7 +223,7 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 17,
+        "line": 22,
         "column": 1
       }
     },
@@ -144,24 +235,24 @@
       "n_any": 0,
       "n_untyped": 0,
       "location": {
-        "line": 24,
+        "line": 29,
         "column": 1
       }
     }
   ],
   "type_ignores": [],
-  "n_typable": 5,
-  "n_typed": 3,
-  "n_any": 0,
+  "n_typable": 10,
+  "n_typed": 6,
+  "n_any": 2,
   "n_untyped": 2,
-  "coverage": 60.0,
+  "coverage": 80.0,
   "strict_coverage": 60.0,
   "n_functions": 0,
-  "n_methods": 3,
+  "n_methods": 4,
   "n_function_params": 0,
-  "n_method_params": 0,
-  "n_classes": 3,
-  "n_attrs": 5,
+  "n_method_params": 1,
+  "n_classes": 5,
+  "n_attrs": 9,
   "n_properties": 0,
   "n_type_ignores": 0
 }

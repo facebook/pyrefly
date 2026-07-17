@@ -12,11 +12,16 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::qname::QName;
 use pyrefly_types::types::Type;
 use starlark_map::small_set::SmallSet;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing::warn;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::module::bundled::BundledStub;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::module::third_party::get_bundled_third_party;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::module::typeshed::typeshed;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::module::typeshed_third_party::typeshed_third_party;
 
 /// Convert to a path we can show to the user. The contents may not match the disk, but it has
@@ -26,6 +31,11 @@ pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
         ModulePathDetails::FileSystem(path)
         | ModulePathDetails::Memory(path)
         | ModulePathDetails::Namespace(path) => Some(path.to_path_buf()),
+        #[cfg(target_arch = "wasm32")]
+        ModulePathDetails::BundledTypeshed(_)
+        | ModulePathDetails::BundledTypeshedThirdParty(_)
+        | ModulePathDetails::BundledThirdParty(_) => None,
+        #[cfg(not(target_arch = "wasm32"))]
         ModulePathDetails::BundledTypeshed(path) => {
             let typeshed = typeshed().ok()?;
             let typeshed_path = match typeshed.materialized_path_on_disk() {
@@ -37,6 +47,7 @@ pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
             }?;
             Some(typeshed_path.join(&**path))
         }
+        #[cfg(not(target_arch = "wasm32"))]
         ModulePathDetails::BundledTypeshedThirdParty(path) => {
             let typeshed_third_party = typeshed_third_party().ok()?;
             let typeshed_path = match typeshed_third_party.materialized_path_on_disk() {
@@ -48,6 +59,7 @@ pub fn to_real_path(path: &ModulePath) -> Option<PathBuf> {
             }?;
             Some(typeshed_path.join(&**path))
         }
+        #[cfg(not(target_arch = "wasm32"))]
         ModulePathDetails::BundledThirdParty(path) => {
             let bundled_third_party = get_bundled_third_party().ok()?;
             let bundled_path = match bundled_third_party.materialized_path_on_disk() {

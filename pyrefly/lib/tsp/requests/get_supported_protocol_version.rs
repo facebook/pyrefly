@@ -11,9 +11,9 @@ use tsp_types::TSP_PROTOCOL_VERSION;
 use tsp_types::protocol::TypeServerVersion;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspConnection;
+use crate::tsp::server::TspServer;
 
-impl<T: TspInterface> TspConnection<T> {
+impl<T: TspInterface> TspServer<T> {
     pub fn get_supported_protocol_version(&self) -> TypeServerVersion {
         // Return the current protocol version from the generated enum
         TSP_PROTOCOL_VERSION

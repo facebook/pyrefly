@@ -10,20 +10,24 @@
 //! Walks the module's AST in source order and uses the binding/answer
 //! system to resolve types for each declaration.
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
+use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable::Required;
-use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::types::Type;
+use ruff_python_ast::BoolOp;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtClassDef;
@@ -34,7 +38,8 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 
 use crate::alt::answers::Answers;
-use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::annotation::format_annotation;
+use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyClassMetadata;
@@ -52,7 +57,8 @@ pub struct ModuleStub {
     /// Whether any item uses `Incomplete` (so we know whether to
     /// emit `from _typeshed import Incomplete`).
     pub uses_incomplete: bool,
-    pub uses_self: bool,
+    /// Names used by generated annotations that must be imported from `typing`.
+    pub typing_imports: BTreeSet<&'static str>,
 }
 
 pub enum StubItem {
@@ -121,12 +127,9 @@ pub fn extract_module_stub(
     let ast = transaction.get_ast(handle)?;
     let module_info = transaction.get_module_info(handle)?;
 
-    let function_map: HashMap<TextRange, DecoratedFunction> = bindings
+    let function_map: HashMap<TextRange, Idx<KeyDecoratedFunction>> = bindings
         .keys::<KeyDecoratedFunction>()
-        .map(|idx| {
-            let dec = DecoratedFunction::from_bindings_answers(idx, &bindings, &answers);
-            (dec.id_range(), dec)
-        })
+        .map(|idx| (bindings.idx_to_key(idx).range(), idx))
         .collect();
 
     let dunder_all = resolve_dunder_all(&ast.body, &module_info);
@@ -137,17 +140,17 @@ pub fn extract_module_stub(
         module_info: &module_info,
         config,
         uses_incomplete: false,
-        uses_self: false,
+        typing_imports: BTreeSet::new(),
         function_map: &function_map,
         dunder_all: &dunder_all,
     };
 
-    let items = extract_stmts(&ast.body, &mut ctx, false);
+    let items = extract_stmts(&ast.body, &mut ctx, false, false);
 
     Some(ModuleStub {
         items,
         uses_incomplete: ctx.uses_incomplete,
-        uses_self: ctx.uses_self,
+        typing_imports: ctx.typing_imports,
     })
 }
 
@@ -157,14 +160,19 @@ struct ExtractionContext<'a> {
     module_info: &'a Module,
     config: &'a ExtractConfig,
     uses_incomplete: bool,
-    uses_self: bool,
-    function_map: &'a HashMap<TextRange, DecoratedFunction>,
+    typing_imports: BTreeSet<&'static str>,
+    function_map: &'a HashMap<TextRange, Idx<KeyDecoratedFunction>>,
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
     dunder_all: &'a Option<HashSet<Name>>,
 }
 
-fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) -> Vec<StubItem> {
+fn extract_stmts(
+    stmts: &[Stmt],
+    ctx: &mut ExtractionContext,
+    in_class: bool,
+    in_enum: bool,
+) -> Vec<StubItem> {
     let mut items = Vec::new();
     let overloaded = collect_overloaded_names(stmts);
 
@@ -209,7 +217,7 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
                     let text = source_text(ctx.module_info, assign.range()).to_owned();
                     items.push(StubItem::TypeAlias(StubTypeAlias { text }));
                 } else {
-                    for item in extract_assign(assign, ctx, in_class) {
+                    for item in extract_assign(assign, ctx, in_class, in_enum) {
                         items.push(StubItem::Variable(item));
                     }
                 }
@@ -224,7 +232,10 @@ fn extract_stmts(stmts: &[Stmt], ctx: &mut ExtractionContext, in_class: bool) ->
                 items.push(StubItem::TypeAlias(StubTypeAlias { text }));
             }
             Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test) => {
-                items.extend(extract_stmts(&if_stmt.body, ctx, in_class));
+                items.extend(extract_stmts(&if_stmt.body, ctx, in_class, in_enum));
+            }
+            Stmt::Try(try_stmt) => {
+                items.extend(extract_stmts(&try_stmt.body, ctx, in_class, in_enum));
             }
             _ => {}
         }
@@ -237,6 +248,9 @@ fn is_type_checking_guard(expr: &Expr) -> bool {
     match expr {
         Expr::Name(name) => name.id == "TYPE_CHECKING",
         Expr::Attribute(attr) => attr.attr.as_str() == "TYPE_CHECKING",
+        Expr::BoolOp(bool_op) if bool_op.op == BoolOp::Or => {
+            bool_op.values.iter().any(is_type_checking_guard)
+        }
         _ => false,
     }
 }
@@ -251,7 +265,7 @@ fn extract_function(
         return None;
     }
 
-    let decorated = ctx.function_map.get(&func_def.name.range());
+    let decorated = ctx.function_map.get(&func_def.name.range()).copied();
 
     let decorators: Vec<String> = func_def
         .decorator_list
@@ -273,9 +287,16 @@ fn extract_function(
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
+    // An `async def` that yields is an async generator: calling it returns an
+    // `AsyncGenerator`, not a coroutine. A stub drops the body (and its
+    // `yield`), so emitting `async def` would mistype the call as
+    // `Coroutine[..., AsyncGenerator[...]]`. Follow the typeshed convention and
+    // emit a plain `def` returning the async-generator type.
+    let is_async = func_def.is_async && !Ast::body_contains_yield(&func_def.body);
+
     Some(StubFunction {
         name: name.to_owned(),
-        is_async: func_def.is_async,
+        is_async,
         type_params,
         decorators,
         params,
@@ -287,16 +308,21 @@ fn extract_function(
 /// Enrich parameters with inferred types where source annotations are missing.
 fn extract_params(
     func_def: &StmtFunctionDef,
-    decorated: Option<&DecoratedFunction>,
+    decorated: Option<Idx<KeyDecoratedFunction>>,
     ctx: &mut ExtractionContext,
 ) -> Vec<StubParam> {
     let ast_params = &func_def.parameters;
     let mut result = Vec::new();
 
-    let resolved_map: HashMap<&str, &Param> = decorated
+    let undecorated = decorated.map(|idx| {
+        let idx = ctx.bindings.get(idx).undecorated_idx;
+        ctx.answers
+            .get_idx(idx)
+            .expect("decorated function must have an undecorated answer")
+    });
+    let resolved_map: HashMap<&str, &Param> = undecorated
         .map(|d| {
-            d.undecorated
-                .params
+            d.params
                 .iter()
                 .filter_map(|p| p.name().map(|n| (n.as_str(), p)))
                 .collect()
@@ -386,7 +412,7 @@ fn make_param(
     ctx: &mut ExtractionContext,
 ) -> StubParam {
     let annotation = if let Some(ann_expr) = source_annotation {
-        Some(source_text(ctx.module_info, ann_expr.range()).to_owned())
+        Some(expr_source_text(ctx.module_info, ann_expr.range()))
     } else if let Some(param) = resolved {
         format_param_type(param, ctx)
     } else {
@@ -417,21 +443,11 @@ fn format_param_type(param: &Param, ctx: &mut ExtractionContext) -> Option<Strin
 
 /// Returns `Incomplete` for Any and unresolvable types.
 fn format_type(ty: &Type, ctx: &mut ExtractionContext) -> Option<String> {
-    if ty.is_any() {
-        ctx.uses_incomplete = true;
-        return Some("Incomplete".to_owned());
-    }
-    if ty.any(|sub_type| matches!(sub_type, Type::SelfType(_))) {
-        ctx.uses_self = true;
-    }
-    let mut display = TypeDisplayContext::new(&[ty]);
-    display.render_self_type_as_self();
-    let s = display.display(ty).to_string();
-    if s.contains("@") || s.contains("Unknown") {
-        ctx.uses_incomplete = true;
-        return Some("Incomplete".to_owned());
-    }
-    Some(s)
+    Some(format_annotation(
+        ty,
+        &mut ctx.typing_imports,
+        &mut ctx.uses_incomplete,
+    ))
 }
 
 /// Uses source text for simple literals, `...` for everything else.
@@ -446,13 +462,13 @@ fn format_default(expr: &Expr, module_info: &Module) -> String {
             }
         }
         Expr::NumberLiteral(_) | Expr::StringLiteral(_) | Expr::BytesLiteral(_) => {
-            source_text(module_info, expr.range()).to_owned()
+            expr_source_text(module_info, expr.range())
         }
         Expr::UnaryOp(u) => {
             if matches!(u.op, ruff_python_ast::UnaryOp::USub)
                 && matches!(u.operand.as_ref(), Expr::NumberLiteral(_))
             {
-                source_text(module_info, expr.range()).to_owned()
+                expr_source_text(module_info, expr.range())
             } else {
                 "...".to_owned()
             }
@@ -466,12 +482,12 @@ fn format_default(expr: &Expr, module_info: &Module) -> String {
 /// Prefer source annotation, fall back to inferred return type.
 fn extract_return_type(
     func_def: &StmtFunctionDef,
-    decorated: Option<&DecoratedFunction>,
+    decorated: Option<Idx<KeyDecoratedFunction>>,
     ctx: &mut ExtractionContext,
 ) -> Option<String> {
     if let Some(returns) = &func_def.returns {
         let expr: &Expr = returns;
-        return Some(source_text(ctx.module_info, expr.range()).to_owned());
+        return Some(expr_source_text(ctx.module_info, expr.range()));
     }
 
     if decorated.is_some() {
@@ -589,6 +605,24 @@ fn is_dataclass_or_pydantic_model(class_def: &StmtClassDef, ctx: &ExtractionCont
         return false;
     };
     metadata.dataclass_metadata().is_some() || metadata.is_pydantic_model()
+}
+
+/// Returns `true` when the class is an `Enum` (or subclass such as `IntEnum`,
+/// `Flag`, etc.), using the resolved `ClassMetadata`. Bare assignments in an
+/// enum body are enum members, not class variables, so they must not have
+/// inferred annotations or be wrapped in `ClassVar[...]`.
+fn is_enum_class(class_def: &StmtClassDef, ctx: &ExtractionContext) -> bool {
+    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+        return false;
+    };
+    let key = KeyClassMetadata(def_index);
+    let Some(idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+        return false;
+    };
+    let Some(metadata) = ctx.answers.get_idx(idx) else {
+        return false;
+    };
+    metadata.is_enum()
 }
 
 /// Extract a synthesized `__init__` stub for dataclass and pydantic model
@@ -764,7 +798,8 @@ fn extract_class(class_def: &StmtClassDef, ctx: &mut ExtractionContext) -> Optio
         .as_ref()
         .map(|tp| source_text(ctx.module_info, tp.range()).to_owned());
 
-    let mut body = extract_stmts(&class_def.body, ctx, true);
+    let in_enum = is_enum_class(class_def, ctx);
+    let mut body = extract_stmts(&class_def.body, ctx, true, in_enum);
     let has_explicit_init = body
         .iter()
         .any(|item| matches!(item, StubItem::Function(f) if f.name == "__init__"));
@@ -792,20 +827,29 @@ fn extract_ann_assign(
     ctx: &mut ExtractionContext,
     in_class: bool,
 ) -> Option<StubVariable> {
-    let name = match ann_assign.target.as_ref() {
-        Expr::Name(n) => n.id.as_str(),
+    let name_expr = match ann_assign.target.as_ref() {
+        Expr::Name(name_expr) => name_expr,
         _ => return None,
     };
+    let name = name_expr.id.as_str();
     if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
         return None;
     }
 
-    let annotation = source_text(ctx.module_info, ann_assign.annotation.range()).to_owned();
+    let annotation = expr_source_text(ctx.module_info, ann_assign.annotation.range());
 
-    let value = ann_assign
-        .value
-        .as_deref()
-        .and_then(|v| simple_value_text(v, ctx.module_info));
+    let def_key = Key::Definition(ShortIdentifier::expr_name(name_expr));
+    let is_type_alias = ctx
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&def_key))
+        .is_some_and(|idx| matches!(ctx.bindings.get(idx), Binding::TypeAlias(_)));
+    let value = ann_assign.value.as_deref().and_then(|value| {
+        if is_type_alias {
+            Some(expr_source_text(ctx.module_info, value.range()))
+        } else {
+            simple_value_text(value, ctx.module_info)
+        }
+    });
 
     Some(StubVariable {
         name: name.to_owned(),
@@ -818,41 +862,107 @@ fn extract_assign(
     assign: &ruff_python_ast::StmtAssign,
     ctx: &mut ExtractionContext,
     in_class: bool,
+    in_enum: bool,
 ) -> Vec<StubVariable> {
     let mut result = Vec::new();
 
     for target in &assign.targets {
-        if let Expr::Name(name_expr) = target {
-            let name = name_expr.id.as_str();
-            if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
-                continue;
+        match target {
+            Expr::Name(name_expr)
+                if let Some(variable) = extract_assign_name(
+                    name_expr,
+                    Some(assign.value.as_ref()),
+                    ctx,
+                    in_class,
+                    in_enum,
+                ) =>
+            {
+                result.push(variable);
             }
-
-            if name == "__all__" {
-                continue;
-            }
-
-            let short_id = ShortIdentifier::expr_name(name_expr);
-            let def_key = Key::Definition(short_id);
-            let annotation = ctx
-                .bindings
-                .key_to_idx_hashed_opt(starlark_map::Hashed::new(&def_key))
-                .and_then(|idx| ctx.answers.get_type_at(idx))
-                .and_then(|ty| format_type(&ty, ctx));
-
-            let value = simple_value_text(&assign.value, ctx.module_info);
-
-            if annotation.is_some() || value.is_some() {
-                result.push(StubVariable {
-                    name: name.to_owned(),
-                    annotation,
-                    value,
+            Expr::Tuple(_) | Expr::List(_) => {
+                Ast::expr_lvalue(target, &mut |name_expr| {
+                    if let Some(variable) =
+                        extract_assign_name(name_expr, None, ctx, in_class, in_enum)
+                    {
+                        result.push(variable);
+                    }
                 });
             }
+            _ => {}
         }
     }
 
     result
+}
+
+fn extract_assign_name(
+    name_expr: &ExprName,
+    assigned_value: Option<&Expr>,
+    ctx: &mut ExtractionContext,
+    in_class: bool,
+    in_enum: bool,
+) -> Option<StubVariable> {
+    let name = name_expr.id.as_str();
+
+    // Preserve a static `__all__` literal verbatim so the stub keeps the
+    // module's re-export semantics (PEP 484): a name imported without a
+    // redundant `as` alias is re-exported only if listed in `__all__`.
+    // Dropping `__all__` would silently un-export such names. (#3924)
+    if !in_class
+        && name == "__all__"
+        && let Some(assigned_value) = assigned_value
+    {
+        return dunder_all_value_text(assigned_value, ctx.module_info).map(|value| StubVariable {
+            name: "__all__".to_owned(),
+            annotation: None,
+            value: Some(value),
+        });
+    }
+
+    if !should_include_name(name, ctx.config, in_class, ctx.dunder_all) {
+        return None;
+    }
+
+    if in_enum {
+        let value = assigned_value.map_or_else(
+            || "...".to_owned(),
+            |value| format_default(value, ctx.module_info),
+        );
+        return Some(StubVariable {
+            name: name.to_owned(),
+            annotation: None,
+            value: Some(value),
+        });
+    }
+
+    let value = assigned_value.and_then(|value| simple_value_text(value, ctx.module_info));
+    let def_key = Key::Definition(ShortIdentifier::expr_name(name_expr));
+    let mut annotation = ctx
+        .bindings
+        .key_to_idx_hashed_opt(Hashed::new(&def_key))
+        .and_then(|idx| ctx.answers.get_type_at(idx))
+        .and_then(|ty| format_type(&ty, ctx));
+
+    // A bare assignment in a class body is an implicit class variable.
+    if in_class && let Some(ann) = &annotation {
+        ctx.typing_imports.insert("ClassVar");
+        annotation = Some(format!("ClassVar[{ann}]"));
+    }
+
+    (annotation.is_some() || value.is_some()).then(|| StubVariable {
+        name: name.to_owned(),
+        annotation,
+        value,
+    })
+}
+
+/// Verbatim text of an `__all__` right-hand side when it's a static list or
+/// tuple literal; `None` for computed/dynamic forms we can't safely reproduce.
+fn dunder_all_value_text(value: &Expr, module_info: &Module) -> Option<String> {
+    match value {
+        Expr::List(_) | Expr::Tuple(_) => Some(expr_source_text(module_info, value.range())),
+        _ => None,
+    }
 }
 
 /// Returns `None` for complex expressions.
@@ -865,7 +975,7 @@ fn simple_value_text(expr: &Expr, module_info: &Module) -> Option<String> {
             "False".to_owned()
         }),
         Expr::NumberLiteral(_) | Expr::StringLiteral(_) | Expr::BytesLiteral(_) => {
-            Some(source_text(module_info, expr.range()).to_owned())
+            Some(expr_source_text(module_info, expr.range()))
         }
         Expr::EllipsisLiteral(_) => Some("...".to_owned()),
         _ => None,
@@ -1011,4 +1121,17 @@ fn is_type_constructor_or_alias(assign: &ruff_python_ast::StmtAssign) -> bool {
 
 fn source_text(module_info: &Module, range: TextRange) -> &str {
     module_info.code_at(range)
+}
+
+/// Source text for an expression that may span multiple physical lines. The
+/// parentheses that make a multi-line expression valid are not part of its AST
+/// range, so re-wrap multi-line snippets to keep them valid when emitted on a
+/// single logical line in the stub.
+fn expr_source_text(module_info: &Module, range: TextRange) -> String {
+    let text = source_text(module_info, range);
+    if text.contains('\n') {
+        format!("({text})")
+    } else {
+        text.to_owned()
+    }
 }

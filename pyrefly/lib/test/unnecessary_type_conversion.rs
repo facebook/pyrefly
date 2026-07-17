@@ -24,10 +24,10 @@ def f(x: int) -> None:
 );
 
 testcase!(
-    test_float_to_float,
+    test_float_to_float_ok,
     r#"
 def f(x: float) -> None:
-    y = float(x)  # E: Unnecessary `float()` call; argument is already of type `float`
+    y = float(x)  # OK - `x` may be an int due to numeric tower compatibility.
 "#,
 );
 

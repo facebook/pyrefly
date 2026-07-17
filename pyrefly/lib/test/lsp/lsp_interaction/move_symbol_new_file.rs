@@ -14,11 +14,11 @@ use lsp_types::ResourceOp;
 use lsp_types::TextEdit;
 use lsp_types::Url;
 use lsp_types::request::CodeActionRequest;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn init_with_create_support(root_path: &Path) -> (LspInteraction, Url) {
     let scope_uri = Url::from_file_path(root_path).unwrap();
@@ -74,10 +74,10 @@ fn has_edit(ops: &[DocumentChangeOperation], uri: &Url, expected_text: &str) -> 
         };
         edit.text_document.uri == *uri
             && edit.edits.iter().any(|edit| match edit {
-                lsp_types::OneOf::Left(TextEdit { new_text, .. }) => {
-                    new_text.replace("\r\n", "\n") == expected_text
-                }
-                lsp_types::OneOf::Right(_) => false,
+                lsp_types::TextEditOrAnnotatedOrSnippet::TextEdit(TextEdit {
+                    new_text, ..
+                }) => new_text.replace("\r\n", "\n") == expected_text,
+                _ => false,
             })
     })
 }

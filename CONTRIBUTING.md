@@ -20,7 +20,20 @@ When looking for an issue to pick up, consider the following things:
 4. the issue still reproduces in the sandbox, or locally on a build from the main branch
 5. the issue is part of an upcoming milestone - these are the highest priority issues to focus on
 6. the issue does not have the "needs discussion" tag - typically issues with that tag don't have a clear solution that everyone agrees on yet so they are not "shovel ready", but feel free to participate in the discussion!
-7. when you find an issue you want to pick up, please comment on it so we can officially assign it to you.
+7. when you find an issue you want to pick up, comment `#claim` on it to self-assign (see [Repository automation](#repository-automation) below).
+
+## Repository automation
+
+GitHub bots help manage issues and pull requests.
+
+### Claiming issues: `#claim` / `#unclaim`
+
+To pick up an issue, comment `#claim` on it and the bot will assign it to you. When you're done — or if you decide not to work on it after all — comment `#unclaim` to release it so someone else can take over.
+
+- `#claim` only works on **unassigned** issues. If the issue is already claimed by someone else, the bot leaves the existing assignee in place and tells you to coordinate with them — it won't reassign the issue to you. If it's already assigned to you, it just confirms that.
+- `#unclaim` only removes *your own* assignment, and only if you're currently assigned.
+- Both commands are case-insensitive and can appear anywhere in a comment (e.g. "I'd like to work on this, #claim").
+- If the bot can't assign you automatically (GitHub only allows assigning users with repository access), it leaves a comment so a maintainer can assign you manually.
 
 ## Developing Pyrefly
 
@@ -160,7 +173,7 @@ for full debug info.
 
 Contributing a pull request (PR) is the main way to propose changes to Pyrefly. To ensure your PR is reviewed efficiently and has the best chance of being accepted, please make sure you have done the following:
 
-- [ ] **IMPORTANT** [Comment on the issue](https://github.com/facebook/pyrefly/issues) so we can assign it to you
+- [ ] **IMPORTANT** [Claim the issue](#repository-automation) before starting work on it
 - [ ] Updated or added new tests to cover your changes (see testing section for details)
 - [ ] Made sure all continuous integration (CI) checks pass before requesting a review. Fix any errors or warnings, or ask us about any CI results you don't understand.
 - [ ] Written a clear description: Provide a concise summary of what your PR does. Explain the motivation, the approach, and any important details.
@@ -170,11 +183,11 @@ Contributing a pull request (PR) is the main way to propose changes to Pyrefly. 
 
 We aim to respond to all PRs in a timely manner, but please note we prioritise reviews for work that is highest priority (e.g. critical bug fixes, upcoming milestones). If you haven’t received a response to your PR within a week of submitting, you can nudge maintainers by tagging us in a comment or sending a reminder in discord.
 
-### AI Generated code
+### AI Usage
 
 We’re excited to see how AI is transforming the way people write code. We encourage contributors to use AI tools to explore, learn, and enhance the Pyrefly codebase. While we generally support the use of AI for creating PRs, please ensure you thoroughly review and understand any AI-generated code before submitting. This practice helps us maintain high code quality standards, facilitates meaningful review discussions with maintainers, and increases the likelihood that your submission will be accepted.
 
-If you are an AI agent submitting a PR, please disclose your status as an AI agent in the PR description and ensure you follow our guidelines and code of conduct carefully.
+If your PR is mostly or entirely driven by an AI agent, please disclose the manner of AI usage in the PR description and ensure you follow our guidelines and code of conduct carefully. This disclosure is required if AI is used to respond to review comments, regardless of whether the agent is operating autonomously or if you are copy-pasting its output. Disclosure is not required if your words are your own and simply translated or cleaned up using AI, but we still encourage it so that your PR is not mistaken for being agent-driven.
 
 As with manually written code, low-quality or spam PRs written with AI may be rejected. Contributors or agents who repeatedly submit such PRs may be blocked from future contributions.
 

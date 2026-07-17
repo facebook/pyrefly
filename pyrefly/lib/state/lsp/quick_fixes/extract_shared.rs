@@ -30,6 +30,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 use crate::types::stdlib::Stdlib;
+use crate::types::type_output::AnnotationPart;
 use crate::types::types::Type;
 
 pub(crate) fn split_selection<'a>(
@@ -119,12 +120,7 @@ pub(crate) fn function_has_decorator(function_def: &StmtFunctionDef, decorator: 
 }
 
 pub(crate) fn decorator_matches_name(decorator: &Expr, expected: &str) -> bool {
-    match decorator {
-        Expr::Name(identifier) => identifier.id.as_str() == expected,
-        Expr::Attribute(attribute) => attribute.attr.as_str() == expected,
-        Expr::Call(call) => decorator_matches_name(call.func.as_ref(), expected),
-        _ => false,
-    }
+    Ast::decorator_trailing_name(decorator) == Some(expected)
 }
 
 /// Given a selection range, returns the first non-whitespace position within it.
@@ -149,29 +145,8 @@ pub(crate) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     }
 }
 
-pub(crate) fn expr_needs_parens(expr: &Expr) -> bool {
-    !matches!(
-        expr,
-        Expr::Name(_)
-            | Expr::NumberLiteral(_)
-            | Expr::StringLiteral(_)
-            | Expr::BytesLiteral(_)
-            | Expr::BooleanLiteral(_)
-            | Expr::NoneLiteral(_)
-            | Expr::EllipsisLiteral(_)
-            | Expr::Subscript(_)
-            | Expr::Attribute(_)
-            | Expr::Call(_)
-            | Expr::List(_)
-            | Expr::Dict(_)
-            | Expr::Set(_)
-            | Expr::Tuple(_)
-            | Expr::FString(_)
-    )
-}
-
-pub(crate) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
-    if expr_needs_parens(expr) {
+pub(crate) fn wrap_if_needed(parent: Option<AnyNodeRef>, expr: &Expr, text: &str) -> String {
+    if Ast::needs_brackets(parent, expr) {
         format!("({text})")
     } else {
         text.to_owned()
@@ -378,8 +353,15 @@ pub(super) fn type_to_annotation(ty: Type, stdlib: &Stdlib) -> Option<String> {
     if ty.is_any() {
         return None;
     }
-    let parts = ty.get_types_with_locations(Some(stdlib));
-    Some(parts.into_iter().map(|(part, _)| part).collect())
+    Some(
+        ty.get_annotation_parts(Some(stdlib))
+            .into_iter()
+            .map(|part| match part {
+                AnnotationPart::Text(text) => text,
+                AnnotationPart::Reference { name, .. } => name,
+            })
+            .collect(),
+    )
 }
 
 pub(super) fn has_existing_from_import(ast: &ModModule, module_name: &str, name: &str) -> bool {

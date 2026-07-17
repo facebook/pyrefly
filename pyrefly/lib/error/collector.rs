@@ -10,12 +10,13 @@ use std::mem;
 
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
+use pyrefly_python::ignore::Suppression;
 use pyrefly_python::ignore::Tool;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::small_map::SmallMap;
+use ruff_text_size::TextSize;
 
 use crate::config::error::ErrorConfig;
 use crate::config::error_kind::Severity;
@@ -66,7 +67,10 @@ impl ModuleErrors {
                 previous_range = x.range();
                 previous_start = self.items.len();
                 self.items.push(x);
-            } else if !self.items[previous_start..].contains(&x) {
+            } else if !self.items[previous_start..]
+                .iter_mut()
+                .any(|existing| existing.merge_if_same_diagnostic(&x))
+            {
                 self.items.push(x);
             }
         }
@@ -148,6 +152,19 @@ impl ErrorCollector {
         }
     }
 
+    /// Add the errors from another collector that satisfy `keep`.
+    pub(crate) fn extend_filtered(
+        &self,
+        other: ErrorCollector,
+        mut keep: impl FnMut(&Error) -> bool,
+    ) {
+        if self.is_active() {
+            let mut other = other.errors.into_inner();
+            other.items.retain(|error| keep(error));
+            self.errors.lock().extend(other);
+        }
+    }
+
     /// Start building an error. Returns a no-op builder if style is Never.
     pub fn error_builder(
         &self,
@@ -165,6 +182,7 @@ impl ErrorCollector {
             context: None,
             annotations: Vec::new(),
             quick_fixes: Vec::new(),
+            deprecated_tag: true,
         }
     }
 
@@ -219,16 +237,24 @@ impl ErrorCollector {
     fn is_error_suppressed(
         err: &Error,
         fstring_ranges: &[(LineNumber, LineNumber)],
-        ignore_all: &SmallMap<Tool, LineNumber>,
+        ignore_all: &[Suppression],
         error_config: &ErrorConfig,
     ) -> bool {
         // Check whole-file ignore-all directives first.
         // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
         if err.error_kind() != ErrorKind::UnusedIgnore
-            && error_config
-                .enabled_ignores
-                .iter()
-                .any(|tool| ignore_all.contains_key(tool))
+            && err.error_kind().suppression_names().any(|kind| {
+                ignore_all.iter().any(|supp| {
+                    error_config.enabled_ignores.contains(&supp.tool())
+                        && match supp.tool() {
+                            Tool::Pyrefly => {
+                                supp.error_codes().is_empty()
+                                    || supp.error_codes().iter().any(|x| x == kind)
+                            }
+                            _ => true,
+                        }
+                })
+            })
         {
             return true;
         }
@@ -258,7 +284,8 @@ impl ErrorCollector {
         &self,
         error_config: &ErrorConfig,
         fstring_ranges: &[(LineNumber, LineNumber)],
-        ignore_all: &SmallMap<Tool, LineNumber>,
+        ignore_all: &[Suppression],
+        misplaced: &[LineNumber],
         result: &mut CollectedErrors,
     ) {
         let mut errors = self.errors.lock();
@@ -285,15 +312,70 @@ impl ErrorCollector {
                     }
                 }
             }
+            self.collect_misplaced_ignores(misplaced, error_config, result);
+        }
+    }
+
+    /// Emit a diagnostic for each pyrefly `ignore-errors` directive found outside
+    /// the preamble, where it is inert. These are synthesized here rather than
+    /// during type checking so that every display surface and the `testcase!`
+    /// path (both of which funnel through `collect_into`) report them uniformly.
+    ///
+    /// Like `unused-ignore`, this is a suppression-hygiene diagnostic: it is
+    /// controlled via config severity rather than a per-line
+    /// `# pyrefly: ignore[misplaced-ignore]`, so it is emitted directly instead
+    /// of being routed through `is_error_suppressed` (the fix is to move or
+    /// remove the directive, not to silence the warning about it).
+    fn collect_misplaced_ignores(
+        &self,
+        misplaced: &[LineNumber],
+        error_config: &ErrorConfig,
+        result: &mut CollectedErrors,
+    ) {
+        if misplaced.is_empty() {
+            return;
+        }
+        let severity = error_config
+            .display_config
+            .severity(ErrorKind::MisplacedIgnore);
+        for line in misplaced {
+            let buffer = self.module_info.lined_buffer();
+            let line_start = buffer.line_start(*line);
+            // Point the diagnostic at the directive itself — from the `#` to the
+            // end of the comment — rather than the leading whitespace at the line
+            // start, so editor underlines land on the offending directive.
+            let line_text = buffer.content_in_line_range(*line, *line);
+            let leading_ws = (line_text.len() - line_text.trim_start().len()) as u32;
+            let content_len = line_text.trim_end().len() as u32;
+            let range = TextRange::new(
+                line_start + TextSize::new(leading_ws),
+                line_start + TextSize::new(content_len),
+            );
+            let err = Error::new(
+                self.module_info.dupe(),
+                range,
+                MISPLACED_IGNORE_MESSAGE.to_owned(),
+                Vec::new(),
+                ErrorKind::MisplacedIgnore,
+            );
+            match severity {
+                Severity::Ignore => result.disabled.push(err),
+                sev => result.ordinary.push(err.with_severity(sev)),
+            }
         }
     }
 
     pub fn collect(&self, error_config: &ErrorConfig) -> CollectedErrors {
         let mut result = CollectedErrors::default();
-        self.collect_into(error_config, &[], &SmallMap::new(), &mut result);
+        self.collect_into(error_config, &[], &[], &[], &mut result);
         result
     }
 }
+
+/// Message for the `misplaced-ignore` diagnostic. Kept as a shared constant so
+/// the wording stays consistent across every misplaced directive.
+const MISPLACED_IGNORE_MESSAGE: &str = "`# pyrefly: ignore-errors` has no effect here — a file-level suppression must appear before any code. \
+Move it to the top of the file, or use `# pyrefly: ignore[code]` to suppress a single line.";
 
 /// A builder for constructing and emitting errors incrementally.
 /// Chain decoration methods and call `.emit()` to push the error into the collector.
@@ -308,12 +390,25 @@ pub struct ErrorBuilder<'a> {
     context: Option<ErrorContext>,
     annotations: Vec<(TextRange, String)>,
     quick_fixes: Vec<ErrorQuickFix>,
+    deprecated_tag: bool,
 }
 
 impl ErrorBuilder<'_> {
     /// Append a detail line (shown indented below the header).
     pub fn with_detail(mut self, msg: String) -> Self {
         if self.active {
+            self.details.push(msg);
+        }
+        self
+    }
+
+    /// Append a detail line that is only worth working out if the error will be
+    /// kept. Modules loaded below `Require::Errors` collect with
+    /// [`ErrorStyle::Never`], so for them this never runs at all.
+    pub fn with_detail_from(mut self, msg: impl FnOnce() -> Option<String>) -> Self {
+        if self.active
+            && let Some(msg) = msg()
+        {
             self.details.push(msg);
         }
         self
@@ -340,6 +435,13 @@ impl ErrorBuilder<'_> {
         if self.active {
             self.annotations.push((range, label));
         }
+        self
+    }
+
+    /// Report the deprecation without marking the range as deprecated in editors. See
+    /// [`Error::without_deprecated_tag`].
+    pub fn without_deprecated_tag(mut self) -> Self {
+        self.deprecated_tag = false;
         self
     }
 
@@ -390,12 +492,16 @@ impl ErrorBuilder<'_> {
         for fix in self.quick_fixes {
             err = err.with_quick_fix(fix);
         }
+        if !self.deprecated_tag {
+            err = err.without_deprecated_tag();
+        }
         self.collector.errors.lock().push(err);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::collections::HashMap;
     use std::path::Path;
     use std::path::PathBuf;
@@ -458,7 +564,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
                 ))
@@ -512,7 +618,7 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config = ErrorConfig::new(Cow::Owned(display_config), false, Tool::default_enabled());
 
         assert_eq!(
             errors.collect(&config).ordinary.map(|x| x.msg()),
@@ -536,13 +642,17 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::default();
-        let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config0 = ErrorConfig::new(
+            Cow::Borrowed(&display_config),
+            false,
+            Tool::default_enabled(),
+        );
         assert_eq!(
             errors.collect(&config0).ordinary.map(|x| x.msg()),
             vec!["a"]
         );
 
-        let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled());
+        let config1 = ErrorConfig::new(Cow::Owned(display_config), true, Tool::default_enabled());
         assert!(
             errors
                 .collect(&config1)
@@ -575,7 +685,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
                 ))

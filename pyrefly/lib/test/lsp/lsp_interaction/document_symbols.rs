@@ -8,11 +8,11 @@
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::Url;
 use lsp_types::request::DocumentSymbolRequest;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_document_symbols_underscore_prefix() {
@@ -54,6 +54,57 @@ fn test_document_symbols_underscore_prefix() {
                 .any(|s| s.name == "MyClass" && s.kind == lsp_types::SymbolKind::CLASS);
 
             has_function && has_class
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// An empty `disabledLanguageServices` object (which VS Code materializes from
+/// its `{}` default and returns whenever the server pulls config) must not
+/// disable document symbols, since nothing is actually disabled.
+#[test]
+fn test_document_symbols_with_empty_disabled_services() {
+    let root = get_test_files_root();
+    let test_root = root.path().join("prefixed_with_underscore");
+    let scope_uri = Url::from_file_path(test_root.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
+        .send_configuration_response(json!([{"pyrefly": {"disabledLanguageServices": {}}}]));
+
+    interaction.client.did_open("normal.py");
+
+    let path = test_root.join("normal.py");
+    let uri = Url::from_file_path(&path).unwrap();
+
+    interaction
+        .client
+        .send_request::<DocumentSymbolRequest>(json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            },
+        }))
+        .expect_response_with(|response: Option<DocumentSymbolResponse>| {
+            let symbols = match response {
+                Some(DocumentSymbolResponse::Nested(s)) => s,
+                _ => return false,
+            };
+            symbols
+                .iter()
+                .any(|s| s.name == "normal_function" && s.kind == lsp_types::SymbolKind::FUNCTION)
         })
         .unwrap();
 

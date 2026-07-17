@@ -23,7 +23,6 @@ import MonacoEditorButton, {
 import RunPythonButton from './RunPythonButton';
 import { PyodideStatus } from './PyodideStatus';
 import Editor from '@monaco-editor/react';
-import * as LZString from 'lz-string';
 import * as stylex from '@stylexjs/stylex';
 import SandboxResults from './SandboxResults';
 import {
@@ -39,6 +38,15 @@ import { editor } from 'monaco-editor';
 import type { PyreflyErrorMessage } from './SandboxResults';
 import { DEFAULT_SANDBOX_PROGRAM } from './DefaultSandboxProgram';
 import { usePythonWorker } from './usePythonWorker';
+import {
+    resetPersistedSandboxState,
+    SANDBOX_LOCAL_STORAGE_KEY,
+} from './persistedSandboxState';
+import {
+    decodeSandboxUrl,
+    encodeSandboxProject,
+    SandboxProject,
+} from './generateSandboxUrl';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
@@ -52,7 +60,7 @@ export interface PyreflyState {
     autoComplete: (line: number, column: number) => any;
     gotoDefinition: (line: number, column: number) => monaco.IRange[] | null;
     hover: (line: number, column: number) => any;
-    inlayHint: () => any;
+    inlayHint: (callArgumentNames: boolean) => any;
     semanticTokens: (range: any) => any;
     semanticTokensLegend: () => any;
 }
@@ -119,6 +127,7 @@ export default function Sandbox({
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
+    const [showParameterHints, setShowParameterHints] = useState(false);
     // Absolute pixel height for the editor pane (null = not yet initialized)
     const [editorHeight, setEditorHeight] = useState<number | null>(null);
     const [isResizing, setIsResizing] = useState(false);
@@ -544,6 +553,17 @@ export default function Sandbox({
                     </button>
                 )}
             </div>
+            <label {...stylex.props(styles.parameterHintToggle)}>
+                <input
+                    id="parameter-hints-toggle"
+                    type="checkbox"
+                    checked={showParameterHints}
+                    onChange={(event) =>
+                        setShowParameterHints(event.target.checked)
+                    }
+                />
+                Parameter hints
+            </label>
         </div>
     );
 
@@ -687,7 +707,7 @@ export default function Sandbox({
     // Recheck when pyre service or model changes
     useEffect(() => {
         forceRecheck();
-    }, [pyreService, model]);
+    }, [pyreService, model, showParameterHints]);
 
     function updateAllFiles(forceUpdate: boolean): boolean {
         if (models.size > 0 && pyreService && model) {
@@ -732,7 +752,7 @@ export default function Sandbox({
         );
         setInlayHintFunctionForMonaco(
             model,
-            () => pyreService?.inlayHint() || []
+            () => pyreService?.inlayHint(showParameterHints) || []
         );
         setSemanticTokensFunctionForMonaco(model, (range) =>
             pyreService?.semanticTokens(range)
@@ -893,7 +913,7 @@ export default function Sandbox({
         pythonVersion,
         models,
         activeFileName,
-        createNewFile,
+        setModels,
         setActiveFileName
     );
 
@@ -1006,19 +1026,14 @@ export default function Sandbox({
     );
 }
 
-interface ProjectState {
-    files: Record<string, string>;
-    activeFile: string;
-}
+type ProjectState = SandboxProject;
 
 function updateURL(allFiles: Record<string, string>, activeFile: string): void {
     const projectState: ProjectState = {
         files: allFiles,
         activeFile: activeFile,
     };
-    const compressed = LZString.compressToEncodedURIComponent(
-        JSON.stringify(projectState)
-    );
+    const compressed = encodeSandboxProject(projectState);
     const params = new URLSearchParams();
     params.set('project', compressed);
     const newURL = `${window.location.pathname}?${params.toString()}`;
@@ -1027,34 +1042,8 @@ function updateURL(allFiles: Record<string, string>, activeFile: string): void {
 
 function getProjectFromURL(): ProjectState | null {
     if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-
-    const project = params.get('project');
-    if (project) {
-        try {
-            const decompressed =
-                LZString.decompressFromEncodedURIComponent(project);
-            return decompressed ? JSON.parse(decompressed) : null;
-        } catch (e) {
-            console.error('Failed to parse project from URL:', e);
-        }
-    }
-
-    const code = params.get('code');
-    if (code) {
-        const decompressed = LZString.decompressFromEncodedURIComponent(code);
-        if (decompressed) {
-            return {
-                files: { 'sandbox.py': decompressed },
-                activeFile: 'sandbox.py',
-            };
-        }
-    }
-
-    return null;
+    return decodeSandboxUrl(window.location.href);
 }
-
-const LOCAL_STORAGE_KEY = 'pyrefly-sandbox';
 
 function saveToLocalStorage(
     allFiles: Record<string, string>,
@@ -1062,7 +1051,10 @@ function saveToLocalStorage(
 ): void {
     try {
         const projectState: ProjectState = { files: allFiles, activeFile };
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(projectState));
+        localStorage.setItem(
+            SANDBOX_LOCAL_STORAGE_KEY,
+            JSON.stringify(projectState)
+        );
     } catch {
         // localStorage may be full or unavailable; silently ignore.
     }
@@ -1071,7 +1063,7 @@ function saveToLocalStorage(
 function getProjectFromLocalStorage(): ProjectState | null {
     if (typeof window === 'undefined') return null;
     try {
-        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+        const saved = localStorage.getItem(SANDBOX_LOCAL_STORAGE_KEY);
         return saved ? JSON.parse(saved) : null;
     } catch {
         return null;
@@ -1226,7 +1218,9 @@ function getMonacoButtons(
     pythonVersion: string,
     models: Map<string, editor.ITextModel>,
     activeFileName: string,
-    createNewFile: (fileName: string, content: string) => void,
+    setModels: React.Dispatch<
+        React.SetStateAction<Map<string, editor.ITextModel>>
+    >,
     setActiveFileName: (fileName: string) => void
 ): ReadonlyArray<React.ReactElement> {
     let buttons: ReadonlyArray<React.ReactElement> = [];
@@ -1241,9 +1235,9 @@ function getMonacoButtons(
                       forceRecheck,
                       codeSample,
                       isCodeSnippet,
+                      pythonVersion,
                       models,
-                      activeFileName,
-                      createNewFile,
+                      setModels,
                       setActiveFileName
                   )
                 : null,
@@ -1261,9 +1255,9 @@ function getMonacoButtons(
                 forceRecheck,
                 codeSample,
                 isCodeSnippet,
+                pythonVersion,
                 models,
-                activeFileName,
-                createNewFile,
+                setModels,
                 setActiveFileName
             ),
             getGitHubIssuesButton(models, activeFileName, pythonVersion),
@@ -1392,10 +1386,11 @@ function OpenSandboxButton({
             onClick={async () => {
                 if (model) {
                     const currentCode = model.getValue();
-                    const compressed =
-                        LZString.compressToEncodedURIComponent(currentCode);
-                    // Navigate to the sandbox URL with the compressed code as a query parameter
-                    const sandboxURL = sandboxBaseUrl + `?code=${compressed}`;
+                    const project = encodeSandboxProject({
+                        files: { 'sandbox.py': currentCode },
+                        activeFile: 'sandbox.py',
+                    });
+                    const sandboxURL = sandboxBaseUrl + `?project=${project}`;
                     window.location.href = sandboxURL;
                 }
 
@@ -1445,9 +1440,11 @@ function getResetButton(
     forceRecheck: () => void,
     codeSample: string,
     isCodeSnippet: boolean,
+    pythonVersion: string,
     models: Map<string, editor.ITextModel>,
-    activeFileName: string,
-    createNewFile: (fileName: string, content: string) => void,
+    setModels: React.Dispatch<
+        React.SetStateAction<Map<string, editor.ITextModel>>
+    >,
     setActiveFileName: (fileName: string) => void
 ): React.ReactElement {
     return (
@@ -1455,8 +1452,43 @@ function getResetButton(
             id="reset-button"
             onClick={async () => {
                 if (!isCodeSnippet) {
+                    resetPersistedSandboxState();
+                    const sandboxModel =
+                        models.get('sandbox.py') ??
+                        monaco.editor.createModel(
+                            codeSample,
+                            'python',
+                            monaco.Uri.file('/sandbox.py')
+                        );
+                    sandboxModel.setValue(codeSample);
+
+                    const defaultConfig = defaultPyreflyToml(pythonVersion);
+                    const pyreflyTomlModel =
+                        models.get('pyrefly.toml') ??
+                        monaco.editor.createModel(
+                            defaultConfig,
+                            'toml',
+                            monaco.Uri.file('/pyrefly.toml')
+                        );
+                    pyreflyTomlModel.setValue(defaultConfig);
+
+                    models.forEach((existingModel, fileName) => {
+                        if (
+                            fileName !== 'sandbox.py' &&
+                            fileName !== 'pyrefly.toml'
+                        ) {
+                            setTimeout(() => existingModel.dispose(), 100);
+                        }
+                    });
+                    setModels(
+                        new Map([
+                            ['sandbox.py', sandboxModel],
+                            ['pyrefly.toml', pyreflyTomlModel],
+                        ])
+                    );
                     setActiveFileName('sandbox.py');
                     forceRecheck();
+                    return;
                 }
                 if (model) {
                     model.setValue(codeSample);
@@ -1632,6 +1664,17 @@ const styles = stylex.create({
         alignItems: 'center',
         gap: '4px',
         marginLeft: '8px', // Small gap from last tab
+    },
+    parameterHintToggle: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        marginLeft: 'auto',
+        padding: '0 12px',
+        color: 'var(--color-text)',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        userSelect: 'none',
     },
     actionButton: {
         border: 'none',
