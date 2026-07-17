@@ -17,7 +17,6 @@ use lsp_types::CodeActionOrCommand;
 use lsp_types::CreateFile;
 use lsp_types::DocumentChangeOperation;
 use lsp_types::DocumentChanges;
-use lsp_types::OneOf;
 use lsp_types::OptionalVersionedTextDocumentIdentifier;
 use lsp_types::Position;
 use lsp_types::Range;
@@ -25,6 +24,7 @@ use lsp_types::ResourceOp;
 use lsp_types::ResourceOperationKind;
 use lsp_types::TextDocumentEdit;
 use lsp_types::TextEdit;
+use lsp_types::TextEditOrAnnotatedOrSnippet;
 use lsp_types::Url;
 use lsp_types::WorkspaceEdit;
 use pyrefly_build::handle::Handle;
@@ -166,7 +166,7 @@ pub(crate) fn move_symbol_to_new_file_code_action(
                 uri: new_uri,
                 version: None,
             },
-            edits: vec![OneOf::Left(TextEdit {
+            edits: vec![TextEditOrAnnotatedOrSnippet::TextEdit(TextEdit {
                 range: Range {
                     start: Position::new(0, 0),
                     end: Position::new(0, 0),
@@ -196,7 +196,10 @@ pub(crate) fn move_symbol_to_new_file_code_action(
         });
         operations.push(DocumentChangeOperation::Edit(TextDocumentEdit {
             text_document: OptionalVersionedTextDocumentIdentifier { uri, version: None },
-            edits: text_edits.into_iter().map(OneOf::Left).collect(),
+            edits: text_edits
+                .into_iter()
+                .map(TextEditOrAnnotatedOrSnippet::TextEdit)
+                .collect(),
         }));
     }
 

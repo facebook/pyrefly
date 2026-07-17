@@ -38,6 +38,7 @@ use crate::alt::callable::ArgMap;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::callable::CallWithTypes;
+use crate::alt::callable::ReturnTypeResolutionError;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
@@ -56,8 +57,10 @@ struct CalledOverload<'f> {
     func: &'f TargetWithTParams<Function>,
     res: Type,
     ctor_targs: Option<TArgs>,
+    arg_errors: ErrorCollector,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
+    return_type_errors: Vec<ReturnTypeResolutionError>,
     /// Maps each argument's source range to the parameter it was matched against.
     argmap: ArgMap,
 }
@@ -253,6 +256,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         keywords: &[CallKeyword],
         arguments_range: TextRange,
         errors: &ErrorCollector,
+        return_errors: &ErrorCollector,
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
         // If we're constructing a class, its type arguments. A successful call will fill these in.
@@ -291,8 +295,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     func: arity_closest_overload.unwrap().0,
                     res: self.heap.mk_any_error(),
                     ctor_targs: None,
+                    arg_errors: self.error_collector(),
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
+                    return_type_errors: Vec::new(),
                     argmap: ArgMap::new(),
                 },
                 false,
@@ -346,14 +352,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         let func = first_overload.func;
                         let ctor_targs = first_overload.ctor_targs.clone();
                         let argmap = first_overload.argmap.clone();
+                        let arg_errors = self.error_collector();
                         let specialization_errors = first_overload.specialization_errors.clone();
+                        let return_type_errors = matched_overloads
+                            .iter()
+                            .flat_map(|overload| overload.return_type_errors.iter().cloned())
+                            .unique()
+                            .collect();
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
                             argmap,
-                            res: self.unions(matched_overloads.into_map(|o| o.res)),
+                            res: self.unions(matched_overloads.into_map(|o| {
+                                arg_errors.extend(o.arg_errors);
+                                o.res
+                            })),
+                            arg_errors,
                             call_errors: self.error_collector(),
                             specialization_errors,
+                            return_type_errors,
                         };
                         matched = true;
                         break;
@@ -414,6 +431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
                 error_builder.with_context(context).emit();
             }
+            errors.extend(closest_overload.arg_errors);
             errors.extend(closest_overload.call_errors);
             if let Ok(specialization_errors) =
                 Vec1::try_from_vec(closest_overload.specialization_errors)
@@ -425,6 +443,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     None,
                 );
             }
+            self.add_return_type_resolution_errors(
+                closest_overload.return_type_errors,
+                arguments_range,
+                return_errors,
+                None,
+            );
             (
                 closest_overload.res,
                 closest_overload.func.1.signature.clone(),
@@ -720,7 +744,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 args,
                 keywords,
                 arguments_range,
-                errors,
                 None, // don't use the hint yet, it shouldn't influence overload selection
                 ctor_targs,
             );
@@ -842,7 +865,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &materialized_args,
                                 &materialized_keywords,
                                 arguments_range,
-                                errors,
                                 None, // don't use the hint yet, it shouldn't influence overload selection
                                 &None,
                             );
@@ -874,15 +896,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     args,
                     keywords,
                     arguments_range,
-                    &self.error_collector(),
                     hint,
                     ctor_targs,
                 );
                 (
-                    // Intentionally check only `call_errors` and not `specialization_errors`. The
-                    // contextual pass re-runs with the hint and may legitimately introduce
-                    // specialization errors that the matched-overload step already accounted for,
-                    // so we only fall back to the no-hint version on hard call errors. See
+                    // The contextual pass may legitimately introduce late resolution errors, so
+                    // we only fall back to the no-hint version on hard call errors. See
                     // `test::generic_restriction::test_nested_call_of_overloaded_function_preserves_bound`.
                     if !contextual_overload.has_hard_call_errors() {
                         contextual_overload
@@ -999,7 +1018,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         args: &[CallArg],
         keywords: &[CallKeyword],
         arguments_range: TextRange,
-        errors: &ErrorCollector,
         hint: Option<HintRef>,
         ctor_targs: &Option<&mut TArgs>,
     ) -> CalledOverload<'c> {
@@ -1010,8 +1028,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
+        // `@uses_shape_dsl` may sit on a single overload (e.g. a shape-DSL variant that
+        // follows a plain-TypeVar fast path). The set-wide `shape_transform` only carries
+        // the first overload's decorator, so prefer this overload's own transform and only
+        // fall back to the set-wide one (e.g. an implementation-level decorator).
+        let shape_transform = callable
+            .1
+            .metadata
+            .flags
+            .shape_transform
+            .as_deref()
+            .or(shape_transform);
+
+        let arg_errors = self.error_collector();
         let call_errors = self.error_collector();
-        let (res, specialization_errors, argmap) = self.callable_infer(
+        let (res, specialization_errors, return_type_errors, argmap) = self.callable_infer(
             callable.1.signature.clone(),
             Some(&metadata.kind),
             shape_transform,
@@ -1020,7 +1051,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             args,
             keywords,
             arguments_range,
-            errors,
+            &arg_errors,
             &call_errors,
             // We intentionally drop the context here, as arg errors don't need it,
             // and if there are any call errors, we'll log a "No matching overloads"
@@ -1029,13 +1060,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             hint,
             overload_ctor_targs.as_mut(),
         );
-
         CalledOverload {
             func: callable,
             res,
             ctor_targs: overload_ctor_targs,
+            arg_errors,
             call_errors,
             specialization_errors,
+            return_type_errors,
             argmap,
         }
     }

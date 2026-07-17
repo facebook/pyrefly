@@ -466,7 +466,7 @@ match y:
 testcase!(
     test_match_narrow_len,
     r#"
-from typing import assert_type, Never
+from typing import assert_type
 
 def foo(x: tuple[int, int] | tuple[str]):
     match x:
@@ -479,7 +479,7 @@ def foo(x: tuple[int, int] | tuple[str]):
             assert_type(x0, int)
             assert_type(x1, int)
     match x:
-        # these two cases should be impossible to match
+        # these two cases are impossible to match
         case [str(), str()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
             assert_type(x, tuple[int, int])
         case [int()]:  # E: Case pattern can never match subject of type `tuple[int, int] | tuple[str]`
@@ -656,7 +656,6 @@ def test(x: tuple[int, ...] | tuple[int, *tuple[int, ...], int] | tuple[int, int
 );
 
 testcase!(
-    bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
 from typing import assert_type, assert_never, Literal
@@ -673,17 +672,16 @@ class Bar:
 def test(x: Foo | Bar) -> None:
     match x:
         case Foo(1, "a"):
-            # we should narrow x.x and x.y to literals
             assert_type(x, Foo)
-            assert_type(x.x, int)
-            assert_type(x.y, str)
+            assert_type(x.x, Literal[1])
+            assert_type(x.y, Literal["a"])
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
             assert_type(x.y, Literal[""])
         case Bar("bar"):
             assert_type(x, Bar)
-            assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+            assert_type(x.x, Literal["bar"])
 
 def test_keyword_irrefutable(x: Foo | Bar) -> None:
     match x:
@@ -1700,8 +1698,7 @@ def main() -> None:
 );
 
 testcase!(
-    bug =
-        "BoolOp laxness causes false negative for walrus in while short-circuit context, see #1251",
+    bug = "BoolOp laxness causes false negative for walrus in short-circuit context, see #1251",
     test_walrus_in_while_bool_op,
     r#"
 def cond() -> bool: ...
