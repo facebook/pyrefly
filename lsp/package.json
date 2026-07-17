@@ -318,6 +318,13 @@
                         }
                     }
                 },
+                "python.analysis.inlayHintDebounceMs": {
+                    "type": "number",
+                    "default": 150,
+                    "minimum": 0,
+                    "description": "Debounce window, in milliseconds, for inlay hints. While a file is being edited, inlay hint updates are held until editing pauses for this long, so hint widths don't jitter on every keystroke. Set to 0 to update inlay hints immediately.",
+                    "scope": "resource"
+                },
                 "python.pyrefly.syncNotebooks": {
                     "type": "boolean",
                     "default": true,
