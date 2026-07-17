@@ -466,6 +466,24 @@ def pick_random_identifier_case(
     )
 
 
+def _read_exactly(stream: Any, n: int) -> bytes:
+    """Read exactly n bytes from a raw stream.
+
+    Servers are spawned with bufsize=0, so stdout is a raw io.FileIO whose read(n) issues a single syscall and may return fewer than n bytes.
+    Small responses arrive whole, but a large one like a completion list with hundreds of items would come back truncated, fail to parse, and desync the stream.
+    Thus we loop until the whole body is read.
+    """
+    chunks: List[bytes] = []
+    remaining = n
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 class LspProtocolError(RuntimeError):
     pass
 
@@ -728,8 +746,8 @@ class LspClient:
                 except ValueError:
                     continue
 
-                body = stream.read(length)
-                if not body:
+                body = _read_exactly(stream, length)
+                if len(body) < length:
                     return
 
                 try:
