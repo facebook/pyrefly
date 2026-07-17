@@ -39,6 +39,7 @@ struct IncrementalData(Arc<Mutex<SmallMap<ModuleName, Arc<String>>>>);
 /// Helper for writing incrementality tests.
 struct Incremental {
     data: IncrementalData,
+    files: Vec<String>,
     require: Option<Require>,
     state: State,
     to_set: Vec<(String, String)>,
@@ -74,13 +75,17 @@ impl Incremental {
     const USER_FILES: &[&str] = &["main", "foo", "bar", "baz"];
 
     fn new() -> Self {
+        Self::with_files(Self::USER_FILES.map(|x| (*x).to_owned()))
+    }
+
+    fn with_files(files: Vec<String>) -> Self {
         init_test();
         let data = IncrementalData::default();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
-        for file in Self::USER_FILES {
+        for file in &files {
             sourcedb.insert(
                 ModuleName::from_str(file),
                 ModulePath::memory(PathBuf::from(file)),
@@ -92,6 +97,7 @@ impl Incremental {
 
         Self {
             data: data.dupe(),
+            files,
             require: None,
             state: State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT),
             to_set: Vec::new(),
@@ -141,7 +147,11 @@ impl Incremental {
             None,
             None,
         );
-        let loaded = Self::USER_FILES.map(|x| self.handle(x));
+        let loaded = self
+            .files
+            .iter()
+            .map(|x| self.handle(x))
+            .collect::<Vec<_>>();
         let errors = self.state.transaction().get_errors(&loaded);
         let project_root = PathBuf::new();
         print_errors(project_root.as_path(), &errors.collect_display_errors());
@@ -868,6 +878,64 @@ fn test_overlapping_exports_cycle_detected() {
     // Both modules should be recomputed to reach stable state
     assert!(res.changed.contains(&"foo".to_owned()));
     assert!(res.changed.contains(&"bar".to_owned()));
+}
+
+// Synthetic defense-in-depth reproducer for https://github.com/facebook/pyrefly/issues/4171.
+#[test]
+#[should_panic(expected = "Transaction has uncommitted changes")]
+fn test_deep_scc_chain_stabilizes_after_epoch_cap() {
+    const LEVELS: usize = 208;
+
+    let mut files = vec!["leaf".to_owned(), "main".to_owned()];
+    for level in 0..LEVELS {
+        files.push(format!("a_{level}"));
+        files.push(format!("b_{level}"));
+    }
+    let mut i = Incremental::with_files(files);
+
+    i.set("leaf", "value: int = 0");
+    for level in 0..LEVELS {
+        let previous = if level == 0 {
+            "leaf".to_owned()
+        } else {
+            format!("a_{}", level - 1)
+        };
+        i.set(
+            &format!("a_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nfrom {previous} import value as value\nif TYPE_CHECKING:\n    from b_{level} import Marker\n"
+            ),
+        );
+        i.set(
+            &format!("b_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from a_{level} import value\nclass Marker: pass\n"
+            ),
+        );
+    }
+    i.set(
+        "main",
+        &format!(
+            "from a_{} import value\nobserved: int = value\n",
+            LEVELS - 1
+        ),
+    );
+
+    let initial = i.unchecked(&["main"]);
+    assert_eq!(initial.errors.collect_display_errors().len(), 0);
+
+    i.set("leaf", "value: str = 'changed'");
+    let changed = i.unchecked(&["main"]);
+    let errors = changed
+        .errors
+        .collect_display_errors()
+        .map(|error| error.msg().to_owned());
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected final importer error, got {errors:?}"
+    );
+    assert!(errors[0].contains("not assignable to `int`"), "{errors:?}");
 }
 
 /// Test a more complex non-overlapping case with a chain of re-exports.
