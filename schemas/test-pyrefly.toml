@@ -28,7 +28,6 @@ untyped-def-behavior = "check-and-infer-return-type"
 infer-with-first-use = true
 ignore-errors-in-generated-code = false
 disable-type-errors-in-ide = false
-tensor-shapes = false
 strict-callable-subtyping = false
 recursion-depth-limit = 100
 recursion-overflow-handler = "break-with-placeholder"

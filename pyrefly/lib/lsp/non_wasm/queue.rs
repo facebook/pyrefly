@@ -198,12 +198,7 @@ pub struct HeavyTask(
 );
 
 impl HeavyTask {
-    fn run(
-        self,
-        server: &Server,
-        telemetry: &impl Telemetry,
-        telemetry_event: &mut TelemetryEvent,
-    ) {
+    fn run(self, server: &Server, telemetry: &dyn Telemetry, telemetry_event: &mut TelemetryEvent) {
         self.0(server, telemetry, telemetry_event);
     }
 }
@@ -243,7 +238,7 @@ impl HeavyTaskQueue {
         debug!("Enqueued task on {} heavy task queue", self.queue_name);
     }
 
-    pub fn run_until_stopped(&self, server: &Server, telemetry: &impl Telemetry) {
+    pub fn run_until_stopped(&self, server: &Server, telemetry: &dyn Telemetry) {
         let mut receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
         // so we register priority_events_receiver first.

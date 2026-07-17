@@ -15,6 +15,7 @@ use lsp_types::request::Initialize;
 use lsp_types::request::Request as _;
 use lsp_types::request::WorkspaceConfiguration;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use pyrefly::lsp::non_wasm::protocol::Message;
 use pyrefly::lsp::non_wasm::protocol::Notification;
 use pyrefly::lsp::non_wasm::protocol::Request;
@@ -24,6 +25,7 @@ use serde_json::json;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::object_model::LspMessageError;
 use crate::util::get_test_files_root;
 
@@ -55,6 +57,16 @@ fn require_markdown_initialize(interaction: &LspInteraction) {
             settings.unwrap_or(json!([])),
         );
     }
+}
+
+fn severity_count(
+    diagnostics: &[lsp_types::Diagnostic],
+    severity: lsp_types::DiagnosticSeverity,
+) -> usize {
+    diagnostics
+        .iter()
+        .filter(|d| d.severity == Some(severity))
+        .count()
 }
 
 #[test]
@@ -163,11 +175,114 @@ fn test_diagnostics_markdown_messages() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn test_baseline_diagnostic_is_hint() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_hint");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+
+    interaction
+        .client
+        .diagnostic("bad.py")
+        .expect_response_with(|response| {
+            let DocumentDiagnosticReportResult::Report(report) = response else {
+                return false;
+            };
+            let lsp_types::DocumentDiagnosticReport::Full(full) = report else {
+                return false;
+            };
+            let items = &full.full_document_diagnostic_report.items;
+            // `bad.py` has two `bad-assignment` errors; only the one whose column
+            // matches the baseline entry is downgraded to HINT — the other must
+            // stay at ERROR, guarding against baseline filtering downgrading (or
+            // dropping) every diagnostic.
+            items.len() == 2
+                && items.iter().all(|item| {
+                    item.code
+                        == Some(lsp_types::NumberOrString::String(
+                            "bad-assignment".to_owned(),
+                        ))
+                })
+                && severity_count(items, lsp_types::DiagnosticSeverity::HINT) == 1
+                && severity_count(items, lsp_types::DiagnosticSeverity::ERROR) == 1
+        })
+        .expect("Failed to receive hint diagnostic");
+
+    interaction.shutdown().unwrap();
+}
+
+/// Push diagnostics (`publishDiagnostics`) is the primary user-facing path and
+/// has the same HINT-downgrade logic as the pull path exercised above, so assert
+/// the published notification downgrades only the baselined error.
+#[test]
+fn test_baseline_diagnostic_is_hint_push() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_hint");
+    let bad_py = root_path.join("bad.py");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+
+    interaction
+        .client
+        .expect_message("publishDiagnostics with baseline HINT", |msg| {
+            let Message::Notification(notification) = msg else {
+                return None;
+            };
+            if notification.method != PublishDiagnostics::METHOD {
+                return None;
+            }
+            let params: PublishDiagnosticsParams =
+                serde_json::from_value(notification.params).unwrap();
+            if params.uri.to_file_path().unwrap() != bad_py {
+                return None;
+            }
+            let hints = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::HINT);
+            let errors = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::ERROR);
+            if params.diagnostics.len() == 2 && hints == 1 && errors == 1 {
+                Some(Ok(()))
+            } else {
+                Some(Err(LspMessageError::Custom {
+                    description: format!(
+                        "Expected 1 HINT and 1 ERROR, got {hints} HINT and {errors} ERROR ({} total)",
+                        params.diagnostics.len()
+                    ),
+                }))
+            }
+        })
+        .expect("Failed to receive push diagnostics with baseline HINT");
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_stream_diagnostics_after_save() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -222,7 +337,13 @@ fn test_stream_diagnostics_after_save() {
 fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -292,7 +413,13 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -347,7 +474,13 @@ fn test_open_file_during_recheck() {
 fn test_edit_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -433,6 +566,41 @@ fn test_cycle_class() {
             "items": [],
             "kind": "full"
         }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// Regression test for <https://github.com/facebook/pyrefly/issues/3789>.
+///
+/// Opening `expr.py` — part of a 3-module import cycle
+/// (`expr` -> `add` -> `operations` -> `expr`) whose `expr` module contains a
+/// lambda — used to panic with "a variable has leaked from one module to
+/// another". The lambda parameter's Unwrap `Var` is cached in thread-local
+/// state that is shared across `Solver` instances while a cross-module SCC is
+/// driven iteratively, so a stale `Var` allocated in one module's solver was
+/// returned while solving another module. This reproduces only on the
+/// incremental LSP open path, not on a uniform batch `check`. We only assert
+/// that the server stays alive (does not panic) and answers the diagnostic
+/// request.
+#[test]
+fn test_var_leak_cycle_no_panic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("var_leak_cycle_3789/expr.py");
+
+    interaction
+        .client
+        .diagnostic("var_leak_cycle_3789/expr.py")
+        .expect_response_with(|_| true)
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -737,7 +905,7 @@ fn test_unused_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `os` is unused",
+                    "message": "Import `os` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 7},
                         "end": {"line": 6, "character": 9}
@@ -786,7 +954,7 @@ fn test_unused_from_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `Dict` is unused",
+                    "message": "Import `Dict` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 19},
                         "end": {"line": 6, "character": 23}
@@ -1427,9 +1595,7 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
                     == Some(lsp_types::NumberOrString::String(
                         "missing-import".to_owned(),
                     ))
-                    && item
-                        .message
-                        .starts_with("Cannot find module `whatthepatch`")
+                    && matches!(&item.message, lsp_types::DiagnosticMessage::String(s) if s.starts_with("Cannot find module `whatthepatch`"))
                     && item.range.start.line == 5
                     && item.range.start.character == 7
                     && item.range.end.line == 5
@@ -1473,7 +1639,7 @@ fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `boto3` is unused",
+                    "message": "Import `boto3` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 12}
@@ -1502,7 +1668,7 @@ fn test_cross_file_diagnostic_no_indexing() {
     let root = get_test_files_root();
     let root_path = root.path().join("cross_file_method_change");
     // Indexing must be disabled to reproduce.
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
+    let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -1590,7 +1756,7 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
                 },
                 {
                     "code": "unused-import",
-                    "message": "Import `django` is unused",
+                    "message": "Import `django` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 13}
@@ -1784,6 +1950,79 @@ fn test_unused_ignore_diagnostic_default_severity() {
     interaction
         .client
         .diagnostic("unused_ignore_no_config.py")
+        .expect_response(json!({
+            "items": [],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_type_ignore_diagnostic() {
+    let root = get_test_files_root();
+    let test_files_root = root.path().join("unused_type_ignore");
+    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("example.py");
+
+    interaction
+        .client
+        .diagnostic("example.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unused-type-ignore",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unused-type-ignore"
+                    },
+                    "message": "Unused `# type: ignore` comment",
+                    "range": {
+                        "start": {"line": 5, "character": 0},
+                        "end": {"line": 5, "character": 1}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_unused_type_ignore_diagnostic_default_severity() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("unused_type_ignore_no_config.py");
+
+    // Without `unused-type-ignore = "error"` in config, the default severity is "ignore", so no
+    // `unused-type-ignore` diagnostic should appear.
+    interaction
+        .client
+        .diagnostic("unused_type_ignore_no_config.py")
         .expect_response(json!({
             "items": [],
             "kind": "full"

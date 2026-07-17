@@ -88,6 +88,123 @@ xyz = [foo.meth]
 }
 
 #[test]
+fn hover_on_overloaded_method_call_shows_implementation_docstring() {
+    let code = r#"
+from typing import overload
+
+class Foo:
+    @overload
+    def bar(self, x: int) -> int: ...
+    @overload
+    def bar(self, x: str) -> str: ...
+    def bar(self, x: int | str) -> int | str:
+        """Hello."""
+        return x
+
+Foo().bar(1)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Hello."),
+        "Expected implementation docstring in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_union_method_call_shows_method_signature() {
+    let code = r#"
+class A:
+    def foo(self) -> int:
+        return 0
+
+class B:
+    def foo(self) -> str:
+        return ""
+
+def f(x: A | B) -> None:
+    x.foo()
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) foo:"),
+        "Expected union method call hover, got: {report}"
+    );
+    assert!(
+        report.contains("-> int") && report.contains("-> str"),
+        "Expected hover to show both union method return types, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_union_class_attribute_shows_class() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    foo = C
+
+class B:
+    foo = C
+
+def f(x: A | B) -> None:
+    x.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(class) foo:"),
+        "Expected union class attribute hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_mixed_union_attribute_falls_back_to_attribute() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    foo = C
+
+def f(x: A | B) -> None:
+    x.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(attribute) foo:"),
+        "Expected mixed union attribute hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_attribute_shows_class() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    foo = C
+
+def f(a: A) -> None:
+    a.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(class) foo:"),
+        "Expected single-type class attribute hover, got: {report}"
+    );
+}
+
+#[test]
 fn renamed_reexport_shows_original_name() {
     let lib2 = r#"
 def foo() -> None: ...
@@ -354,6 +471,65 @@ def f(x: int | str | None) -> None:
 }
 
 #[test]
+fn hover_type_source_attribute_narrow() {
+    let code = r#"
+class C:
+    x: int | None
+
+def f(c: C) -> None:
+    if c.x is not None:
+        c.x
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("**Type source**"),
+        "Expected type source section in field hover, got: {report}"
+    );
+    assert!(
+        report.contains("c.x is not None"),
+        "Expected attribute narrow in field hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_type_source_attribute_store_no_source() {
+    // Attribute assignment targets are store-context. Type-source narrowing is only
+    // surfaced for attribute reads (Load/Invalid), so a store target must fall through
+    // and produce no type-source section.
+    let code = r#"
+class C:
+    x: int | None
+
+def f(c: C) -> None:
+    if c.x is not None:
+        c.x = 1
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        !report.contains("**Type source**"),
+        "Should not show type source when hovering an attribute assignment target, got: {report}"
+    );
+}
+
+#[test]
 fn hover_type_source_no_source_at_first_use_site() {
     // When hovering at the first-use site itself, we should not show
     // "Inferred from first use" pointing back to the same location.
@@ -590,6 +766,26 @@ lhs @ rhs
 }
 
 #[test]
+fn hover_over_augmented_assignment_operator_shows_in_place_dunder_name() {
+    let code = r#"
+class Counter:
+    def __iadd__(self, other: int) -> Counter:
+        return self
+
+c = Counter()
+c += 1
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(
+            "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
+        ),
+        "Expected __iadd__ signature in hover, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_tuple_element_literal_uses_element_type() {
     let code = r#"
 tup = (1, +2)
@@ -684,7 +880,8 @@ del c [0]
 }
 
 #[test]
-fn hover_over_getitem_without_space_doesnt_show_signature() {
+fn hover_over_getitem_without_space_shows_signature() {
+    // Regression test for https://github.com/facebook/pyrefly/issues/1838
     let code = r#"
 class Container:
     def __getitem__(self, idx: int) -> int: ...
@@ -694,23 +891,17 @@ c[0]
 #^ ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
-6 | c[0]
-     ^
-```python
-(variable) c: Container
-```
-
-6 | c[0]
-       ^
-```python
-(attribute) __getitem__: Literal[0]
-```
-"#
-        .trim(),
-        report.trim(),
+    // Hovering the base `c` still shows the variable.
+    assert!(
+        report.contains("(variable) c: Container"),
+        "Expected variable hover for base `c`, got: {report}"
+    );
+    // Hovering inside the brackets shows the dunder method, matching `c [0]`.
+    assert!(
+        report.contains(
+            "```python\n(method) __getitem__: def __getitem__(\n    self: Container,\n    idx: int\n) -> int: ...\n```"
+        ),
+        "Expected __getitem__ signature in hover, got: {report}"
     );
 }
 
@@ -994,6 +1185,54 @@ Test docstring
 }
 
 #[test]
+fn hover_on_imported_enum_shows_members() {
+    let code = r#"
+from http import HTTPStatus
+#                ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | from http import HTTPStatus
+                     ^
+```python
+(class) HTTPStatus: Literal[HTTPStatus.CONTINUE, HTTPStatus.SWITCHING_PROTOCOLS, HTTPStatus.PROCESSING, HTTPStatus.EARLY_HINTS, HTTPStatus.OK, HTTPStatus.CREATED, HTTPStatus.ACCEPTED, HTTPStatus.NON_AUTHORITATIVE_INFORMATION, HTTPStatus.NO_CONTENT, HTTPStatus.RESET_CONTENT, HTTPStatus.PARTIAL_CONTENT, HTTPStatus.MULTI_STATUS, HTTPStatus.ALREADY_REPORTED, HTTPStatus.IM_USED, HTTPStatus.MULTIPLE_CHOICES, HTTPStatus.MOVED_PERMANENTLY, HTTPStatus.FOUND, HTTPStatus.SEE_OTHER, HTTPStatus.NOT_MODIFIED, HTTPStatus.USE_PROXY, HTTPStatus.TEMPORARY_REDIRECT, HTTPStatus.PERMANENT_REDIRECT, HTTPStatus.BAD_REQUEST, HTTPStatus.UNAUTHORIZED, HTTPStatus.PAYMENT_REQUIRED, HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND, HTTPStatus.METHOD_NOT_ALLOWED, HTTPStatus.NOT_ACCEPTABLE, HTTPStatus.PROXY_AUTHENTICATION_REQUIRED, HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.CONFLICT, HTTPStatus.GONE, HTTPStatus.LENGTH_REQUIRED, HTTPStatus.PRECONDITION_FAILED, HTTPStatus.CONTENT_TOO_LARGE, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, HTTPStatus.URI_TOO_LONG, HTTPStatus.REQUEST_URI_TOO_LONG, HTTPStatus.UNSUPPORTED_MEDIA_TYPE, HTTPStatus.RANGE_NOT_SATISFIABLE, HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, HTTPStatus.EXPECTATION_FAILED, HTTPStatus.IM_A_TEAPOT, HTTPStatus.MISDIRECTED_REQUEST, HTTPStatus.UNPROCESSABLE_CONTENT, HTTPStatus.UNPROCESSABLE_ENTITY, HTTPStatus.LOCKED, HTTPStatus.FAILED_DEPENDENCY, HTTPStatus.TOO_EARLY, HTTPStatus.UPGRADE_REQUIRED, HTTPStatus.PRECONDITION_REQUIRED, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE, HTTPStatus.UNAVAILABLE_FOR_LEGAL_REASONS, HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.NOT_IMPLEMENTED, HTTPStatus.BAD_GATEWAY, HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.GATEWAY_TIMEOUT, HTTPStatus.HTTP_VERSION_NOT_SUPPORTED, HTTPStatus.VARIANT_ALSO_NEGOTIATES, HTTPStatus.INSUFFICIENT_STORAGE, HTTPStatus.LOOP_DETECTED, HTTPStatus.NOT_EXTENDED, HTTPStatus.NETWORK_AUTHENTICATION_REQUIRED]
+```
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_imported_enum_call_shows_call() {
+    let code = r#"
+from http import HTTPStatus
+
+HTTPStatus(200)
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) __new__") && report.contains("value: Any"),
+        "Expected enum call hover to show the call signature, got: {report}"
+    );
+    assert!(
+        !report.contains("Literal[HTTPStatus.CONTINUE"),
+        "Enum call hover should not show the member list, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_class_in_type_annotation_shows_constructor() {
     let code = r#"
 class Foo:
@@ -1055,6 +1294,65 @@ from lib import Widget
 ---
 Widget docstring"#
             .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn hover_on_dict_constructor_is_multiline() {
+    let code = r#"
+x: dict[str, int]
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | x: dict[str, int]
+       ^
+```python
+(class) dict: ((
+    *args: Any,
+    **kwargs: Any
+) -> dict[Unknown, Unknown]) | Overload[
+  () -> dict[Unknown, Unknown]
+  (**kwargs: Unknown) -> dict[str, Unknown]
+  (map: SupportsKeysAndGetItem[Unknown, Unknown], /) -> dict[Unknown, Unknown]
+  (
+    map: SupportsKeysAndGetItem[str, Unknown],
+    /,
+    **kwargs: Unknown
+) -> dict[str, Unknown]
+  (iterable: Iterable[tuple[Unknown, Unknown]], /) -> dict[Unknown, Unknown]
+  (
+    iterable: Iterable[tuple[str, Unknown]],
+    /,
+    **kwargs: Unknown
+) -> dict[str, Unknown]
+  (iterable: Iterable[list[str]], /) -> dict[str, str]
+  (iterable: Iterable[list[bytes]], /) -> dict[bytes, bytes]
+]
+```
+---
+dict() -> new empty dictionary  
+dict(mapping) -> new dictionary initialized from a mapping object's  
+&nbsp;&nbsp;&nbsp;&nbsp;(key, value) pairs  
+dict(iterable) -> new dictionary initialized as if via:  
+&nbsp;&nbsp;&nbsp;&nbsp;d = {}  
+&nbsp;&nbsp;&nbsp;&nbsp;for k, v in iterable:  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;d[k] = v  
+dict(**kwargs) -> new dictionary initialized with the name=value pairs  
+&nbsp;&nbsp;&nbsp;&nbsp;in the keyword argument list.  For example:  dict(one=1, two=2)
+"#
+        .trim(),
         report.trim(),
     );
 }
@@ -1207,6 +1505,25 @@ c = Container()
     assert!(
         report.contains("self: Container") && report.contains("item: int"),
         "Expected hover to show __contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_operator_with_unknown_left_operand_shows_contains_dunder() {
+    let code = r#"
+languages: list[str] = []
+
+def supported_language(lang):
+    if lang in languages:
+#           ^
+        return lang
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) __contains__:")
+            && report.contains("self: list[str]")
+            && report.contains(") -> bool"),
+        "Expected hover to show list.__contains__ method signature, got: {report}"
     );
 }
 
@@ -1372,6 +1689,86 @@ Box[str]("hello")
     assert!(
         report.contains("Box[str]"),
         "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3240
+#[test]
+fn hover_on_generic_metaclass_constructor_does_not_show_inference_var() {
+    let code = r#"
+class DeclarativeAttributeIntercept(type):
+    pass
+
+class DCTransformDeclarative(DeclarativeAttributeIntercept):
+#                            ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        !report.contains("-> @"),
+        "Hover must not expose an internal inference variable, got: {report}"
+    );
+    assert!(
+        report.contains(") -> Self@DeclarativeAttributeIntercept: ..."),
+        "Hover should resolve the constructor's return type, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_covariant() {
+    let code = r#"
+class Foo[T]:
+#         ^
+    def foo(self) -> T: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Foo (covariant)"),
+        "Expected covariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_contravariant() {
+    let code = r#"
+class Sink[T]:
+#          ^
+    def consume(self, value: T) -> None: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Sink (contravariant)"),
+        "Expected contravariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_variance_invariant() {
+    let code = r#"
+class Container[T]:
+#               ^
+    def get(self) -> T: ...
+    def set(self, value: T) -> None: ...
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Container (invariant)"),
+        "Expected invariant hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_type_parameter_shows_bivariant_as_invariant() {
+    // T is unused in the class body — bivariant, but displayed as invariant
+    let code = r#"
+class Phantom[T]:
+#             ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(type parameter) T: T@Phantom (invariant)"),
+        "Expected bivariant displayed as invariant, got: {report}"
     );
 }
 

@@ -32,7 +32,11 @@ fn test_initialize_basic() {
         )
         .expect_response(json!({"capabilities": {
             "positionEncoding": "utf-16",
-            "textDocumentSync": 2,
+            "textDocumentSync": {
+                "openClose": true,
+                "change": 2,
+                "save": { "includeText": false }
+            },
             "definitionProvider": true,
             "typeDefinitionProvider": true,
             "codeActionProvider": {

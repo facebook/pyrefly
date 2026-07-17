@@ -187,9 +187,9 @@ testcase!(
     r#"
 class C[T]: pass
 
-x: C        # E: Cannot determine the type parameter `T` for generic class `C`
-y: C | int  # E: Cannot determine the type parameter `T` for generic class `C`
-z: list[C]  # E: Cannot determine the type parameter `T` for generic class `C`
+x: C        # E: Cannot determine the type parameter `T` for generic class `C[T]`
+y: C | int  # E: Cannot determine the type parameter `T` for generic class `C[T]`
+z: list[C]  # E: Cannot determine the type parameter `T` for generic class `C[T]`
     "#,
 );
 
@@ -198,7 +198,7 @@ testcase!(
     TestEnv::new().enable_implicit_any_error(),
     r#"
 class C[T]: pass
-class D(C): pass  # E: Cannot determine the type parameter `T` for generic class `C`
+class D(C): pass  # E: Cannot determine the type parameter `T` for generic class `C[T]`
 x: D
     "#,
 );
@@ -635,7 +635,7 @@ testcase!(
 from typing import Callable, Type
 
 def f(
-    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list`
+    x: list,      # E: Cannot determine the type parameter `_T` for generic class `list[_T]`
     y: tuple,     # E: Cannot determine the type parameter for generic class `tuple`
     z: Callable,  # E: Cannot determine the type parameter for generic class `Callable`
     w: Type,      # E: Cannot determine the type parameter for generic class `type`
@@ -758,6 +758,22 @@ assert_type(b, A[int])
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3387
+testcase!(
+    test_future_annotations_forward_ref_in_generic_constructor,
+    r#"
+from __future__ import annotations
+
+class Foo[T]: ...
+
+class Bar:
+    foo = Foo[Bar]()
+    foo2 = Foo[UnknownClass]()  # E:
+    foo3 = Foo["UnknownClass"]()  # E:
+    foo4 = Foo[]()  # E:
+"#,
+);
+
 testcase!(
     test_typevar_type,
     r#"
@@ -816,5 +832,28 @@ testcase!(
 from typing import assert_type
 def f[T](x: T, y: T) -> T: ...
 assert_type(f([""], [0]), list[int] | list[str])
+    "#,
+);
+
+testcase!(
+    test_typevar_bound_type_of_class_attr_access,
+    r#"
+from typing import TypeVar, assert_type
+
+class C:
+    name: str = "base"
+
+T = TypeVar("T", bound=type[C])
+def test(cls: T) -> str:
+    return cls.name
+
+class C2:
+    def __init__(self) -> None:
+        self.name: str = "base"
+
+T2 = TypeVar("T2", bound=type[C2])
+def test2(cls: T2) -> str:
+    # this should error because `name` is instance-only
+    return cls.name  # E:
     "#,
 );

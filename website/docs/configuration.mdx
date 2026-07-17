@@ -514,13 +514,15 @@ min-severity = "warn"
 Default format for `pyrefly check` error output when `--output-format` is not
 set on the CLI.
 
-- Type: `"min-text" | "full-text" | "json" | "github" | "omit-errors"`
+- Type: `"min-text" | "full-text" | "json" | "github" | "junit-xml" | "omit-errors"`
 - Default: `full-text`
 - Flag equivalent: `--output-format`
 - Notes:
     - `output-format` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - A CLI `--output-format` flag still takes precedence over the config value.
+    - `"junit-xml"` emits a JUnit XML `<testsuites>` report suitable for CI
+      dashboards (Jenkins, GitLab MR widgets, CircleCI, Azure DevOps, etc.).
 
 ### `preset`
 
@@ -539,10 +541,10 @@ Silences every error kind. Other settings (scalar flags, behavior settings) are 
 
 #### Preset: `basic`
 
-A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Only the highest-confidence diagnostics (crashes and clearly broken code) are active. Every other error kind is silenced.
+A minimal-checking preset used by default in projects without a Pyrefly configuration and in the LSP. Enables parse errors plus a small set of high-confidence, locally-fixable checks. Stricter checks like override validation, annotation completeness, and broader call-shape or assignment validation are disabled.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`infer-with-first-use`](#infer-with-first-use) `= false`, [`permissive-ignores`](#permissive-ignores) `= true`
-- Enables (as errors): [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unknown-name`](./error-kinds.mdx#unknown-name), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`not-async`](./error-kinds.mdx#not-async), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
+- Enables (as errors): [`bad-class-definition`](./error-kinds.mdx#bad-class-definition), [`bad-instantiation`](./error-kinds.mdx#bad-instantiation), [`bad-keyword-argument`](./error-kinds.mdx#bad-keyword-argument), [`bad-raise`](./error-kinds.mdx#bad-raise), [`bad-unpacking`](./error-kinds.mdx#bad-unpacking), [`division-by-zero`](./error-kinds.mdx#division-by-zero), [`invalid-annotation`](./error-kinds.mdx#invalid-annotation), [`invalid-literal`](./error-kinds.mdx#invalid-literal), [`invalid-super-call`](./error-kinds.mdx#invalid-super-call), [`invalid-syntax`](./error-kinds.mdx#invalid-syntax), [`missing-import`](./error-kinds.mdx#missing-import), [`not-async`](./error-kinds.mdx#not-async), [`parse-error`](./error-kinds.mdx#parse-error), [`unexpected-keyword`](./error-kinds.mdx#unexpected-keyword), [`unexpected-positional-argument`](./error-kinds.mdx#unexpected-positional-argument), [`unknown-name`](./error-kinds.mdx#unknown-name), [`unused-coroutine`](./error-kinds.mdx#unused-coroutine)
 - All other error kinds are silenced.
 
 #### Preset: `legacy`
@@ -556,6 +558,8 @@ A looser, less-strict preset intended for codebases migrating from mypy. This is
 
 The default Pyrefly configuration. Equivalent to having no preset at all.
 
+- Overrides no error codes or behavior settings — each error kind uses its own default severity (see [error kinds](./error-kinds.mdx)).
+
 #### Preset: `strict`
 
 Enables additional error codes on top of the default for stricter checking.
@@ -564,9 +568,6 @@ Enables additional error codes on top of the default for stricter checking.
 - Enables (as errors): [`implicit-any`](./error-kinds.mdx#implicit-any) (covers every implicit-`Any` sub-kind), [`missing-override-decorator`](./error-kinds.mdx#missing-override-decorator), [`potential-bad-keyword-argument`](./error-kinds.mdx#potential-bad-keyword-argument), [`unused-ignore`](./error-kinds.mdx#unused-ignore)
 
 #### Preset: `all`
-:::info
-This is a new preset in *upcoming* Pyrefly version 1.1.0. It is not yet available in the current stable version.
-:::
 
 :::info
 For most users, we recommend using the `strict` preset and enabling individual additional errors as desired,
@@ -1007,19 +1008,6 @@ The following lints are enabled by this flag:
 | [`pytorch-efficiency-lint-print-tensor`](./error-kinds.mdx#pytorch-efficiency-lint-print-tensor) | `print(tensor)` — GPU→CPU sync via `__repr__` |
 | [`pytorch-efficiency-lint-redundant-to-call`](./error-kinds.mdx#pytorch-efficiency-lint-redundant-to-call) | `torch.zeros(...).to(device)` — redundant copy |
 
-### `tensor-shapes`
-
-:::warning
-This feature is experimental and may change without notice.
-:::
-
-Enable tensor shape type inference. Supports both native (`Tensor[N, M]`) and
-jaxtyping (`Float[Tensor, "batch channels"]`) syntax.
-
-- Type: `bool`
-- Default: `false`
-- Flag equivalent: `--tensor-shapes`
-
 ### `spec-compliant-overloads`
 
 :::warning
@@ -1098,13 +1086,13 @@ you've configured yourself, either through CLI flags or a config file.
 We look for an interpreter with the following logic:
 
 1. Use [`python-interpreter-path`](#python-interpreter-path),
-   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
+   [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if any are set by a flag.
    More than one cannot be set in flags at the same time.
 2. Determine if there's an active `venv` or `conda` environment. If both are active at
    the same time, we take `venv` over `conda`.
 3. Use [`python-interpreter-path`](#python-interpreter-path),
-   [`fallback-python-interpreter-name](#fallback-python-interpreter-name), or
+   [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
    [`conda-environment`](#conda-environment) if either are set in a config file.
    Both cannot be set in a config at the same time.
 4. Find a `venv` at the root of the project by searching for something that looks like a
@@ -1155,7 +1143,7 @@ directories under `src/`, so therefore, we will recursively match everything und
 Examples:
 
 - `src/**/*.py`: only match `.py` files under `src/`
-- `src`, `src/`, `src/*`, `src/**`, and `src/**/*`: match all `.py` and `.pyi` files under `src/
+- `src`, `src/`, `src/*`, `src/**`, and `src/**/*`: match all `.py` and `.pyi` files under `src/`
 - `?.py` and `[A-z].py`: match any file that looks like `<letter>.py`
 - `src/path/to/my/file.py`: only match `src/path/to/my/file.py`
 - `src/**/tests`, `src/**/tests/`, `src/**/tests/**`, and `src/**/tests/**/*`: match all `.py` and `.pyi` files in `src/`

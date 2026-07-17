@@ -63,7 +63,7 @@ describe('generateSandboxUrl', () => {
     test('round-trips multiple files', () => {
         const files = {
             'sandbox.py': 'import torch\nx = torch.randn(3, 4)',
-            'pyrefly.toml': 'tensor-shapes = true',
+            'pyrefly.toml': 'python-version = "3.12"',
             'torch.pyi': 'class Tensor[*Shape]: ...',
         };
         const url = encode(files, 'sandbox.py');

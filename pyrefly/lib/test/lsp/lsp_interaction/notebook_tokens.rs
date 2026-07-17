@@ -11,17 +11,33 @@ use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
 use crate::util::get_test_files_root;
 
+fn initialize_settings() -> InitializeSettings {
+    InitializeSettings {
+        capabilities: Some(json!({
+            "textDocument": {
+                "semanticTokens": {
+                    "requests": {
+                        "full": true,
+                        "range": true,
+                    },
+                    "tokenTypes": [],
+                    "tokenModifiers": [],
+                    "formats": ["relative"],
+                    "augmentsSyntaxTokens": true,
+                },
+            },
+        })),
+        configuration: Some(None),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn test_semantic_tokens_full() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction
-        .initialize(InitializeSettings {
-            configuration: Some(None),
-            ..Default::default()
-        })
-        .unwrap();
+    interaction.initialize(initialize_settings()).unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["x = 1", "x2 = 1"]);
 
     interaction
@@ -41,12 +57,7 @@ fn test_semantic_tokens_ranged() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.path().to_path_buf());
-    interaction
-        .initialize(InitializeSettings {
-            configuration: Some(None),
-            ..Default::default()
-        })
-        .unwrap();
+    interaction.initialize(initialize_settings()).unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["x = 1\nx2 = 1"]);
 
     // Request ranged semantic tokens for just the first line in the first cell

@@ -30,15 +30,17 @@ use crate::callable::Params;
 use crate::callable::PrefixParam;
 use crate::class::Class;
 use crate::class::ClassType;
-use crate::dimension::SizeExpr;
+use crate::dimension::Int;
 use crate::keywords::KwCall;
 use crate::literal::LitStyle;
 use crate::literal::Literal;
 use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
+use crate::sentinel::Sentinel;
+use crate::shaped_array::IntTuple;
+use crate::shaped_array::ShapedArrayType;
 use crate::special_form::SpecialForm;
-use crate::tensor::TensorType;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_var::TypeVar;
@@ -135,6 +137,11 @@ impl TypeHeap {
     /// Create a `Type::None`.
     pub fn mk_none(&self) -> Type {
         Type::None
+    }
+
+    /// Create a `Type::Sentinel`.
+    pub fn mk_sentinel(&self, sentinel: Sentinel) -> Type {
+        Type::Sentinel(sentinel)
     }
 
     /// Create a `Type::Union` from members.
@@ -434,19 +441,19 @@ impl TypeHeap {
         Type::Never(style)
     }
 
-    /// Create a `Type::Dim` wrapping an inner type.
-    pub fn mk_dim(&self, inner: Type) -> Type {
-        Type::Dim(Box::new(inner))
+    /// Create a `Type::Int` from a symbolic integer expression.
+    pub fn mk_int(&self, symint: Int) -> Type {
+        Type::Int(symint)
     }
 
-    /// Create a `Type::Size` from a SizeExpr.
-    pub fn mk_size(&self, size_expr: SizeExpr) -> Type {
-        Type::Size(size_expr)
+    /// Create a `Type::ShapedArray` from a ShapedArrayType.
+    pub fn mk_shaped_array(&self, shaped_array: ShapedArrayType) -> Type {
+        Type::ShapedArray(Box::new(shaped_array))
     }
 
-    /// Create a `Type::Tensor` from a TensorType.
-    pub fn mk_tensor(&self, tensor: TensorType) -> Type {
-        Type::Tensor(Box::new(tensor))
+    /// Create a `Type::IntTuple` from a IntTuple.
+    pub fn mk_int_tuple(&self, int_tuple: IntTuple) -> Type {
+        Type::IntTuple(Box::new(int_tuple))
     }
 
     /// Create a `Type::NNModule` from an NNModuleType.

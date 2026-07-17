@@ -11,29 +11,23 @@ use clap::Subcommand;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 
+use crate::commands::bazel_check::BazelCheckArgs;
 use crate::commands::buck_check::BuckCheckArgs;
 use crate::commands::check::CheckResult;
 use crate::commands::check::FullCheckArgs;
 use crate::commands::check::SnippetCheckArgs;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
+use crate::commands::coverage::CoverageCommand;
+use crate::commands::coverage::report::ReportArgs;
 use crate::commands::dump_config::DumpConfigArgs;
 use crate::commands::infer::InferArgs;
 use crate::commands::init::InitArgs;
 use crate::commands::lsp::LspArgs;
-use crate::commands::report::ReportArgs;
 use crate::commands::stubgen::StubgenArgs;
 use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
 use crate::lsp::non_wasm::external_provider::NoExternalProvider;
-
-/// Subcommands of `pyrefly coverage`.
-#[deny(clippy::missing_docs_in_private_items)]
-#[derive(Debug, Clone, Subcommand)]
-pub enum CoverageCommand {
-    /// Generate a machine-readable type-coverage report from pyrefly type checking results.
-    Report(ReportArgs),
-}
 
 /// Subcommands to run Pyrefly with.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -50,6 +44,9 @@ pub enum Command {
 
     /// Entry point for Buck integration
     BuckCheck(BuckCheckArgs),
+
+    /// Entry point for Bazel integration.
+    BazelCheck(BazelCheckArgs),
 
     /// Initialize a new pyrefly config in the given directory,
     /// or migrate an existing mypy or pyright config to pyrefly.
@@ -89,6 +86,7 @@ impl Command {
             Command::Check(args) => args.run(config_configurer_wrapper, thread_count).await,
             Command::Snippet(args) => args.run(thread_count).await,
             Command::BuckCheck(args) => Ok((args.run(thread_count)?, None)),
+            Command::BazelCheck(args) => Ok((args.run(thread_count)?, None)),
             Command::Lsp(args) => Ok((
                 args.run(
                     version,
@@ -111,9 +109,9 @@ impl Command {
             )),
             Command::Infer(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
             Command::DumpConfig(args) => Ok((args.run(config_configurer_wrapper)?, None)),
-            Command::Coverage {
-                command: CoverageCommand::Report(args),
-            } => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
+            Command::Coverage { command } => {
+                Ok((command.run(config_configurer_wrapper, thread_count)?, None))
+            }
             Command::Report(args) => {
                 eprintln!(
                     "warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead"

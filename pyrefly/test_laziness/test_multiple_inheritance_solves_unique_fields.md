@@ -48,7 +48,7 @@ a: Solutions
 b: Answers
 c: Answers
 
-(195 builtin demands hidden)
+(84 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> c::Exports(is_special_export)
 a -> b::Load(module_exists)
@@ -70,6 +70,8 @@ a -> b::KeyClassField(ClassDefIndex(0), Name("shared"))
 a -> c::KeyClassField(ClassDefIndex(0), Name("p2"))
 a -> c::KeyClassField(ClassDefIndex(0), Name("shared"))
 a -> b::KeyClassField(ClassDefIndex(0), Name("shared"))
+a -> b::KeyClassDisjointBase(ClassDefIndex(0))
+a -> c::KeyClassDisjointBase(ClassDefIndex(0))
 a -> b::KeyClassSynthesizedFields(ClassDefIndex(0))
 a -> c::KeyClassSynthesizedFields(ClassDefIndex(0))
 ```

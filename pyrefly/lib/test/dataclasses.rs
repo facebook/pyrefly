@@ -139,6 +139,29 @@ replace(f, z=3)  # E: Unexpected keyword argument `z`
 );
 
 testcase!(
+    test_copy_replace,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import copy
+from copy import replace
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Foo:
+    x: int
+    y: str
+
+f = Foo(1, "a")
+
+assert_type(copy.replace(f, x=2), Foo)
+replace(f, y="b")
+copy.replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `Foo.__replace__`
+replace(f, z=3)  # E: Unexpected keyword argument `z`
+    "#,
+);
+
+testcase!(
     test_replace_initvar_default,
     r#"
 from dataclasses import dataclass, field, InitVar, replace
@@ -431,12 +454,458 @@ testcase!(
     test_asdict,
     r#"
 import dataclasses
+from typing import assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+    y: str
+    items: list[int]
+
+d = dataclasses.asdict(A(3, "a", [1]))
+# Subscripting the synthesized TypedDict recovers each field's precise type...
+assert_type(d["x"], int)
+assert_type(d["y"], str)
+assert_type(d["items"], list[int])
+# ...preserved all the way down: the list element type is not widened to Any.
+assert_type(d["items"][0], int)
+# The whole value coerces to dict[str, <field-type union>].
+assert_type(d, dict[str, int | str | list[int]])
+    "#,
+);
+
+testcase!(
+    test_asdict_generic,
+    r#"
+import dataclasses
+from typing import Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+
+@dataclasses.dataclass
+class Box(Generic[T]):
+    item: T
+    items: list[T]
+
+def f(b: Box[int]):
+    # The type argument is substituted into the field types, including nested ones.
+    d = dataclasses.asdict(b)
+    assert_type(d["item"], int)
+    assert_type(d["items"], list[int])
+    assert_type(d["items"][0], int)
+    "#,
+);
+
+testcase!(
+    test_asdict_union,
+    r#"
+import dataclasses
+from typing import Any, assert_type
 
 @dataclasses.dataclass
 class A:
     x: int
 
-print(dataclasses.asdict(A(x=3)))
+@dataclasses.dataclass
+class B:
+    x: str
+
+def f(ab: A | B):
+    # A union argument is not a single dataclass type, so the anonymous-TypedDict
+    # special-case does not fire and we fall back to the declared signature, which
+    # widens the value type to Any.
+    d = dataclasses.asdict(ab)
+    assert_type(d, dict[str, Any])
+    assert_type(d["x"], Any)
+    "#,
+);
+
+testcase!(
+    test_asdict_dict_factory,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+
+def factory(items: list[tuple[str, Any]]) -> list[str]:
+    return []
+
+# The `dict_factory=` overload returns the factory's result type, so the
+# anonymous-TypedDict special-case does not fire.
+result = dataclasses.asdict(A(x=3), dict_factory=factory)
+assert_type(result, list[str])
+assert_type(result[0], str)
+    "#,
+);
+
+testcase!(
+    test_asdict_nested,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class Inner:
+    a: int
+
+@dataclasses.dataclass
+class Outer:
+    inner: Inner
+    items: list[Inner]
+    n: int
+
+d = dataclasses.asdict(Outer(Inner(1), [Inner(2)], 3))
+# asdict recurses at runtime: nested dataclass instances become dicts, including
+# those inside containers, so their types collapse to dict[str, Any]. A
+# non-recursive implementation would instead type d["inner"] as `Inner`.
+assert_type(d["inner"], dict[str, Any])
+assert_type(d["items"], list[dict[str, Any]])
+assert_type(d["n"], int)
+assert_type(d, dict[str, dict[str, Any] | int | list[dict[str, Any]]])
+    "#,
+);
+
+testcase!(
+    test_asdict_recursive,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class One:
+    x: "One"
+    y: int
+
+def f(o: One):
+    # `One` is not a runtime value type -- asdict(o)["x"] is a dict -- so the
+    # self-referential field collapses to dict[str, Any] instead of expanding
+    # forever.
+    d = dataclasses.asdict(o)
+    assert_type(d["x"], dict[str, Any])
+    assert_type(d["y"], int)
+    assert_type(d, dict[str, dict[str, Any] | int])
+    "#,
+);
+
+testcase!(
+    test_asdict_mutually_recursive,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    b: "B"
+    n: int
+
+@dataclasses.dataclass
+class B:
+    a: "A"
+    m: str
+
+def f(o: A):
+    # Mutual recursion: each nested dataclass collapses to dict[str, Any].
+    d = dataclasses.asdict(o)
+    assert_type(d["b"], dict[str, Any])
+    assert_type(d["n"], int)
+    assert_type(d, dict[str, dict[str, Any] | int])
+    "#,
+);
+
+testcase!(
+    test_asdict_only_dataclasses_replaced,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class Inner:
+    a: int
+
+class Plain:  # not a dataclass: must be left untouched
+    pass
+
+@dataclasses.dataclass
+class C:
+    p: Plain
+    inner: Inner
+
+def f(o: C):
+    # Only dataclass types are rewritten; an ordinary class field is preserved.
+    d = dataclasses.asdict(o)
+    assert_type(d["p"], Plain)
+    assert_type(d["inner"], dict[str, Any])
+    assert_type(d, dict[str, Plain | dict[str, Any]])
+    "#,
+);
+
+testcase!(
+    test_asdict_dataclass_in_containers,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class Inner:
+    a: int
+
+@dataclasses.dataclass
+class C:
+    md: dict[str, Inner]
+    tp: tuple[Inner, int]
+    un: Inner | int
+    op: Inner | None
+    deep: list[dict[str, list[Inner]]]
+
+def f(o: C):
+    # The replacement traverses into every position of the type tree.
+    d = dataclasses.asdict(o)
+    assert_type(d["md"], dict[str, dict[str, Any]])
+    assert_type(d["tp"], tuple[dict[str, Any], int])
+    assert_type(d["un"], dict[str, Any] | int)
+    assert_type(d["op"], dict[str, Any] | None)
+    assert_type(d["deep"], list[dict[str, list[dict[str, Any]]]])
+    "#,
+);
+
+testcase!(
+    test_asdict_union_of_dataclasses_collapses,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    a: int
+
+@dataclasses.dataclass
+class B:
+    b: str
+
+@dataclasses.dataclass
+class C:
+    field: A | B
+
+def f(o: C):
+    # Distinct dataclasses in a union all collapse to the same dict[str, Any], so
+    # they merge into a single value type.
+    d = dataclasses.asdict(o)
+    assert_type(d["field"], dict[str, Any])
+    assert_type(d, dict[str, dict[str, Any]])
+    "#,
+);
+
+testcase!(
+    test_asdict_field_selection,
+    r#"
+import dataclasses
+from typing import ClassVar, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+    cv: ClassVar[float] = 0.0  # ClassVar: not an instance field, excluded
+    no_init: str = dataclasses.field(init=False, default="")  # init=False: still included
+    iv: dataclasses.InitVar[bytes] = b""  # InitVar: not an instance field, excluded
+
+    def __post_init__(self, iv: bytes) -> None:
+        pass
+
+d = dataclasses.asdict(A(0))
+assert_type(d["x"], int)
+assert_type(d["no_init"], str)
+# Only the instance fields x and no_init appear: the value union is int | str, so
+# the excluded ClassVar(float) and InitVar(bytes) do not leak into the type.
+assert_type(d, dict[str, int | str])
+    "#,
+);
+
+testcase!(
+    test_asdict_inherited,
+    r#"
+import dataclasses
+from typing import assert_type
+
+@dataclasses.dataclass
+class Base:
+    a: int
+
+@dataclasses.dataclass
+class Derived(Base):
+    b: str
+
+d = dataclasses.asdict(Derived(1, "x"))
+assert_type(d["a"], int)  # inherited field
+assert_type(d["b"], str)  # own field
+assert_type(d, dict[str, int | str])
+    "#,
+);
+
+testcase!(
+    test_asdict_optional,
+    r#"
+import dataclasses
+from typing import Optional, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: Optional[int]
+    y: int | None
+
+d = dataclasses.asdict(A(1, 2))
+assert_type(d["x"], int | None)
+assert_type(d["y"], int | None)
+assert_type(d, dict[str, int | None])
+    "#,
+);
+
+testcase!(
+    test_asdict_many_same_type_fields,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+# 25 fields: over the field-count cap, so we fall back to dict[str, Any]. The cap is
+# on field count (decided before building the TypedDict), so we lose precision here
+# even though every field shares a single type and could have stayed int.
+@dataclasses.dataclass
+class Many:
+    a0: int
+    a1: int
+    a2: int
+    a3: int
+    a4: int
+    a5: int
+    a6: int
+    a7: int
+    a8: int
+    a9: int
+    a10: int
+    a11: int
+    a12: int
+    a13: int
+    a14: int
+    a15: int
+    a16: int
+    a17: int
+    a18: int
+    a19: int
+    a20: int
+    a21: int
+    a22: int
+    a23: int
+    a24: int
+
+def f(o: Many):
+    d = dataclasses.asdict(o)
+    assert_type(d["a0"], Any)
+    assert_type(d, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_asdict_field_count_limit_within,
+    r#"
+import dataclasses
+from typing import assert_type
+
+# Exactly 20 fields: at the cap, so the special-case still fires and every field
+# keeps its precise type.
+@dataclasses.dataclass
+class Within:
+    a0: int
+    a1: str
+    a2: bytes
+    a3: float
+    a4: bool
+    a5: complex
+    a6: list[int]
+    a7: list[str]
+    a8: dict[str, int]
+    a9: set[int]
+    a10: frozenset[str]
+    a11: tuple[int, str]
+    a12: list[bytes]
+    a13: dict[int, str]
+    a14: set[str]
+    a15: list[float]
+    a16: list[bool]
+    a17: dict[str, bytes]
+    a18: set[bytes]
+    a19: memoryview
+
+def f(o: Within):
+    d = dataclasses.asdict(o)
+    assert_type(d["a0"], int)
+    assert_type(d["a19"], memoryview)
+    "#,
+);
+
+testcase!(
+    test_asdict_field_count_limit_exceeded,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+# 21 fields: over the cap, so we fall back to `dict[str, Any]` rather than
+# synthesize an unwieldy 21-member TypedDict.
+@dataclasses.dataclass
+class Exceeded:
+    a0: int
+    a1: str
+    a2: bytes
+    a3: float
+    a4: bool
+    a5: complex
+    a6: list[int]
+    a7: list[str]
+    a8: dict[str, int]
+    a9: set[int]
+    a10: frozenset[str]
+    a11: tuple[int, str]
+    a12: list[bytes]
+    a13: dict[int, str]
+    a14: set[str]
+    a15: list[float]
+    a16: list[bool]
+    a17: dict[str, bytes]
+    a18: set[bytes]
+    a19: memoryview
+    a20: range
+
+def f(o: Exceeded):
+    d = dataclasses.asdict(o)
+    assert_type(d["a0"], Any)
+    assert_type(d, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_asdict_mixed_union,
+    r#"
+import dataclasses
+from typing import Any, assert_type
+
+@dataclasses.dataclass
+class A:
+    x: int
+
+def f(a: A | int):
+    # A union argument is not a single dataclass type, so it falls back to the
+    # declared signature (which also flags the non-dataclass member as a bad argument).
+    d = dataclasses.asdict(a)  # E: is not assignable to parameter
+    assert_type(d, dict[str, Any])
+    "#,
+);
+
+testcase!(
+    test_asdict_not_dataclass,
+    r#"
+import dataclasses
+dataclasses.asdict(42)  # E: is not assignable to parameter
     "#,
 );
 
@@ -454,6 +923,145 @@ class B(A):
 # Overwriting x doesn't change the param order but does change its type
 B('0', 1.0)  # OK
 B(0, 1.0)  # E: Argument `Literal[0]` is not assignable to parameter `x` with type `str`
+    "#,
+);
+
+// A property that shadows an inherited field without re-annotating it must not redefine
+// the field's type or keywords (e.g. `init=False`).
+
+testcase!(
+    test_property_override_init_false_field,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = dataclasses.field(init=False)
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+# `foo` is `init=False`, inherited from `A`: it is not a constructor parameter.
+B()  # OK
+B(foo=2)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+testcase!(
+    test_classvar_override_field,
+    r#"
+import dataclasses
+from typing import ClassVar
+@dataclasses.dataclass
+class A:
+    foo: int
+@dataclasses.dataclass
+class B(A):
+    foo: ClassVar[int] = 0  # E: ClassVar `B.foo` overrides instance variable of the same name in parent class `A`
+# A `ClassVar` override removes `foo` from the constructor entirely.
+B()  # OK
+B(foo=1)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+testcase!(
+    test_property_override_field_diamond_mro,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class Base:
+    foo: int = dataclasses.field(init=False)
+@dataclasses.dataclass
+class Mixin:
+    @property
+    def foo(self) -> int:
+        return 1
+@dataclasses.dataclass
+class C(Mixin, Base):
+    pass
+# Resolution walks the MRO past `Mixin`'s property to `Base`'s `init=False` field.
+C()  # OK
+C(foo=2)  # E: Unexpected keyword argument `foo`
+    "#,
+);
+
+testcase!(
+    test_property_override_attribute_access_uses_property,
+    r#"
+import dataclasses
+from typing import assert_type
+@dataclasses.dataclass
+class A:
+    foo: int = dataclasses.field(init=False)
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> str:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return "x"
+def f(b: B):
+    # Attribute access still resolves to the property getter, not the inherited field.
+    assert_type(b.foo, str)
+    "#,
+);
+
+testcase!(
+    test_property_override_preserves_match_args,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = 0
+    bar: int = 0
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+def f(b: B):
+    # `foo` is still a field, so it stays in `__match_args__` alongside `bar`;
+    # this irrefutable two-element pattern must match without error.
+    match b:
+        case B(x, y):
+            pass
+    "#,
+);
+
+testcase!(
+    test_property_override_replace_uses_field_type,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    foo: int = 0
+@dataclasses.dataclass
+class B(A):
+    @property
+    def foo(self) -> int:  # E: Class member `B.foo` overrides parent class `A` in an inconsistent manner
+        return 1
+def f(b: B):
+    # The synthesized `__replace__` also uses the inherited field's `int` type.
+    dataclasses.replace(b, foo=10)
+    dataclasses.replace(b, foo="bad")  # E: Argument `Literal['bad']` is not assignable to parameter `foo` with type `int`
+    "#,
+);
+
+testcase!(
+    test_field_overrides_parent_property,
+    r#"
+import dataclasses
+@dataclasses.dataclass
+class A:
+    @property
+    def foo(self) -> int:
+        return 1
+@dataclasses.dataclass
+class B(A):
+    foo: int = 5
+# The reverse direction: an annotated field DOES redefine the inherited property,
+# so `foo` becomes a real constructor parameter with a default.
+B()  # OK
+B(5)  # OK
+B("x")  # E: Argument `Literal['x']` is not assignable to parameter `foo` with type `int`
     "#,
 );
 
@@ -550,15 +1158,14 @@ assert_type(c.__match_args__, tuple[Literal['x']])  # Ok
 );
 
 testcase!(
-    bug = "TODO: consider erroring on unannotated attributes",
+    bug = "TODO: consider erroring on a plain unannotated assignment like `y = 3`",
     test_unannotated_attribute,
     r#"
 import dataclasses
 @dataclasses.dataclass
 class C:
-    # Not annotating a field with value dataclasses.field(...) is a runtime error, so we should
-    # probably error on this.
-    x = dataclasses.field()
+    # Not annotating a field with value dataclasses.field(...) is a runtime error.
+    x = dataclasses.field()  # E: `x` is a dataclass field but has no type annotation
     # This is confusing and likely indicative of a programming error; consider erroring on this, too.
     y = 3
     "#,
@@ -710,6 +1317,18 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class C:
     x: list[str] = field(default_factory=list)
+    "#,
+);
+
+// `default` and `default_factory` are mutually exclusive at runtime; typeshed's
+// `dataclasses.field` overloads already reject passing both, so no extra check is needed.
+testcase!(
+    test_dataclass_field_default_and_default_factory_conflict,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = field(default=1, default_factory=int)  # E: not assignable to parameter `default_factory`
     "#,
 );
 
@@ -1376,9 +1995,27 @@ class B:
     b: str = "default"
 
 @dataclass
-class C(A, B):
+class C(A, B):  # E: Dataclass field `a` without a default may not follow dataclass field with a default
     c: float = field(kw_only=True)  # OK - kw_only
     d: bool  # E: Dataclass field `d` without a default may not follow dataclass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_inherited_conflict_not_repeated_on_subclass,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class HasDefault:
+    a: int = 0
+
+@dataclass
+class Origin(HasDefault):
+    b: int  # E: Dataclass field `b` without a default may not follow dataclass field with a default
+
+@dataclass
+class Sub(Origin):
+    pass
     "#,
 );
 
@@ -1702,6 +2339,37 @@ c = C()
 );
 
 testcase!(
+    test_non_data_descriptor_returns_own_class,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+# A __get__ returning the descriptor's own class (not literal Self) is sound.
+class Dev:
+    def __get__(self, obj, cls) -> "Dev": ...
+
+class Other: ...
+class Bad:
+    def __get__(self, obj, cls) -> Other: ...
+
+@dataclass
+class Base:
+    x: Dev = Dev()
+
+@dataclass
+class Sub(Base):
+    pass
+
+@dataclass
+class C:
+    y: Bad = Bad()  # E: Cannot set field `y` to non-data descriptor `Bad`
+
+assert_type(Base().x, Dev)
+assert_type(Sub().x, Dev)
+    "#,
+);
+
+testcase!(
     test_data_descriptor_in_dataclass,
     r#"
 from dataclasses import dataclass
@@ -1859,6 +2527,41 @@ class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all ot
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_protocol_fields_in_subclass,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass
+class Base(Protocol):  # E: `@dataclass` cannot be applied to Protocol
+    x: int
+
+@dataclass
+class Child(Base):
+    y: str
+
+Base(0)  # E: Cannot instantiate `Base` because it is a protocol
+Child(x=0, y="ok")
+Child(0, "ok")
+Child("bad", "ok")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `Child.__init__`
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3751
+testcase!(
+    test_dataclass_decorator_on_named_tuple,
+    r#"
+from dataclasses import dataclass
+from typing import NamedTuple
+
+@dataclass
+class Foo(NamedTuple):  # E: Cannot apply `@dataclass` to NamedTuple
+    x: int
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/2920
 testcase!(
     test_frozen_dataclass_override_setattr_delattr,
@@ -1924,5 +2627,72 @@ class Mutable:
 
     def __setattr__(self, name: str, val: object) -> None: ...
     def __delattr__(self, name: str) -> None: ...
+"#,
+);
+
+testcase!(
+    test_field_without_annotation,
+    r#"
+from dataclasses import dataclass, field
+from typing import ClassVar
+
+@dataclass
+class HasUnannotatedField:
+    idx = field(default=1)  # E: `idx` is a dataclass field but has no type annotation
+    another: int
+
+@dataclass
+class HasAnnotatedField:
+    another: int
+    idx: int = field(default=1)  # !E: type annotation
+
+@dataclass
+class HasClassVarField:
+    x: ClassVar[int] = field(default=1)  # !E: type annotation
+
+class NotADataclass:
+    # Outside a dataclass, an unannotated `field()` is just an ordinary assignment.
+    x = field(default=1)  # !E: type annotation
+
+def user_defined_field() -> None:
+    # A user-defined `field` is not a recognized field specifier, so an
+    # unannotated assignment to it is fine even inside a dataclass.
+    def field(default: int = 0) -> int:
+        return default
+    @dataclass
+    class C:
+        x = field(default=1)  # !E: type annotation
+"#,
+);
+
+// Unlike attrs, a stdlib dataclass does NOT strip leading underscores from a private
+// field's `__init__` parameter.
+testcase!(
+    test_dataclass_private_field_keeps_underscore,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass
+class C:
+    _x: int
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, _x: int) -> None
+"#,
+);
+
+// A dataclass field named 'self" must not collide with the implicit "self" parameter of the synthesized "__init__". cpython renames the instance param to "__dataclass_self__".
+testcase!(
+    test_dataclass_field_named_self,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class C:
+    self: str
+
+c = C(self="test")
+assert_type(c.self, str)
 "#,
 );

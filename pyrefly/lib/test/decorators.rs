@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::sys_info::PythonVersion;
+
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -319,6 +321,41 @@ class C:
 
 # `f` is `Any` now, we should be able to call it with anything and get back `Any`.
 assert_type(C().f("any", b"thing"), Any)
+    "#,
+);
+
+testcase!(
+    test_class_decorator_returning_type_any,
+    r#"
+from typing import Any, assert_type
+
+def erase_class(cls: type[Any]) -> type[Any]: ...
+def inferred_type_any(cls: type[Any]): return cls
+def returns_any(cls: type[Any]) -> Any: ...
+
+# Only an explicit `-> type[Any]` return annotation erases the class interface.
+@erase_class
+class C:
+    def __init__(self, x: int) -> None: ...
+
+assert_type(C, type[Any])
+assert_type(C(unknown=1, arbitrary="x"), Any)
+
+# An inferred `type[Any]` return type must not erase the class interface.
+@inferred_type_any
+class D:
+    def __init__(self, x: int) -> None: ...
+
+D(x=1)
+D(x=1, unknown=2)  # E: Unexpected keyword argument `unknown`
+
+# A bare `Any` return type (not `type[Any]`) must not erase the class interface.
+@returns_any
+class E:
+    def __init__(self, x: int) -> None: ...
+
+E(x=1)
+E(x=1, unknown=2)  # E: Unexpected keyword argument `unknown`
     "#,
 );
 
@@ -764,5 +801,331 @@ def test2(a: int, b: int) -> int:
 
 assert_type(test1(1, 2), int)
 assert_type(test2(1, 2), int)
+"#,
+);
+
+testcase!(
+    test_disjoint_base_decorator_misuse,
+    r#"
+from typing import NamedTuple, Protocol, TypedDict, assert_never
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Nominal:
+    pass
+
+@disjoint_base
+class Row(NamedTuple):
+    x: int
+
+@disjoint_base  # E: `@disjoint_base` cannot be applied to a function
+def f() -> None:
+    pass
+
+class C:
+    @disjoint_base  # E: `@disjoint_base` cannot be applied to a function
+    def m(self) -> None:
+        pass
+
+@disjoint_base  # E: `@disjoint_base` cannot be applied to a TypedDict
+class Movie(TypedDict):
+    name: str
+
+@disjoint_base  # E: `@disjoint_base` cannot be applied to a Protocol
+class SupportsClose(Protocol):
+    def close(self) -> None:
+        ...
+
+@disjoint_base  # E: `@disjoint_base` cannot be applied to a Protocol
+class BadProto(Protocol):
+    pass
+
+@disjoint_base
+class Other:
+    pass
+
+def keep_invalid_protocol_out_of_disjoint_base(x: BadProto) -> None:
+    if isinstance(x, Other):
+        # If `@disjoint_base` on a Protocol were honored, the intersection of
+        # the two disjoint bases would narrow `x` to `Never` and `assert_never`
+        # would be silently accepted. The error here proves the Protocol was
+        # NOT marked as a disjoint base.
+        assert_never(x)  # E: not assignable to parameter `arg` with type `Never`
+
+# A concrete (non-Protocol) class extending `BadProto` should not error, since
+# the rejected `@disjoint_base` on `BadProto` is not inherited.
+class ConcreteFromBadProto(BadProto):
+    pass
+"#,
+);
+
+testcase!(
+    test_disjoint_base_decorator_misuse_from_typing,
+    TestEnv::new_with_version(PythonVersion::new(3, 15, 0)),
+    r#"
+from typing import Protocol, disjoint_base
+
+@disjoint_base  # E: `@disjoint_base` cannot be applied to a function
+def f() -> None:
+    pass
+
+@disjoint_base  # E: `@disjoint_base` cannot be applied to a Protocol
+class P(Protocol):
+    pass
+"#,
+);
+
+testcase!(
+    test_disjoint_base_incompatible_inheritance,
+    r#"
+from typing import NamedTuple
+from typing_extensions import disjoint_base
+
+@disjoint_base
+class Left: ...
+
+@disjoint_base
+class Right: ...
+
+@disjoint_base
+class Third: ...
+
+@disjoint_base
+class LeftChild(Left): ...
+
+@disjoint_base
+class Record(NamedTuple):
+    value: int
+
+class Plain: ...
+
+class LeftOnly(Left, Plain): ...
+class MostSpecific(LeftChild, Left): ...
+
+class LeftA(Left): ...
+class LeftB(Left): ...
+class SameRepresentative(LeftA, LeftB): ...
+
+class LeftAndObject(Left, object): ...
+class LeftAndInt(Left, int): ...  # E: incompatible disjoint bases
+
+class Bad(Left, Right): ...  # E: inherits from incompatible disjoint bases `Left`, `Right`
+class BadThree(Left, Right, Third): ...  # E: inherits from incompatible disjoint bases `Left`, `Right`, `Third`
+class BadViaChild(LeftChild, Right): ...  # E: incompatible disjoint bases
+class BadViaLeftOnly(LeftOnly, Right): ...  # E: incompatible disjoint bases
+# `Bad` cached `Left` (its first direct base), so re-conflicts with `Right`
+# but not with `Left`.
+class BadViaInvalidIntermediate(Bad, Right): ...  # E: incompatible disjoint bases
+class BadViaInvalidIntermediateCompatible(Bad, Left): ...
+
+class LeftRecord(Left, Record): ...  # E: incompatible disjoint bases
+
+@disjoint_base
+class DecoratedBad(Left, Right): ...  # E: incompatible disjoint bases
+
+# `Right` is already in `DecoratedBad`'s MRO, so no new conflict.
+class CascadingFromDecoratedBad(DecoratedBad, Right): ...
+"#,
+);
+
+// `@dataclass(slots=True)` promotes a class to its own disjoint-base
+// representative only when synthesis produces a fresh slot name. A bare
+// `@dataclass` middle class must not re-credit its grandparent's slots.
+testcase!(
+    test_disjoint_base_dataclass_slots_through_bare_middle_class,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class A:
+    x: int
+
+@dataclass
+class B(A): ...
+
+@dataclass(slots=True)
+class CNoNew(B): ...
+
+@dataclass(slots=True)
+class CNew(B):
+    y: int
+
+class Other:
+    __slots__ = ("z",)
+
+# CNoNew inherits `A` as representative (no fresh slot synthesized).
+class MixNoNew(CNoNew, Other): ...  # E: incompatible disjoint bases `A`, `Other`
+# CNew synthesizes `y`, becoming its own representative.
+class MixNew(CNew, Other): ...  # E: incompatible disjoint bases `CNew`, `Other`
+"#,
+);
+
+testcase!(
+    test_unannotated_class_decorator_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+def my_decorator(cls):
+    return cls
+
+@my_decorator
+class A: ...
+"#,
+);
+
+testcase!(
+    test_typed_class_decorator_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+
+def typed(cls: type[T]) -> type[T]:
+    return cls
+
+@typed
+class B: ...
+"#,
+);
+
+testcase!(
+    test_class_decorator_explicit_any_return_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+from typing import Any
+
+def anydec(cls) -> Any: ...
+
+@anydec
+class C: ...
+"#,
+);
+
+testcase!(
+    test_unannotated_callable_instance_class_decorator_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+class Decorator:
+    def __call__(self, cls):
+        return cls
+
+@Decorator()
+class D: ...
+"#,
+);
+
+testcase!(
+    test_implicit_any_class_decorator,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+def untyped(x):
+    return x
+
+d = untyped(1)
+
+@d  # E: Untyped class decorator
+class C: ...
+"#,
+);
+
+testcase!(
+    test_untyped_function_decorator,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+@my_decorator  # E: Untyped function decorator obscures the type of function `g`
+def g() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_untyped_method_decorator,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+class C:
+    @my_decorator  # E: Untyped function decorator obscures the type of function `m`
+    def m(self) -> int:
+        return 1
+"#,
+);
+
+testcase!(
+    test_unannotated_function_decorator_no_error,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+# An unannotated decorator function's own type is a callable, not `Any`, so it does not
+# fire (matching the class-decorator rule).
+def my_decorator(f):
+    return f
+
+@my_decorator
+def g() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_typed_function_decorator_no_error,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Callable
+
+def typed(f: Callable[[], int]) -> Callable[[], int]:
+    return f
+
+@typed
+def h() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_function_decorator_explicit_any_return_no_error,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+def anydec(f) -> Any: ...
+
+@anydec
+def k() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_implicit_any_function_decorator,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+def untyped(x):
+    return x
+
+# `d` has an implicit `Any` type (from an untyped call), which obscures the function too.
+d = untyped(1)
+
+@d  # E: Untyped function decorator obscures the type of function `g`
+def g() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_untyped_function_decorator_suppressed,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+@my_decorator  # pyrefly: ignore[untyped-function-decorator]
+def g() -> int:
+    return 1
 "#,
 );

@@ -7,5 +7,6 @@
 
 #![cfg(test)]
 mod attributes;
+mod define;
 mod fields;
 mod util;

@@ -334,7 +334,7 @@ impl Error {
                 Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
             }),
             source: Some("Pyrefly".to_owned()),
-            message: self.msg().to_owned(),
+            message: self.msg().to_owned().into(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
             tags: if self.error_kind() == ErrorKind::Deprecated {
@@ -356,15 +356,21 @@ impl Error {
 }
 
 #[cfg(test)]
-pub fn print_errors(project_root: &Path, errors: &[Error]) -> io::Result<()> {
-    let stdout = anstream::stdout();
-    let color_choice = stdout.current_choice();
-    let mut renderer = ErrorRenderer::new(stdout.lock(), color_choice);
-    for err in errors {
-        renderer.write(err, project_root, true)?;
-        renderer.flush()?;
+pub fn print_errors(project_root: &Path, errors: &[Error]) {
+    let mut buf = Vec::new();
+    {
+        let mut renderer = ErrorRenderer::new(&mut buf, anstream::stdout().current_choice());
+        for err in errors {
+            renderer.write(err, project_root, true).unwrap();
+        }
+        renderer.flush().unwrap();
     }
-    Ok(())
+    // Use print! so Rust's test runner captures the output and shows it
+    // on test failure. Direct writes to stdout (e.g. via ErrorRenderer +
+    // stdout.lock()) bypass test capture and are invisible in test output.
+    if !buf.is_empty() {
+        print!("{}", String::from_utf8_lossy(&buf));
+    }
 }
 
 fn count_error_kinds(errors: &[Error]) -> Vec<(ErrorKind, usize)> {

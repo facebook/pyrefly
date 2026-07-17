@@ -77,6 +77,22 @@ impl Visit<Type> for Class {
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
+/// `attr.ib`/`attrib` honor a `type=` argument and accept a positional default; `field` neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttrsFieldSpecifierKind {
+    Attrib,
+    Field,
+}
+
+/// Bundling these with the specifier keeps them unrepresentable without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttrsFieldSpecifier {
+    pub kind: AttrsFieldSpecifierKind,
+    pub default_is_nothing: bool,
+    pub default_decorator_method_range: Option<TextRange>,
+    pub converter_decorator_method_range: Option<TextRange>,
+}
+
 /// Simple properties of class fields that can be attached to the class definition. Note that this
 /// does not include the type of a field, which needs to be computed lazily to avoid a recursive loop.
 #[derive(Debug, Clone)]
@@ -86,6 +102,7 @@ pub struct ClassFieldProperties {
     is_initialized_on_class: bool,
     // The field is defined in the class body (not in a method via self.x = ...)
     is_defined_in_class_body: bool,
+    attrs_field_specifier: Option<AttrsFieldSpecifier>,
     range: TextRange,
     // The range of the docstring following this field, if present
     docstring_range: Option<TextRange>,
@@ -101,6 +118,7 @@ impl ClassFieldProperties {
         is_annotated: bool,
         has_default_value: bool,
         is_defined_in_class_body: bool,
+        attrs_field_specifier: Option<AttrsFieldSpecifier>,
         range: TextRange,
         docstring_range: Option<TextRange>,
     ) -> Self {
@@ -108,6 +126,7 @@ impl ClassFieldProperties {
             is_annotated,
             is_initialized_on_class: has_default_value,
             is_defined_in_class_body,
+            attrs_field_specifier,
             range,
             docstring_range,
         }
@@ -151,6 +170,10 @@ impl ClassFields {
         self.0.contains_key(name)
     }
 
+    pub fn get_index_of(&self, name: &Name) -> Option<usize> {
+        self.0.get_index_of(name)
+    }
+
     pub fn fields(&self) -> impl ExactSizeIterator<Item = &Name> {
         self.0.keys()
     }
@@ -173,6 +196,47 @@ impl ClassFields {
 
     pub fn is_field_annotated(&self, name: &Name) -> bool {
         self.0.get(name).is_some_and(|prop| prop.is_annotated)
+    }
+
+    pub fn is_attrs_field_specifier(&self, name: &Name) -> bool {
+        self.0
+            .get(name)
+            .is_some_and(|prop| prop.attrs_field_specifier.is_some())
+    }
+
+    pub fn default_is_attrs_nothing(&self, name: &Name) -> bool {
+        self.0.get(name).is_some_and(|prop| {
+            prop.attrs_field_specifier
+                .is_some_and(|s| s.default_is_nothing)
+        })
+    }
+
+    pub fn default_is_attrs_decorator(&self, name: &Name) -> bool {
+        self.attrs_default_decorator_method_range(name).is_some()
+    }
+
+    /// The name range of this field's `@<field>.default` method, if any.
+    pub fn attrs_default_decorator_method_range(&self, name: &Name) -> Option<TextRange> {
+        self.0
+            .get(name)
+            .and_then(|prop| prop.attrs_field_specifier)
+            .and_then(|s| s.default_decorator_method_range)
+    }
+
+    /// The name range of this field's first `@<field>.converter` method, if any.
+    pub fn attrs_converter_decorator_method_range(&self, name: &Name) -> Option<TextRange> {
+        self.0
+            .get(name)
+            .and_then(|prop| prop.attrs_field_specifier)
+            .and_then(|s| s.converter_decorator_method_range)
+    }
+
+    /// Whether the field's attrs specifier honors a `type=` argument (`attr.ib`, not `field`).
+    pub fn attrs_specifier_honors_type(&self, name: &Name) -> bool {
+        self.0.get(name).is_some_and(|prop| {
+            prop.attrs_field_specifier
+                .is_some_and(|s| s.kind == AttrsFieldSpecifierKind::Attrib)
+        })
     }
 
     pub fn is_field_initialized_on_class(&self, name: &Name) -> bool {
