@@ -638,10 +638,16 @@ fn test_did_change_workspace_folder() {
     interaction.shutdown().expect("Failed to shutdown");
 }
 
-fn get_diagnostics_result() -> serde_json::Value {
+fn get_diagnostics_result(file_uri: &Url) -> serde_json::Value {
+    let uri = file_uri.as_str();
     json!({"items": [
             {"code":"unsupported-operation","codeDescription":{"href":"https://pyrefly.org/en/docs/error-kinds/#unsupported-operation"},"message":"`+` is not supported between `Literal[1]` and `Literal['']`\n  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`",
-            "range":{"end":{"character":6,"line":5},"start":{"character":0,"line":5}},"severity":1,"source":"Pyrefly"}],"kind":"full"
+            "range":{"end":{"character":6,"line":5},"start":{"character":0,"line":5}},
+            "relatedInformation":[
+                {"location":{"range":{"end":{"character":1,"line":5},"start":{"character":0,"line":5}},"uri":uri},"message":"has type `Literal[1]`"},
+                {"location":{"range":{"end":{"character":6,"line":5},"start":{"character":4,"line":5}},"uri":uri},"message":"has type `Literal['']`"}
+            ],
+            "severity":1,"source":"Pyrefly"}],"kind":"full"
     })
 }
 
@@ -952,10 +958,11 @@ fn test_diagnostics_default_workspace_with_config() {
 
     interaction.client.did_open("type_errors.py");
 
+    let type_errors_uri = Url::from_file_path(root.join("type_errors.py")).unwrap();
     interaction
         .client
         .diagnostic("type_errors.py")
-        .expect_response(get_diagnostics_result())
+        .expect_response(get_diagnostics_result(&type_errors_uri))
         .expect("Failed to receive expected response");
 
     interaction.client.did_change_configuration();
@@ -1040,10 +1047,15 @@ fn test_diagnostics_file_not_in_includes() {
         .did_open("diagnostics_file_not_in_includes/type_errors_include.py");
 
     // prove that it works for a project included
+    let include_uri = Url::from_file_path(
+        root.path()
+            .join("diagnostics_file_not_in_includes/type_errors_include.py"),
+    )
+    .unwrap();
     interaction
         .client
         .diagnostic("diagnostics_file_not_in_includes/type_errors_include.py")
-        .expect_response(get_diagnostics_result())
+        .expect_response(get_diagnostics_result(&include_uri))
         .expect("Failed to receive expected response");
 
     // prove that it ignores a file not in project includes
@@ -1078,10 +1090,15 @@ fn test_diagnostics_file_in_excludes() {
         .did_open("diagnostics_file_in_excludes/type_errors_include.py");
 
     // prove that it works for a project included
+    let include_uri = Url::from_file_path(
+        root.path()
+            .join("diagnostics_file_in_excludes/type_errors_include.py"),
+    )
+    .unwrap();
     interaction
         .client
         .diagnostic("diagnostics_file_in_excludes/type_errors_include.py")
-        .expect_response(get_diagnostics_result())
+        .expect_response(get_diagnostics_result(&include_uri))
         .expect("Failed to receive expected response");
 
     // prove that it ignores a file not in project includes
