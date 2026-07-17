@@ -62,6 +62,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::state::state::Transaction;
 use crate::state::state::TransactionHandle;
 
@@ -113,14 +114,7 @@ impl HoverValue {
 
     fn resolve_symbol_kind(&self) -> Option<SymbolKind> {
         match self.kind {
-            Some(SymbolKind::Attribute) if self.type_.is_toplevel_callable() => self
-                .type_
-                .visit_toplevel_func_metadata(&|meta| match &meta.kind {
-                    FunctionKind::Def(func) if func.cls.is_some() => Some(SymbolKind::Method),
-                    _ => Some(SymbolKind::Function),
-                })
-                .unwrap_or(SymbolKind::Method)
-                .into(),
+            Some(SymbolKind::Attribute) => Some(attribute_symbol_kind_from_type(&self.type_)),
             Some(other) => Some(other),
             None => None,
         }
@@ -538,6 +532,56 @@ fn type_parameter_hover_display(
     ))
 }
 
+fn class_hover_display(
+    solver: &AnswersSolver<TransactionHandle<'_>>,
+    type_: &Type,
+    name_for_display: Option<&str>,
+) -> Option<String> {
+    let enum_class = match type_ {
+        Type::ClassDef(cls) => Some(cls),
+        Type::ClassType(cls) => Some(cls.class_object()),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(cls.class_object()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(cls) = enum_class
+        && solver.get_metadata_for_class(cls).is_enum()
+    {
+        let members: Vec<Type> = solver
+            .get_enum_members(cls)
+            .into_iter()
+            .map(|lit| lit.to_implicit_type())
+            .collect();
+        let enum_display_type = if members.is_empty() {
+            type_.clone()
+        } else {
+            solver.heap.mk_union(members)
+        };
+        return Some(
+            enum_display_type
+                .as_lsp_string_with_fallback_name(name_for_display, LspDisplayMode::Hover),
+        );
+    }
+
+    let mut constructor = match type_ {
+        Type::ClassDef(cls) if !solver.get_metadata_for_class(cls).is_typed_dict() => Some(
+            solver
+                .type_order()
+                .constructor_to_callable(&solver.promote_nontypeddict_silently_to_classtype(cls)),
+        ),
+        Type::Type(t) => match &**t {
+            Type::ClassType(cls) => Some(solver.type_order().constructor_to_callable(cls)),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    constructor = solver.for_display(constructor);
+    Some(constructor.as_lsp_string_with_fallback_name(name_for_display, LspDisplayMode::Hover))
+}
+
 fn parameter_documentation_for_callee(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -700,7 +744,8 @@ pub fn get_hover(
 
     let mut type_ = transaction
         .subscript_operator_type_at(handle, position)
-        .or_else(|| transaction.get_type_at_for_display(handle, position))?;
+        .or_else(|| transaction.get_type_at_for_display(handle, position))
+        .or_else(|| transaction.operator_type_at(handle, position))?;
 
     // Helper function to check if we're hovering over a callee and get its range
     let find_callee_range_at_position = || -> Option<TextRange> {
@@ -791,29 +836,11 @@ pub fn get_hover(
             {
                 return display;
             }
-            if show_constructor {
-                let constructor = match cloned {
-                    Type::ClassDef(ref cls)
-                        if !solver.get_metadata_for_class(cls).is_typed_dict() =>
-                    {
-                        Some(solver.type_order().constructor_to_callable(
-                            &solver.promote_nontypeddict_silently_to_classtype(cls),
-                        ))
-                    }
-                    Type::Type(ref t) if let Type::ClassType(cls) = &**t => {
-                        Some(solver.type_order().constructor_to_callable(cls))
-                    }
-                    _ => None,
-                };
-                if let Some(mut constructor) = constructor {
-                    constructor.transform_toplevel_callable(|c| {
-                        expand_callable_kwargs_for_hover(&solver, c)
-                    });
-                    return constructor.as_lsp_string_with_fallback_name(
-                        name_for_display.as_deref(),
-                        LspDisplayMode::Hover,
-                    );
-                }
+            if show_constructor
+                && let Some(display) =
+                    class_hover_display(&solver, &cloned, name_for_display.as_deref())
+            {
+                return display;
             }
             cloned.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(&solver, c));
             cloned.as_lsp_string_with_fallback_name(

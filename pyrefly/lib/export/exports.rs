@@ -55,8 +55,8 @@ pub trait LookupExport {
     /// Get deprecation info for an export. Records a dependency on `name` from `module` regardless of if it exists.
     fn get_deprecated(&self, module: ModuleName, name: &Name) -> Option<Deprecation>;
 
-    /// Check if an export is a re-export from another module. Records a dependency on `name` from `module` regardless of if it exists.
-    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool;
+    /// If `name` is a re-export, return the module it is re-exported from. Records a dependency on `name` from `module` regardless of if it exists.
+    fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName>;
 
     /// Check if an export is a special export. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_special_export(&self, module: ModuleName, name: &Name) -> Option<SpecialExport>;
@@ -497,8 +497,8 @@ mod tests {
             None
         }
 
-        fn is_reexport(&self, _module: ModuleName, _name: &Name) -> bool {
-            false
+        fn reexport_source(&self, _module: ModuleName, _name: &Name) -> Option<ModuleName> {
+            None
         }
 
         fn docstring_range(&self, _module: ModuleName, _name: &Name) -> Option<TextRange> {

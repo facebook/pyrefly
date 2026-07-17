@@ -9,10 +9,12 @@ mod init;
 
 mod basic;
 mod call_hierarchy;
+mod code_action_markdown_diagnostic;
 mod code_lens;
 mod completion;
 mod configuration;
 mod convert_module_package;
+mod cross_file_invalidation_project_mode;
 mod definition;
 mod diagnostic;
 mod did_change;

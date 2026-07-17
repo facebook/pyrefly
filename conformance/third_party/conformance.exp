@@ -3017,7 +3017,7 @@
       "code": -2,
       "column": 14,
       "concise_description": "Could not find name `var`",
-      "description": "Could not find name `var`\n  Did you mean `vars`?",
+      "description": "Could not find name `var`\n  Did you mean `var1`?",
       "line": 40,
       "name": "unknown-name",
       "severity": "error",

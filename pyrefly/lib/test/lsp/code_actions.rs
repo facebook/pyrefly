@@ -682,8 +682,14 @@ my_export
 
 #[test]
 fn prefer_public_stdlib_module_for_reexports() {
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", "BytesIO\n# ^")], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", "BytesIO\n# ^"),
+            ("_io", "class BytesIO: pass\n"),
+            ("io", "from _io import BytesIO as BytesIO\n"),
+        ],
+        get_test_report,
+    );
     assert_eq!(
         r#"
 # main.py
@@ -746,6 +752,12 @@ BytesIO
 # pyrefly: ignore [unknown-name]
 BytesIO
 # ^
+
+
+
+# _io.py
+
+# io.py
 "#
         .trim(),
         report.trim(),
@@ -1472,22 +1484,12 @@ fn test_import_from_stdlib() {
         &[("a", "TypeVar('T')\n# ^")],
         get_test_report,
     );
-    // TODO: Ideally `typing` would be preferred over `ast`.
     assert_eq!(
         r#"
 # a.py
 1 | TypeVar('T')
       ^
 Code Actions Results:
-# Title: Insert import: `from ast import TypeVar`
-
-## Before:
-TypeVar('T')
-# ^
-## After:
-from ast import TypeVar
-TypeVar('T')
-# ^
 # Title: Insert import: `from typing import TypeVar`
 
 ## Before:
@@ -3841,7 +3843,36 @@ def greet(name, param):
     )
 
 def caller():
-    greet("Ada", "Hello " + ("Ada"))
+    greet("Ada", "Hello " + "Ada")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_parenthesizes_int_before_attribute() {
+    let code = r#"
+def f(x):
+    return (
+        # EXTRACT-START
+        x.bit_length()
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def f(x, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42, (42).bit_length())
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3872,7 +3903,7 @@ def add_one(x, param):
     return param
 
 def caller():
-    add_one(3, (3) + 1)
+    add_one(3, 3 + 1)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3911,7 +3942,7 @@ class Greeter:
 
 def caller():
     greeter = Greeter()
-    greeter.greet("Ada", greeter.prefix + ("Ada"))
+    greeter.greet("Ada", greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3940,7 +3971,7 @@ def mix(x, *, param, y):
     )
 
 def caller():
-    mix(1, param=(1) + (2), y=2)
+    mix(1, param=1 + 2, y=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4002,7 +4033,7 @@ class Utils:
         )
 
 def caller():
-    Utils.join("Hi ", "Ada", ("Hi ") + ("Ada"))
+    Utils.join("Hi ", "Ada", "Hi " + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4031,7 +4062,7 @@ def add(a, b, param):
     )
 
 def caller():
-    add(1, param=(1) + (2), b=2)
+    add(1, param=1 + 2, b=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4068,7 +4099,7 @@ class Greeter:
         )
 
 def caller():
-    Greeter.greet("Ada", Greeter.prefix + ("Ada"))
+    Greeter.greet("Ada", Greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4414,6 +4445,118 @@ def compute():
 }
 
 #[test]
+fn inline_variable_parens_for_bin_op_in_attribute() {
+    let code = r#"
+value = 1 + 3
+result = value.real
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = (1 + 3).real
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_no_parens_for_number_literal() {
+    let code = r#"
+value = 42
+result = value + 1
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = 42 + 1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_number_literal_in_attribute() {
+    let code = r#"
+def compute():
+    value = 42
+    result = value.bit_length()
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = (42).bit_length()
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_no_parens_for_float_literal_in_attribute() {
+    let code = r#"
+def compute():
+    value = 4.2
+    result = value.hex()
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 4.2.hex()
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_bool_op() {
+    let code = r#"
+def compute(a, b, c):
+    value = a and b
+    result = value or c
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute(a, b, c):
+    result = (a and b) or c
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_tuple() {
+    let code = r#"
+def compute():
+    value = 1, 2
+    result = len(value)
+#                ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = len((1, 2))
+#                ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
 fn inline_method_basic_refactor() {
     let code = r#"
 def add(a, b):
@@ -4586,7 +4729,7 @@ def compute():
     let expected = r#"
 def add(a):
 #          ^
-    return a + (2)
+    return a + 2
 
 def compute():
     return add(1)

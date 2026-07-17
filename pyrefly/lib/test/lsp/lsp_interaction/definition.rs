@@ -15,6 +15,7 @@ use lsp_types::Position;
 use lsp_types::Range;
 use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use pyrefly::lsp::non_wasm::protocol::Message;
 use pyrefly::lsp::non_wasm::protocol::Request;
 use serde_json::json;
@@ -22,6 +23,7 @@ use tempfile::TempDir;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::util::bundled_typeshed_path;
 use crate::util::expect_definition_points_to_symbol;
 use crate::util::get_test_files_root;
@@ -651,7 +653,13 @@ fn definition_relative_import_with_nested_config() {
         .join("nested_config_relative_import/src")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -710,7 +718,10 @@ fn thrift_go_to_def_navigates_to_thrift_source() {
         None
     });
 
-    let mut interaction = LspInteraction::new_with_thrift_remapper(Some(thrift_remapper));
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        thrift_remapper: Some(thrift_remapper),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -765,7 +776,13 @@ fn definition_relative_import_with_nested_config_workspace_at_root() {
         .join("nested_config_relative_import")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -802,7 +819,13 @@ fn definition_relative_import_outside_search_path() {
         .join("relative_import_outside_search_path")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
@@ -846,7 +869,13 @@ fn definition_site_packages_relative_import() {
         .join("site_packages_relative_import")
         .to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path);
     interaction
         .initialize(InitializeSettings {
