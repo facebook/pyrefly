@@ -20,6 +20,7 @@ use pyrefly_util::arc_id::ArcId;
 use starlark_map::small_map::SmallMap;
 
 use crate::module::bundled::BundledStub;
+use crate::module::bundled::bundled_module_path_is_preferred;
 use crate::module::bundled::create_bundled_stub_config;
 
 #[derive(Debug, Clone)]
@@ -45,8 +46,12 @@ impl BundledStub for BundledTypeshedThirdParty {
                 .get(&relative_path)
                 .map(|s| ModuleName::from_str(s))
                 .unwrap_or_else(|| ModuleName::from_name(&module_name.first_component()));
-            res.find
-                .insert(module_name, (relative_path.clone(), package_name));
+            if res.find.get(&module_name).is_none_or(|(existing, _)| {
+                bundled_module_path_is_preferred(&relative_path, existing)
+            }) {
+                res.find
+                    .insert(module_name, (relative_path.clone(), package_name));
+            }
             res.load.insert(relative_path, Arc::new(contents));
         }
         Ok(res)

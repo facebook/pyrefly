@@ -24,6 +24,7 @@ use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
 use crate::module::bundled::BundledStub;
+use crate::module::bundled::bundled_module_path_is_preferred;
 use crate::module::bundled::create_bundled_stub_config;
 
 #[derive(Debug, Clone)]
@@ -41,7 +42,13 @@ impl BundledStub for BundledTypeshedStdlib {
         };
         for (relative_path, contents) in contents {
             let module_name = ModuleName::from_relative_path(&relative_path)?;
-            res.find.insert(module_name, relative_path.clone());
+            if res
+                .find
+                .get(&module_name)
+                .is_none_or(|existing| bundled_module_path_is_preferred(&relative_path, existing))
+            {
+                res.find.insert(module_name, relative_path.clone());
+            }
             res.load.insert(relative_path, Arc::new(contents));
         }
         Ok(res)

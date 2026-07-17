@@ -116,6 +116,43 @@ fn hover_shows_third_party_function_name() {
 }
 
 #[test]
+fn hover_shows_bundled_pandas_function_type() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("pandas_read_csv_hover"));
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("test.py");
+    interaction
+        .client
+        .definition("test.py", 2, 5)
+        .expect_definition_response_from_root(
+            "site_packages/pandas/io/parsers/readers.py",
+            0,
+            4,
+            0,
+            12,
+        )
+        .unwrap();
+    interaction
+        .client
+        .hover("test.py", 2, 5)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| {
+                text.contains("read_csv:") && !text.contains("read_csv: Unknown")
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_hover_import() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
