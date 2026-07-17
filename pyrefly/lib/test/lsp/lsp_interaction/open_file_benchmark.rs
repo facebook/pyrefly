@@ -32,11 +32,11 @@ use std::time::Instant;
 use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
 use pyrefly::commands::lsp::LspArgs;
-use pyrefly_util::telemetry::NoTelemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 
 /// Peak resident set size of this process in bytes, read from `VmHWM` in
 /// `/proc/self/status`. The LSP server runs in a thread of this process, so its
@@ -102,8 +102,11 @@ fn test_open_file_time_to_first_diagnostics() {
     // use the maximum on a high-core box we pass the raw core count explicitly.
     let cores = available_parallelism().map(|n| n.get()).unwrap_or(1);
     let thread_count = ThreadCount::NumThreads(NonZeroUsize::new(cores).unwrap());
-    let mut interaction =
-        LspInteraction::new_with_args(args, NoTelemetry, Some(thread_count), None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args,
+        thread_count,
+        ..Default::default()
+    });
     interaction.set_root(root.clone());
 
     interaction

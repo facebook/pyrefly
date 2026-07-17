@@ -1685,6 +1685,43 @@ MyTuple = collections.namedtuple("MyTuple", "x y")
             .with_is_def_statement(false)
             .with_defining_class(get_class_ref("test", "MyTuple", context))
             .with_overridden_base_method(get_method_ref("builtins", "tuple", "__new__", context)),
+            create_function_definition(
+                "_replace",
+                ScopeParent::Class {
+                    class_id: ClassId::from_int(0),
+                },
+                vec![create_simple_signature(
+                    vec![
+                        FunctionParameter::PosOnly {
+                            name: Some("self".into()),
+                            annotation: PysaType::from_class(
+                                &get_class("test", "MyTuple", context),
+                                context,
+                            ),
+                            required: true,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "x".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: false,
+                        },
+                        FunctionParameter::KwOnly {
+                            name: "y".into(),
+                            annotation: PysaType::any_implicit(),
+                            required: false,
+                        },
+                    ],
+                    PysaType::from_class(&get_class("test", "MyTuple", context), context),
+                )],
+            )
+            .with_is_def_statement(false)
+            .with_defining_class(get_class_ref("test", "MyTuple", context))
+            .with_overridden_base_method(get_method_ref(
+                "_typeshed._type_checker_internals",
+                "NamedTupleFallback",
+                "_replace",
+                context,
+            )),
         ]
     },
 );

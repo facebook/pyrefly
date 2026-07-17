@@ -11,11 +11,13 @@ use lsp_types::Url;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use pyrefly::lsp::non_wasm::protocol::Message;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::util::get_test_files_root;
 
 /// Non-open file gets diagnostics in workspace mode.
@@ -30,7 +32,13 @@ use crate::util::get_test_files_root;
 fn test_workspace_diagnostics_for_non_open_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -71,7 +79,13 @@ fn test_workspace_diagnostics_for_non_open_file() {
 fn test_workspace_diagnostics_skip_clean_non_open_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -165,7 +179,13 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
 fn test_workspace_diagnostics_preserved_after_did_close() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -244,7 +264,13 @@ fn test_workspace_diagnostics_preserved_after_did_close() {
 fn test_workspace_diagnostics_not_published_without_workspace_folders() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -287,7 +313,13 @@ fn test_workspace_diagnostics_not_published_without_workspace_folders() {
 fn test_workspace_diagnostics_scoped_to_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_scoped");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -335,7 +367,13 @@ fn test_did_close_clears_diagnostics_outside_workspace_folder() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_scoped");
     let project_path = root_path.join("project");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -387,7 +425,13 @@ fn test_did_close_clears_diagnostics_outside_workspace_folder() {
 fn test_workspace_diagnostics_multiple_configs() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_multi_config");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -463,7 +507,13 @@ fn test_workspace_diagnostics_config_above_root() {
     let project_path = root
         .path()
         .join("workspace_diagnostics_config_above/project");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(project_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -505,7 +555,13 @@ fn test_workspace_diagnostics_cleared_on_mode_switch() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -561,7 +617,13 @@ fn test_workspace_diagnostics_cleared_on_mode_switch() {
 fn test_did_close_no_stale_memory_path_errors() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -644,7 +706,13 @@ fn test_did_close_no_stale_memory_path_errors() {
 fn test_workspace_diagnostics_cleared_on_file_delete() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -698,7 +766,13 @@ fn test_workspace_diagnostics_cleared_on_file_delete() {
 fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_severity");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -821,7 +895,13 @@ fn test_workspace_baseline_non_open_file_stays_error() {
     let root = get_test_files_root();
     let root_path = root.path().join("baseline_hint_workspace");
     let bad_py = root_path.join("bad.py");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {

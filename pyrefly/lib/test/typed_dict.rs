@@ -1023,6 +1023,8 @@ testcase!(
 from typing import TypedDict, assert_type
 class C(TypedDict): ...
 assert_type(C.__total__, bool)
+assert_type(C.__required_keys__, frozenset[str])
+assert_type(C.__optional_keys__, frozenset[str])
     "#,
 );
 

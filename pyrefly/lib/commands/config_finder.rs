@@ -349,6 +349,7 @@ mod tests {
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
+    use crate::commands::check::Handles;
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
 
@@ -533,6 +534,21 @@ mod tests {
                     .collect::<Vec<PathBuf>>()
             )),
         );
+    }
+
+    /// gh-4132: CLI handles must derive module names via the config's fallback
+    /// search path, so files in a config-less directory don't become `__unknown__`.
+    #[test]
+    fn test_handles_all_uses_fallback_search_path() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("foo.py")]);
+
+        let finder = TestConfigurer::new_standard(|_, x, _| {
+            ConfigOverrideArgs::default().override_config(x)
+        });
+        let (handles, _, _) = Handles::new(vec![root.join("foo.py")]).all(&finder);
+        assert_eq!(handles[0].module(), ModuleName::from_str("foo"));
     }
 
     /// A real pyrefly.toml should always take priority over a pyproject.toml

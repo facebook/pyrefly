@@ -1034,7 +1034,11 @@ impl Includes for FilteredGlobs {
     }
 
     fn covers(&self, path: &Path) -> bool {
-        self.includes.covers(path) && !self.filter.is_excluded(path)
+        self.covers_ignoring_excludes(path) && !self.filter.is_excluded(path)
+    }
+
+    fn covers_ignoring_excludes(&self, path: &Path) -> bool {
+        self.includes.covers(path)
     }
 
     fn errors(&mut self) -> Vec<anyhow::Error> {

@@ -88,6 +88,123 @@ xyz = [foo.meth]
 }
 
 #[test]
+fn hover_on_overloaded_method_call_shows_implementation_docstring() {
+    let code = r#"
+from typing import overload
+
+class Foo:
+    @overload
+    def bar(self, x: int) -> int: ...
+    @overload
+    def bar(self, x: str) -> str: ...
+    def bar(self, x: int | str) -> int | str:
+        """Hello."""
+        return x
+
+Foo().bar(1)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("Hello."),
+        "Expected implementation docstring in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_union_method_call_shows_method_signature() {
+    let code = r#"
+class A:
+    def foo(self) -> int:
+        return 0
+
+class B:
+    def foo(self) -> str:
+        return ""
+
+def f(x: A | B) -> None:
+    x.foo()
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) foo:"),
+        "Expected union method call hover, got: {report}"
+    );
+    assert!(
+        report.contains("-> int") && report.contains("-> str"),
+        "Expected hover to show both union method return types, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_union_class_attribute_shows_class() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    foo = C
+
+class B:
+    foo = C
+
+def f(x: A | B) -> None:
+    x.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(class) foo:"),
+        "Expected union class attribute hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_mixed_union_attribute_falls_back_to_attribute() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    foo = C
+
+def f(x: A | B) -> None:
+    x.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(attribute) foo:"),
+        "Expected mixed union attribute hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_class_attribute_shows_class() {
+    let code = r#"
+class C:
+    pass
+
+class A:
+    foo = C
+
+def f(a: A) -> None:
+    a.foo
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(class) foo:"),
+        "Expected single-type class attribute hover, got: {report}"
+    );
+}
+
+#[test]
 fn renamed_reexport_shows_original_name() {
     let lib2 = r#"
 def foo() -> None: ...
@@ -354,6 +471,65 @@ def f(x: int | str | None) -> None:
 }
 
 #[test]
+fn hover_type_source_attribute_narrow() {
+    let code = r#"
+class C:
+    x: int | None
+
+def f(c: C) -> None:
+    if c.x is not None:
+        c.x
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        report.contains("**Type source**"),
+        "Expected type source section in field hover, got: {report}"
+    );
+    assert!(
+        report.contains("c.x is not None"),
+        "Expected attribute narrow in field hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_type_source_attribute_store_no_source() {
+    // Attribute assignment targets are store-context. Type-source narrowing is only
+    // surfaced for attribute reads (Load/Invalid), so a store target must fall through
+    // and produce no type-source section.
+    let code = r#"
+class C:
+    x: int | None
+
+def f(c: C) -> None:
+    if c.x is not None:
+        c.x = 1
+#         ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert!(
+        !report.contains("**Type source**"),
+        "Should not show type source when hovering an attribute assignment target, got: {report}"
+    );
+}
+
+#[test]
 fn hover_type_source_no_source_at_first_use_site() {
     // When hovering at the first-use site itself, we should not show
     // "Inferred from first use" pointing back to the same location.
@@ -586,6 +762,26 @@ lhs @ rhs
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn hover_over_augmented_assignment_operator_shows_in_place_dunder_name() {
+    let code = r#"
+class Counter:
+    def __iadd__(self, other: int) -> Counter:
+        return self
+
+c = Counter()
+c += 1
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(
+            "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
+        ),
+        "Expected __iadd__ signature in hover, got: {report}"
     );
 }
 
@@ -1103,6 +1299,65 @@ Widget docstring"#
 }
 
 #[test]
+fn hover_on_dict_constructor_is_multiline() {
+    let code = r#"
+x: dict[str, int]
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: HoverContents::Markup(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | x: dict[str, int]
+       ^
+```python
+(class) dict: ((
+    *args: Any,
+    **kwargs: Any
+) -> dict[Unknown, Unknown]) | Overload[
+  () -> dict[Unknown, Unknown]
+  (**kwargs: Unknown) -> dict[str, Unknown]
+  (map: SupportsKeysAndGetItem[Unknown, Unknown], /) -> dict[Unknown, Unknown]
+  (
+    map: SupportsKeysAndGetItem[str, Unknown],
+    /,
+    **kwargs: Unknown
+) -> dict[str, Unknown]
+  (iterable: Iterable[tuple[Unknown, Unknown]], /) -> dict[Unknown, Unknown]
+  (
+    iterable: Iterable[tuple[str, Unknown]],
+    /,
+    **kwargs: Unknown
+) -> dict[str, Unknown]
+  (iterable: Iterable[list[str]], /) -> dict[str, str]
+  (iterable: Iterable[list[bytes]], /) -> dict[bytes, bytes]
+]
+```
+---
+dict() -> new empty dictionary  
+dict(mapping) -> new dictionary initialized from a mapping object's  
+&nbsp;&nbsp;&nbsp;&nbsp;(key, value) pairs  
+dict(iterable) -> new dictionary initialized as if via:  
+&nbsp;&nbsp;&nbsp;&nbsp;d = {}  
+&nbsp;&nbsp;&nbsp;&nbsp;for k, v in iterable:  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;d[k] = v  
+dict(**kwargs) -> new dictionary initialized with the name=value pairs  
+&nbsp;&nbsp;&nbsp;&nbsp;in the keyword argument list.  For example:  dict(one=1, two=2)
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn hover_on_first_component_of_multi_part_import() {
     let mymod_init = r#"# mymod/__init__.py
 def version() -> str: ...
@@ -1250,6 +1505,25 @@ c = Container()
     assert!(
         report.contains("self: Container") && report.contains("item: int"),
         "Expected hover to show __contains__ method signature, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_in_operator_with_unknown_left_operand_shows_contains_dunder() {
+    let code = r#"
+languages: list[str] = []
+
+def supported_language(lang):
+    if lang in languages:
+#           ^
+        return lang
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("(method) __contains__:")
+            && report.contains("self: list[str]")
+            && report.contains(") -> bool"),
+        "Expected hover to show list.__contains__ method signature, got: {report}"
     );
 }
 
@@ -1415,6 +1689,28 @@ Box[str]("hello")
     assert!(
         report.contains("Box[str]"),
         "Expected generic constructor to show Box[str], got: {report}"
+    );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3240
+#[test]
+fn hover_on_generic_metaclass_constructor_does_not_show_inference_var() {
+    let code = r#"
+class DeclarativeAttributeIntercept(type):
+    pass
+
+class DCTransformDeclarative(DeclarativeAttributeIntercept):
+#                            ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        !report.contains("-> @"),
+        "Hover must not expose an internal inference variable, got: {report}"
+    );
+    assert!(
+        report.contains(") -> Self@DeclarativeAttributeIntercept: ..."),
+        "Hover should resolve the constructor's return type, got: {report}"
     );
 }
 

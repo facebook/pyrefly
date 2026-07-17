@@ -12,8 +12,7 @@
  */
 
 use pyrefly_types::callable::FuncMetadata;
-use pyrefly_types::shaped_array::ShapedArrayShape;
-use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
@@ -159,9 +158,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .force(self.expr_infer_with_hint(&args[0], hint, errors));
             if let Type::ShapedArray(shaped_array) = &actual {
                 if let Some(shape) = self.parse_assert_shape_expr(&args[1], errors) {
-                    let expected =
-                        ShapedArrayType::new(shaped_array.base_class.clone(), shape.clone())
-                            .to_type();
+                    let expected = self
+                        .shaped_array_with_shape(shaped_array, shape.clone())
+                        .to_type();
                     if !self.is_equivalent(&actual, &expected) {
                         self.error(
                             errors,
@@ -169,7 +168,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorKind::AssertType,
                             format!(
                                 "assert_shape({}, {}) failed",
-                                format_assert_shape_shape(&shaped_array.shape),
+                                format_assert_shape_shape(&shaped_array.shape()),
                                 format_assert_shape_shape(&shape)
                             ),
                         );
@@ -899,7 +898,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 }
 
-fn format_assert_shape_shape(shape: &ShapedArrayShape) -> String {
+fn format_assert_shape_shape(shape: &IntTuple) -> String {
     match shape.as_concrete() {
         Some([]) => "()".to_owned(),
         Some([dim]) => format!("({dim},)"),

@@ -75,9 +75,9 @@ def test_embedding_moduledict():
 
     # Can call forward on them (since they're typed as Embedding)
     # Result shape: [32, 128, embedding_dim] where embedding_dim is unknown
-    indices: Tensor[32, 128] = torch.randn(32, 128)
-    assert_type(tok_emb(indices), Tensor[32, 128, Any])
-    assert_type(pos_emb(indices), Tensor[32, 128, Any])
+    indices: Tensor[[32, 128]] = torch.randn(32, 128)
+    assert_type(tok_emb(indices), Tensor[[32, 128, Any]])
+    assert_type(pos_emb(indices), Tensor[[32, 128, Any]])
 
 
 # ============================================================================
@@ -109,8 +109,8 @@ def test_transformer_moduledict():
     assert_type(transformer.drop, nn.Dropout)
 
     # Can use them with proper types
-    idx: Tensor[2, 128] = torch.randn(2, 128)
-    pos: Tensor[128] = torch.randn(128)
+    idx: Tensor[[2, 128]] = torch.randn(2, 128)
+    pos: Tensor[[128]] = torch.randn(128)
 
     tok_emb: Tensor = transformer.wte(idx)
     pos_emb: Tensor = transformer.wpe(pos)
@@ -153,7 +153,7 @@ def test_mixed_moduledict():
     assert_type(model.dropout, nn.Dropout)
 
     # Build a simple forward pass
-    x: Tensor[32, 10] = torch.randn(32, 10)
+    x: Tensor[[32, 10]] = torch.randn(32, 10)
     embedded: Tensor = model.embedding(x)
     h1: Tensor = model.linear1(embedded)
     h1_act: Tensor = model.activation(h1)

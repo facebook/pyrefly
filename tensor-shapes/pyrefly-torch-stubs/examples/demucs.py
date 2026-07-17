@@ -32,9 +32,9 @@ Key patterns exercised:
 - Tensor.view for reshaping final output to [B, Sources, AudioCh, T]
 
 Now ported (previously omitted):
-- downsample: x[:, :, ::stride] stride slicing works with Dim[S] step
+- downsample: x[:, :, ::stride] stride slicing works with Int[S] step
 - upsample: .size() tuple unpacking, view, ellipsis slicing, broadcasting
-- center_trim: symbolic slice bounds from .size() diffs, returns Tensor[B, C, R]
+- center_trim: symbolic slice bounds from .size() diffs, returns Tensor[[B, C, R]]
 """
 
 from typing import assert_type, TYPE_CHECKING
@@ -44,7 +44,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
@@ -56,9 +56,9 @@ if TYPE_CHECKING:
 # Stride slicing computes ceil_div(dim, step) for the strided dimension.
 
 
-def downsample[B, C, T, S](
-    x: Tensor[B, C, T], stride: Dim[S]
-) -> Tensor[B, C, (T + S - 1) // S]:
+def downsample[B: IntVar, C: IntVar, T: IntVar, S: IntVar](
+    x: Tensor[[B, C, T]], stride: Int[S]
+) -> Tensor[[B, C, (T + S - 1) // S]]:
     """Downsample x by decimation.
 
     Stride slicing x[:, :, ::stride] computes ceil_div(T, S) = (T + S - 1) // S
@@ -76,14 +76,14 @@ def downsample[B, C, T, S](
 #
 # Changes from original:
 # - Type annotations added on function signature
-# - stride: int (not Dim) because arange and broadcasting need runtime int
+# - stride: int (not Int) because arange and broadcasting need runtime int
 # - Variable reassignment x → x_4d (shape changes from 3D to 4D)
 # - out.reshape(batch, channels, -1) uses -1 for automatic size inference
 
 
-def center_trim[B, C, T, R](
-    tensor: Tensor[B, C, T], reference: Tensor[B, C, R]
-) -> Tensor[B, C, R]:
+def center_trim[B: IntVar, C: IntVar, T: IntVar, R: IntVar](
+    tensor: Tensor[[B, C, T]], reference: Tensor[[B, C, R]]
+) -> Tensor[[B, C, R]]:
     """Center trim `tensor` to match `reference` along the last dimension.
 
     Original: demucs/utils.py center_trim
@@ -103,11 +103,13 @@ def center_trim[B, C, T, R](
     return tensor[..., delta // 2 : tensor.size(-1) - (delta - delta // 2)]
 
 
-def upsample[B, C, T](x: Tensor[B, C, T], stride: int) -> Tensor:
+def upsample[B: IntVar, C: IntVar, T: IntVar](
+    x: Tensor[[B, C, T]], stride: int
+) -> Tensor:
     """Linear upsampling, the output will be `stride` times longer.
 
     Steps:
-    1. x.size() → (batch, channels, time) as Dim types
+    1. x.size() → (batch, channels, time) as Int types
     2. torch.arange(stride) / stride → weight vector
     3. view to [B, C, T, 1] for broadcasting
     4. x[..., :-1, :] * (1 - weight) + x[..., 1:, :] * weight
@@ -129,34 +131,36 @@ def upsample[B, C, T](x: Tensor[B, C, T], stride: int) -> Tensor:
 # → permute to [B, C, T]
 
 
-class BLSTM[Ch](nn.Module):
+class BLSTM[Ch: IntVar](nn.Module):
     """Bidirectional LSTM bottleneck.
 
-    Input:  Tensor[B, Ch, T]
-    Output: Tensor[B, Ch, T]
+    Input:  Tensor[[B, Ch, T]]
+    Output: Tensor[[B, Ch, T]]
 
     Internally: permute → BiLSTM → Linear(2*Ch, Ch) → permute back.
     Uses bidirectional=True: output is 2*dim, projected back to dim via Linear.
     """
 
-    def __init__(self, dim: Dim[Ch]) -> None:
+    def __init__(self, dim: Int[Ch]) -> None:
         super().__init__()
         self.lstm = nn.LSTM(dim, dim, bidirectional=True, batch_first=True)
         self.linear = nn.Linear(2 * dim, dim)
 
-    def forward[B, T](self, x: Tensor[B, Ch, T]) -> Tensor[B, Ch, T]:
+    def forward[B: IntVar, T: IntVar](
+        self, x: Tensor[[B, Ch, T]]
+    ) -> Tensor[[B, Ch, T]]:
         # [B, Ch, T] → [B, T, Ch]
         x_perm = x.permute(0, 2, 1)
-        assert_type(x_perm, Tensor[B, T, Ch])
+        assert_type(x_perm, Tensor[[B, T, Ch]])
         # BiLSTM: [B, T, Ch] → [B, T, 2*Ch]
         lstm_out, _h_n, _c_n = self.lstm(x_perm)
-        assert_type(lstm_out, Tensor[B, T, 2 * Ch])
+        assert_type(lstm_out, Tensor[[B, T, 2 * Ch]])
         # Linear: [B, T, 2*Ch] → [B, T, Ch]
         lin_out = self.linear(lstm_out)
-        assert_type(lin_out, Tensor[B, T, Ch])
+        assert_type(lin_out, Tensor[[B, T, Ch]])
         # [B, T, Ch] → [B, Ch, T]
         out = lin_out.permute(0, 2, 1)
-        assert_type(out, Tensor[B, Ch, T])
+        assert_type(out, Tensor[[B, Ch, T]])
         return out
 
 
@@ -184,9 +188,11 @@ class EncoderBlockGLU(nn.Module):
             nn.GLU(dim=1),
         )
 
-    def forward[B, L](self, x: Tensor[B, 2, L]) -> Tensor[B, 64, (L - 8) // 4 + 1]:
+    def forward[B: IntVar, L: IntVar](
+        self, x: Tensor[[B, 2, L]]
+    ) -> Tensor[[B, 64, (L - 8) // 4 + 1]]:
         out = self.encode(x)
-        assert_type(out, Tensor[B, 64, (L - 8) // 4 + 1])
+        assert_type(out, Tensor[[B, 64, (L - 8) // 4 + 1]])
         return out
 
 
@@ -204,22 +210,24 @@ class EncoderBlockGLU(nn.Module):
 #   Layer 2: 128 → 256    (channels*growth → channels*growth^2)
 
 
-class EncoderBlock[InC, OutC](nn.Module):
+class EncoderBlock[InC: IntVar, OutC: IntVar](nn.Module):
     """Encoder block: Conv1d(InC, OutC, 8, stride=4) → ReLU → Conv1d(OutC, OutC, 1) → ReLU.
 
     Spatial: L → (L - 8) // 4 + 1 (1x1 conv preserves spatial).
     """
 
-    def __init__(self, in_ch: Dim[InC], out_ch: Dim[OutC]) -> None:
+    def __init__(self, in_ch: Int[InC], out_ch: Int[OutC]) -> None:
         super().__init__()
         self.conv1 = nn.Conv1d(in_ch, out_ch, 8, stride=4)
         self.conv2 = nn.Conv1d(out_ch, out_ch, 1)
 
-    def forward[B, L](self, x: Tensor[B, InC, L]) -> Tensor[B, OutC, (L - 8) // 4 + 1]:
+    def forward[B: IntVar, L: IntVar](
+        self, x: Tensor[[B, InC, L]]
+    ) -> Tensor[[B, OutC, (L - 8) // 4 + 1]]:
         h = F.relu(self.conv1(x))
-        assert_type(h, Tensor[B, OutC, (L - 8) // 4 + 1])
+        assert_type(h, Tensor[[B, OutC, (L - 8) // 4 + 1]])
         out = F.relu(self.conv2(h))
-        assert_type(out, Tensor[B, OutC, (L - 8) // 4 + 1])
+        assert_type(out, Tensor[[B, OutC, (L - 8) // 4 + 1]])
         return out
 
 
@@ -236,23 +244,25 @@ class EncoderBlock[InC, OutC](nn.Module):
 # The type system canonicalizes (L-3)*4 + 8 to 4*L - 4 via distributive law.
 
 
-class DecoderBlock[InC, OutC](nn.Module):
+class DecoderBlock[InC: IntVar, OutC: IntVar](nn.Module):
     """Decoder block: Conv1d(InC, InC, 3) → ReLU → ConvTranspose1d(InC, OutC, 8, stride=4).
 
     No final ReLU — caller applies it for non-outermost layers.
     Spatial: L → (L-3)*4 + 8.
     """
 
-    def __init__(self, in_ch: Dim[InC], out_ch: Dim[OutC]) -> None:
+    def __init__(self, in_ch: Int[InC], out_ch: Int[OutC]) -> None:
         super().__init__()
         self.context_conv = nn.Conv1d(in_ch, in_ch, 3)
         self.deconv = nn.ConvTranspose1d(in_ch, out_ch, 8, stride=4)
 
-    def forward[B, L](self, x: Tensor[B, InC, L]) -> Tensor[B, OutC, (L - 3) * 4 + 8]:
+    def forward[B: IntVar, L: IntVar](
+        self, x: Tensor[[B, InC, L]]
+    ) -> Tensor[[B, OutC, (L - 3) * 4 + 8]]:
         h = F.relu(self.context_conv(x))
-        assert_type(h, Tensor[B, InC, L - 2])
+        assert_type(h, Tensor[[B, InC, L - 2]])
         out = self.deconv(h)
-        assert_type(out, Tensor[B, OutC, (L - 3) * 4 + 8])
+        assert_type(out, Tensor[[B, OutC, (L - 3) * 4 + 8]])
         return out
 
 
@@ -283,11 +293,11 @@ class DemucsEncoder(nn.Module):
         self.enc1 = EncoderBlock(64, 128)
         self.enc2 = EncoderBlock(128, 256)
 
-    def forward[B, L](
-        self, x: Tensor[B, 2, L]
-    ) -> Tensor[B, 256, (((L // 4 - 1) // 4 - 1) // 4 - 1)]:
+    def forward[B: IntVar, L: IntVar](
+        self, x: Tensor[[B, 2, L]]
+    ) -> Tensor[[B, 256, (((L // 4 - 1) // 4 - 1) // 4 - 1)]]:
         h0 = self.enc0(x)
-        assert_type(h0, Tensor[B, 64, (L // 4 - 1)])
+        assert_type(h0, Tensor[[B, 64, (L // 4 - 1)]])
         h1 = self.enc1(h0)
         h2 = self.enc2(h1)
         return h2
@@ -300,12 +310,12 @@ class DemucsEncoder(nn.Module):
 # into [B, sources, audio_channels, T] using view.
 
 
-def reshape_output[B, T](
-    x: Tensor[B, 8, T],
-) -> Tensor[B, 4, 2, T]:
+def reshape_output[B: IntVar, T: IntVar](
+    x: Tensor[[B, 8, T]],
+) -> Tensor[[B, 4, 2, T]]:
     """Reshape decoder output to [B, sources=4, audio_channels=2, T]."""
     out = x.view(x.size(0), 4, 2, x.size(-1))
-    assert_type(out, Tensor[B, 4, 2, T])
+    assert_type(out, Tensor[[B, 4, 2, T]])
     return out
 
 
@@ -326,8 +336,8 @@ def reshape_output[B, T](
 class Demucs(nn.Module):
     """Full Demucs model: 3-layer encoder → BLSTM → 3-layer decoder with skips.
 
-    Input:  Tensor[B, 2, L]  (stereo audio)
-    Output: Tensor[B, 4, 2, T]  (4 sources × stereo × time)
+    Input:  Tensor[[B, 2, L]]  (stereo audio)
+    Output: Tensor[[B, 4, 2, T]]  (4 sources × stereo × time)
 
     Skip connections: each encoder output is center_trimmed to match the
     corresponding decoder output, then added before decoding.
@@ -343,19 +353,19 @@ class Demucs(nn.Module):
         self.dec1 = DecoderBlock(128, 64)
         self.dec0 = DecoderBlock(64, 8)
 
-    def forward[B, L](self, mix: Tensor[B, 2, L]):
+    def forward[B: IntVar, L: IntVar](self, mix: Tensor[[B, 2, L]]):
         # Encoder: save outputs for skip connections
         # Spatial: L → L//4-1 → (L//4-1)//4-1 → ((L//4-1)//4-1)//4-1
         x0 = self.enc0(mix)
-        assert_type(x0, Tensor[B, 64, L // 4 - 1])
+        assert_type(x0, Tensor[[B, 64, L // 4 - 1]])
         x1 = self.enc1(x0)
-        assert_type(x1, Tensor[B, 128, (L // 4 - 1) // 4 - 1])
+        assert_type(x1, Tensor[[B, 128, (L // 4 - 1) // 4 - 1]])
         x2 = self.enc2(x1)
-        assert_type(x2, Tensor[B, 256, ((L // 4 - 1) // 4 - 1) // 4 - 1])
+        assert_type(x2, Tensor[[B, 256, ((L // 4 - 1) // 4 - 1) // 4 - 1]])
 
         # BLSTM bottleneck (preserves shape)
         xb = self.lstm(x2)
-        assert_type(xb, Tensor[B, 256, ((L // 4 - 1) // 4 - 1) // 4 - 1])
+        assert_type(xb, Tensor[[B, 256, ((L // 4 - 1) // 4 - 1) // 4 - 1]])
 
         # Decoder with skip connections
         # Each decoder: Conv1d(ch, ch, 3) → ConvTranspose1d(ch, out, 8, stride=4)
@@ -364,15 +374,15 @@ class Demucs(nn.Module):
         # ReLU applied after non-outermost decoders (original has ReLU inside dec2/dec1).
         skip2 = center_trim(x2, xb)
         d2 = F.relu(self.dec2(xb + skip2))
-        assert_type(d2, Tensor[B, 128, 4 * (((L // 4 - 1) // 4 - 1) // 4) - 8])
+        assert_type(d2, Tensor[[B, 128, 4 * (((L // 4 - 1) // 4 - 1) // 4) - 8]])
 
         skip1 = center_trim(x1, d2)
         d1 = F.relu(self.dec1(d2 + skip1))
-        assert_type(d1, Tensor[B, 64, 16 * (((L // 4 - 1) // 4 - 1) // 4) - 36])
+        assert_type(d1, Tensor[[B, 64, 16 * (((L // 4 - 1) // 4 - 1) // 4) - 36]])
 
         skip0 = center_trim(x0, d1)
         d0 = self.dec0(d1 + skip0)
-        assert_type(d0, Tensor[B, 8, 64 * (((L // 4 - 1) // 4 - 1) // 4) - 148])
+        assert_type(d0, Tensor[[B, 8, 64 * (((L // 4 - 1) // 4 - 1) // 4) - 148]])
 
         # Reshape: [B, sources*audio_ch, T] → [B, sources, audio_ch, T]
         return d0.view(d0.size(0), 4, 2, d0.size(-1))
@@ -389,9 +399,9 @@ def test_encoder_block0():
     With L=1024: (1024 - 8) // 4 + 1 = 1016 // 4 + 1 = 254 + 1 = 255
     """
     enc = EncoderBlock(2, 64)
-    x: Tensor[2, 2, 1024] = torch.randn(2, 2, 1024)
+    x: Tensor[[2, 2, 1024]] = torch.randn(2, 2, 1024)
     out = enc(x)
-    assert_type(out, Tensor[2, 64, 255])
+    assert_type(out, Tensor[[2, 64, 255]])
 
 
 def test_encoder_block1():
@@ -400,9 +410,9 @@ def test_encoder_block1():
     With L=255: (255 - 8) // 4 + 1 = 247 // 4 + 1 = 61 + 1 = 62
     """
     enc = EncoderBlock(64, 128)
-    x: Tensor[2, 64, 255] = torch.randn(2, 64, 255)
+    x: Tensor[[2, 64, 255]] = torch.randn(2, 64, 255)
     out = enc(x)
-    assert_type(out, Tensor[2, 128, 62])
+    assert_type(out, Tensor[[2, 128, 62]])
 
 
 def test_encoder_block2():
@@ -411,9 +421,9 @@ def test_encoder_block2():
     With L=62: (62 - 8) // 4 + 1 = 54 // 4 + 1 = 13 + 1 = 14
     """
     enc = EncoderBlock(128, 256)
-    x: Tensor[2, 128, 62] = torch.randn(2, 128, 62)
+    x: Tensor[[2, 128, 62]] = torch.randn(2, 128, 62)
     out = enc(x)
-    assert_type(out, Tensor[2, 256, 14])
+    assert_type(out, Tensor[[2, 256, 14]])
 
 
 def test_decoder_block2():
@@ -422,9 +432,9 @@ def test_decoder_block2():
     With L=14: (14-3)*4 + 8 = 52
     """
     dec = DecoderBlock(256, 128)
-    x: Tensor[2, 256, 14] = torch.randn(2, 256, 14)
+    x: Tensor[[2, 256, 14]] = torch.randn(2, 256, 14)
     out = dec(x)
-    assert_type(out, Tensor[2, 128, 52])
+    assert_type(out, Tensor[[2, 128, 52]])
 
 
 def test_decoder_block1():
@@ -433,9 +443,9 @@ def test_decoder_block1():
     With L=52: (52-3)*4 + 8 = 204
     """
     dec = DecoderBlock(128, 64)
-    x: Tensor[2, 128, 52] = torch.randn(2, 128, 52)
+    x: Tensor[[2, 128, 52]] = torch.randn(2, 128, 52)
     out = dec(x)
-    assert_type(out, Tensor[2, 64, 204])
+    assert_type(out, Tensor[[2, 64, 204]])
 
 
 def test_decoder_block0():
@@ -444,32 +454,32 @@ def test_decoder_block0():
     With L=204: (204-3)*4 + 8 = 812
     """
     dec = DecoderBlock(64, 8)
-    x: Tensor[2, 64, 204] = torch.randn(2, 64, 204)
+    x: Tensor[[2, 64, 204]] = torch.randn(2, 64, 204)
     out = dec(x)
-    assert_type(out, Tensor[2, 8, 812])
+    assert_type(out, Tensor[[2, 8, 812]])
 
 
 def test_encoder_pipeline():
     """Test three-layer encoder: [B, 2, 1024] → [B, 256, 14]."""
     encoder = DemucsEncoder()
-    x: Tensor[2, 2, 1024] = torch.randn(2, 2, 1024)
+    x: Tensor[[2, 2, 1024]] = torch.randn(2, 2, 1024)
     out = encoder(x)
-    assert_type(out, Tensor[2, 256, 14])
+    assert_type(out, Tensor[[2, 256, 14]])
 
 
 def test_reshape_output():
     """Test output reshape: [B, 8, T] → [B, 4, 2, T]."""
-    x: Tensor[2, 8, 812] = torch.randn(2, 8, 812)
+    x: Tensor[[2, 8, 812]] = torch.randn(2, 8, 812)
     out = reshape_output(x)
-    assert_type(out, Tensor[2, 4, 2, 812])
+    assert_type(out, Tensor[[2, 4, 2, 812]])
 
 
 def test_blstm_bottleneck():
     """Test BLSTM: [B, 256, T] → [B, 256, T] (preserves shape)."""
     blstm = BLSTM(256)
-    x: Tensor[2, 256, 14] = torch.randn(2, 256, 14)
+    x: Tensor[[2, 256, 14]] = torch.randn(2, 256, 14)
     out = blstm(x)
-    assert_type(out, Tensor[2, 256, 14])
+    assert_type(out, Tensor[[2, 256, 14]])
 
 
 def test_encoder_block_glu():
@@ -479,25 +489,25 @@ def test_encoder_block_glu():
     Conv1d(2→64, K=8, S=4) → ReLU → Conv1d(64→128, K=1) → GLU(dim=1) → 64 ch
     """
     enc = EncoderBlockGLU()
-    x: Tensor[2, 2, 1024] = torch.randn(2, 2, 1024)
+    x: Tensor[[2, 2, 1024]] = torch.randn(2, 2, 1024)
     out = enc(x)
-    assert_type(out, Tensor[2, 64, 255])
+    assert_type(out, Tensor[[2, 64, 255]])
 
 
 def test_downsample():
     """Test stride-based downsampling via function call.
 
     Original: downsample(x, stride=4)
-    Pattern: Tensor[B, C, T] → Tensor[B, C, ceil_div(T, stride)]
+    Pattern: Tensor[[B, C, T]] → Tensor[[B, C, ceil_div(T, stride)]]
     With T=1024, stride=4: ceil_div(1024, 4) = 256
     """
-    x: Tensor[2, 64, 1024] = torch.randn(2, 64, 1024)
+    x: Tensor[[2, 64, 1024]] = torch.randn(2, 64, 1024)
     # Direct stride slicing with literal step — shape is tracked
     out = x[:, :, ::4]
-    assert_type(out, Tensor[2, 64, 256])
-    # Function call with literal Dim stride — shape also tracked
+    assert_type(out, Tensor[[2, 64, 256]])
+    # Function call with literal Int stride — shape also tracked
     out2 = downsample(x, 4)
-    assert_type(out2, Tensor[2, 64, 256])
+    assert_type(out2, Tensor[[2, 64, 256]])
 
 
 def test_downsample_odd():
@@ -505,11 +515,11 @@ def test_downsample_odd():
 
     (255 + 3) // 4 = 64
     """
-    x: Tensor[2, 64, 255] = torch.randn(2, 64, 255)
+    x: Tensor[[2, 64, 255]] = torch.randn(2, 64, 255)
     out = x[:, :, ::4]
-    assert_type(out, Tensor[2, 64, 64])
+    assert_type(out, Tensor[[2, 64, 64]])
     out2 = downsample(x, 4)
-    assert_type(out2, Tensor[2, 64, 64])
+    assert_type(out2, Tensor[[2, 64, 64]])
 
 
 def test_upsample():
@@ -518,9 +528,9 @@ def test_upsample():
     Original: upsample(x, stride=4)
     Pattern: .size() tuple unpacking → view → ellipsis slicing → broadcasting → reshape
     """
-    x: Tensor[2, 64, 100] = torch.randn(2, 64, 100)
+    x: Tensor[[2, 64, 100]] = torch.randn(2, 64, 100)
     out = upsample(x, 4)
-    # Result is shapeless Tensor because stride is int (not Dim)
+    # Result is shapeless Tensor because stride is int (not Int)
     # and broadcasting between different-rank tensors uses Self return type
     assert_type(out, Tensor)
 
@@ -531,10 +541,10 @@ def test_center_trim():
     Original: center_trim(tensor, reference)
     Trims tensor's last dim to match reference's last dim.
     """
-    tensor: Tensor[2, 64, 1024] = torch.randn(2, 64, 1024)
-    ref: Tensor[2, 64, 1016] = torch.randn(2, 64, 1016)
+    tensor: Tensor[[2, 64, 1024]] = torch.randn(2, 64, 1024)
+    ref: Tensor[[2, 64, 1016]] = torch.randn(2, 64, 1016)
     out = center_trim(tensor, ref)
-    assert_type(out, Tensor[2, 64, 1016])
+    assert_type(out, Tensor[[2, 64, 1016]])
 
 
 def test_encoder_decoder_chain():
@@ -550,11 +560,11 @@ def test_encoder_decoder_chain():
     """
     enc = EncoderBlock(2, 64)
     dec = DecoderBlock(64, 8)
-    x: Tensor[2, 2, 1024] = torch.randn(2, 2, 1024)
+    x: Tensor[[2, 2, 1024]] = torch.randn(2, 2, 1024)
     encoded = enc(x)
-    assert_type(encoded, Tensor[2, 64, 255])
+    assert_type(encoded, Tensor[[2, 64, 255]])
     decoded = dec(encoded)
-    assert_type(decoded, Tensor[2, 8, 1016])
+    assert_type(decoded, Tensor[[2, 8, 1016]])
 
 
 def test_demucs_full():
@@ -571,44 +581,44 @@ def test_demucs_full():
         view: [2, 8, 16172] → [2, 4, 2, 16172]
     """
     model = Demucs()
-    x: Tensor[2, 2, 16384] = torch.randn(2, 2, 16384)
+    x: Tensor[[2, 2, 16384]] = torch.randn(2, 2, 16384)
     out = model(x)
-    assert_type(out, Tensor[2, 4, 2, 16172])
+    assert_type(out, Tensor[[2, 4, 2, 16172]])
 
 
 def test_demucs_full_step_by_step():
     """Verify every intermediate shape in the Demucs pipeline."""
     model = Demucs()
-    mix: Tensor[2, 2, 16384] = torch.randn(2, 2, 16384)
+    mix: Tensor[[2, 2, 16384]] = torch.randn(2, 2, 16384)
 
     # Encoder
     x0 = model.enc0(mix)
-    assert_type(x0, Tensor[2, 64, 4095])
+    assert_type(x0, Tensor[[2, 64, 4095]])
     x1 = model.enc1(x0)
-    assert_type(x1, Tensor[2, 128, 1022])
+    assert_type(x1, Tensor[[2, 128, 1022]])
     x2 = model.enc2(x1)
-    assert_type(x2, Tensor[2, 256, 254])
+    assert_type(x2, Tensor[[2, 256, 254]])
 
     # BLSTM
     xb = model.lstm(x2)
-    assert_type(xb, Tensor[2, 256, 254])
+    assert_type(xb, Tensor[[2, 256, 254]])
 
     # Decoder with skip connections
     skip2 = center_trim(x2, xb)
-    assert_type(skip2, Tensor[2, 256, 254])
+    assert_type(skip2, Tensor[[2, 256, 254]])
     d2 = model.dec2(xb + skip2)
-    assert_type(d2, Tensor[2, 128, 1012])
+    assert_type(d2, Tensor[[2, 128, 1012]])
 
     skip1 = center_trim(x1, d2)
-    assert_type(skip1, Tensor[2, 128, 1012])
+    assert_type(skip1, Tensor[[2, 128, 1012]])
     d1 = model.dec1(d2 + skip1)
-    assert_type(d1, Tensor[2, 64, 4044])
+    assert_type(d1, Tensor[[2, 64, 4044]])
 
     skip0 = center_trim(x0, d1)
-    assert_type(skip0, Tensor[2, 64, 4044])
+    assert_type(skip0, Tensor[[2, 64, 4044]])
     d0 = model.dec0(d1 + skip0)
-    assert_type(d0, Tensor[2, 8, 16172])
+    assert_type(d0, Tensor[[2, 8, 16172]])
 
     # Final reshape
     result = d0.view(d0.size(0), 4, 2, d0.size(-1))
-    assert_type(result, Tensor[2, 4, 2, 16172])
+    assert_type(result, Tensor[[2, 4, 2, 16172]])

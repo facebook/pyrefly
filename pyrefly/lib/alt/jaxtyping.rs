@@ -17,13 +17,13 @@
 //!
 //! The shape string is whitespace-separated and supports:
 //! - Named dims (`"batch"`) → Quantified TypeVars
-//! - Integer literals (`"3"`) → `Type::Size(SizeExpr::Literal(3))`
+//! - Integer literals (`"3"`) → `Type::Int(Int::Literal(3))`
 //! - Anonymous dim (`"_"`) → `Type::Any(AnyStyle::Implicit)`
 //! - Variadic (`"*batch"`) → Quantified TypeVarTuples
 //! - Ellipsis (`"..."`) → anonymous variadic (any number of any-sized dims)
 //! - Broadcast (`"#batch"`) → treated as `"batch"` (conservative, safe)
 //! - Combined (`"*#batch"`) → variadic TypeVarTuple, broadcast prefix stripped
-//! - Arithmetic (`"dim+1"`, `"n-1"`) → `Type::Size(SizeExpr::Add/Sub(...))`
+//! - Arithmetic (`"dim+1"`, `"n-1"`) → `Type::Int(Int::Add/Sub(...))`
 //! - Parenthesized (`"(1+T)"`) → parens stripped, parsed as arithmetic
 //! - Scalar (`""`) → rank-0 tensor
 //!
@@ -48,9 +48,9 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassType;
-use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::Int;
 use pyrefly_types::quantified::QuantifiedKind;
-use pyrefly_types::shaped_array::ShapedArrayShape;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::shaped_array::ShapedArraySyntax;
 use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::types::TParams;
@@ -267,6 +267,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Build a jaxtyping-syntax `ShapedArrayType` and synchronize the tuple carrier.
+    ///
+    /// For shaped arrays whose shape parameter is a `TypeVar` or `IntVar`, the
+    /// carrier type argument on `base_class` is updated to reflect `shape` so that
+    /// shape-aware operations (e.g. `.shape` access, generic return reprojection)
+    /// remain coherent with the jaxtyping annotation.
+    fn jaxtyping_shaped_array_type(&self, mut base_class: ClassType, shape: IntTuple) -> Type {
+        let shape_arg_index = match self.shaped_array_shape_for_class_type(&base_class) {
+            Some(shape_param) => {
+                let shape_idx = self
+                    .get_class_tparams(base_class.class_object())
+                    .iter()
+                    .position(|param| param == &shape_param)
+                    // The metadata is produced by `@shaped_array` validation which
+                    // verifies the shape param is an actual type parameter of the class.
+                    .expect("shaped-array metadata should refer to a class type parameter");
+                match shape_param.kind() {
+                    QuantifiedKind::TypeVar | QuantifiedKind::IntVar => {
+                        let shape_arg = base_class.targs_mut().as_mut().get_mut(shape_idx).expect(
+                            // Pyrefly always constructs ClassType with one targ per tparam.
+                            "class type should have an argument for each type parameter",
+                        );
+                        *shape_arg = shape.to_shape_arg_type();
+                        Some(shape_idx)
+                    }
+                    QuantifiedKind::TypeVarTuple => unreachable!(
+                        "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+                    ),
+                    QuantifiedKind::ParamSpec => unreachable!(
+                        "shaped-array metadata validation rejects ParamSpec shape parameters"
+                    ),
+                }
+            }
+            None => None,
+        };
+        let shaped_array =
+            ShapedArrayType::new(base_class, shape).with_syntax(ShapedArraySyntax::Jaxtyping);
+        match shape_arg_index {
+            Some(index) => shaped_array.with_tuple_carrier_shape_arg(index).to_type(),
+            None => shaped_array.to_type(),
+        }
+    }
+
     /// Parse a jaxtyping annotation like `Float[Tensor, "batch channels"]`.
     fn parse_jaxtyping_annotation(
         &self,
@@ -306,10 +349,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tokens: Vec<&str> = shape_str.split_whitespace().collect();
         if tokens.is_empty() {
             // Empty shape string means scalar tensor (rank 0), like Tensor[()]
-            let shaped_array_shape = ShapedArrayShape::from_types(vec![]);
-            return ShapedArrayType::new(base_class, shaped_array_shape)
-                .with_syntax(ShapedArraySyntax::Jaxtyping)
-                .to_type();
+            let shaped_array_shape = IntTuple::from_types(vec![]);
+            return self.jaxtyping_shaped_array_type(base_class, shaped_array_shape);
         }
 
         // Find variadic token: "*name", "*#name", or "...".
@@ -337,29 +378,41 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
             let middle = if tokens[var_idx] == "..." {
                 // Ellipsis: anonymous variadic matching any number of any-sized dims.
-                // Represented as tuple[Any, ...], same as shapeless tensor middle.
-                Type::any_tuple()
+                IntTuple::shapeless().to_shape_arg_type()
             } else {
-                // "*name" or "*#name": named TypeVarTuple.
+                // "*name" or "*#name": named variadic shape.
                 // Strip leading '*', then strip optional broadcast '#' prefix.
                 let var_name = &tokens[var_idx][1..];
                 let var_name = var_name.strip_prefix('#').unwrap_or(var_name);
-                let q = self
-                    .get_or_create_jaxtyping_dim(Name::new(var_name), QuantifiedKind::TypeVarTuple);
+                let q = match self.shaped_array_shape_for_class_type(&base_class) {
+                    Some(shape_param) => match shape_param.kind() {
+                        QuantifiedKind::TypeVar | QuantifiedKind::IntVar => self
+                            .get_or_create_jaxtyping_shape_carrier(
+                                Name::new(var_name),
+                                shape_param.kind(),
+                            ),
+                        QuantifiedKind::TypeVarTuple => unreachable!(
+                            "shaped-array metadata validation rejects TypeVarTuple shape parameters"
+                        ),
+                        QuantifiedKind::ParamSpec => unreachable!(
+                            "shaped-array metadata validation rejects ParamSpec shape parameters"
+                        ),
+                    },
+                    None => self.get_or_create_jaxtyping_dim(
+                        Name::new(var_name),
+                        QuantifiedKind::TypeVarTuple,
+                    ),
+                };
                 Type::Quantified(Box::new(q))
             };
 
-            let shaped_array_shape = ShapedArrayShape::unpacked(prefix, middle, suffix);
-            ShapedArrayType::new(base_class, shaped_array_shape)
-                .with_syntax(ShapedArraySyntax::Jaxtyping)
-                .to_type()
+            let shaped_array_shape = IntTuple::unpacked_from_types(prefix, middle, suffix);
+            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
         } else {
             // Concrete shape: all tokens are non-variadic dims
             let dims = self.parse_jaxtyping_dim_tokens(&tokens);
-            let shaped_array_shape = ShapedArrayShape::from_types(dims);
-            ShapedArrayType::new(base_class, shaped_array_shape)
-                .with_syntax(ShapedArraySyntax::Jaxtyping)
-                .to_type()
+            let shaped_array_shape = IntTuple::from_types(dims);
+            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
         }
     }
 
@@ -369,7 +422,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// jaxtyping's parser behavior:
     /// 1. Strip broadcast `#` prefix (treated as regular dim — conservative, safe)
     /// 2. `_` → `Type::Any(AnyStyle::Implicit)` (anonymous, any size)
-    /// 3. Integer → `Type::Size(SizeExpr::Literal(n))`
+    /// 3. Integer → `Type::Int(Int::Literal(n))`
     /// 4. Parenthesized → strip outer parens, parse inner as arithmetic
     /// 5. Contains `+`/`-` (not at position 0) → arithmetic expression
     /// 6. Named identifier → Quantified TypeVar (cached per module)
@@ -387,7 +440,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
                 // Integer literal: "3", "-1", etc.
                 if let Ok(n) = token.parse::<i64>() {
-                    return self.heap.mk_size(SizeExpr::literal(n));
+                    return self.heap.mk_int(Int::literal(n));
                 }
 
                 // Parenthesized expression: "(dim+1)" → strip parens, parse as arithmetic
@@ -403,7 +456,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
 
                 // Named dimension: "batch", "channels", etc.
-                let q = self.get_or_create_jaxtyping_dim(Name::new(token), QuantifiedKind::TypeVar);
+                let q = self.get_or_create_jaxtyping_dim(Name::new(token), QuantifiedKind::IntVar);
                 Type::Quantified(Box::new(q))
             })
             .collect()
@@ -413,7 +466,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ///
     /// Looks for the last `+` or `-` not at position 0 (to avoid treating
     /// negative integer literals like "-3" as subtraction). Splits into
-    /// left/right atoms and creates `SizeExpr::Add` or `SizeExpr::Sub`.
+    /// left/right atoms and creates `Int::Add` or `Int::Sub`.
     ///
     /// Returns `None` if the token contains no arithmetic operator.
     fn parse_jaxtyping_arithmetic(&self, token: &str) -> Option<Type> {
@@ -434,9 +487,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Parse each operand as an integer literal or named dim
         let parse_atom = |s: &str| -> Type {
             if let Ok(n) = s.parse::<i64>() {
-                self.heap.mk_size(SizeExpr::literal(n))
+                self.heap.mk_int(Int::literal(n))
             } else {
-                let q = self.get_or_create_jaxtyping_dim(Name::new(s), QuantifiedKind::TypeVar);
+                let q = self.get_or_create_jaxtyping_dim(Name::new(s), QuantifiedKind::IntVar);
                 Type::Quantified(Box::new(q))
             }
         };
@@ -444,13 +497,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let left = parse_atom(left_str);
         let right = parse_atom(right_str);
 
-        let size_expr = match op {
-            '+' => SizeExpr::add(left, right),
-            '-' => SizeExpr::sub(left, right),
+        let symint = match op {
+            '+' => Int::add(left, right),
+            '-' => Int::sub(left, right),
             _ => unreachable!("only '+' and '-' are matched above"),
         };
 
-        Some(self.heap.mk_size(size_expr))
+        Some(self.heap.mk_int(symint))
     }
 
     /// Collect implicit jaxtyping TypeVars from a callable's signature and

@@ -376,16 +376,18 @@ fn test_tensor_shapes_availability_uses_origin_sensitive_resolution() {
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#,
     )
     .unwrap();
     fs::write(
         pkg.join("torch.pyi"),
         r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#,
     )
     .unwrap();
@@ -496,10 +498,10 @@ fn test_tensor_shapes_find_invalidation_rebuilds_module() {
     fs::write(
         root.join("torch.pyi"),
         r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#,
     )
     .unwrap();
@@ -575,6 +577,8 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#,
     )
     .unwrap();
@@ -680,10 +684,10 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
             PathBuf::from("torch.pyi"),
             Some(Arc::new(FileContents::from_source(
                 r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#
                 .to_owned(),
             ))),
@@ -704,6 +708,8 @@ class Float[*Shape]: ...
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#
                 .to_owned(),
             ))),
@@ -775,16 +781,18 @@ fn test_tensor_shapes_find_invalidation_drops_shapes_on_removal() {
 from typing import Any
 
 shaped_array: Any
+class IntTuple:
+    def __class_getitem__(cls, params: Any) -> Any: ...
 "#,
     )
     .unwrap();
     fs::write(
         root.join("torch.pyi"),
         r#"
-from shape_extensions import shaped_array
+from shape_extensions import IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[*Shape]: ...
+class Tensor[Shape: IntTuple]: ...
 "#,
     )
     .unwrap();

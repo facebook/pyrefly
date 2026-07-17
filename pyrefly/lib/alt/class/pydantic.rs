@@ -565,7 +565,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
-                    && let Some(keywords) = self.compute_dataclass_field_initialization(call, dm)
+                    && let Some(keywords) =
+                        self.compute_dataclass_field_initialization(call, None, dm)
                 {
                     return Some(keywords);
                 }

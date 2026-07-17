@@ -7,10 +7,12 @@
 
 use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::util::get_test_files_root;
 
 #[test]
@@ -137,7 +139,13 @@ fn test_references_workspace_smaller_than_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("config_with_workspace_smaller");
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -197,7 +205,13 @@ fn test_references_cross_file_no_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -259,7 +273,13 @@ fn test_include_declaration_respects_false() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -317,7 +337,13 @@ fn test_references_cross_file_no_config_nested() {
     let root = get_test_files_root();
     let root_path = root.path().join("nested_test").to_path_buf();
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -378,7 +404,13 @@ fn test_references_cross_file_with_marker_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("marker_file_no_config");
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -726,7 +758,13 @@ fn test_references_cross_file_method_inheritance() {
     let root = get_test_files_root();
     let root_path = root.path().join("references_cross_file_method_inheritance");
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -786,7 +824,13 @@ fn test_references_for_init_priority() {
         .path()
         .join("constructor_priority_references/init_priority");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -833,7 +877,13 @@ fn test_references_for_new_priority() {
         .path()
         .join("constructor_priority_references/new_priority");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -879,7 +929,13 @@ fn test_references_for_metaclass_call_priority() {
         .path()
         .join("constructor_priority_references/metaclass_priority");
     let scope_uri = Url::from_file_path(&root_path).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {

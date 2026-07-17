@@ -512,7 +512,7 @@ impl Playground {
                     start_col: range.start.column().get() as i32,
                     end_line: range.end.line_within_file().get() as i32,
                     end_col: range.end.column().get() as i32,
-                    message_header: format!("Import `{}` is unused", unused.name.as_str()),
+                    message_header: format!("Import `{}` may be unused", unused.name.as_str()),
                     message_details: String::new(),
                     kind: "unused-import".to_owned(),
                     // MarkerSeverity.Hint (1)
@@ -1032,7 +1032,10 @@ mod tests {
             .collect();
 
         assert_eq!(unused_imports.len(), 1, "Should detect 1 unused import");
-        assert_eq!(unused_imports[0].message_header, "Import `Dict` is unused");
+        assert_eq!(
+            unused_imports[0].message_header,
+            "Import `Dict` may be unused"
+        );
         assert_eq!(unused_imports[0].severity, 1); // MarkerSeverity.Hint
     }
 
