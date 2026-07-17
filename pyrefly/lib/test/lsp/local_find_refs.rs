@@ -97,6 +97,72 @@ References:
 }
 
 #[test]
+fn references_to_aliased_submodule_stop_at_import() {
+    let main = r#"
+from xxx import yyy as zzz
+#                      ^
+
+zzz.f()
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", main), ("xxx", ""), ("xxx.yyy", "def f(): ...\n")],
+        |state, handle, position| get_test_report(state, handle, position, true),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | from xxx import yyy as zzz
+                           ^
+References:
+2 | from xxx import yyy as zzz
+                           ^^^
+5 | zzz.f()
+    ^^^
+
+
+# xxx.py
+
+# xxx.yyy.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn references_to_aliased_module_stop_at_import() {
+    let main = r#"
+import xxx.yyy as zzz
+#                 ^
+
+zzz.f()
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", main), ("xxx", ""), ("xxx.yyy", "def f(): ...\n")],
+        |state, handle, position| get_test_report(state, handle, position, true),
+    );
+    assert_eq!(
+        r#"
+# main.py
+2 | import xxx.yyy as zzz
+                      ^
+References:
+2 | import xxx.yyy as zzz
+                      ^^^
+5 | zzz.f()
+    ^^^
+
+
+# xxx.py
+
+# xxx.yyy.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn pytest_fixture_references_include_injected_parameters() {
     let code = r#"
 import pytest  # type: ignore
