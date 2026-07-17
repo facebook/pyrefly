@@ -21,12 +21,12 @@ use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
 use pyrefly::commands::lsp::LspArgs;
 use pyrefly_util::fs_anyhow::read_to_string;
-use pyrefly_util::telemetry::NoTelemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 
 #[test]
 #[ignore] // Run manually with: PYTORCH_PATH=/path/to/pytorch cargo test --release test_pytorch_error_propagation_latency -- --ignored --nocapture
@@ -46,8 +46,11 @@ fn test_pytorch_error_propagation_latency() {
         build_system_blocking: false,
     };
     // Use all available cores for realistic benchmarking
-    let mut interaction =
-        LspInteraction::new_with_args(args, NoTelemetry, Some(ThreadCount::AllThreads), None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args,
+        thread_count: ThreadCount::AllThreads,
+        ..Default::default()
+    });
     interaction.set_root(pytorch_root.clone());
 
     interaction

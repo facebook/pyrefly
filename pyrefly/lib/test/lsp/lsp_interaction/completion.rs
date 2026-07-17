@@ -17,10 +17,12 @@ use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::request::Completion;
 use lsp_types::request::ResolveCompletionItem;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 use serde_json::json;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::util::get_test_files_root;
 
 #[test]
@@ -416,8 +418,13 @@ fn test_completion_with_autoimport() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -452,11 +459,74 @@ fn test_completion_with_autoimport() {
 }
 
 #[test]
+fn test_completion_autoimport_disabled() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "autoImportCompletions": false
+                }
+            }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file = root_path.join("foo.py");
+    interaction.client.did_open("foo.py");
+
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&file).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "this_is_a_very_long_function_name_so_we_can".to_owned()
+            }],
+        }));
+
+    // With autoImportCompletions disabled, the symbol that would require a new import
+    // must not be offered (no completion item carrying an import edit for it).
+    interaction
+        .client
+        .completion("foo.py", 0, 43)
+        .expect_completion_response_with(|list| {
+            list.items.iter().all(|item| {
+                item.label
+                    != "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_completion_with_autoimport_submodule() {
     let root = get_test_files_root();
     let root_path = root.path().join("autoimport_submodule");
 
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -714,8 +784,13 @@ fn test_stdlib_submodule_completion() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -744,8 +819,13 @@ fn test_stdlib_class_completion() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -868,8 +948,13 @@ fn test_autoimport_completions_show_reexported_paths() {
     let root = get_test_files_root();
     let root_path = root.path().join("autoimport_reexport_test");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction

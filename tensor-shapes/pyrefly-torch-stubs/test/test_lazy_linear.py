@@ -21,14 +21,14 @@ if TYPE_CHECKING:
 def test_lazy_linear_preserves_out_features():
     """LazyLinear output has known out_features dim."""
     proj = nn.LazyLinear(128)
-    x: Tensor[4, 256] = torch.randn(4, 256)
+    x: Tensor[[4, 256]] = torch.randn(4, 256)
     out = proj(x)
-    assert_type(out, Tensor[4, 128])
+    assert_type(out, Tensor[[4, 128]])
 
 
 def test_lazy_linear_batched():
     """LazyLinear preserves batch dims via variadic *Bs."""
     proj = nn.LazyLinear(64)
-    x: Tensor[2, 8, 512] = torch.randn(2, 8, 512)
+    x: Tensor[[2, 8, 512]] = torch.randn(2, 8, 512)
     out = proj(x)
-    assert_type(out, Tensor[2, 8, 64])
+    assert_type(out, Tensor[[2, 8, 64]])

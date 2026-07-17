@@ -395,6 +395,16 @@ def foo(f: MyFlag) -> None:
 );
 
 testcase!(
+    test_recursive_enum_class,
+    r#"
+import enum
+
+class C(C, enum.Enum):  # E: Class `C` inheriting from `C` creates a cycle  # E: Cannot extend final class `C`
+    a = 1
+"#,
+);
+
+testcase!(
     test_enum_instance_only_attr,
     r#"
 from typing import assert_type, Any

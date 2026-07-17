@@ -337,6 +337,9 @@ pub struct LspAnalysisConfig {
     pub diagnostic_mode: Option<DiagnosticMode>,
     pub import_format: Option<ImportFormat>,
     pub complete_function_parens: Option<bool>,
+    /// When false, completions no longer offer symbols that require adding a new
+    /// import (and the corresponding import edit). Defaults to true, matching Pylance.
+    pub auto_import_completions: Option<bool>,
     pub inlay_hints: Option<InlayHintConfig>,
     // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]
@@ -348,6 +351,7 @@ impl LspAnalysisConfig {
         self.diagnostic_mode.is_some()
             || self.import_format.is_some()
             || self.complete_function_parens.is_some()
+            || self.auto_import_completions.is_some()
             || self.inlay_hints.is_some()
             || self.show_hover_go_to_links.is_some()
     }
@@ -359,6 +363,9 @@ impl LspAnalysisConfig {
             complete_function_parens: overrides
                 .complete_function_parens
                 .or(self.complete_function_parens),
+            auto_import_completions: overrides
+                .auto_import_completions
+                .or(self.auto_import_completions),
             inlay_hints: overrides.inlay_hints.or(self.inlay_hints),
             show_hover_go_to_links: overrides
                 .show_hover_go_to_links

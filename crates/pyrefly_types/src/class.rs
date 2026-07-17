@@ -90,6 +90,7 @@ pub struct AttrsFieldSpecifier {
     pub kind: AttrsFieldSpecifierKind,
     pub default_is_nothing: bool,
     pub default_decorator_method_range: Option<TextRange>,
+    pub converter_decorator_method_range: Option<TextRange>,
 }
 
 /// Simple properties of class fields that can be attached to the class definition. Note that this
@@ -169,6 +170,10 @@ impl ClassFields {
         self.0.contains_key(name)
     }
 
+    pub fn get_index_of(&self, name: &Name) -> Option<usize> {
+        self.0.get_index_of(name)
+    }
+
     pub fn fields(&self) -> impl ExactSizeIterator<Item = &Name> {
         self.0.keys()
     }
@@ -216,6 +221,14 @@ impl ClassFields {
             .get(name)
             .and_then(|prop| prop.attrs_field_specifier)
             .and_then(|s| s.default_decorator_method_range)
+    }
+
+    /// The name range of this field's first `@<field>.converter` method, if any.
+    pub fn attrs_converter_decorator_method_range(&self, name: &Name) -> Option<TextRange> {
+        self.0
+            .get(name)
+            .and_then(|prop| prop.attrs_field_specifier)
+            .and_then(|s| s.converter_decorator_method_range)
     }
 
     /// Whether the field's attrs specifier honors a `type=` argument (`attr.ib`, not `field`).

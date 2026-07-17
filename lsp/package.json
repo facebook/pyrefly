@@ -261,6 +261,12 @@
                     "description": "Automatically insert parentheses when completing a function or method.",
                     "scope": "resource"
                 },
+                "python.analysis.autoImportCompletions": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement.",
+                    "scope": "resource"
+                },
                 "python.pyrefly.diagnosticMode": {
                     "type": "string",
                     "default": "openFilesOnly",

@@ -62,6 +62,7 @@ use crate::export::definitions::MutableCaptureKind;
 use crate::export::special::SpecialExport;
 use crate::state::loader::FindingOrError;
 use crate::types::alias::resolve_typeshed_alias;
+use crate::types::quantified::QuantifiedKind;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::AnyStyle;
 
@@ -78,6 +79,14 @@ pub(crate) const SPECIAL_IMPORT_FUNCTIONS: &[&str] = &[
 /// Returns true if the given name is a special import function.
 pub(crate) fn is_special_import_function(name: &str) -> bool {
     SPECIAL_IMPORT_FUNCTIONS.contains(&name)
+}
+
+fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
+    match special {
+        SpecialExport::TypeVar => Some(QuantifiedKind::TypeVar),
+        SpecialExport::IntVar => Some(QuantifiedKind::IntVar),
+        _ => None,
+    }
 }
 
 /// Returns true if the module name represents a directory import
@@ -137,7 +146,7 @@ fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
 impl<'a> BindingsBuilder<'a> {
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
         let test_range = test.range();
-        self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
+        self.ensure_expr(&mut test, &mut Usage::NonPinningValue(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
         let test_clone = test.clone();
@@ -151,7 +160,7 @@ impl<'a> BindingsBuilder<'a> {
             self.bind_narrow_ops(
                 &negated_narrow_ops,
                 NarrowUseLocation::Span(msg_expr.range()),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
             );
             let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
             self.ensure_expr(&mut msg_expr, msg.usage());
@@ -165,7 +174,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops,
             NarrowUseLocation::Span(assert_range),
-            &Usage::Narrowing(None),
+            &Usage::NonPinningValue(None),
         );
         if let Some(false) = static_test {
             self.scopes.mark_flow_termination(true);
@@ -310,7 +319,7 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall) {
+    fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall, kind: QuantifiedKind) {
         // Type var declarations are static types only; skip them for first-usage type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation {
             is_annotation: false,
@@ -323,12 +332,31 @@ impl<'a> BindingsBuilder<'a> {
         // The constraints (i.e., any positional arguments after the first)
         // and some keyword arguments are types.
         for arg in iargs {
+            if self.as_direct_shape_intvar(arg) {
+                self.error(
+                    arg.range(),
+                    ErrorKind::InvalidTypeVar,
+                    "`IntVar` cannot be used as a TypeVar constraint".to_owned(),
+                );
+                self.ensure_expr(arg, static_type_usage);
+                continue;
+            }
             self.ensure_type(arg, &mut None);
         }
         for kw in call.arguments.keywords.iter_mut() {
             if let Some(id) = &kw.arg
                 && (id.id == "bound" || id.id == "default")
             {
+                if self.as_direct_shape_intvar(&kw.value) {
+                    let role = if id.id == "bound" { "bound" } else { "default" };
+                    self.error(
+                        kw.value.range(),
+                        ErrorKind::InvalidTypeVar,
+                        format!("`IntVar` cannot be used as a TypeVar {role}"),
+                    );
+                    self.ensure_expr(&mut kw.value, static_type_usage);
+                    continue;
+                }
                 self.ensure_type(&mut kw.value, &mut None);
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
@@ -339,6 +367,7 @@ impl<'a> BindingsBuilder<'a> {
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
+                kind,
             )))
         })
     }
@@ -602,7 +631,11 @@ impl<'a> BindingsBuilder<'a> {
         is_initialized: AnnAssignHasValue,
     ) -> Idx<KeyAnnotation> {
         let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(name));
-        self.ensure_type(annotation, &mut None);
+        if self.scopes.in_class_body() {
+            self.ensure_class_member_type(annotation, &mut None);
+        } else {
+            self.ensure_type(annotation, &mut None);
+        }
         let ann_val = if let Some(special) = SpecialForm::new(&name.id, annotation) {
             // Special case `_: SpecialForm` declarations (this mainly affects some names declared in `typing.pyi`)
             BindingAnnotation::SpecialForm(
@@ -711,11 +744,11 @@ impl<'a> BindingsBuilder<'a> {
                     if let Expr::Call(call) = &mut *x.value
                         && let Some(special) = self.as_special_export(&call.func)
                     {
+                        if let Some(kind) = special_type_var_kind(special) {
+                            self.assign_type_var(name, call, kind);
+                            return;
+                        }
                         match special {
-                            SpecialExport::TypeVar => {
-                                self.assign_type_var(name, call);
-                                return;
-                            }
                             SpecialExport::ParamSpec => {
                                 self.assign_param_spec(name, call);
                                 return;
@@ -862,6 +895,7 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         match special {
                             SpecialExport::TypeVar
+                            | SpecialExport::IntVar
                             | SpecialExport::ParamSpec
                             | SpecialExport::TypeVarTuple => {
                                 let ident = Ast::expr_name_identifier(name.clone());
@@ -870,17 +904,18 @@ impl<'a> BindingsBuilder<'a> {
                                     &mut x.annotation,
                                     AnnAssignHasValue::Yes,
                                 );
-                                match special {
-                                    SpecialExport::TypeVar => {
-                                        self.assign_type_var(&name, call);
+                                if let Some(kind) = special_type_var_kind(special) {
+                                    self.assign_type_var(&name, call, kind);
+                                } else {
+                                    match special {
+                                        SpecialExport::ParamSpec => {
+                                            self.assign_param_spec(&name, call);
+                                        }
+                                        SpecialExport::TypeVarTuple => {
+                                            self.assign_type_var_tuple(&name, call);
+                                        }
+                                        _ => unreachable!("filtered by outer match"),
                                     }
-                                    SpecialExport::ParamSpec => {
-                                        self.assign_param_spec(&name, call);
-                                    }
-                                    SpecialExport::TypeVarTuple => {
-                                        self.assign_type_var_tuple(&name, call);
-                                    }
-                                    _ => unreachable!("filtered by outer match"),
                                 }
                                 return;
                             }
@@ -959,7 +994,7 @@ impl<'a> BindingsBuilder<'a> {
                     let ann_key = self.insert_binding(
                         KeyAnnotation::AttrAnnotation(x.annotation.range()),
                         BindingAnnotation::AnnotateExpr(
-                            AnnotationTarget::ClassMember(attr_name.clone()),
+                            AnnotationTarget::AttrAssign(attr_name.clone()),
                             *x.annotation,
                             None,
                         ),
@@ -1167,7 +1202,7 @@ impl<'a> BindingsBuilder<'a> {
                 // narrowing and type checking are aware that the test might be impacted by changes
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
-                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                self.ensure_expr(&mut x.test, &mut Usage::NonPinningValue(None));
                 // The while condition always evaluates at least once, so walrus
                 // targets are guaranteed to be assigned after the loop.
                 self.scopes.propagate_new_flow_entries_to_loop_base();
@@ -1176,7 +1211,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.bind_narrow_ops(
                     &narrow_ops,
                     NarrowUseLocation::Span(x.range),
-                    &Usage::Narrowing(None),
+                    &Usage::NonPinningValue(None),
                 );
                 self.insert_binding(
                     KeyExpect::Bool(x.test.range()),
@@ -1200,7 +1235,7 @@ impl<'a> BindingsBuilder<'a> {
                 // Process the first `if` test before forking so that walrus-defined names
                 // are in the base flow and visible after the if-statement. This mirrors the
                 // fix for ternary expressions in expr.rs (Expr::If handling).
-                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                self.ensure_expr(&mut x.test, &mut Usage::NonPinningValue(None));
                 self.start_fork(if_range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
@@ -1217,7 +1252,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_narrow_ops(
                         &negated_prev_ops,
                         NarrowUseLocation::Start(range),
-                        &Usage::Narrowing(None),
+                        &Usage::NonPinningValue(None),
                     );
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
@@ -1236,7 +1271,7 @@ impl<'a> BindingsBuilder<'a> {
                     // The first `if` test was already processed before the fork (above).
                     // Only process elif/else tests here, inside the branch.
                     if !is_first_branch {
-                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                        self.ensure_expr_opt(test.as_mut(), &mut Usage::NonPinningValue(None));
                         // Lift walrus-defined names from the elif condition into the
                         // fork's base flow. The elif condition always executes when
                         // control reaches past the preceding branch, so any walrus
@@ -1270,7 +1305,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_narrow_ops(
                         &new_narrow_ops,
                         NarrowUseLocation::Span(range),
-                        &Usage::Narrowing(None),
+                        &Usage::NonPinningValue(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
                     self.stmts(body, parent);

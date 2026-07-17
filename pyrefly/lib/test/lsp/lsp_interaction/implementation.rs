@@ -7,15 +7,23 @@
 
 use lsp_types::Url;
 use pyrefly::commands::lsp::IndexingMode;
+use pyrefly::commands::lsp::LspArgs;
 
 use crate::object_model::InitializeSettings;
 use crate::object_model::LspInteraction;
+use crate::object_model::LspInteractionArgs;
 use crate::util::get_test_files_root;
 
 #[test]
 fn implementation_on_definition_test() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     let test_root = root.path().join("references_cross_file_method_inheritance");
     interaction.set_root(test_root.clone());
     interaction
@@ -49,7 +57,13 @@ fn implementation_on_definition_test() {
 #[test]
 fn implementation_on_call_test() {
     let root = get_test_files_root();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     let test_root = root.path().join("references_cross_file_method_inheritance");
     interaction.set_root(test_root.clone());
     interaction

@@ -41,10 +41,10 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
-# Activation function type — all are shape-preserving: Tensor[*S] -> Tensor[*S]
+# Activation function type — all are shape-preserving: Tensor[S] -> Tensor[S]
 ShapePreservingActivation = (
     type[nn.ReLU]
     | type[nn.SELU]
@@ -60,7 +60,7 @@ ShapePreservingActivation = (
 # ============================================================================
 
 
-class AutoEncoder[InDim, H1, H2](nn.Module):
+class AutoEncoder[InDim: IntVar, H1: IntVar, H2: IntVar](nn.Module):
     """Symmetric autoencoder for collaborative filtering.
 
     Architecture (3-layer):
@@ -72,9 +72,9 @@ class AutoEncoder[InDim, H1, H2](nn.Module):
 
     def __init__(
         self,
-        in_dim: Dim[InDim],
-        h1: Dim[H1],
-        h2: Dim[H2],
+        in_dim: Int[InDim],
+        h1: Int[H1],
+        h2: Int[H2],
         act_fn: ShapePreservingActivation = nn.SELU,
         dp_drop_prob: float = 0.0,
     ) -> None:
@@ -92,23 +92,23 @@ class AutoEncoder[InDim, H1, H2](nn.Module):
         self.dec1 = nn.Linear(h2, h1)
         self.dec2 = nn.Linear(h1, in_dim)
 
-    def encode[B](self, x: Tensor[B, InDim]) -> Tensor[B, H2]:
+    def encode[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, H2]]:
         h = self.act(self.enc1(x))
-        assert_type(h, Tensor[B, H1])
+        assert_type(h, Tensor[[B, H1]])
         z = self.act(self.enc2(h))
-        assert_type(z, Tensor[B, H2])
+        assert_type(z, Tensor[[B, H2]])
         if self.dp_drop_prob > 0:
             z = self.drop(z)
         return z
 
-    def decode[B](self, z: Tensor[B, H2]) -> Tensor[B, InDim]:
+    def decode[B: IntVar](self, z: Tensor[[B, H2]]) -> Tensor[[B, InDim]]:
         h = self.act(self.dec1(z))
-        assert_type(h, Tensor[B, H1])
+        assert_type(h, Tensor[[B, H1]])
         out = self.act(self.dec2(h))
-        assert_type(out, Tensor[B, InDim])
+        assert_type(out, Tensor[[B, InDim]])
         return out
 
-    def forward[B](self, x: Tensor[B, InDim]) -> Tensor[B, InDim]:
+    def forward[B: IntVar](self, x: Tensor[[B, InDim]]) -> Tensor[[B, InDim]]:
         return self.decode(self.encode(x))
 
 
@@ -117,7 +117,9 @@ class AutoEncoder[InDim, H1, H2](nn.Module):
 # ============================================================================
 
 
-def MSEloss[B, InDim](inputs: Tensor[B, InDim], targets: Tensor[B, InDim]) -> Tensor:
+def MSEloss[B: IntVar, InDim: IntVar](
+    inputs: Tensor[[B, InDim]], targets: Tensor[[B, InDim]]
+) -> Tensor:
     """Masked MSE loss — only computes error on non-zero target entries.
 
     In collaborative filtering, the ratings matrix is sparse: most entries are
@@ -144,47 +146,47 @@ def MSEloss[B, InDim](inputs: Tensor[B, InDim], targets: Tensor[B, InDim]) -> Te
 def test_autoencoder_encode():
     """Test encoder: (B, InDim) → (B, H2)."""
     ae = AutoEncoder(10000, 1024, 512)
-    x: Tensor[32, 10000] = torch.randn(32, 10000)
+    x: Tensor[[32, 10000]] = torch.randn(32, 10000)
     z = ae.encode(x)
-    assert_type(z, Tensor[32, 512])
+    assert_type(z, Tensor[[32, 512]])
 
 
 def test_autoencoder_decode():
     """Test decoder: (B, H2) → (B, InDim)."""
     ae = AutoEncoder(10000, 1024, 512)
-    z: Tensor[32, 512] = torch.randn(32, 512)
+    z: Tensor[[32, 512]] = torch.randn(32, 512)
     out = ae.decode(z)
-    assert_type(out, Tensor[32, 10000])
+    assert_type(out, Tensor[[32, 10000]])
 
 
 def test_autoencoder_roundtrip():
     """Test full autoencoder: (B, InDim) → (B, InDim)."""
     ae = AutoEncoder(10000, 1024, 512)
-    x: Tensor[16, 10000] = torch.randn(16, 10000)
+    x: Tensor[[16, 10000]] = torch.randn(16, 10000)
     out = ae(x)
-    assert_type(out, Tensor[16, 10000])
+    assert_type(out, Tensor[[16, 10000]])
 
 
 def test_autoencoder_relu():
     """Test with ReLU activation instead of default SELU."""
     ae = AutoEncoder(5000, 512, 256, act_fn=nn.ReLU)
-    x: Tensor[8, 5000] = torch.randn(8, 5000)
+    x: Tensor[[8, 5000]] = torch.randn(8, 5000)
     out = ae(x)
-    assert_type(out, Tensor[8, 5000])
+    assert_type(out, Tensor[[8, 5000]])
 
 
 def test_autoencoder_with_dropout():
     """Test with dropout on bottleneck."""
     ae = AutoEncoder(5000, 512, 256, dp_drop_prob=0.5)
-    x: Tensor[8, 5000] = torch.randn(8, 5000)
+    x: Tensor[[8, 5000]] = torch.randn(8, 5000)
     out = ae(x)
-    assert_type(out, Tensor[8, 5000])
+    assert_type(out, Tensor[[8, 5000]])
 
 
 def test_mse_loss():
     """Test masked MSE loss on autoencoder output."""
     ae = AutoEncoder(10000, 1024, 512)
-    x: Tensor[32, 10000] = torch.randn(32, 10000)
+    x: Tensor[[32, 10000]] = torch.randn(32, 10000)
     out = ae(x)
     loss = MSEloss(out, x)
     assert_type(loss, Tensor)
