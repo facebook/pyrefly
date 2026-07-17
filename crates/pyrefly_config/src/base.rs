@@ -183,6 +183,7 @@ impl Preset {
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -199,6 +200,7 @@ impl Preset {
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -304,6 +306,13 @@ pub struct ConfigBase {
     /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
+
+    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
+    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
+    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// parameter types and arity are checked precisely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_partial_subtyping: Option<bool>,
 
     /// Whether to use spec-compliant overload evaluation semantics.
     /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
@@ -414,6 +423,10 @@ impl ConfigBase {
 
     pub fn get_strict_callable_subtyping(base: &Self) -> Option<bool> {
         base.strict_callable_subtyping
+    }
+
+    pub fn get_strict_partial_subtyping(base: &Self) -> Option<bool> {
+        base.strict_partial_subtyping
     }
 
     pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {

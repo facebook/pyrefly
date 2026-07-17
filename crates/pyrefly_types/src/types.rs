@@ -46,8 +46,9 @@ use crate::callable_residual::CallableResidual;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
+use crate::data_frame::DataFrameSchema;
 use crate::dimension;
-use crate::dimension::SizeExpr;
+use crate::dimension::Int;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
@@ -60,12 +61,14 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::sentinel::Sentinel;
+use crate::shaped_array::IntTuple;
 use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_level_dsl::TypeLevelDslCall;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -608,7 +611,7 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
-#[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq)]
 pub struct Union {
     pub members: Vec<Type>,
     pub display_name: Option<(ModuleName, Name)>,
@@ -623,6 +626,24 @@ impl PartialEq for Union {
 impl Hash for Union {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.members.hash(state)
+    }
+}
+
+impl PartialOrd for Union {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Union {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.members.cmp(&other.members)
+    }
+}
+
+impl TypeEq for Union {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        self.members.type_eq(&other.members, ctx)
     }
 }
 
@@ -657,7 +678,7 @@ impl VisitMut<Type> for Union {
 pub struct NNModuleType {
     /// The underlying nn.Module subclass (e.g., MaxPool2d).
     pub class: ClassType,
-    /// Captured init args (e.g., kernel_size → Size(3), stride → None).
+    /// Captured init args (e.g., kernel_size → Int(3), stride → None).
     /// Ordered by constructor parameter order.
     pub fields: SmallMap<Name, Type>,
 }
@@ -749,6 +770,9 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
+    /// A type-level shape DSL application that is valid inside callable return annotations.
+    /// Call return-boundary processing forces this to a result-schema projection.
+    TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
@@ -787,27 +811,24 @@ pub enum Type {
     /// Shaped-array type with shape information.
     /// Example: Tensor[2, 3] represents a 2x3 tensor
     ShapedArray(Box<ShapedArrayType>),
+    /// First-class tensor shape tuple.
+    IntTuple(Box<IntTuple>),
     /// nn.Module instance with captured constructor arguments.
     /// Wraps a ClassType + field map of init args, enabling DSL forward
     /// functions to access shape-relevant constructor parameters directly.
     NNModule(Box<NNModuleType>),
+    /// DataFrame instance with an inferred column schema.
+    /// Wraps an underlying DataFrame instance type and an ordered column schema;
+    /// all behavior delegates to the underlying type.
+    DataFrame(Box<DataFrameSchema>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:
-    ///   - Type::Size(SizeExpr::Literal(6)) for concrete dimension 6
-    ///   - Type::Size(SizeExpr::Var(v)) for dimension variables
+    ///   - `Type::Int(Int::Literal(6))` for concrete dimension 6
+    ///   - `Type::Int(Int::Symbolic(v))` for dimension variables
     ///
     /// This is the type-level representation of dimension values, used when
     /// type variables with Dim bound unify with concrete dimension values.
-    Size(SizeExpr),
-    /// Symbolic integer type - wraps dimension expressions for use in type annotations
-    /// Examples:
-    ///   - Type::Dim(SizeExpr(Literal(3))) for Dim[3]
-    ///   - Type::Dim(Quantified) for Dim[N]
-    ///   - Type::Dim(SizeExpr(Add(...))) for Dim[N+1]
-    ///
-    /// This is the type annotation form of symbolic integers, distinct from
-    /// concrete integer literals which use Type::Literal(Lit::Int(...)).
-    Dim(Box<Type>),
+    Int(Int),
     Tuple(Tuple),
     Module(ModuleType),
     Forall(Box<Forall<Forallable>>),
@@ -898,6 +919,7 @@ impl Visit for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::CallableResidual(x) => x.visit(f),
+            Type::TypeLevelDslCall(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
             Type::Overload(x) => x.visit(f),
@@ -908,9 +930,10 @@ impl Visit for Type {
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
             Type::ShapedArray(x) => x.visit(f),
+            Type::IntTuple(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
-            Type::Size(x) => x.visit(f),
-            Type::Dim(x) => x.visit(f),
+            Type::DataFrame(x) => x.visit(f),
+            Type::Int(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
             Type::Module(x) => x.visit(f),
             Type::Forall(x) => x.visit(f),
@@ -955,6 +978,7 @@ impl VisitMut for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::CallableResidual(x) => x.visit_mut(f),
+            Type::TypeLevelDslCall(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
             Type::Overload(x) => x.visit_mut(f),
@@ -965,9 +989,10 @@ impl VisitMut for Type {
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
             Type::ShapedArray(x) => x.visit_mut(f),
+            Type::IntTuple(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
-            Type::Size(x) => x.visit_mut(f),
-            Type::Dim(x) => x.visit_mut(f),
+            Type::DataFrame(x) => x.visit_mut(f),
+            Type::Int(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
             Type::Module(x) => x.visit_mut(f),
             Type::Forall(x) => x.visit_mut(f),
@@ -1140,6 +1165,11 @@ impl Type {
 
     pub fn is_literal_string(&self) -> bool {
         self.lit_string_style().is_some()
+    }
+
+    /// A scalar type cannot decompose into a container element type.
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, Type::Literal(_) | Type::LiteralString(_) | Type::None)
     }
 
     /// If this type is a literal string (either `LiteralString` or a `Literal` string value),
@@ -1401,6 +1431,12 @@ impl Type {
         }
     }
 
+    pub fn is_assert_shape(&self) -> bool {
+        self.visit_toplevel_func_metadata(&|meta| {
+            meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
+        })
+    }
+
     pub fn is_none(&self) -> bool {
         matches!(self, Type::None)
     }
@@ -1452,6 +1488,72 @@ impl Type {
     pub fn subst(mut self, mp: &SmallMap<&Quantified, &Type>) -> Self {
         self.subst_mut(mp);
         self
+    }
+
+    pub fn finalize_type_level_dsl_at_boundary(&mut self) -> Vec<dimension::ShapeError> {
+        let mut errors = Vec::new();
+
+        // Nested applications are dependencies of the public application being forced here:
+        // propagate the first invalid dependency upward so fallback is applied only at that
+        // public result-schema boundary.
+        fn force_nested(ty: &mut Type) -> Result<(), dimension::ShapeError> {
+            let Type::TypeLevelDslCall(call) = ty else {
+                match ty {
+                    Type::Callable(_)
+                    | Type::Function(_)
+                    | Type::BoundMethod(_)
+                    | Type::Overload(_)
+                    | Type::Forall(_) => return Ok(()),
+                    _ => {
+                        let mut error = None;
+                        ty.recurse_mut(&mut |ty| {
+                            if error.is_none() {
+                                error = force_nested(ty).err();
+                            }
+                        });
+                        return match error {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        };
+                    }
+                }
+            };
+            for arg in &mut call.args {
+                if let Err(error) = force_nested(arg) {
+                    *ty = call.fallback();
+                    return Err(error);
+                }
+            }
+            match call.evaluate() {
+                Ok(result) => {
+                    *ty = result;
+                    Ok(())
+                }
+                Err(error) => {
+                    *ty = call.fallback();
+                    Err(error)
+                }
+            }
+        }
+
+        fn collect_errors(ty: &mut Type, errors: &mut Vec<dimension::ShapeError>) {
+            if matches!(ty, Type::TypeLevelDslCall(_)) {
+                if let Err(error) = force_nested(ty) {
+                    errors.push(error);
+                }
+                return;
+            }
+            match ty {
+                Type::Callable(_)
+                | Type::Function(_)
+                | Type::BoundMethod(_)
+                | Type::Overload(_)
+                | Type::Forall(_) => {}
+                _ => ty.recurse_mut(&mut |ty| collect_errors(ty, errors)),
+            }
+        }
+        collect_errors(self, &mut errors);
+        errors
     }
 
     pub fn subst_self_special_form_mut(&mut self, self_type: &Type) {
@@ -1888,10 +1990,10 @@ impl Type {
         }
     }
 
-    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
+    /// Extract the literal value from a `Int::Literal`, if this is one.
     pub fn as_shape_literal(&self) -> Option<i64> {
         match self {
-            Type::Size(SizeExpr::Literal(n)) => Some(*n),
+            Type::Int(Int::Literal(n)) => Some(*n),
             _ => None,
         }
     }
@@ -1991,6 +2093,18 @@ impl Type {
         ty.transform_types_in_type_variable_positions(&mut |ty| {
             if ty.is_any() {
                 *ty = Type::Materialization;
+            } else {
+                // Gradual shape dimensions are the shape analog of `Any`, but they
+                // are stored as `Int` rather than `Type`, so the traversal above
+                // never reaches them directly. Materialize them at each carrier so
+                // `is_equivalent` does not treat a gradual size as equivalent to a
+                // concrete one.
+                match ty {
+                    Type::Int(dim) => dim.materialize(),
+                    Type::IntTuple(tuple) => tuple.materialize(),
+                    Type::ShapedArray(shaped) => shaped.materialize_inline_shape(),
+                    _ => {}
+                }
             }
             ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
                 if matches!(callable.params, Params::Ellipsis) {
@@ -2049,9 +2163,36 @@ impl<'a> TypeVariable<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
+    use pyrefly_python::module_name::ModuleName;
+    use ruff_python_ast::name::Name;
+
+    use crate::equality::TypeEq;
+    use crate::equality::TypeEqCtx;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
     use crate::types::Type;
+    use crate::types::Union;
+
+    /// `display_name` is presentation-only, so two unions with identical members
+    /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.
+    #[test]
+    fn test_union_display_name_ignored_by_comparisons() {
+        let members = vec![Type::None, Type::LiteralString(LitStyle::Implicit)];
+        let named = Union {
+            members: members.clone(),
+            display_name: Some((ModuleName::builtins(), Name::new_static("TA"))),
+        };
+        let anonymous = Union {
+            members,
+            display_name: None,
+        };
+
+        assert_eq!(named, anonymous);
+        assert_eq!(named.cmp(&anonymous), Ordering::Equal);
+        assert!(named.type_eq(&anonymous, &mut TypeEqCtx::default()));
+    }
 
     #[test]
     fn test_as_bool() {

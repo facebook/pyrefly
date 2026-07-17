@@ -637,3 +637,28 @@ def g(a: A):
     a.x = None  # E:  # !E: `is not None` check  # !E: changing the declared type
     "#,
 );
+
+testcase!(
+    test_return_hint_not_used_if_detrimental,
+    r#"
+from collections.abc import Callable
+from typing import reveal_type
+
+def first[T](items: list[T], matcher: Callable[[T], bool]) -> T | None: ...
+def foo(items: list[int]) -> int | None:
+    return first(items, lambda i: reveal_type(i) == 3)  # E: revealed type: int
+    "#,
+);
+
+testcase!(
+    test_uses_return_hint_even_if_some_arg_error,
+    r#"
+from collections.abc import Iterable
+from typing import Any
+
+def collect[T](xs: Iterable[T], unrelated: Any) -> list[T]: ...
+
+def f() -> list[object]:
+    return collect(["x"], 1 + "oops")  # E: `+` is not supported between `Literal[1]` and `Literal['oops']`
+    "#,
+);

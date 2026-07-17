@@ -340,15 +340,6 @@ impl Definitions {
         builder.inner
     }
 
-    /// Add an implicit `from builtins import *` to the definitions.
-    /// Additional user-defined builtins are imported from `__builtins__.pyi`
-    pub fn inject_builtins(&mut self) {
-        self.import_all.entry(ModuleName::builtins()).or_default();
-        self.import_all
-            .entry(ModuleName::extra_builtins())
-            .or_default();
-    }
-
     pub fn inject_implicit_globals(&mut self) {
         for global in ImplicitGlobal::implicit_globals(false) {
             self.definitions.insert(
@@ -781,7 +772,8 @@ impl DefinitionsBuilder {
                         Expr::StringLiteral(lit) => Some(lit.value.to_str()),
                         _ => None,
                     });
-                    let is_wildcard = alias.is_none() || alias == Some("*");
+                    let is_wildcard =
+                        alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
 
                     if is_wildcard {
                         self.inner.import_all.insert(m, func_name.range);

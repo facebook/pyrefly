@@ -45,14 +45,8 @@ reachable from public modules via re-export chains count: the library's public A
 pyrefly coverage check robot/ --fail-under 60
 ```
 
-On success it prints a one-line summary and exits 0:
-
-```
- INFO type coverage 66.67% (4 of 6 typable)
-```
-
-Otherwise it exits non-zero and reports every offending symbol in the same style as
-`pyrefly check`, as `coverage-missing` (no annotations at all) or `coverage-partial` (only some):
+It reports every offending symbol in the same style as `pyrefly check`, as `coverage-missing`
+(no annotations at all) or `coverage-partial` (only some), followed by a one-line summary:
 
 ```
  WARN `walk` is not fully typed [coverage-partial]
@@ -72,8 +66,16 @@ Otherwise it exits non-zero and reports every offending symbol in the same style
 ERROR type coverage 66.67% (4 of 6 typable) is below the 100.00% threshold
 ```
 
-With `--strict`, annotations that resolve to `Any` count as untyped. The findings format is
-configurable with `--output-format`. See `pyrefly coverage check --help` for all flags.
+When coverage meets the threshold, the findings are printed but the summary is INFO and the exit
+code is 0:
+
+```
+ INFO type coverage 66.67% (4 of 6 typable)
+```
+
+Findings go to stdout, the summary to stderr. With `--strict`, annotations that resolve to `Any`
+count as untyped. `--output-format` controls the findings format.
+See `pyrefly coverage check --help` for all flags.
 
 ## Generating a JSON report
 

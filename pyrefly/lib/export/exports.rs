@@ -55,8 +55,13 @@ pub trait LookupExport {
     /// Get deprecation info for an export. Records a dependency on `name` from `module` regardless of if it exists.
     fn get_deprecated(&self, module: ModuleName, name: &Name) -> Option<Deprecation>;
 
-    /// Check if an export is a re-export from another module. Records a dependency on `name` from `module` regardless of if it exists.
-    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool;
+    /// If `name` is a re-export, return the module it is re-exported from. Records a dependency on `name` from `module` regardless of if it exists.
+    fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName>;
+
+    /// Check if a name is only an *implicit* re-export (available via a plain
+    /// import, not part of the module's public interface). Records a dependency
+    /// on `name` from `module` regardless of if it exists.
+    fn is_implicit_reexport(&self, module: ModuleName, name: &Name) -> bool;
 
     /// Check if an export is a special export. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_special_export(&self, module: ModuleName, name: &Name) -> Option<SpecialExport>;
@@ -446,6 +451,28 @@ impl Exports {
             .is_some_and(|definition| matches!(definition.style, DefinitionStyle::ImportAsEq(_)))
     }
 
+    /// Returns true if `name` is available from this module only as an *implicit*
+    /// re-export: it was brought in by a plain `import`/`from ... import ...`
+    /// (without a redundant `as` alias) and is not listed in an explicit `__all__`.
+    /// Per the typing spec such names are not part of the module's public interface.
+    /// Names defined locally, redundantly aliased (`as` same-name), or introduced
+    /// via a wildcard import are not implicit re-exports.
+    pub fn is_implicit_reexport(&self, name: &Name) -> bool {
+        if let Some(mut all) = self.get_explicit_dunder_all_names_iter()
+            && all.any(|n| n == name)
+        {
+            return false;
+        }
+        self.definitions.definitions.get(name).is_some_and(|def| {
+            matches!(
+                def.style,
+                DefinitionStyle::Import(_)
+                    | DefinitionStyle::ImportModule(_)
+                    | DefinitionStyle::ImportAs(..)
+            )
+        })
+    }
+
     /// Returns the range of the unresolvable `__all__` RHS, if applicable.
     pub fn unresolvable_dunder_all_range(&self) -> Option<TextRange> {
         match self.definitions.dunder_all.kind {
@@ -497,7 +524,11 @@ mod tests {
             None
         }
 
-        fn is_reexport(&self, _module: ModuleName, _name: &Name) -> bool {
+        fn reexport_source(&self, _module: ModuleName, _name: &Name) -> Option<ModuleName> {
+            None
+        }
+
+        fn is_implicit_reexport(&self, _module: ModuleName, _name: &Name) -> bool {
             false
         }
 

@@ -19,6 +19,7 @@ use crate::commands::coverage::collect::collect_module_reports;
 use crate::commands::coverage::types::SlotCounts;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::config::config::ConfigScope;
 
 /// Gate type-annotation coverage against a threshold.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -48,8 +49,8 @@ pub struct CheckArgs {
     public_only: bool,
 
     /// Format for the untyped-symbol findings.
-    #[arg(long, value_enum)]
-    output_format: Option<OutputFormat>,
+    #[arg(long, value_enum, default_value_t)]
+    output_format: OutputFormat,
 }
 
 impl CheckArgs {
@@ -67,7 +68,8 @@ impl CheckArgs {
         }
 
         let (files_to_check, config_finder, _) =
-            self.files.resolve(self.config_override, wrapper)?;
+            self.files
+                .resolve_scoped(self.config_override, wrapper, ConfigScope::Coverage)?;
         let (module_reports, errors) = collect_module_reports(
             files_to_check,
             config_finder,
@@ -100,12 +102,13 @@ impl CheckArgs {
             number_thousands(total.n_typable),
         );
 
+        let root = std::env::current_dir().unwrap_or_default();
+        write_errors_to_console(self.output_format, &root, &errors)?;
+
         if coverage + 1e-9 >= self.fail_under {
             eprintln!("{} {summary}", Severity::Info.painted());
             Ok(CommandExitStatus::Success)
         } else {
-            let root = std::env::current_dir().unwrap_or_default();
-            write_errors_to_console(self.output_format.unwrap_or_default(), &root, &errors)?;
             eprintln!(
                 "{} {summary} is below the {:.2}% threshold",
                 Severity::Error.painted(),
