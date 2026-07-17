@@ -51,6 +51,7 @@ use pyrefly_util::lock::RwLock;
 use pyrefly_util::locked_map::LockedMap;
 use pyrefly_util::no_hash::BuildNoHash;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::tarjan::Tarjan;
 use pyrefly_util::task_heap::CancellationHandle;
 use pyrefly_util::task_heap::Cancelled;
 use pyrefly_util::task_heap::TaskHeap;
@@ -2017,18 +2018,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Transitively invalidate all modules in the dependency chain of the changed modules.
-    ///
-    /// Unlike the single-level invalidation in `demand`, this follows the entire rdeps
-    /// chain using a BFS worklist algorithm. Every module that transitively depends on
-    /// any of the changed modules is marked dirty.
-    ///
-    /// This is called from `run_internal` when a mutable dependency cycle is detected
-    /// (i.e., the same module changes twice in one run), as a fallback to ensure all
-    /// cyclic modules reach a stable state.
-    fn invalidate_rdeps(&mut self, mut follow: Vec<ArcId<ModuleDataMut>>) {
-        // All modules discovered so far (to avoid revisiting).
-        let mut dirty: SmallMap<Handle, ArcId<ModuleDataMut>> =
+    /// Find every module transitively depending on the changed modules.
+    fn rdep_closure(
+        &mut self,
+        mut follow: Vec<ArcId<ModuleDataMut>>,
+    ) -> SmallMap<Handle, ArcId<ModuleDataMut>> {
+        let mut closure: SmallMap<Handle, ArcId<ModuleDataMut>> =
             follow.iter().map(|m| (m.handle.dupe(), m.dupe())).collect();
 
         while let Some(module) = follow.pop() {
@@ -2037,20 +2032,24 @@ impl<'a> Transaction<'a> {
             for rdep_handle in rdeps {
                 let hashed_rdep = Hashed::new(&rdep_handle);
 
-                if dirty.contains_key_hashed(hashed_rdep) {
+                if closure.contains_key_hashed(hashed_rdep) {
                     continue;
                 }
 
                 let m = self.get_module(&rdep_handle);
-                dirty.insert_hashed(hashed_rdep.cloned(), m.dupe());
+                closure.insert_hashed(hashed_rdep.cloned(), m.dupe());
                 follow.push(m.dupe());
             }
         }
-        self.stats.lock().cycle_rdeps += dirty.len();
+        self.stats.lock().cycle_rdeps += closure.len();
+        closure
+    }
 
+    fn invalidate_rdeps(&mut self, follow: Vec<ArcId<ModuleDataMut>>) {
+        let closure = self.rdep_closure(follow);
         let mut dirty_set: std::sync::MutexGuard<'_, SmallSet<ArcId<ModuleDataMut>>> =
             self.data.dirty.lock();
-        for x in dirty.into_values() {
+        for x in closure.into_values() {
             x.state.set_dirty_deps();
             dirty_set.insert(x);
         }
@@ -2134,6 +2133,60 @@ impl<'a> Transaction<'a> {
                 return self.run_step(handles, require, custom_thread_pool);
             }
 
+            if i == MAX_EPOCHS {
+                tracing::warn!(
+                    "Exceeded maximum epochs ({MAX_EPOCHS}) without stabilizing. \
+                     Recomputing the affected graph in dependency order."
+                );
+                let closure = self.rdep_closure(changed.into_map(|(m, _)| m));
+                let mut tarjan = Tarjan::new();
+                let mut components = closure
+                    .values()
+                    .map(|module| {
+                        tarjan.root(module.dupe(), &|module, edge| {
+                            for dependency in module.deps.read().keys() {
+                                if let Some(dependency) = closure.get(dependency) {
+                                    edge(dependency.dupe());
+                                }
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                components.sort();
+                components.dedup();
+
+                // Importer-to-dependency edges make Tarjan's topological SCC order
+                // dependency-first.
+                for component in components {
+                    let component = tarjan.iter_scc(component).cloned().collect::<Vec<_>>();
+                    let mut stabilized = false;
+                    for _ in 0..MAX_EPOCHS {
+                        let pending = {
+                            let mut dirty = self.data.dirty.lock();
+                            let mut pending = mem::take(&mut *dirty);
+                            for module in &component {
+                                pending.shift_remove(module);
+                                module.state.set_dirty_deps();
+                                dirty.insert(module.dupe());
+                            }
+                            pending
+                        };
+                        let result = self.run_step(&[], require, custom_thread_pool);
+                        self.data.dirty.lock().extend(pending);
+                        result?;
+                        if mem::take(&mut *self.data.changed.lock()).is_empty() {
+                            stabilized = true;
+                            break;
+                        }
+                    }
+                    assert!(
+                        stabilized,
+                        "a topologically isolated dependency component must stabilize"
+                    );
+                }
+                return Ok(());
+            }
+
             // No cycle detected. Merge the new deps into our tracking set.
             for (module, changed_dep) in changed {
                 match seen_deps.entry(module.dupe()) {
@@ -2146,16 +2199,7 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
-        // If we reach here, we've exceeded MAX_EPOCHS without stabilizing.
-        // This should be extremely rare and indicates an unexpected edge case.
-        // Force invalidation and one final run as a fallback.
-        tracing::warn!(
-            "Exceeded maximum epochs ({MAX_EPOCHS}) without stabilizing. \
-             This may indicate an unexpected dependency pattern. Forcing invalidation."
-        );
-        let changed = mem::take(&mut *self.data.changed.lock());
-        self.invalidate_rdeps(changed.into_map(|(m, _)| m));
-        self.run_step(handles, require, custom_thread_pool)
+        unreachable!("the final epoch must return or enter the capped fallback")
     }
 
     pub fn run(
