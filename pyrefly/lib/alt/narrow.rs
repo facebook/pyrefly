@@ -128,9 +128,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return instance.to_type(self.heap);
         }
-        let e = self.get_enum_from_class(instance.class).unwrap();
+        self.get_enum_from_class(instance.class)
+            .expect("enum subtraction requires an enum class");
         // Enums derived from enum.Flag cannot be treated as a union of their members
-        if e.is_flag {
+        if self.has_superclass(instance.class, self.stdlib.enum_flag().class_object()) {
             return instance.to_type(self.heap);
         }
         self.unions(
@@ -2080,9 +2081,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     fn is_flag_enum(&self, cls: &ClassType) -> bool {
-        self.get_metadata_for_class(cls.class_object())
-            .enum_metadata()
-            .is_some_and(|meta| meta.is_flag)
+        self.get_enum_from_class(cls.class_object()).is_some()
+            && self.has_superclass(cls.class_object(), self.stdlib.enum_flag().class_object())
     }
 
     pub(crate) fn with_type_for_exhaustiveness_check(&self, info: Arc<TypeInfo>) -> TypeInfo {
@@ -2151,9 +2151,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_match_exhaustiveness(
         &self,
         subject_idx: &Idx<Key>,
-        narrowing_subject: &NarrowingSubject,
+        narrowing_subject: Option<&NarrowingSubject>,
         narrow_ops_for_fall_through: &(Box<NarrowOp>, TextRange),
         subject_range: &TextRange,
+        show_subject_expr: bool,
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
@@ -2165,11 +2166,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let ignore_errors = self.error_swallower();
         // Get the narrowed type of the match subject when none of the cases match
         let mut remaining_ty = match narrowing_subject {
-            NarrowingSubject::Name(_) => self
+            None | Some(NarrowingSubject::Name(_)) => self
                 .narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors)
                 .ty()
                 .clone(),
-            NarrowingSubject::Facets(_, facets) => {
+            Some(NarrowingSubject::Facets(_, facets)) => {
                 let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
                     return;
                 };
@@ -2195,14 +2196,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let subject_display = self.for_display(subject_info.into_ty());
         let remaining_display = self.for_display(remaining_ty.clone());
         let ctx = TypeDisplayContext::new(&[&subject_display, &remaining_display]);
-        let mut builder = errors.error_builder(
-            *subject_range,
-            ErrorKind::NonExhaustiveMatch,
-            format!(
-                "Match on `{}` is not exhaustive",
-                ctx.display(&subject_display)
-            ),
-        );
+        let displayed_subject = if show_subject_expr {
+            self.module().code_at(*subject_range).to_owned()
+        } else {
+            ctx.display(&subject_display).to_string()
+        };
+        let message = format!("Match on `{displayed_subject}` is not exhaustive");
+        let mut builder =
+            errors.error_builder(*subject_range, ErrorKind::NonExhaustiveMatch, message);
         if let Some(missing_cases) = self.format_missing_cases(&remaining_ty) {
             builder = builder.with_detail(format!("Missing cases: {}", missing_cases));
         }
@@ -2212,7 +2213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn check_match_case_reachability(
         &self,
         subject_idx: &Idx<Key>,
-        narrowing_subject: &NarrowingSubject,
+        narrowing_subject: Option<&NarrowingSubject>,
         narrow_ops_for_case: &(Box<NarrowOp>, TextRange),
         case_range: &TextRange,
         errors: &ErrorCollector,
@@ -2230,14 +2231,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let ignore_errors = self.error_swallower();
         let (mut narrowed_ty, has_never_trigger_facet) = match narrowing_subject {
-            NarrowingSubject::Name(_) => {
+            None | Some(NarrowingSubject::Name(_)) => {
                 let narrowed =
                     self.narrow(&subject_info, op.as_ref(), *narrow_range, &ignore_errors);
                 let has_never_trigger_facet =
                     self.has_never_match_trigger_facet(&narrowed, op, *case_range);
                 (narrowed.ty().clone(), has_never_trigger_facet)
             }
-            NarrowingSubject::Facets(_, facets) => {
+            Some(NarrowingSubject::Facets(_, facets)) => {
                 let Some(resolved_chain) = self.resolve_facet_chain(facets.chain.clone()) else {
                     return;
                 };

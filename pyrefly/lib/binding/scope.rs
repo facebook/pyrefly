@@ -1587,6 +1587,14 @@ impl Scopes {
         }
     }
 
+    /// The `ClassDefIndex` of the current class body, if the innermost scope is one.
+    pub fn current_class_def_index(&self) -> Option<ClassDefIndex> {
+        match &self.current().kind {
+            ScopeKind::Class(c) => Some(c.indices.def_index),
+            _ => None,
+        }
+    }
+
     pub fn in_function_scope(&self) -> bool {
         self.iter_rev()
             .any(|scope| matches!(scope.kind, ScopeKind::Function(_) | ScopeKind::Method(_)))
@@ -2381,7 +2389,7 @@ impl Scopes {
             // `name` is absent from lexical scope, so it may resolve to an implicit builtin.
             match self.look_up_name_for_read(
                 Hashed::new(name),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
                 lookup,
                 current_module,
             ) {
@@ -3126,7 +3134,7 @@ impl Scopes {
                 } else {
                     flow_info.initialized()
                 };
-                // Because class body scopes are dynamic, if we know that the the name is
+                // Because class body scopes are dynamic, if we know that the name is
                 // definitely not initialized in the flow, we should skip it.
                 if is_class && matches!(initialized, InitializedInFlow::No) {
                     return None;
@@ -3570,7 +3578,7 @@ impl<'a> BindingsBuilder<'a> {
             };
             let branch_idx = flow_info.idx();
 
-            // The BranchInfo always sees the branch_idx, which will will be
+            // The BranchInfo always sees the branch_idx, which will be
             // a narrow if one exists, otherwise the value. Each branch may have a
             // termination key, which potentially causes us to ignore it in the Phi based
             // on Never/NoReturn type information.
@@ -3921,7 +3929,7 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops.negate(),
             NarrowUseLocation::Span(other_range),
-            &Usage::Narrowing(None),
+            &Usage::NonPinningValue(None),
         );
         self.stmts(orelse, parent);
         // Exiting from a break skips past any `else`, so we merge them after, and the
@@ -4026,7 +4034,7 @@ impl<'a> BindingsBuilder<'a> {
                 negated_prev_ops,
                 // Generate a range that is distinct from other use_ranges of the same narrow.
                 NarrowUseLocation::End(fork.range),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
             );
             if let Some(key) = base_termination_key {
                 self.scopes.current_mut().flow.last_stmt_expr = Some(key);

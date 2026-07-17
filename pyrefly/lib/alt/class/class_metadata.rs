@@ -225,10 +225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     targ.transform_mut(&mut |ty| match ty {
                         Type::Quantified(q) => *ty = q.as_gradual_type(),
                         Type::TypeVar(t) => {
-                            *ty = Quantified::as_gradual_type_helper(
-                                QuantifiedKind::TypeVar,
-                                t.default(),
-                            )
+                            *ty = Quantified::as_gradual_type_helper(t.kind(), t.default())
                         }
                         Type::TypeVarTuple(t) => {
                             *ty = Quantified::as_gradual_type_helper(
@@ -553,24 +550,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let BindingShapedArrayMetadata { shape_name, range } = metadata?;
         let tparams = self.get_class_tparams(cls);
         match tparams.iter().find(|param| param.name() == shape_name) {
-            // A shape parameter may be either a `TypeVarTuple` (variadic shape,
-            // e.g. `Array[*Shape]`) or a regular `TypeVar` that carries the shape
-            // as a single tuple type (e.g. NumPy's `ndarray[Shape, DType]`).
-            Some(param)
-                if matches!(
-                    param.kind,
-                    QuantifiedKind::TypeVarTuple | QuantifiedKind::TypeVar
-                ) =>
-            {
-                Some(param.clone())
-            }
+            Some(param) if param.is_type_var() => Some(param.clone()),
             Some(param) => {
                 self.error(
                     errors,
                     *range,
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Shape parameter `{}` must be a `TypeVar` or `TypeVarTuple`, got `{}`",
+                        "Shape parameter `{}` must be a `TypeVar` or `IntVar`, got `{}`",
                         shape_name, param.kind
                     ),
                 );
@@ -930,14 +917,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.get_class_fields(base)
                         .is_some_and(|f| f.contains(&Name::new_static("_value_")))
                 }),
-                is_flag: bases_with_metadata.iter().any(|(base, _)| {
-                    self.is_subset_eq(
-                        &self
-                            .heap
-                            .mk_class_type(self.promote_nontypeddict_silently_to_classtype(base)),
-                        &self.heap.mk_class_type(self.stdlib.enum_flag().clone()),
-                    )
-                }),
                 is_django,
             })
         } else {
@@ -1293,7 +1272,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // @dataclass cannot be applied to Protocol, Enum, TypedDict, or NamedTuple classes.
-        // Emit the error and return no metadata so the class is not treated as a dataclass.
+        // Protocols still become dataclasses at runtime, so preserve their metadata after
+        // reporting the spec violation. The other cases do not have useful dataclass runtime
+        // behavior to model.
         if has_dataclass_decorator {
             if is_protocol {
                 self.error(
@@ -1305,7 +1286,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         cls.name()
                     ),
                 );
-                return (None, false);
             }
             if is_enum {
                 self.error(
@@ -1426,7 +1406,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 _ => None,
                             }
                             && let Some(quantified) = quantified
-                            && quantified.kind() == QuantifiedKind::TypeVar
+                            && quantified.is_type_var()
                             && matches!(quantified.restriction(), Restriction::Unrestricted)
                             && let Some(tparam) = forall.tparams.as_vec().first()
                             && *quantified == *tparam

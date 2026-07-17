@@ -576,7 +576,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
                     && let Some(keywords) =
-                        self.compute_dataclass_field_initialization(call, field_name, dm)
+                        self.compute_dataclass_field_initialization(call, field_name, None, dm)
                 {
                     return Some(keywords);
                 }

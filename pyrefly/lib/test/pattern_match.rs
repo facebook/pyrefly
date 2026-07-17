@@ -36,7 +36,7 @@ testcase!(
     test_pattern_crash,
     r#"
 # Used to crash, see https://github.com/facebook/pyrefly/issues/490
-match None:
+match None: # E: Missing cases: None
     case {a: 1}: # E: # E: # E:
         pass
 "#,
@@ -259,6 +259,95 @@ def f0(x: A | B):
 );
 
 testcase!(
+    test_match_await_exhaustive_no_implicit_return,
+    r#"
+from typing import NoReturn
+
+class Ok[T]:
+    __match_args__ = ("value",)
+    value: T
+
+class Err[E]:
+    __match_args__ = ("value",)
+    value: E
+
+class NotFound:
+    pass
+
+def handle_error(error: NotFound) -> NoReturn:
+    raise Exception()
+
+async def get_result() -> Ok[list[int]] | Err[NotFound]:
+    raise Exception()
+
+async def f() -> list[int]:
+    match await get_result():
+        case Ok(value):
+            return value
+        case Err(error):
+            handle_error(error)
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_match_call_subject_diagnostic,
+    r#"
+from typing import final
+
+@final
+class Ok[T]:
+    __match_args__ = ("value",)
+    value: T
+
+@final
+class Err[E]:
+    __match_args__ = ("value",)
+    value: E
+
+@final
+class NotFound:
+    pass
+
+def get_result() -> Ok[int] | Err[NotFound]:
+    raise Exception()
+
+def f() -> None:
+    match get_result():  # E: get_result()
+        case Ok(value):
+            pass
+"#,
+);
+
+testcase!(
+    test_non_exhaustive_match_await_subject_diagnostic,
+    r#"
+from typing import final
+
+@final
+class Ok[T]:
+    __match_args__ = ("value",)
+    value: T
+
+@final
+class Err[E]:
+    __match_args__ = ("value",)
+    value: E
+
+@final
+class NotFound:
+    pass
+
+async def get_result() -> Ok[int] | Err[NotFound]:
+    raise Exception()
+
+async def f() -> None:
+    match await get_result():  # E: await get_result()
+        case Ok(value):
+            pass
+"#,
+);
+
+testcase!(
     test_match_sequence_pattern_narrows_tuple_out_of_union,
     r#"
 from typing import assert_never
@@ -364,7 +453,7 @@ def f(x: A | B) -> A | B:
     return x
 
 def test(x: A | B):
-    # A guard does not narrow the fallthrough for an anonymous subject, matching the named-subject
+    # A guard does not narrow the fallthrough for a synthetic subject, matching the named-subject
     # behavior in test_negation_of_guarded_pattern / test_class_match_with_guard_not_exhaustive.
     match f(x):
         case value if isinstance(value, A):
@@ -1146,10 +1235,34 @@ class Color(Enum):
 def make_color() -> Color: ...
 
 def f(y: Color) -> None:
-    match make_color():
+    match make_color():  # E: Missing cases: Color.GREEN
         case Color.RED as y:
             return
     reveal_type(y)  # E: revealed type: Color
+"#,
+);
+
+testcase!(
+    test_indirect_match_mapping_or_patterns_do_not_over_narrow,
+    r#"
+from typing import TypedDict, Literal, assert_type
+
+class Config(TypedDict, total=False):
+    skip: bool
+    ci_platforms: list[str]
+    ignore_missing_stub: bool
+
+def get_config() -> Config: ...
+
+def test() -> Literal["skipped", "ignored", "error"]:
+    match get_config():
+        case {"skip": True} | {"ci_platforms": []}:
+            return "skipped"
+        case {"ignore_missing_stub": True} as config:
+            assert_type(config["ignore_missing_stub"], Literal[True])
+            return "ignored"
+        case _:
+            return "error"
 "#,
 );
 
@@ -1228,4 +1341,129 @@ def test(w: A | B, x: A | B, y: A | B, z: A | B):
             assert_type(rest, list[A | B])
             assert_type(z, B)
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3731
+testcase!(
+    bug = "nested class pattern in a generic wrapper is not treated as exhaustive",
+    test_nested_class_pattern_exhaustive,
+    r#"
+from typing import assert_never
+class Ok[T]:
+    __match_args__ = ("value",)
+    value: T
+class Err[E]:
+    __match_args__ = ("value",)
+    value: E
+class NotFound:
+    pass
+def f(r: Ok[int] | Err[NotFound]) -> int:  # E: one or more paths are missing an explicit
+    match r:
+        case Ok(value):
+            return value
+        case Err(NotFound()):
+            raise Exception()
+def g(r: Ok[int] | Err[NotFound]) -> int:
+    match r:
+        case Ok(value):
+            return value
+        case Err(NotFound()):
+            raise Exception()
+        case _:
+            assert_never(r)  # E: Argument `Err[NotFound]` is not assignable to parameter `arg` with type `Never`
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3805
+testcase!(
+    bug = "match on a union of tuples widens to tuple[str | int, str | int], losing exhaustiveness and per-element narrowing",
+    test_match_tuple_union_narrowing,
+    r#"
+def foo(b: bool) -> tuple[str, int] | tuple[int, str]:
+    if b:
+        return "foo", 1
+    else:
+        return 2, "bar"
+def bar(b: bool) -> int:  # E: one or more paths are missing an explicit
+    match foo(b):
+        case (str() as x, y):
+            return y  # E: Returned type `int | str` is not assignable to declared return type `int`
+        case (x, str() as y):
+            return x  # E: Returned type `int | str` is not assignable to declared return type `int`
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3883
+testcase!(
+    bug = "sequence pattern with a literal element does not subtract the tuple from the union, so the match is not seen as exhaustive",
+    test_match_sequence_literal_element,
+    r#"
+from typing import Literal, reveal_type
+type MyUnion = Literal["a"] | tuple[Literal["b"], int] | tuple[Literal["c"], int]
+def broken(value: MyUnion) -> str:  # E: one or more paths are missing an explicit
+    match value:
+        case "a":
+            return "a"
+        case "b", v:
+            return "b"
+        case "c", v:
+            return "c"
+    reveal_type(value)  # E: revealed type: tuple[Literal['b'], int] | tuple[Literal['c'], int]
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2474
+testcase!(
+    bug = "mapping pattern `{}` does not narrow the negative (else) case the way isinstance(x, Mapping) does",
+    test_match_mapping_pattern_else_narrow,
+    r#"
+from typing import reveal_type
+def test_match(x: dict | int) -> None:
+    match x:
+        case {}:
+            reveal_type(x)  # E: revealed type: dict[Unknown, Unknown]
+        case _:
+            reveal_type(x)  # E: revealed type: dict[Unknown, Unknown] | int
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3213
+testcase!(
+    bug = "match on a tuple of optionals does not narrow the elements based on earlier None cases",
+    test_match_tuple_none_cases_narrow,
+    r#"
+def example(a: list[int] | None, b: list[int] | None) -> list[int]:
+    match (a, b):
+        case (None, None):
+            return []
+        case (_, None):
+            return a  # E: Returned type `list[int] | None` is not assignable to declared return type `list[int]`
+        case (None, _):
+            return b  # E: Returned type `list[int] | None` is not assignable to declared return type `list[int]`
+        case _:
+            return a + b  # E: `+` is not supported between `list[int]` and `None` # E: `+` is not supported between `None` and `list[int]` # E: `+` is not supported between `None` and `None`
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/2932
+testcase!(
+    bug = "variables assigned in every non-raising match arm are still reported as possibly-unbound after the match",
+    test_match_false_positive_unbound_name,
+    r#"
+from typing import assert_type
+def test(x: int | None, y: int | None) -> None:
+    match x, y:
+        case None, None:
+            raise ValueError
+        case int(m), None:
+            u = m * 3
+            v = m
+        case None, int(n):
+            u = n
+            v = n // 3
+        case _, _:
+            raise ValueError
+    assert_type(u, int)  # E: `u` may be uninitialized
+    assert_type(v, int)  # E: `v` may be uninitialized
+"#,
 );

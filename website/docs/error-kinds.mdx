@@ -376,6 +376,20 @@ def bad_gen() -> Generator[int, None, str]:
   return 2  # should be a str!
 ```
 
+## bad-singledispatch-register
+
+A `functools.singledispatch` implementation is registered with a dispatch type that is not a subtype of the fallback function's first parameter. Since that parameter defines the function's declared domain, the registration is outside it and can never be dispatched to through type-correct calls (often meaning the fallback was annotated too narrowly).
+
+```python
+from functools import singledispatch
+
+@singledispatch
+def f(arg: int) -> None: ...
+
+@f.register
+def _(arg: str) -> None: ...  # bad-singledispatch-register: `str` is not a subtype of `int`
+```
+
 ## bad-specialization
 
 "Specialization" refers to instantiating a generic type with a concrete type.
@@ -445,6 +459,16 @@ def two_elems() -> tuple:
   return (1, "two")
 
 a, b, c = two_elems()
+```
+
+## column-type-mismatch
+
+A Polars DataFrame column literal has an element whose type does not fit the column's dtype. Polars infers the dtype from the first element and requires every later element to fit it, so a mismatch raises `TypeError` at runtime.
+
+```python
+import polars as pl
+
+pl.DataFrame({"a": [1, 2.0]})  # column `a` is `int`, so the `float` does not fit
 ```
 
 ## deprecated
@@ -526,6 +550,7 @@ Umbrella error code for cases where Pyrefly infers an implicit `Any`. Suppressin
 Most concrete diagnostics are emitted under one of the more specific sub-kinds:
 - [`implicit-any-attribute`](#implicit-any-attribute)
 - [`implicit-any-empty-container`](#implicit-any-empty-container)
+- [`implicit-any-lambda`](#implicit-any-lambda)
 - [`implicit-any-parameter`](#implicit-any-parameter)
 - [`implicit-any-type-argument`](#implicit-any-type-argument)
 
@@ -569,16 +594,29 @@ x: list[int] = []
 x = [1, 2, 3]
 ```
 
+## implicit-any-lambda
+
+Default severity: `ignore`
+
+A lambda whose parameter or return type cannot be inferred is treated as an implicit `Any`, hiding type errors in its body and at its call sites.
+
+When the lambda is used in a typed context (e.g. assigned to a `Callable` or passed to a function that expects one), the parameters are inferred from that context and no error is reported.
+
+```python
+f = lambda x: x  # error: implicit-any-lambda
+
+from typing import Callable
+g: Callable[[int], int] = lambda x: x  # OK: `x` is inferred as `int` from context
+```
+
 ## implicit-any-parameter
 
 Default severity: `ignore`
 
 A function parameter has no type annotation, so Pyrefly treats it as `Any`. Add an annotation. The `self` and `cls` parameters of methods are excluded from this check.
 
-This is a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` also suppresses this error.
-
 ```python
-def f(x):  # implicit-any-parameter — `x` has type `Any`
+def f(x):
     return x + 1
 
 # Fix:
@@ -1015,6 +1053,23 @@ for _ in range(1, 10):
 def bad_yield_from() -> Generator[int, None, None]:
   # `yield from` can only be used with iterables.
   yield from 1
+```
+
+## misplaced-ignore
+
+Default severity: `warn`
+
+A file-level `# pyrefly: ignore-errors` (or `# pyrefly: ignore-errors[code]`) directive
+only takes effect when it appears at the top of the file, before any code. Placed after
+the first line of code it is silently inert — it suppresses nothing — so Pyrefly flags it.
+Move the directive to the top of the file, or use a line-level `# pyrefly: ignore[code]`
+to suppress a single line.
+
+```python
+import os
+
+# pyrefly: ignore-errors  # inert here — flagged as misplaced-ignore
+x: int = "not an int"  # this error is still reported
 ```
 
 ## missing-argument
@@ -1667,6 +1722,28 @@ reveal_type(1)  # error
 assert_type(1, int)  # error
 ```
 
+## unknown-attribute-type
+
+Default severity: `ignore`
+
+An unannotated attribute is assigned a value whose type is unknown, so the attribute is inferred as `Any`. Add an explicit attribute annotation or fix the right-hand side so Pyrefly can infer a concrete type.
+
+This is not a sub-kind of [implicit-any](#implicit-any): suppressing `implicit-any` does not suppress this error.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+class C:
+    def __init__(self) -> None:
+        self.x = untyped(1)  # downstream users don't know what type `self.x` is
+        self.y: int = untyped(1)  # downstream users treat `self.y` as `int`
+```
+
+## unknown-column
+
+Accessing a DataFrame column that does not exist in the inferred schema.
+
 ## unknown-name
 
 A name is referenced but does not exist.
@@ -1679,6 +1756,20 @@ Even when no configuration file is present, this diagnostic is shown as a warnin
 def where() -> None:
   # There is no spoon: unknown-name
   global spoon
+```
+
+## unknown-variable-type
+
+Default severity: `ignore`
+
+A variable assigned a value of unknown type without an explicit annotation is inferred as `Any`, which hides type errors wherever it is used. Adding an annotation gives the variable a concrete type.
+
+```python
+def untyped(x):  # unannotated: returns an implicit `Any`
+    return x
+
+y = untyped(1)  # downstream users don't know what type `y` is
+y2: int = untyped(1)  # downstream users treat `y2` as `int`
 ```
 
 ## unnecessary-comparison
@@ -1827,6 +1918,37 @@ This error arises when attempting to perform an operation between values of two 
 
 ```python
 x = 1 + "oops"  # `+` is not supported between `int` and `str` [unsupported-operation]
+```
+
+## untyped-class-decorator
+
+Default severity: `ignore`
+
+A class decorator whose own type is `Any` may modify the class in unexpected ways.
+
+```python
+from typing import Any
+
+my_decorator: Any = lambda cls: cls
+
+@my_decorator  # `my_decorator` is `Any`, so the type of `A` is lost [untyped-class-decorator]
+class A: ...
+```
+
+## untyped-function-decorator
+
+Default severity: `ignore`
+
+A function or method decorator whose own type is `Any` obscures the decorated function's type.
+
+```python
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+@my_decorator  # `my_decorator` is `Any`, so the type of `g` is lost [untyped-function-decorator]
+def g() -> int:
+    return 1
 ```
 
 ## untyped-import
