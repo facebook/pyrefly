@@ -218,6 +218,23 @@ so you can fully specify your `project-excludes` in case we get it wrong.
 - Default: `false`
 - Flag equivalent: `--disable-project-excludes-heuristics`
 
+### `coverage`
+
+Include/exclude overrides used only by the `pyrefly coverage` commands, for when the set of
+files to report coverage on differs from the set of files to type check (e.g. to skip tests or
+vendored code). `coverage.includes` takes precedence over [`project-includes`](#project-includes)
+and `coverage.excludes` over [`project-excludes`](#project-excludes); each falls back to the
+project setting when unset.
+
+- Type: table with `includes` and `excludes` keys, each a list of
+  [filesystem glob patterns](#filesystem-globbing)
+- Default: `project-includes` / `project-excludes`
+- Flag equivalent: none, though `--project-excludes` takes precedence over `coverage.excludes`
+- Notes:
+    - Like the project globs, these are not consulted when passing in `FILES...`.
+    - `coverage.excludes` gets the same default excludes appended as `project-excludes` does,
+      unless [`disable-project-excludes-heuristics`](#disable-project-excludes-heuristics) is set.
+
 ### `search-path`
 
 A file path describing the roots from which imports should be
