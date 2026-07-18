@@ -28,6 +28,7 @@ pub(crate) struct AttributeContext {
 }
 
 impl AttributeContext {
+    /// Finds a module-level or class-level declaration with this exact name range.
     pub(crate) fn from_module(
         module: &Module,
         target_range: TextRange,
@@ -43,36 +44,36 @@ impl AttributeContext {
         target_range: TextRange,
     ) -> Option<AttributeContext> {
         for stmt in body {
-            match stmt {
-                Stmt::ClassDef(class_def) => {
+            let kind = match stmt {
+                Stmt::ClassDef(class_def) if class_def.name.range == target_range => {
+                    AttributeKind::Class
+                }
+                Stmt::ClassDef(class_def) if class_def.range().contains_range(target_range) => {
                     parents.push(class_def.name.id.clone());
-                    if let Some(ctx) = Self::from_body(&class_def.body, parents, target_range) {
-                        return Some(ctx);
-                    }
-                    parents.pop();
-                    if class_def.range().contains_range(target_range) {
-                        return Some(AttributeContext {
-                            parent_classes: parents.clone(),
-                            kind: AttributeKind::Class,
-                        });
-                    }
+                    return Self::from_body(&class_def.body, parents, target_range);
                 }
-                Stmt::FunctionDef(_) if stmt.range().contains_range(target_range) => {
-                    return Some(AttributeContext {
-                        parent_classes: parents.clone(),
-                        kind: AttributeKind::Function,
-                    });
+                Stmt::FunctionDef(function) if function.name.range == target_range => {
+                    AttributeKind::Function
                 }
-                Stmt::Assign(_) | Stmt::AnnAssign(_)
-                    if stmt.range().contains_range(target_range) =>
+                Stmt::Assign(assign)
+                    if assign.targets.iter().any(
+                        |target| matches!(target, Expr::Name(name) if name.range() == target_range),
+                    ) =>
                 {
-                    return Some(AttributeContext {
-                        parent_classes: parents.clone(),
-                        kind: AttributeKind::Assignment,
-                    });
+                    AttributeKind::Assignment
                 }
-                _ => {}
-            }
+                Stmt::AnnAssign(assign)
+                    if assign.target.range() == target_range
+                        && matches!(assign.target.as_ref(), Expr::Name(_)) =>
+                {
+                    AttributeKind::Assignment
+                }
+                _ => continue,
+            };
+            return Some(AttributeContext {
+                parent_classes: parents.clone(),
+                kind,
+            });
         }
         None
     }

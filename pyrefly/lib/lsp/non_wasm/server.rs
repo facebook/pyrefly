@@ -5750,7 +5750,10 @@ impl Server {
                     import_behavior: ImportBehavior::StopAtRenamedImports,
                     ..Default::default()
                 },
-                options: ReferenceOptions::all(params.context.include_declaration),
+                options: ReferenceOptions {
+                    include_interface_declaration: false,
+                    ..ReferenceOptions::all(params.context.include_declaration)
+                },
                 activity_key,
             },
             move |results| {
