@@ -703,6 +703,22 @@ assert_type(C(False), C[B])
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4192
+testcase!(
+    test_overloaded_init_missing_self,
+    r#"
+from typing import overload
+
+class C:
+    @overload
+    def __init__(): ...  # E: Overloaded function must have an implementation
+    @overload
+    def __init__(): ...
+
+C()  # E: Expected 0 positional arguments, got 1 (including implicit `self`)
+    "#,
+);
+
 testcase!(
     test_init_bad_receiver_annotation,
     r#"
