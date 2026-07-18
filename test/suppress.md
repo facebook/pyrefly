@@ -1,5 +1,37 @@
 # Tests for `--suppress-errors`
 
+## `suppress --remove-unused` preserves unused `# type: ignore` comments by default
+
+```scrut
+$ mkdir $TMPDIR/suppress_remove_unused_default && \
+> printf 'a = 1  # pyrefly: ignore\nb = 2  # type: ignore\n' > $TMPDIR/suppress_remove_unused_default/main.py && \
+> : > $TMPDIR/suppress_remove_unused_default/pyrefly.toml && \
+> $PYREFLY suppress $TMPDIR/suppress_remove_unused_default/main.py \
+>     --config $TMPDIR/suppress_remove_unused_default/pyrefly.toml \
+>     --remove-unused \
+>     >/dev/null 2>/dev/null && \
+> cat $TMPDIR/suppress_remove_unused_default/main.py
+a = 1
+b = 2  # type: ignore
+[0]
+```
+
+## `suppress --remove-unused-type-ignores` also removes unused `# type: ignore` comments
+
+```scrut
+$ mkdir $TMPDIR/suppress_remove_unused_type_ignores && \
+> printf 'a = 1  # pyrefly: ignore\nb = 2  # type: ignore\n' > $TMPDIR/suppress_remove_unused_type_ignores/main.py && \
+> : > $TMPDIR/suppress_remove_unused_type_ignores/pyrefly.toml && \
+> $PYREFLY suppress $TMPDIR/suppress_remove_unused_type_ignores/main.py \
+>     --config $TMPDIR/suppress_remove_unused_type_ignores/pyrefly.toml \
+>     --remove-unused-type-ignores \
+>     >/dev/null 2>/dev/null && \
+> cat $TMPDIR/suppress_remove_unused_type_ignores/main.py
+a = 1
+b = 2
+[0]
+```
+
 ## `--suppress-errors` should not rewrite warnings hidden by `--min-severity`
 
 Use an explicit empty config so the repro does not depend on any ancestor

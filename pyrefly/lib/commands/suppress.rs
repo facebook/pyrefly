@@ -39,6 +39,10 @@ pub struct SuppressArgs {
     #[arg(long)]
     remove_unused: bool,
 
+    /// Remove unused `# type: ignore` comments in addition to unused Pyrefly ignores.
+    #[arg(long)]
+    remove_unused_type_ignores: bool,
+
     /// Where to place suppression comments: on the line before the error
     /// (`line-before`, the default) or on the same line (`same-line`).
     #[arg(long, default_value = "line-before")]
@@ -51,19 +55,22 @@ impl SuppressArgs {
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
-        if self.remove_unused {
+        if self.remove_unused || self.remove_unused_type_ignores {
             // Remove unused ignores mode
             let unused_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
-                // Parse errors from JSON file, filtering for UnusedIgnore errors only
+                // Parse errors from JSON file, filtering for unused suppression errors only.
                 let json_content = std::fs::read_to_string(json_path)?;
                 let errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
                 errors
                     .into_iter()
-                    .filter(|e| e.is_unused_ignore())
+                    .filter(|e| {
+                        e.is_unused_ignore()
+                            || (self.remove_unused_type_ignores && e.is_unused_type_ignore())
+                    })
                     .collect()
             } else {
-                // Delegate to `check --remove-unused-ignores`, which calls
-                // collect_unused_ignore_errors directly (bypassing severity
+                // Delegate to `check --remove-unused-[type-]ignores`, which
+                // collects unused ignore errors directly (bypassing severity
                 // filtering) and handles removal in one step.
                 self.config_override.validate()?;
                 let (files_to_check, config_finder, upsell) = self
@@ -71,18 +78,26 @@ impl SuppressArgs {
                     .clone()
                     .resolve(self.config_override.clone(), wrapper.clone())?;
 
+                let remove_unused_flag = if self.remove_unused_type_ignores {
+                    "--remove-unused-type-ignores"
+                } else {
+                    "--remove-unused-ignores"
+                };
                 let check_args = CheckArgs::parse_from([
                     "check",
                     "--output-format",
                     "omit-errors",
-                    "--remove-unused-ignores",
+                    remove_unused_flag,
                 ]);
                 check_args.run_once(files_to_check, config_finder, upsell, thread_count)?;
                 return Ok(CommandExitStatus::Success);
             };
 
             // Remove unused ignores (JSON path only)
-            suppress::remove_unused_ignores_from_serialized(unused_errors);
+            suppress::remove_unused_ignores_from_serialized(
+                unused_errors,
+                self.remove_unused_type_ignores,
+            );
         } else {
             // Add suppressions mode (existing behavior)
             let serialized_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
