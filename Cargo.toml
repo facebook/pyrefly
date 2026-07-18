@@ -22,6 +22,7 @@ members = [
   "crates/pyrefly_derive",
   "crates/pyrefly_glean_schema",
   "crates/pyrefly_graph",
+  "crates/pyrefly_pyo3",
   "crates/pyrefly_python",
   "crates/pyrefly_types",
   "crates/pyrefly_util",
