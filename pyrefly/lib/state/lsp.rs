@@ -3628,7 +3628,14 @@ impl<'a> Transaction<'a> {
         let identifier_context = self.identifier_at(handle, position);
 
         let definitions = self
-            .find_definition(handle, position, FindPreference::default())
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    resolve_call_dunders: false,
+                    ..Default::default()
+                },
+            )
             .map(Vec1::into_vec)
             .unwrap_or_default();
 
