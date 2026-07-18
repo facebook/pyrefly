@@ -3055,3 +3055,16 @@ class C:
     x = untyped(1)  # E: implicitly inferred to be `Any`
 "#,
 );
+
+testcase!(
+    test_bound_method_no_arbitrary_attr_set,
+    r#"
+class Foo:
+    def real_method(self) -> None: ...
+f: Foo = Foo()
+f.real_method.test = None  # E: has no attribute `test`
+del f.real_method.test  # E: has no attribute `test`
+# Known method attributes are still accessible.
+name: str = f.real_method.__name__
+"#,
+);

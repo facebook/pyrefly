@@ -2017,6 +2017,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 acc.not_found(NotFoundOn::ClassInstance(cls.class_object().clone(), base))
             }
+            // A bound method is a `types.MethodType`, which does not override
+            // `__setattr__`/`__delattr__`, so it does not accept arbitrary attribute
+            // assignment (this fails at runtime). Without this arm the base would fall
+            // through to the general lookup and resolve the dunder via
+            // `MethodType.__getattr__`, incorrectly permitting the assignment.
+            AttributeBase1::BoundMethod(_)
+                if (*dunder_name == dunder::SETATTR || *dunder_name == dunder::DELATTR)
+                    && self.field_is_inherited_from(
+                        self.stdlib.method_type().class_object(),
+                        dunder_name,
+                        (ModuleName::builtins().as_str(), "object"),
+                    ) =>
+            {
+                acc.not_found(NotFoundOn::ClassInstance(
+                    self.stdlib.method_type().class_object().clone(),
+                    base,
+                ))
+            }
             AttributeBase1::ShapedArrayInstance(tensor)
                 if (*dunder_name == dunder::SETATTR
                     || *dunder_name == dunder::DELATTR
