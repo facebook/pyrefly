@@ -705,6 +705,30 @@ assert_type(bad(Sub), Sub)
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4187
+testcase!(
+    test_generic_keyword_inference_is_order_independent,
+    r#"
+class P: ...
+
+class Controller[T: P]:
+    value: T
+
+def target[T: P](
+    value: T | None = None,
+    *,
+    controller: Controller[T] | None = None,
+) -> None: ...
+
+def caller[T: P](
+    value: T | None,
+    controller: Controller[T] | None,
+) -> None:
+    target(value=value, controller=controller)
+    target(controller=controller, value=value)
+"#,
+);
+
 testcase!(
     test_generic_alias_fields,
     r#"
