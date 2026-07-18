@@ -739,6 +739,18 @@ fn test_named_tuple_in_malformed_for_target() {
     );
 }
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4177
+#[test]
+fn test_named_tuple_in_malformed_with_item() {
+    // Keep the malformed source exact: adding inline expectations changes the unterminated string.
+    let _ = testcase_for_macro(
+        TestEnv::new(),
+        "from typing import NamedTuple\n\nwith NamedTuple('\n",
+        file!(),
+        line!(),
+    );
+}
+
 testcase!(
     test_named_tuple_dynamic_fields,
     r#"

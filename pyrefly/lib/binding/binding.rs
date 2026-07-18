@@ -902,6 +902,8 @@ pub enum Key {
     StmtExpr(TextRange),
     /// I am an expression that appears in a `with` context.
     ContextExpr(TextRange),
+    /// I am the context manager value for a `with` item without an assignment target.
+    ContextValue(TextRange),
     /// I am the result of joining several branches.
     Phi(Box<(Name, TextRange)>),
     /// I am the result of narrowing a type. The two ranges are the range at which the operation is
@@ -960,6 +962,7 @@ impl Ranged for Key {
             Self::InvalidTarget(r) => *r,
             Self::StmtExpr(r) => *r,
             Self::ContextExpr(r) => *r,
+            Self::ContextValue(r) => *r,
             Self::Phi(x) => x.1,
             Self::Narrow(x) => x.1,
             Self::Anywhere(x) => x.1,
@@ -990,6 +993,7 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::InvalidTarget(r) => write!(f, "Key::InvalidTarget({})", ctx.display(r)),
             Self::StmtExpr(r) => write!(f, "Key::StmtExpr({})", ctx.display(r)),
             Self::ContextExpr(r) => write!(f, "Key::ContextExpr({})", ctx.display(r)),
+            Self::ContextValue(r) => write!(f, "Key::ContextValue({})", ctx.display(r)),
             Self::Phi(x) => write!(f, "Key::Phi({} {})", x.0, ctx.display(&x.1)),
             Self::Narrow(x) => {
                 write!(
