@@ -560,27 +560,43 @@ assert_type(C().f(1), int)
 "#,
 );
 
-// Mypy and Pyright treat `f` as not a method here; its actual behavior
-// is ambiguous even if we assume the values are always functions or lambdas
-// because the default value can be overridden by instance assignment.
-//
-// Our behavior is compatible, but the underlying implementation is not, we are
-// behaving this way based on how we treat the Callable type rather than based
-// on the absence of `ClassVar`.
+// A `Callable` assigned in the class body without an explicit annotation binds `self`,
+// matching mypy & pyright: instance access drops the first parameter, class access does not,
+// and the (read-only) method cannot be shadowed by an instance assignment.
 //
 // See https://discuss.python.org/t/when-should-we-assume-callable-types-are-method-descriptors/92938
 testcase!(
-    test_callable_with_ambiguous_binding,
+    test_callable_inferred_binding,
     r#"
 from typing import assert_type, Callable
 def get_callback() -> Callable[[object, int], int]: ...
 class C:
     f = get_callback()
 assert_type(C.f(None, 1), int)
-assert_type(C().f(None, 1), int)
-# This is why the behavior is ambiguous - at runtime, the default `C.f` is a
-# method but the instance-level shadow is not.
-C().f = lambda _, x: x
+assert_type(C().f(1), int)
+C().f = get_callback()  # E: not assignable to attribute `f`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3465: methods produced by a
+// factory helper (as PySpark's `pyspark.sql.Column` does for `isNull`, `asc`, etc.) are
+// `Callable`-typed class attributes and must bind `self` when called on an instance.
+testcase!(
+    test_callable_factory_method_binding,
+    r#"
+from typing import assert_type, Callable
+def _unary_op() -> Callable[["Column"], "Column"]:
+    def _(self: "Column") -> "Column": ...
+    return _
+def _bin_op() -> Callable[["Column", "Column"], "Column"]:
+    def _(self: "Column", other: "Column") -> "Column": ...
+    return _
+class Column:
+    isNull = _unary_op()
+    eqNullSafe = _bin_op()
+c = Column()
+assert_type(c.isNull(), Column)
+assert_type(c.eqNullSafe(c), Column)
 "#,
 );
 
