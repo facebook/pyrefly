@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -619,8 +620,7 @@ pub fn remove_unused_ignores_from_serialized(
 
             for (idx, line) in lines.iter().enumerate() {
                 if let Some(errors) = line_errors.get(&idx) {
-                    let mut updated_line = (*line).to_owned();
-                    let mut line_changed = false;
+                    let mut updated_line = Cow::Borrowed(*line);
 
                     for error in errors {
                         // Use string-aware comment detection instead of raw regex.
@@ -644,10 +644,11 @@ pub fn remove_unused_ignores_from_serialized(
                             if ignore_regex.is_match(comment_part) {
                                 let code_part = &updated_line[..comment_start];
                                 let new_comment = ignore_regex.replace(comment_part, "");
-                                updated_line = format!("{}{}", code_part, new_comment)
-                                    .trim_end()
-                                    .to_owned();
-                                line_changed = true;
+                                updated_line = Cow::Owned(
+                                    format!("{}{}", code_part, new_comment)
+                                        .trim_end()
+                                        .to_owned(),
+                                );
                             }
                             continue;
                         }
@@ -672,15 +673,14 @@ pub fn remove_unused_ignores_from_serialized(
                                         &used_codes,
                                         &unused_codes,
                                     ) {
-                                        updated_line = updated;
-                                        line_changed = true;
+                                        updated_line = Cow::Owned(updated);
                                     }
                                 }
                             }
                         }
                     }
 
-                    if line_changed {
+                    if let Cow::Owned(updated_line) = updated_line {
                         unused_count += 1;
                         if !updated_line.trim().is_empty() {
                             buf.push_str(&updated_line);
@@ -1558,23 +1558,27 @@ def f() -> int:
 
     #[test]
     fn test_remove_multiple_unused_suppressions_from_same_line() {
-        let input = "x = 1  # pyrefly: ignore  # type: ignore\n";
         let want = "x = 1\n";
-        let errors = vec![
-            SerializedError {
-                path: PathBuf::from("test.py"),
-                line: 0,
-                name: "unused-ignore".to_owned(),
-                message: "Unused `# pyrefly: ignore` comment".to_owned(),
-            },
-            SerializedError {
-                path: PathBuf::from("test.py"),
-                line: 0,
-                name: "unused-type-ignore".to_owned(),
-                message: "Unused `# type: ignore` comment".to_owned(),
-            },
-        ];
-        assert_remove_ignores_from_serialized_with_flag(input, errors, want, 1, true);
+        for input in [
+            "x = 1  # pyrefly: ignore  # type: ignore\n",
+            "x = 1  # type: ignore  # pyrefly: ignore\n",
+        ] {
+            let errors = vec![
+                SerializedError {
+                    path: PathBuf::from("test.py"),
+                    line: 0,
+                    name: "unused-ignore".to_owned(),
+                    message: "Unused `# pyrefly: ignore` comment".to_owned(),
+                },
+                SerializedError {
+                    path: PathBuf::from("test.py"),
+                    line: 0,
+                    name: "unused-type-ignore".to_owned(),
+                    message: "Unused `# type: ignore` comment".to_owned(),
+                },
+            ];
+            assert_remove_ignores_from_serialized_with_flag(input, errors, want, 1, true);
+        }
     }
 
     #[test]
