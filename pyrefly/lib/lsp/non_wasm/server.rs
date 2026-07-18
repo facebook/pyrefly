@@ -270,6 +270,7 @@ use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigScope;
 use crate::error::error::Error;
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::build_system::should_requery_build_system;
@@ -551,6 +552,10 @@ impl ServerConnection {
 }
 
 const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Default inlay hint debounce window, applied when the client doesn't set
+/// `analysis.inlayHintDebounceMs`. See [`Server::inlay_hint_debounce_remaining`].
+const DEFAULT_INLAY_HINT_DEBOUNCE_MS: u64 = 150;
 
 struct LspProgressSubscriber<'a> {
     server: &'a Server,
@@ -1932,8 +1937,11 @@ impl Server {
                     info!("Response for unknown request: {x:?}");
                 }
             }
-            LspEvent::LspRequest(mut x) => {
-                telemetry_event.set_activity_key(std::mem::take(&mut x.activity_key));
+            LspEvent::LspRequest(x) => {
+                // Clone (not take): a debounced inlay hint is re-enqueued below
+                // and re-enters this arm, so `x` must retain its activity_key for
+                // the re-delivered request's telemetry.
+                telemetry_event.set_activity_key(x.activity_key.clone());
                 telemetry_event.request_id = Some(x.id.to_string());
 
                 // Extract file stats from the raw JSON params so all requests
@@ -1982,6 +1990,27 @@ impl Server {
                         ErrorCode::RequestCanceled as i32,
                         message,
                     ));
+                    return Ok(ProcessEvent::Continue);
+                }
+
+                // Debounce inlay hints so their widths don't jitter on every
+                // keystroke (#4138). If the document was edited within the
+                // debounce window, hold the request in the queue until editing
+                // pauses, then cancel any older held request it supersedes so the
+                // client isn't left waiting on a request we'll never answer.
+                if x.method == InlayHintRequest::METHOD
+                    && let Some(remaining) = self.inlay_hint_debounce_remaining(&x)
+                {
+                    if let Some(superseded) =
+                        self.lsp_queue.send_delayed(x, Instant::now() + remaining)
+                    {
+                        canceled_requests.remove(&superseded.id);
+                        self.send_response(Response::new_err(
+                            superseded.id,
+                            ErrorCode::RequestCanceled as i32,
+                            "Superseded by a newer inlay hint request".to_owned(),
+                        ));
+                    }
                     return Ok(ProcessEvent::Continue);
                 }
 
@@ -3311,7 +3340,7 @@ impl Server {
 
         info!("Populating all files in the config ({:?}).", config.source);
 
-        let project_path_blobs = config.get_filtered_globs(None);
+        let project_path_blobs = config.get_filtered_globs(None, ConfigScope::Default);
         let mut handles = Vec::new();
         if let Ok(paths) = project_path_blobs.files_iter() {
             for path in paths {
@@ -5042,6 +5071,37 @@ impl Server {
             .and_then(|c| c.show_hover_go_to_links)
             .unwrap_or(true);
         Ok(get_hover(transaction, &handle, position, show_go_to_links))
+    }
+
+    /// How long an inlay hint request should be deferred to debounce it, or
+    /// `None` if it can run now. VS Code has no client-side inlay-hint debounce
+    /// (microsoft/vscode#133730), so without this, hints recompute on every
+    /// keystroke and their widths jitter distractingly (#4138). We defer the
+    /// request while the document is still being edited so hints only settle
+    /// once typing pauses. The window is `analysis.inlayHintDebounceMs`
+    /// (default [`DEFAULT_INLAY_HINT_DEBOUNCE_MS`]); `0` disables debouncing.
+    fn inlay_hint_debounce_remaining(&self, request: &Request) -> Option<Duration> {
+        // No edit has happened yet (e.g. right after startup): nothing to
+        // debounce against, so run immediately.
+        let time_since_last_edit = self.lsp_queue.time_since_last_edit()?;
+        let debounce_ms = request
+            .params
+            .get("textDocument")
+            .and_then(|td| td.get("uri"))
+            .and_then(|u| u.as_str())
+            .and_then(|s| Url::parse(s).ok())
+            .and_then(|uri| self.path_for_uri_or_notebook_cell(&uri))
+            .and_then(|path| {
+                self.workspaces.get_with(path, |(_, workspace)| {
+                    workspace
+                        .lsp_analysis_config
+                        .and_then(|c| c.inlay_hint_debounce_ms)
+                })
+            })
+            .unwrap_or(DEFAULT_INLAY_HINT_DEBOUNCE_MS);
+        Duration::from_millis(debounce_ms)
+            .checked_sub(time_since_last_edit)
+            .filter(|remaining| !remaining.is_zero())
     }
 
     fn inlay_hints(

@@ -50,6 +50,7 @@ use ruff_python_ast::BoolOp;
 use ruff_python_ast::Comprehension;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::Expr;
+use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
@@ -455,22 +456,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Expr::Attribute(x) => {
                 let base = self.expr_infer_impl(&x.value, None, errors);
-                self.record_external_attribute_definition_index(
-                    base.ty(),
-                    x.attr.id(),
-                    x.attr.range,
-                );
-                let attr_type = self.attr_infer(&base, &x.attr.id, x.range, errors, None);
-                if base.ty().is_literal_string() {
-                    match attr_type.ty() {
-                        Type::BoundMethod(method) => attr_type
-                            .clone()
-                            .with_ty(method.with_bound_object(base.ty().clone()).as_type()),
-                        _ => attr_type,
-                    }
-                } else {
-                    attr_type
-                }
+                self.attr_access_infer(x, &base, errors)
             }
             Expr::Subscript(x) => {
                 // TODO: We don't deal properly with hint here, we should.
@@ -834,7 +820,34 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Some(ty) = self.synthesized_functional_class_type(x) {
                     return ty;
                 }
-                let callee_ty = self.expr_infer(&x.func, errors);
+                // Infer a method call's receiver once. A Polars column-algebra transform is a
+                // pure function of the receiver schema and is dispatched here; any other
+                // receiver is reused for ordinary callee inference rather than inferred again.
+                let callee_ty = if let Expr::Attribute(func) = &*x.func {
+                    let base = self.expr_infer_impl(&func.value, None, errors);
+                    if let Some(ty) = self.polars_select(base.ty(), func, &x.arguments, errors) {
+                        return ty;
+                    }
+                    if let Some(ty) = self.polars_drop(base.ty(), func, &x.arguments, errors) {
+                        return ty;
+                    }
+                    if let Some(ty) = self.polars_rename(base.ty(), func, &x.arguments, errors) {
+                        return ty;
+                    }
+                    if let Some(ty) =
+                        self.polars_with_columns(base.ty(), func, &x.arguments, errors)
+                    {
+                        return ty;
+                    }
+                    let attr = self.attr_access_infer(func, &base, errors);
+                    // Reusing `base` bypasses `expr_infer_impl`, so record the callee's type trace
+                    // and deprecation check here as that path would for any other expression.
+                    self.check_for_deprecated_call(attr.ty(), func.range(), errors);
+                    self.record_type_trace(func.range(), attr.ty());
+                    attr.into_ty()
+                } else {
+                    self.expr_infer(&x.func, errors)
+                };
                 self.check_pytorch_tensor_item_call(x, &callee_ty, errors);
                 self.check_pytorch_tensor_cuda_call(x, &callee_ty, errors);
                 self.check_pytorch_print_tensor(x, &callee_ty, errors);
@@ -1936,6 +1949,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             context,
             "Expr::attr_infer_for_type",
         )
+    }
+
+    /// Infer an attribute access from its already-inferred base. Factored from the
+    /// `Expr::Attribute` arm so a method call can infer its receiver once and reuse it.
+    fn attr_access_infer(
+        &self,
+        x: &ExprAttribute,
+        base: &TypeInfo,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
+        self.record_external_attribute_definition_index(base.ty(), x.attr.id(), x.attr.range);
+        let attr_type = self.attr_infer(base, &x.attr.id, x.range, errors, None);
+        if base.ty().is_literal_string() {
+            match attr_type.ty() {
+                Type::BoundMethod(method) => attr_type
+                    .clone()
+                    .with_ty(method.with_bound_object(base.ty().clone()).as_type()),
+                _ => attr_type,
+            }
+        } else {
+            attr_type
+        }
     }
 
     pub fn attr_infer(

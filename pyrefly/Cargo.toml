@@ -30,7 +30,7 @@ anyhow = "1.0.103"
 arc-swap = { version = "1.9.2", features = ["weak"] }
 blake3 = { version = "=1.8.2", features = ["mmap", "rayon", "traits-preview"] }
 capnp = "0.25.6"
-clap = { version = "4.6.0", features = ["cargo", "derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.6.2", features = ["cargo", "derive", "env", "string", "unicode", "wrap_help"] }
 crossbeam-channel = "0.5.16"
 dashmap = { version = "6.2.1", features = ["rayon", "serde"] }
 dupe = "0.9.1"
@@ -55,7 +55,7 @@ pyrefly_python = { path = "../crates/pyrefly_python" }
 pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
 rayon = "1.11.0"
-regex = "1.13.0"
+regex = "1.13.1"
 ruff_annotate_snippets = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
 ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5", features = ["serde"] }
@@ -69,7 +69,7 @@ starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 tempfile = "3.27.0"
 thin-vec = "0.2.18"
-tokio = { version = "1.52.3", features = ["macros", "rt"] }
+tokio = { version = "1.52.4", features = ["macros", "rt"] }
 toml = { version = "1.1.3", features = ["preserve_order"] }
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tsp_types = { path = "../crates/tsp_types" }

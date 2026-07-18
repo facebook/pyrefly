@@ -325,6 +325,61 @@ greeter("hi")
 }
 
 #[test]
+fn hover_on_callable_protocol_attribute_uses_dunder_call_signature() {
+    let code = r#"
+from typing import Protocol, cast
+
+class Parametrize(Protocol):
+    def __call__(self, argnames: str, *, ids: list[str] | None = None) -> int: ...
+
+class Mark:
+    parametrize: Parametrize
+
+mark = cast(Mark, ...)
+mark.parametrize("role", ids=["owner"])
+#    ^^^^^^^^^^^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("__call__"),
+        "Expected hover to refer to __call__, got: {report}"
+    );
+    assert!(
+        report.contains("argnames: str"),
+        "Expected hover to show the positional parameter, got: {report}"
+    );
+    assert!(
+        report.contains("ids: list[str] | None = None"),
+        "Expected hover to show the keyword-only parameter, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_callable_receiver_of_method_call_is_not_coerced_to_dunder_call() {
+    // The receiver `c` in `c.run()` sits inside the callee range (`c.run`), but it is
+    // not the callee's own name. Hovering it must show the receiver's own type, not
+    // coerce a callable receiver class to its `__call__` signature.
+    let code = r#"
+class C:
+    def __call__(self, x: int) -> str: ...
+    def run(self) -> None: ...
+
+def f(c: C) -> None:
+    c.run()
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(": C"),
+        "Expected receiver hover to show `c`'s own type `C`, got: {report}"
+    );
+    assert!(
+        !report.contains("x: int"),
+        "Receiver hover must not coerce `c` to its class `__call__` signature, got: {report}"
+    );
+}
+
+#[test]
 fn hover_over_inline_ignore_comment() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore

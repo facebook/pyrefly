@@ -342,6 +342,14 @@ pub struct LspAnalysisConfig {
     // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]
     pub show_hover_go_to_links: Option<bool>,
+    /// Debounce window (milliseconds) for inlay hint requests. VS Code exposes
+    /// no client-side inlay-hint debounce (microsoft/vscode#133730), so without
+    /// this, hints recompute on every keystroke and their widths jitter
+    /// distractingly. When the document was edited within this window, the
+    /// request is deferred until editing pauses. `0` disables debouncing.
+    // TODO: this is not a pylance setting. it should be in pyrefly settings
+    #[serde(default)]
+    pub inlay_hint_debounce_ms: Option<u64>,
 }
 
 fn deserialize_analysis<'de, D>(deserializer: D) -> Result<Option<LspAnalysisConfig>, D::Error>

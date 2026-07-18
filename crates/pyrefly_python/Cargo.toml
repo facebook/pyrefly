@@ -10,7 +10,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0.103"
-clap = { version = "4.6.0", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.6.2", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 dupe = "0.9.1"
 enum-iterator = "2.3.0"
 equivalent = "1.0.2"
@@ -19,7 +19,7 @@ lsp-types = { git = "https://github.com/yangdanny97/lsp-types", rev = "395d6bfcd
 parse-display = "0.8.2"
 pathdiff = "0.2"
 pyrefly_util = { path = "../pyrefly_util" }
-regex = "1.13.0"
+regex = "1.13.1"
 ruff_notebook = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
 ruff_python_ast = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
 ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }

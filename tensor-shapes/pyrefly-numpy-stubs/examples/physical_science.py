@@ -13,11 +13,11 @@ D = IntVar("D")
 
 
 def harmonic_oscillator_energy(
-    position: np.ndarray[tuple[Int[N], Int[D]]],
-    velocity: np.ndarray[tuple[Int[N], Int[D]]],
+    position: np.ndarray[[N, D]],
+    velocity: np.ndarray[[N, D]],
     stiffness: float,
     mass: float,
-) -> np.ndarray[tuple[Int[N]]]:
+) -> np.ndarray[[N]]:
     """Compute the total oscillator energy for a batch of states.
 
     Each row is one independent oscillator state, and each column is a spatial
@@ -32,9 +32,9 @@ def harmonic_oscillator_energy(
 
 
 def linear_elastic_displacement(
-    stiffness: np.ndarray[tuple[Int[N], Int[N]]],
-    force: np.ndarray[tuple[Int[N], Int[1]]],
-) -> np.ndarray[tuple[Int[N], Int[1]]]:
+    stiffness: np.ndarray[[N, N]],
+    force: np.ndarray[[N, 1]],
+) -> np.ndarray[[N, 1]]:
     """Solve a linear elastic equilibrium system.
 
     In small-displacement linear elasticity, the discretized equilibrium
@@ -47,9 +47,9 @@ def linear_elastic_displacement(
 
 
 def gravitational_forces(
-    position: np.ndarray[tuple[Int[N], Int[3]]],
-    mass: np.ndarray[tuple[Int[N]]],
-) -> np.ndarray[tuple[Int[N], Int[3]]]:
+    position: np.ndarray[[N, 3]],
+    mass: np.ndarray[[N]],
+) -> np.ndarray[[N, 3]]:
     """Compute Newtonian gravitational forces for an n-body system.
 
     Each row of `position` is a particle's 3-D location, and `mass` stores one
@@ -71,7 +71,7 @@ def gravitational_forces(
 
 def particle_in_box(
     n_points: Int[N],
-) -> tuple[np.ndarray[tuple[Int[N]]], np.ndarray[tuple[Int[N], Int[N]]]]:
+) -> tuple[np.ndarray[[N]], np.ndarray[[N, N]]]:
     """Solve a finite-difference quantum particle-in-a-box Hamiltonian.
 
     A one-dimensional particle in a box is a standard quantum mechanics model:

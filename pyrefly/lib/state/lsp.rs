@@ -2984,7 +2984,9 @@ impl<'a> Transaction<'a> {
                 }
             }
             match error.error_kind() {
-                ErrorKind::UnknownName if error_range.contains_range(range) => {
+                ErrorKind::UnknownName | ErrorKind::UnimportedDirective
+                    if error_range.contains_range(range) =>
+                {
                     let unknown_name = module_info.code_at(error_range);
                     for (handle_to_import_from, import_name, export) in self
                         .search_exports_exact(unknown_name, custom_thread_pool)

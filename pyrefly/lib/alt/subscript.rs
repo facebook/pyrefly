@@ -319,6 +319,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// Index into an unpacked int-tuple `[*prefix, *middle, *suffix]`.
+    ///
+    /// Unlike `infer_unpacked_index`, an index landing outside the fixed
+    /// prefix/suffix is not an out-of-range error: the variadic `middle` has
+    /// unbounded length, so such an index is only *potentially* in the middle
+    /// and we cannot prove it invalid. We therefore return the middle element
+    /// type rather than reporting `BadIndex`.
     fn infer_int_tuple_unpacked_index(
         &self,
         prefix: &[Type],

@@ -55,6 +55,11 @@ impl DataFrameSchema {
     pub fn underlying_type(&self) -> Type {
         Type::ClassType(self.underlying.clone())
     }
+
+    /// Whether a column with this name exists in the schema.
+    pub fn has_column(&self, name: &Name) -> bool {
+        self.columns.iter().any(|(c, _)| c == name)
+    }
 }
 
 #[cfg(test)]

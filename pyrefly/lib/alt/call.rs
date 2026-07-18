@@ -8,7 +8,6 @@
 use std::iter;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::data_frame::SchemaCompleteness;
@@ -1773,7 +1772,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // and the class object as `objtype`.
         let (objtype, obj) = match base {
             DescriptorBase::Instance(classtype) => (
-                self.heap.mk_class_def(classtype.class_object().dupe()),
+                self.heap
+                    .mk_type_of(self.heap.mk_class_type(classtype.clone())),
                 self.heap.mk_class_type(classtype),
             ),
             DescriptorBase::SelfInstance(classtype) => (

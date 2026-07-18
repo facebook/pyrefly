@@ -53,12 +53,14 @@ use pyrefly_util::telemetry::TelemetrySourceDbRebuildStats;
 use pyrefly_util::watch_pattern::WatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
 
 use crate::base::ConfigBase;
+use crate::base::ExtraConfigs;
 use crate::base::InferReturnTypes;
 use crate::base::Preset;
 use crate::base::RecursionLimitConfig;
@@ -88,6 +90,44 @@ impl SubConfig {
     fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
         self.matches = self.matches.clone().from_root(config_root);
     }
+}
+
+/// Config overrides for the `pyrefly coverage` commands.
+#[skip_serializing_none]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct CoverageConfig {
+    /// Takes precedence over `project_includes` when set.
+    pub includes: Option<Globs>,
+
+    /// Takes precedence over `project_excludes` when set; `--project-excludes` still wins.
+    pub excludes: Option<Globs>,
+
+    /// Any unknown config items
+    #[serde(default, flatten)]
+    pub(crate) extras: ExtraConfigs,
+}
+
+impl CoverageConfig {
+    fn is_empty(&self) -> bool {
+        self.includes.is_none() && self.excludes.is_none()
+    }
+
+    fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
+        for globs in [&mut self.includes, &mut self.excludes] {
+            *globs = globs.take().map(|g| g.from_root(config_root));
+        }
+    }
+}
+
+/// Which scope of the config a command reads its settings from.
+/// Currently only affects file-glob selection.
+#[derive(Debug, Clone, Copy)]
+pub enum ConfigScope {
+    /// The top-level settings.
+    Default,
+    /// The `[coverage]` overrides, falling back to top-level.
+    Coverage,
 }
 
 /// Why a `ConfigFile` was synthesized rather than loaded from a real config
@@ -589,6 +629,10 @@ pub struct ConfigFile {
              )]
     pub sub_configs: Vec<SubConfig>,
 
+    /// Include/exclude overrides for `pyrefly coverage` commands.
+    #[serde(default, skip_serializing_if = "CoverageConfig::is_empty")]
+    pub coverage: CoverageConfig,
+
     /// Whether to respect ignore files (.gitignore, .ignore, .git/exclude).
     #[serde(
         default = "ConfigFile::default_true",
@@ -660,6 +704,7 @@ impl Default for ConfigFile {
             preset: None,
             root: Default::default(),
             sub_configs: Default::default(),
+            coverage: Default::default(),
             build_system: Default::default(),
             source_db: Default::default(),
             use_ignore_files: true,
@@ -711,10 +756,33 @@ impl ConfigFile {
         excludes
     }
 
+    /// The include globs the given scope selects.
+    pub fn includes(&self, scope: ConfigScope) -> &Globs {
+        match scope {
+            ConfigScope::Default => &self.project_includes,
+            ConfigScope::Coverage => self
+                .coverage
+                .includes
+                .as_ref()
+                .unwrap_or(&self.project_includes),
+        }
+    }
+
     /// Gets a [`FilteredGlobs`] from the optional `custom_excludes` or this
     /// [`ConfigFile`]s `project_excludes`, adding all `site_package_path` entries
     /// as extra exclude items.
-    pub fn get_filtered_globs(&self, custom_excludes: Option<Globs>) -> FilteredGlobs {
+    /// Under [`ConfigScope::Coverage`] the `[coverage]` overrides apply, so `custom_excludes` still
+    /// wins over `coverage.excludes`.
+    pub fn get_filtered_globs(
+        &self,
+        custom_excludes: Option<Globs>,
+        scope: ConfigScope,
+    ) -> FilteredGlobs {
+        let includes = self.includes(scope).clone();
+        let custom_excludes = match scope {
+            ConfigScope::Default => custom_excludes,
+            ConfigScope::Coverage => custom_excludes.or_else(|| self.coverage.excludes.clone()),
+        };
         let project_excludes = match custom_excludes {
             None => self.project_excludes.clone(),
             Some(custom_excludes) if !self.disable_project_excludes_heuristics => {
@@ -735,12 +803,7 @@ impl ConfigFile {
                 None => HiddenDirFilter::All,
             }
         };
-        FilteredGlobs::new(
-            self.project_includes.clone(),
-            project_excludes,
-            root,
-            hidden_dir_filter,
-        )
+        FilteredGlobs::new(includes, project_excludes, root, hidden_dir_filter)
     }
 }
 
@@ -1496,6 +1559,7 @@ impl ConfigFile {
     pub fn rewrite_with_path_to_config(&mut self, config_root: &Path) {
         self.project_includes = self.project_includes.clone().from_root(config_root);
         self.project_excludes = self.project_excludes.clone().from_root(config_root);
+        self.coverage.rewrite_with_path_to_config(config_root);
         self.search_path_from_file
             .iter_mut()
             .for_each(|search_root| {
@@ -1588,6 +1652,12 @@ impl ConfigFile {
                 let extra_keys = config.root.extras.0.keys().join(", ");
                 errors.push(ConfigError::warn(anyhow!(
                     "Extra keys found in config: {extra_keys}"
+                )));
+            }
+            if !config.coverage.extras.0.is_empty() {
+                let extra_keys = config.coverage.extras.0.keys().join(", ");
+                errors.push(ConfigError::warn(anyhow!(
+                    "Extra keys found in coverage config: {extra_keys}"
                 )));
             }
             for sub_config in &config.sub_configs {
@@ -1704,6 +1774,10 @@ mod tests {
              assert-type = true
              bad-return = false
 
+             [coverage]
+             includes = ["implementation/**"]
+             excludes = ["implementation/vendored/**"]
+
              [[sub-config]]
              matches = "sub/project/**"
 
@@ -1809,6 +1883,13 @@ mod tests {
                         spec_compliant_overloads: None,
                     }
                 }],
+                coverage: CoverageConfig {
+                    includes: Some(Globs::new(vec!["implementation/**".to_owned()]).unwrap()),
+                    excludes: Some(
+                        Globs::new(vec!["implementation/vendored/**".to_owned()]).unwrap()
+                    ),
+                    extras: Default::default(),
+                },
                 typeshed_path: None,
                 baseline: None,
                 min_severity: None,
@@ -1876,6 +1957,9 @@ mod tests {
              laszewo = "good kids"
              python_platform = "windows"
 
+             [coverage]
+             subtronics = 1
+
              [[sub_config]]
              matches = "abcd"
 
@@ -1885,6 +1969,10 @@ mod tests {
         assert_eq!(
             config.root.extras.0,
             Table::from_iter([("laszewo".to_owned(), Value::String("good kids".to_owned())),])
+        );
+        assert_eq!(
+            config.coverage.extras.0,
+            Table::from_iter([("subtronics".to_owned(), Value::Integer(1))])
         );
         assert_eq!(
             config.sub_configs[0].settings.extras.0,
@@ -1900,6 +1988,9 @@ mod tests {
                  python_platform = "darwin"
                  python_version = "1.2.3"
                  output-format = "json"
+
+            [tool.pyrefly.coverage]
+            includes = ["./implementation/**"]
                  "#;
         let config = ConfigFile::parse_pyproject_toml(config_str)
             .unwrap()
@@ -1927,6 +2018,11 @@ mod tests {
                         .clone(),
                 },
                 output_format: Some(OutputFormat::Json),
+                coverage: CoverageConfig {
+                    includes: Some(Globs::new(vec!["./implementation/**".to_owned()]).unwrap()),
+                    excludes: None,
+                    extras: Default::default(),
+                },
                 ..Default::default()
             }
         );
@@ -2052,6 +2148,11 @@ mod tests {
                 matches: Glob::new("sub/project/**".to_owned()).unwrap(),
                 settings: Default::default(),
             }],
+            coverage: CoverageConfig {
+                includes: Some(Globs::new(vec!["covered/**".to_owned()]).unwrap()),
+                excludes: Some(Globs::new(vec!["covered/vendored/**".to_owned()]).unwrap()),
+                extras: Default::default(),
+            },
             typeshed_path: Some(PathBuf::from(typeshed)),
             baseline: Some(PathBuf::from("baseline.json")),
             min_severity: None,
@@ -2085,6 +2186,8 @@ mod tests {
                 .into_owned(),
         )
         .unwrap();
+        let globs_at =
+            |glob: &str| Globs::new(vec![test_path.join(glob).to_string_lossy().into_owned()]);
 
         config.rewrite_with_path_to_config(&test_path);
 
@@ -2116,6 +2219,11 @@ mod tests {
                 matches: sub_config_matches,
                 settings: Default::default(),
             }],
+            coverage: CoverageConfig {
+                includes: Some(globs_at("covered/**").unwrap()),
+                excludes: Some(globs_at("covered/vendored/**").unwrap()),
+                extras: Default::default(),
+            },
             typeshed_path: Some(expected_typeshed),
             baseline: Some(test_path.join("baseline.json")),
             min_severity: None,
@@ -2910,7 +3018,7 @@ output-format = "omit-errors"
         expected_site_package_path.pop();
 
         assert_eq!(
-            config.get_filtered_globs(None),
+            config.get_filtered_globs(None, ConfigScope::Default),
             FilteredGlobs::new(
                 config.project_includes.clone(),
                 Globs::new(
@@ -2934,9 +3042,10 @@ output-format = "omit-errors"
             )
         );
         assert_eq!(
-            config.get_filtered_globs(Some(
-                Globs::new(vec!["custom_excludes".to_owned()]).unwrap()
-            )),
+            config.get_filtered_globs(
+                Some(Globs::new(vec!["custom_excludes".to_owned()]).unwrap()),
+                ConfigScope::Default,
+            ),
             FilteredGlobs::new(
                 config.project_includes.clone(),
                 Globs::new(
@@ -2954,6 +3063,63 @@ output-format = "omit-errors"
                 None,
                 HiddenDirFilter::All,
             )
+        );
+    }
+
+    #[test]
+    fn test_get_filtered_globs_coverage_scope() {
+        let globs = |patterns: &[&str]| {
+            Globs::new(patterns.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>()).unwrap()
+        };
+        // Expected coverage-scope result: `coverage.includes` plus the given
+        // excludes with the required excludes and site packages appended.
+        let expected = |excludes: &[&str]| {
+            let mut excludes = excludes.to_vec();
+            excludes.extend([
+                "**/node_modules",
+                "**/__pycache__",
+                "**/venv/**",
+                "site_packages",
+            ]);
+            FilteredGlobs::new(
+                globs(&["covered/**"]),
+                globs(&excludes),
+                None,
+                HiddenDirFilter::All,
+            )
+        };
+
+        let mut config = ConfigFile::default();
+        config.interpreters.skip_interpreter_query = true;
+        config.python_environment.site_package_path = Some(vec![PathBuf::from("site_packages")]);
+        config.project_includes = globs(&["project/**"]);
+        config.project_excludes = globs(&["project/excluded/**"]);
+        config.configure();
+
+        // No [coverage] overrides: identical to the plain project globs.
+        assert_eq!(
+            config.get_filtered_globs(None, ConfigScope::Coverage),
+            config.get_filtered_globs(None, ConfigScope::Default)
+        );
+
+        // `includes` takes precedence over `project_includes`; unset `excludes` falls back.
+        config.coverage.includes = Some(globs(&["covered/**"]));
+        assert_eq!(
+            config.get_filtered_globs(None, ConfigScope::Coverage),
+            expected(&["project/excluded/**"])
+        );
+
+        // `excludes` gets the same required-excludes treatment as `--project-excludes`.
+        config.coverage.excludes = Some(globs(&["covered/vendored/**"]));
+        assert_eq!(
+            config.get_filtered_globs(None, ConfigScope::Coverage),
+            expected(&["covered/vendored/**"])
+        );
+
+        // `--project-excludes` wins over `coverage.excludes`.
+        assert_eq!(
+            config.get_filtered_globs(Some(globs(&["custom_excludes"])), ConfigScope::Coverage),
+            expected(&["custom_excludes"])
         );
     }
 

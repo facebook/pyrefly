@@ -1505,6 +1505,41 @@ TypeVar('T')
 }
 
 #[test]
+fn test_import_for_unimported_directives() {
+    for (directive, call) in [
+        ("reveal_type", "reveal_type(1)\n"),
+        ("assert_type", "assert_type(1, int)\n"),
+    ] {
+        let files = [("main", call)];
+        let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::new(TextSize::new(0), TextSize::new(0)),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        let expected_title = format!("Insert import: `from typing import {directive}`");
+        let (_, edits) = actions
+            .iter()
+            .find(|(title, _)| title == &expected_title)
+            .unwrap_or_else(|| panic!("expected import quick fix for `{directive}`"));
+        assert_eq!(edits.len(), 1);
+
+        let expected_import = format!("from typing import {directive}\n");
+        assert_eq!(expected_import, edits[0].2);
+        assert_eq!(
+            format!("{expected_import}{call}"),
+            apply_refactor_edits_for_module(&module_info, edits)
+        );
+    }
+}
+
+#[test]
 fn generate_code_actions_infer_callsite_types() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(

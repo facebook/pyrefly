@@ -316,9 +316,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let (prefix, middle, suffix) = &**unpacked;
                 self.int_tuple_unpacked_element_type(prefix, middle, suffix)
             }
-            _ => self
-                .unwrap_iterable(middle)
-                .unwrap_or_else(|| self.heap.mk_class_type(self.stdlib.object().clone())),
+            // An unresolved variadic middle (an unsolved `Var`, or a raw
+            // `TypeVarTuple` that never went through the tuple-carrier
+            // projection) has no known element type. Its elements are still
+            // shape dimensions, so fall back to a gradual dimension rather than
+            // `object`, matching the resolved variadic cases above.
+            _ => self.unwrap_iterable(middle).unwrap_or_else(gradual_size),
         };
         let mut elements = prefix.to_vec();
         elements.push(middle);
