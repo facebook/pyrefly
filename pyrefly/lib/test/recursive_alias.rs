@@ -272,6 +272,19 @@ not x
 );
 
 testcase!(
+    test_cyclic_alias_through_type_parameter_bound,
+    r#"
+# Regression test for #2851: resolving `Y`'s scoped type parameter bound closes
+# a cycle through `X`. Using the alias used to make the solver recurse forever.
+type X = Y  # E: cyclic self-reference in `X`
+type Y[T: X] = X  # E: cyclic self-reference in `Y`
+
+x: X = 1
+not x
+    "#,
+);
+
+testcase!(
     test_cyclic_no_base_case,
     r#"
 # These have no base case — they are either uninhabited or inhabited only by nestings of empty containers.
