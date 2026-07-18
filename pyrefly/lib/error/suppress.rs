@@ -623,35 +623,7 @@ pub fn remove_unused_ignores_from_serialized(
                     let mut updated_line = Cow::Borrowed(*line);
 
                     for error in errors {
-                        // Use string-aware comment detection instead of raw regex.
-                        let Some(comment_start) = find_comment_start_in_line(&updated_line) else {
-                            continue;
-                        };
-                        let comment_part = &updated_line[comment_start..];
                         let msg = &error.message;
-
-                        let ignore_regex = if error.is_unused_type_ignore() {
-                            Some(&*TYPE_IGNORE_COMMENT_REGEX)
-                        } else if msg.starts_with("Unused `# pyrefly: ignore` comment") {
-                            Some(&*PYREFLY_IGNORE_COMMENT_REGEX)
-                        } else if msg.starts_with("Unused pyre-fixme comment") {
-                            Some(&*PYRE_IGNORE_COMMENT_REGEX)
-                        } else {
-                            None
-                        };
-
-                        if let Some(ignore_regex) = ignore_regex {
-                            if ignore_regex.is_match(comment_part) {
-                                let code_part = &updated_line[..comment_start];
-                                let new_comment = ignore_regex.replace(comment_part, "");
-                                updated_line = Cow::Owned(
-                                    format!("{}{}", code_part, new_comment)
-                                        .trim_end()
-                                        .to_owned(),
-                                );
-                            }
-                            continue;
-                        }
 
                         if msg.starts_with("Unused error code(s)") {
                             // Partially unused - extract codes from message and remove only those.
@@ -677,6 +649,31 @@ pub fn remove_unused_ignores_from_serialized(
                                     }
                                 }
                             }
+                            continue;
+                        }
+
+                        let ignore_regex = if error.is_unused_type_ignore() {
+                            &*TYPE_IGNORE_COMMENT_REGEX
+                        } else if msg.starts_with("Unused `# pyrefly: ignore` comment") {
+                            &*PYREFLY_IGNORE_COMMENT_REGEX
+                        } else if msg.starts_with("Unused pyre-fixme comment") {
+                            &*PYRE_IGNORE_COMMENT_REGEX
+                        } else {
+                            continue;
+                        };
+
+                        // Use string-aware comment detection instead of raw regex.
+                        let Some(comment_start) = find_comment_start_in_line(&updated_line) else {
+                            continue;
+                        };
+                        let comment_part = &updated_line[comment_start..];
+                        if let Cow::Owned(new_comment) = ignore_regex.replace(comment_part, "") {
+                            let code_part = &updated_line[..comment_start];
+                            updated_line = Cow::Owned(
+                                format!("{}{}", code_part, new_comment)
+                                    .trim_end()
+                                    .to_owned(),
+                            );
                         }
                     }
 
