@@ -9,6 +9,7 @@ use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use dupe::IterDupedExt;
 use itertools::Either;
 use itertools::Itertools;
 use pyrefly_graph::index::Idx;
@@ -2072,13 +2073,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Check if `metaclass_cls` is `abc.ABCMeta` or has `abc.ABCMeta` anywhere in its
     /// inheritance chain.
     fn metaclass_extends_abcmeta(&self, metaclass_cls: &Class) -> bool {
-        if metaclass_cls.has_toplevel_qname("abc", "ABCMeta") {
-            return true;
+        let mut pending = vec![metaclass_cls.dupe()];
+        let mut seen = SmallSet::new();
+        while let Some(cls) = pending.pop() {
+            if !seen.insert(cls.dupe()) {
+                continue;
+            }
+            if cls.has_toplevel_qname("abc", "ABCMeta") {
+                return true;
+            }
+            pending.extend(
+                self.get_metadata_for_class(&cls)
+                    .base_class_objects()
+                    .iter()
+                    .duped(),
+            );
         }
-        let metadata = self.get_metadata_for_class(metaclass_cls);
-        metadata
-            .base_class_objects()
-            .iter()
-            .any(|base| self.metaclass_extends_abcmeta(base))
+        false
     }
 }
