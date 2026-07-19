@@ -71,12 +71,15 @@ fn sarif_artifact_uri(path: &Path, relative_to: &Path) -> anyhow::Result<String>
 }
 
 fn errors_to_sarif(relative_to: &Path, errors: &[Error]) -> anyhow::Result<Sarif> {
-    let mut rule_kinds = errors
-        .iter()
-        .map(|error| error.error_kind())
-        .collect::<Vec<_>>();
-    rule_kinds.sort_unstable_by_key(|kind| kind.to_name());
-    rule_kinds.dedup();
+    let rule_kinds = {
+        let mut kinds = errors
+            .iter()
+            .map(|error| error.error_kind())
+            .collect::<Vec<_>>();
+        kinds.sort_unstable_by_key(|kind| kind.to_name());
+        kinds.dedup();
+        kinds
+    };
 
     let rules = rule_kinds
         .iter()
