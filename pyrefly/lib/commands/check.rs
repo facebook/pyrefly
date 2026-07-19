@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+mod sarif;
+
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
@@ -61,6 +63,8 @@ use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 
+use self::sarif::write_error_sarif_to_console;
+use self::sarif::write_error_sarif_to_file;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::files::UpsellDecision;
@@ -438,6 +442,7 @@ fn write_errors_to_file(
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
+        OutputFormat::Sarif => write_error_sarif_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -456,6 +461,7 @@ pub(crate) fn write_errors_to_console(
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
+        OutputFormat::Sarif => write_error_sarif_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }

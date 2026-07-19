@@ -63,6 +63,7 @@ ruff_python_parser = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0
 ruff_source_file = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
 ruff_text_size = { git = "https://github.com/astral-sh/ruff/", rev = "db5aa0a5f1b92cb91d910bf0866a967554dd94f5" }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde-sarif = "0.8.0"
 serde_json = { version = "1.0.140", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_repr = "0.1.14"
 starlark_map = "0.14.2"
