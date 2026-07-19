@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
@@ -56,6 +57,7 @@ use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::watcher::Watcher;
 use ruff_text_size::Ranged;
+use serde_json::json;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -438,6 +440,7 @@ fn write_errors_to_file(
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
+        OutputFormat::Sarif => write_error_sarif_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -456,6 +459,7 @@ pub(crate) fn write_errors_to_console(
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
+        OutputFormat::Sarif => write_error_sarif_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -723,6 +727,108 @@ fn write_error_junit_xml_to_file(
 
 fn write_error_junit_xml_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
     buffered_write_error_junit_xml(stdout(), relative_to, errors)
+}
+
+fn sarif_level(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "error",
+        Severity::Warn => "warning",
+        Severity::Info => "note",
+        Severity::Ignore => "none",
+    }
+}
+
+fn write_error_sarif(
+    writer: &mut impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut rule_help_uris = BTreeMap::new();
+    for error in errors {
+        let kind = error.error_kind();
+        rule_help_uris
+            .entry(kind.to_name())
+            .or_insert_with(|| kind.docs_url());
+    }
+    let rules = rule_help_uris
+        .into_iter()
+        .map(|(id, help_uri)| {
+            json!({
+                "id": id,
+                "name": id,
+                "shortDescription": {"text": format!("Pyrefly {id} diagnostic")},
+                "helpUri": help_uri,
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = errors
+        .iter()
+        .map(|error| {
+            let error_path = error.path().as_path();
+            let path = error_path
+                .strip_prefix(relative_to)
+                .unwrap_or(error_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let range = error.display_range();
+            json!({
+                "ruleId": error.error_kind().to_name(),
+                "level": sarif_level(error.severity()),
+                "message": {"text": error.msg()},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": path},
+                        "region": {
+                            "startLine": range.start.line_within_cell().get(),
+                            "startColumn": range.start.column().get(),
+                            "endLine": range.end.line_within_cell().get(),
+                            "endColumn": range.end.column().get(),
+                        }
+                    }
+                }]
+            })
+        })
+        .collect::<Vec<_>>();
+    let report = json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "Pyrefly",
+                    "informationUri": "https://pyrefly.org",
+                    "rules": rules,
+                }
+            },
+            "results": results,
+        }]
+    });
+    serde_json::to_writer_pretty(writer, &report)?;
+    Ok(())
+}
+
+fn buffered_write_error_sarif(
+    writer: impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_sarif(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_sarif_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let file = File::create(path)?;
+    buffered_write_error_sarif(file, relative_to, errors)
+}
+
+fn write_error_sarif_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_sarif(stdout(), relative_to, errors)
 }
 
 fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
@@ -1685,6 +1791,50 @@ mod tests {
             output.ends_with("</testsuites>\n"),
             "missing closing tag: {output}"
         );
+    }
+
+    #[test]
+    fn sarif_output_format_writes_rules_results_and_locations() {
+        let errors = vec![sample_error("bad".into())];
+        let mut buf = Vec::new();
+        write_error_sarif(&mut buf, Path::new("/"), &errors).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+
+        assert_eq!(report["version"], "2.1.0");
+        assert_eq!(report["runs"][0]["tool"]["driver"]["name"], "Pyrefly");
+        assert_eq!(
+            report["runs"][0]["tool"]["driver"]["rules"][0]["id"],
+            "bad-assignment"
+        );
+        let result = &report["runs"][0]["results"][0];
+        assert_eq!(result["ruleId"], "bad-assignment");
+        assert_eq!(result["level"], "error");
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "repo/foo.py"
+        );
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["region"]["startLine"],
+            1
+        );
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["region"]["startColumn"],
+            1
+        );
+    }
+
+    #[test]
+    fn sarif_output_format_maps_severity_levels() {
+        let errors = vec![
+            sample_error("warning".into()).with_severity(Severity::Warn),
+            sample_error("info".into()).with_severity(Severity::Info),
+        ];
+        let mut buf = Vec::new();
+        write_error_sarif(&mut buf, Path::new("/"), &errors).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        let results = report["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results[0]["level"], "warning");
+        assert_eq!(results[1]["level"], "note");
     }
 
     #[test]

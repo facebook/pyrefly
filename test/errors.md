@@ -190,3 +190,19 @@ $ touch $TMPDIR/pyrefly.toml && \
 </testsuites>
 [1]
 ```
+
+## `--output-format sarif` emits SARIF 2.1.0
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/sarif.py && \
+> $PYREFLY check --output-format sarif $TMPDIR/sarif.py 2>/dev/null | \
+> $JQ '{version, tool: .runs[0].tool.driver.name, rule: .runs[0].results[0].ruleId, level: .runs[0].results[0].level}'
+{
+  "version": "2.1.0",
+  "tool": "Pyrefly",
+  "rule": "bad-assignment",
+  "level": "error"
+}
+[0]
+```
