@@ -1,1 +1,6 @@
+min-severity = "warn"
 
+[errors]
+bad-assignment = "error"
+division-by-zero = "warn"
+reveal-type = "info"

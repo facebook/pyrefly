@@ -28,6 +28,29 @@
           "ruleIndex": 0
         },
         {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "diagnostics.py"
+                },
+                "region": {
+                  "endColumn": 12,
+                  "endLine": 4,
+                  "startColumn": 7,
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Cannot divide by zero: `/` with a literal zero divisor"
+          },
+          "ruleId": "division-by-zero",
+          "ruleIndex": 1
+        },
+        {
           "level": "note",
           "locations": [
             {
@@ -37,9 +60,9 @@
                 },
                 "region": {
                   "endColumn": 15,
-                  "endLine": 4,
+                  "endLine": 5,
                   "startColumn": 12,
-                  "startLine": 4
+                  "startLine": 5
                 }
               }
             }
@@ -48,7 +71,7 @@
             "text": "revealed type: str"
           },
           "ruleId": "reveal-type",
-          "ruleIndex": 1
+          "ruleIndex": 2
         }
       ],
       "tool": {
@@ -66,6 +89,14 @@
             },
             {
               "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://pyrefly.org/en/docs/error-kinds/#division-by-zero",
+              "id": "division-by-zero",
+              "name": "division-by-zero"
+            },
+            {
+              "defaultConfiguration": {
                 "level": "note"
               },
               "helpUri": "https://pyrefly.org/en/docs/error-kinds/#reveal-type",
@@ -73,7 +104,7 @@
               "name": "reveal-type"
             }
           ],
-          "semanticVersion": "1.2.0-dev.2"
+          "semanticVersion": "0.0.0"
         }
       }
     }
