@@ -398,7 +398,6 @@ def f() -> Never:
 "#,
 );
 
-
 testcase!(
     test_return_no_error,
     r#"
