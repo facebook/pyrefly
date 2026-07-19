@@ -7,6 +7,8 @@
 
 //! SARIF diagnostic output for the `check` command.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::Write;
@@ -46,13 +48,16 @@ fn severity_to_sarif_level(severity: Severity) -> ResultLevel {
 }
 
 fn sarif_artifact_uri(path: &Path, relative_to: &Path) -> anyhow::Result<String> {
+    assert!(
+        relative_to.is_absolute(),
+        "SARIF relative root must be absolute"
+    );
     let path = path.absolutize();
-    let relative_to = relative_to.absolutize();
     let path_uri = Url::from_file_path(&path)
         .map_err(|()| anyhow::anyhow!("cannot convert `{}` to a file URI", path.display()))?;
 
-    if path.strip_prefix(&relative_to).is_ok() {
-        let base_uri = Url::from_directory_path(&relative_to).map_err(|()| {
+    if path.strip_prefix(relative_to).is_ok() {
+        let base_uri = Url::from_directory_path(relative_to).map_err(|()| {
             anyhow::anyhow!(
                 "cannot convert `{}` to a directory URI",
                 relative_to.display()
@@ -71,6 +76,7 @@ fn sarif_artifact_uri(path: &Path, relative_to: &Path) -> anyhow::Result<String>
 }
 
 fn errors_to_sarif(relative_to: &Path, errors: &[Error]) -> anyhow::Result<Sarif> {
+    let relative_to = relative_to.absolutize();
     let rule_kinds = {
         let mut kinds = errors
             .iter()
@@ -79,6 +85,27 @@ fn errors_to_sarif(relative_to: &Path, errors: &[Error]) -> anyhow::Result<Sarif
         kinds.sort_unstable_by_key(|kind| kind.to_name());
         kinds.dedup();
         kinds
+    };
+    let rule_index_map = rule_kinds
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, kind)| {
+            (
+                kind,
+                i64::try_from(index).expect("SARIF rule index does not fit in i64"),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let artifact_uri_map = {
+        let mut uris = HashMap::new();
+        for error in errors {
+            let path = error.path().as_path();
+            if let Entry::Vacant(entry) = uris.entry(path.to_path_buf()) {
+                entry.insert(sarif_artifact_uri(path, &relative_to)?);
+            }
+        }
+        uris
     };
 
     let rules = rule_kinds
@@ -104,15 +131,18 @@ fn errors_to_sarif(relative_to: &Path, errors: &[Error]) -> anyhow::Result<Sarif
         .map(|error| {
             let range = error.display_range();
             let kind = error.error_kind();
-            let rule_index = rule_kinds
-                .binary_search_by_key(&kind.to_name(), |kind| kind.to_name())
+            let rule_index = rule_index_map
+                .get(&kind)
                 .expect("error kind was collected into the SARIF rule table");
+            let artifact_uri = artifact_uri_map
+                .get(error.path().as_path())
+                .expect("error path was collected into the SARIF artifact URI table");
             let location = SarifLocation::builder()
                 .physical_location(
                     PhysicalLocation::builder()
                         .artifact_location(
                             ArtifactLocation::builder()
-                                .uri(sarif_artifact_uri(error.path().as_path(), relative_to)?)
+                                .uri(artifact_uri.clone())
                                 .build(),
                         )
                         .region(
@@ -128,9 +158,7 @@ fn errors_to_sarif(relative_to: &Path, errors: &[Error]) -> anyhow::Result<Sarif
                 .build();
             Ok(SarifResult::builder()
                 .rule_id(kind.to_name())
-                .rule_index(
-                    i64::try_from(rule_index).expect("SARIF rule index does not fit in i64"),
-                )
+                .rule_index(*rule_index)
                 .level(severity_to_sarif_level(error.severity()))
                 .message(SarifMessage::from(error.msg().as_str()))
                 .locations(vec![location])
@@ -241,18 +269,18 @@ mod tests {
                 "x\n",
                 0,
                 1,
-                "error",
+                "warning",
                 ErrorKind::BadAssignment,
-            ),
+            )
+            .with_severity(Severity::Warn),
             sample_error(
                 PathBuf::from("/repo/foo.py"),
                 "x\n",
                 0,
                 1,
-                "warning",
+                "error",
                 ErrorKind::BadAssignment,
-            )
-            .with_severity(Severity::Warn),
+            ),
             sample_error(
                 PathBuf::from("/repo/info.py"),
                 "x\n",
@@ -318,16 +346,28 @@ mod tests {
                 .map(|result| result.level)
                 .collect::<Vec<_>>(),
             vec![
-                Some(ResultLevel::Error),
                 Some(ResultLevel::Warning),
+                Some(ResultLevel::Error),
                 Some(ResultLevel::Note),
                 Some(ResultLevel::None),
             ]
         );
 
         let empty = errors_to_sarif(Path::new("/repo"), &[]).unwrap();
-        assert!(empty.runs[0].tool.driver.rules.as_ref().unwrap().is_empty());
-        assert!(empty.runs[0].results.as_ref().unwrap().is_empty());
+        assert!(
+            empty.runs[0]
+                .tool
+                .driver
+                .rules
+                .as_ref()
+                .is_none_or(|rules| rules.is_empty())
+        );
+        assert!(
+            empty.runs[0]
+                .results
+                .as_ref()
+                .is_none_or(|results| results.is_empty())
+        );
     }
 
     #[test]

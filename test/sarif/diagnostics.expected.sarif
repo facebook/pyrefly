@@ -71,6 +71,29 @@
             "text": "revealed type: str"
           },
           "ruleId": "reveal-type",
+          "ruleIndex": 3
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "diagnostics.py"
+                },
+                "region": {
+                  "endColumn": 29,
+                  "endLine": 15,
+                  "startColumn": 17,
+                  "startLine": 15
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Redundant cast: `int` is the same type as `int`"
+          },
+          "ruleId": "redundant-cast",
           "ruleIndex": 2
         }
       ],
@@ -94,6 +117,14 @@
               "helpUri": "https://pyrefly.org/en/docs/error-kinds/#division-by-zero",
               "id": "division-by-zero",
               "name": "division-by-zero"
+            },
+            {
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://pyrefly.org/en/docs/error-kinds/#redundant-cast",
+              "id": "redundant-cast",
+              "name": "redundant-cast"
             },
             {
               "defaultConfiguration": {
