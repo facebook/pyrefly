@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.7069cea3.js" defer="defer"></script>
-<script src="/assets/js/main.2a943fe7.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.3a6a3edc.js" defer="defer"></script>
+<script src="/assets/js/main.c8953a0a.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -60,7 +60,7 @@
 <p>That number is a full-project baseline.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="compare-prs">Compare PRs<a href="#compare-prs" class="hash-link" aria-label="Direct link to Compare PRs" title="Direct link to Compare PRs">​</a></h2>
 <p>The non-blocking coverage workflow runs <code>pyrefly report</code> twice: once on the pull request branch and once on the base branch. A helper script extracts the summary and renders a comparison table with deltas for type coverage, strict coverage, typed symbols, untyped symbols, and module count.</p>
-<p>That design matters. Large projects rarely improve through one giant typing push. They improve when contributors can see that a PR added 200 typed symbols, removed 20 untyped symbols, or accidentally moved coverage in the wrong direction.</p>
+<p>This matters because large projects rarely improve through one giant typing push. Instead, they improve when contributors can see that a PR added 200 typed symbols, removed 20 untyped symbols, or accidentally moved coverage in the wrong direction.</p>
 <p>The PR comment becomes a lightweight code review signal:</p>
 <div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#F8F8F2;--prism-background-color:#282A36"><div class="codeBlockContent_biex"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#F8F8F2;background-color:#282A36"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#F8F8F2"><span class="token plain">### Pyrefly Type Coverage</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">| Metric | Base | PR | Delta |</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">| --- | ---: | ---: | ---: |</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">| Type coverage | 45.90% | 46.02% | +0.12% |</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">| Strict coverage | 45.40% | 45.52% | +0.12% |</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">| Typed symbols | 24,700 | 24,989 | +289 |</span><br></span><span class="token-line" style="color:#F8F8F2"><span class="token plain">| Untyped symbols | 29,800 | 29,635 | -165 |</span><br></span></code></pre><div class="buttonGroup__atx"><button type="button" aria-label="Copy code to clipboard" title="Copy" class="clean-btn"><span class="copyButtonIcons_eSgA" aria-hidden="true"><svg viewBox="0 0 24 24" class="copyButtonIcon_y97N"><path fill="currentColor" d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"></path></svg><svg viewBox="0 0 24 24" class="copyButtonSuccessIcon_LjdS"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"></path></svg></span></button></div></div></div>
 <p>This encourages better typing without turning the first rollout into a migration project.</p>
@@ -83,7 +83,7 @@
 <li>Type coverage asks: &quot;Can static analysis understand this interface?&quot;</li>
 </ul>
 <p>For a codebase like Dify, both matter. Runtime coverage catches behavior regressions. Type coverage catches API drift, missing annotations, accidental <code>Any</code>, and unclear boundaries before they become harder to reason about.</p>
-<h2 class="anchor anchorWithStickyNavbar_LWe7" id="what-worked">What Worked<a href="#what-worked" class="hash-link" aria-label="Direct link to What Worked" title="Direct link to What Worked">​</a></h2>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="what-worked">What Worked<a href="#what-worked" class="hash-link" aria-label="Direct link to What Worked" title="Direct link to What Worked">  ​</a></h2>
 <p>The most effective choices were simple:</p>
 <ul>
 <li>Keep two Pyrefly configurations: one blocking path with local excludes, and one full-project path that reports in comments.</li>
