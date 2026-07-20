@@ -576,6 +576,28 @@ baz: Callable[[int | str | bytes], str] = foo  # E: not assignable
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/1678
+testcase!(
+    test_overload_contextually_types_lambda_in_wide_union,
+    r#"
+from typing import Callable, TypeVar, assert_type, overload
+
+class Frame: ...
+class Series: ...
+
+ScalarT = TypeVar("ScalarT", bound=int)
+
+@overload
+def select(key: Callable[[Frame], ScalarT] | str | bytes | float | None) -> Series: ...
+@overload
+def select(key: Callable[[Frame], list[bool]] | str | bytes | float | None) -> Frame: ...
+def select(key: object) -> object: ...
+
+assert_type(select(lambda frame: [True]), Frame)
+assert_type(select(lambda frame: 1), Series)
+    "#,
+);
+
 testcase!(
     test_overload_assignable_to_callable_union_multi_param,
     r#"
