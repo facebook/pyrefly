@@ -91,6 +91,34 @@ y = list([1, 2, 3])
 }
 
 #[test]
+fn test_new_type_inlay_hint() {
+    let code = r#"from typing import NewType
+
+N = NewType("N", int)
+x = N
+"#;
+    assert_eq!(
+        r#"
+# main.py
+4 | x = N
+     ^ inlay-hint: `: (_x: int) -> N`
+"#
+        .trim(),
+        generate_inlay_hint_report(code, Default::default()).trim()
+    );
+
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state_assert_no_errors(&files, Require::Exports);
+    let handle = handles.get("main").unwrap();
+    let hints = state
+        .transaction()
+        .inlay_hints(handle, Default::default())
+        .unwrap();
+    assert_eq!(hints.len(), 1);
+    assert!(!hints[0].insertable);
+}
+
+#[test]
 fn test_dunder_new_implicit_self_return_inlay_hint() {
     let code = r#"
 class A:
