@@ -44,6 +44,11 @@ impl<'a, 'b> HintRef<'a, 'b> {
         Self::new(hint, None)
     }
 
+    /// Construct a hint from an already-split collection of candidate types.
+    pub fn from_types(types: &'b [Type], errors: Option<&'a ErrorCollector>) -> Self {
+        Self(types, errors)
+    }
+
     pub fn with_ty_opt(hint: Option<Self>, ty: Option<&'b Type>) -> Option<Self> {
         let hint = hint?;
         let ty = ty?;
@@ -61,7 +66,7 @@ impl<'a, 'b> HintRef<'a, 'b> {
         self.0
     }
 
-    pub fn errors(&self) -> Option<&ErrorCollector> {
+    pub fn errors(&self) -> Option<&'a ErrorCollector> {
         self.1
     }
 }
@@ -331,7 +336,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect::<Vec<_>>();
         let vararg_var = vararg_name.map(|_| self.fresh_var());
         let kwarg_var = kwarg_name.map(|_| self.fresh_var());
-        let return_ty = self.fresh_var();
+        // An unresolved generic return hint must be inferred from the lambda body. Relating a
+        // fresh return variable to it here can prematurely solve the generic before the body has
+        // an actual type.
+        let hinted_return = hint.callable_return_type(self.heap);
+        let return_var = match &hinted_return {
+            Some(ty) if !ty.collect_maybe_placeholder_vars().is_empty() => None,
+            _ => Some(self.fresh_var()),
+        };
         let mut params = Vec::with_capacity(
             param_names.len()
                 + usize::from(vararg_name.is_some())
@@ -346,9 +358,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some((name, var)) = kwarg_name.zip(kwarg_var) {
             params.push(Param::Kwargs(Some(name.clone()), var.to_type(self.heap)));
         }
-        let callable_ty = self
-            .heap
-            .mk_callable_from_vec(params, return_ty.to_type(self.heap));
+        let callable_ty = self.heap.mk_callable_from_vec(
+            params,
+            return_var
+                .map(|var| var.to_type(self.heap))
+                .unwrap_or_else(|| {
+                    hinted_return
+                        .clone()
+                        .expect("missing return variable requires a callable return hint")
+                }),
+        );
 
         // Decomposition reads contextual types from the hint; the inferred lambda callable is
         // responsible for instantiating any generics in the hint.
@@ -364,7 +383,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut vararg_hint = vararg_var.and_then(|var| self.resolve_var_opt(hint, var));
         let mut kwarg_hint = kwarg_var.and_then(|var| self.resolve_var_opt(hint, var));
         let mut return_hint = if matched {
-            self.resolve_var_opt(hint, return_ty)
+            return_var.and_then(|var| self.resolve_var_opt(hint, var))
         } else {
             None
         };
