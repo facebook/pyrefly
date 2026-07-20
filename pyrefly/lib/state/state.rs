@@ -1357,8 +1357,8 @@ impl<'a> Transaction<'a> {
     ///
     /// When a module's exports change during the Solutions step, this function
     /// invalidates only those direct rdeps that import the specific names that changed.
-    /// This is the normal incremental path. For transitive invalidation (used when
-    /// mutable dependency cycles are detected), see `invalidate_rdeps`.
+    /// This is the normal incremental path. `run_internal` handles mutable dependency
+    /// cycles by recomputing their reverse-dependency closure in SCC order.
     fn demand(&self, module_data: &ArcId<ModuleDataMut>, step: Step) {
         let mut computed = false;
 
@@ -2045,16 +2045,6 @@ impl<'a> Transaction<'a> {
         closure
     }
 
-    fn invalidate_rdeps(&mut self, follow: Vec<ArcId<ModuleDataMut>>) {
-        let closure = self.rdep_closure(follow);
-        let mut dirty_set: std::sync::MutexGuard<'_, SmallSet<ArcId<ModuleDataMut>>> =
-            self.data.dirty.lock();
-        for x in closure.into_values() {
-            x.state.set_dirty_deps();
-            dirty_set.insert(x);
-        }
-    }
-
     fn run_internal(
         &mut self,
         handles: &[Handle],
@@ -2121,23 +2111,18 @@ impl<'a> Transaction<'a> {
                     .is_some_and(|seen| seen.overlaps(changed_dep))
             });
 
-            if has_cycle {
-                debug!(
-                    "Mutable dependency cycle detected: overlapping export changes. \
-                     Invalidating cycle."
-                );
-                // We are in a cycle of mutual dependencies, so give up.
-                // Just invalidate everything in the cycle and recompute it all.
-                // Use coarse-grained invalidation to ensure all cyclic modules reach stable state
-                self.invalidate_rdeps(changed.into_map(|(m, _)| m));
-                return self.run_step(handles, require, custom_thread_pool);
-            }
-
-            if i == MAX_EPOCHS {
-                tracing::warn!(
-                    "Exceeded maximum epochs ({MAX_EPOCHS}) without stabilizing. \
-                     Recomputing the affected graph in dependency order."
-                );
+            if has_cycle || i == MAX_EPOCHS {
+                if has_cycle {
+                    debug!(
+                        "Mutable dependency cycle detected: overlapping export changes. \
+                         Recomputing the affected graph in dependency order."
+                    );
+                } else {
+                    tracing::warn!(
+                        "Exceeded maximum epochs ({MAX_EPOCHS}) without stabilizing. \
+                         Recomputing the affected graph in dependency order."
+                    );
+                }
                 let closure = self.rdep_closure(changed.into_map(|(m, _)| m));
                 let mut tarjan = Tarjan::new();
                 let mut components = closure

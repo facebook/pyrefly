@@ -8,6 +8,7 @@
 //! Tests of the `State` object.
 
 use std::mem;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use pyrefly_util::thread_pool::ThreadCount;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
@@ -79,6 +81,10 @@ impl Incremental {
     }
 
     fn with_files(files: Vec<String>) -> Self {
+        Self::with_files_and_thread_count(files, TEST_THREAD_COUNT)
+    }
+
+    fn with_files_and_thread_count(files: Vec<String>, thread_count: ThreadCount) -> Self {
         init_test();
         let data = IncrementalData::default();
 
@@ -99,7 +105,7 @@ impl Incremental {
             data: data.dupe(),
             files,
             require: None,
-            state: State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT),
+            state: State::new(ConfigFinder::new_constant(config), thread_count),
             to_set: Vec::new(),
         }
     }
@@ -187,6 +193,43 @@ impl Incremental {
         res.check_recompute(recompute);
         res
     }
+}
+
+#[test]
+fn test_incremental_recursive_warning_survives_comment_edit() {
+    let files = vec!["m_0".to_owned(), "m_1".to_owned()];
+    let m_0 = "from m_1 import f as f_1\nf = (0, f_1)\n";
+    let m_0_final = "from m_1 import f as f_1\nf = (0, f_1)\n# topology control\n";
+    let m_1 = "from m_0 import f as f_0\nf = (1, f_0)\n";
+    let threads = ThreadCount::NumThreads(NonZeroUsize::new(1).unwrap());
+
+    let mut warm = Incremental::with_files_and_thread_count(files.clone(), threads);
+    warm.set("m_0", m_0);
+    warm.set("m_1", m_1);
+    let _ = warm.unchecked(&["m_0"]);
+    warm.set("m_0", m_0_final);
+    let warm = warm
+        .unchecked(&["m_0"])
+        .errors
+        .collect_display_errors()
+        .into_iter()
+        .map(|error| error.error_kind().to_name())
+        .collect::<Vec<_>>();
+
+    let mut cold = Incremental::with_files_and_thread_count(files, threads);
+    cold.set("m_0", m_0_final);
+    cold.set("m_1", m_1);
+    let cold = cold
+        .unchecked(&["m_0"])
+        .errors
+        .collect_display_errors()
+        .into_iter()
+        .map(|error| error.error_kind().to_name())
+        .collect::<Vec<_>>();
+
+    // https://github.com/facebook/pyrefly/issues/4216
+    assert_eq!(cold, vec!["non-convergent-recursion"]);
+    assert_eq!(warm, cold, "incremental and cold diagnostics must match");
 }
 
 #[test]
