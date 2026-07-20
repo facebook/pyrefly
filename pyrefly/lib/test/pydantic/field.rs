@@ -328,7 +328,7 @@ from pydantic import BaseModel, Field
 class A(BaseModel):
     x: int = Field(default='oops')  # E: `str` is not assignable to `int`
 class B(BaseModel):
-    x: int = Field(default_factory=lambda: 'oops')  # E: `str` is not assignable to `int`
+    x: int = Field(default_factory=lambda: 'oops')  # E: `Literal['oops']` is not assignable to `int`
     "#,
 );
 
