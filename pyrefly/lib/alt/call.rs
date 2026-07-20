@@ -22,6 +22,7 @@ use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
@@ -2002,10 +2003,59 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             self.expand_mut(&mut callee_ty);
 
+            // Overload handling normally preserves mutable literals for contextual typing. For a
+            // list of pairs passed to dict/OrderedDict, however, that makes every constructor
+            // overload recursively re-infer every nested constructor (see #3653). This shape is
+            // sufficient to infer the key and value types once when there is no narrow hint or
+            // empty container that requires contextual typing.
+            let dict_pairs_ty = if matches!(
+                &callee_ty,
+                Type::ClassDef(cls)
+                    if cls.is_builtin("dict")
+                        || cls.has_toplevel_qname("collections", "OrderedDict")
+            ) && let [Expr::List(items)] = &*x.arguments.args
+                && !items.elts.is_empty()
+                && items.elts.iter().all(|item| match item {
+                    Expr::Tuple(pair) => {
+                        if pair.elts.len() != 2
+                            || pair.elts.iter().any(|x| matches!(x, Expr::Starred(_)))
+                        {
+                            false
+                        } else {
+                            let mut contains_empty_container = false;
+                            pair.elts.iter().for_each(|elt| {
+                                elt.visit(&mut |x| {
+                                    contains_empty_container |= match x {
+                                        Expr::List(x) => x.elts.is_empty(),
+                                        Expr::Dict(x) => x.items.is_empty(),
+                                        _ => false,
+                                    }
+                                })
+                            });
+                            !contains_empty_container
+                        }
+                    }
+                    _ => false,
+                })
+                && hint.is_none_or(|hint| {
+                    self.decompose_hint(hint, |ty| {
+                        let (key, value) = self.unwrap_mapping(ty)?;
+                        (key.is_any() && value.is_any()).then_some(())
+                    })
+                    .len()
+                        == hint.types().len()
+                }) {
+                Some(self.expr_infer(&x.arguments.args[0], errors))
+            } else {
+                None
+            };
             let args;
             let kws;
             let call = CallWithTypes::new();
-            if callee_ty.is_union() {
+            if let Some(arg_ty) = &dict_pairs_ty {
+                args = vec![CallArg::ty(arg_ty, x.arguments.args[0].range())];
+                kws = x.arguments.keywords.map(CallKeyword::new);
+            } else if callee_ty.is_union() {
                 // If we have a union we will distribute over it, and end up duplicating each function call.
                 args = x
                     .arguments
