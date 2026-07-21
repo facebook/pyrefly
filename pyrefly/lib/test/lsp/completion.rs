@@ -71,6 +71,23 @@ class Foo:
     }
 }
 
+#[test]
+fn completion_dunder_attribute_inherited_from_object() {
+    let code = r#"
+from pathlib import Path
+
+Path(".").read_text.__do
+#                       ^
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    assert_eq!(
+        report.matches("- (Field) __doc__").count(),
+        1,
+        "expected exactly one __doc__ completion:\n{report}"
+    );
+}
+
 fn get_default_test_report() -> impl Fn(&State, &Handle, TextSize) -> String {
     get_test_report(ResultsFilter::default(), ImportFormat::Absolute)
 }

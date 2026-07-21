@@ -2925,13 +2925,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         expected_attribute_name: Option<&Name>,
+        include_object: bool,
         res: &mut Vec<AttrInfo>,
     ) {
-        // NOTE: We do not provide completions from object, to avoid noise like __hash__. Maybe we should?
         let mro = self.get_mro_for_class(cls);
-        let ancestors =
-            iter::once(cls).chain(mro.ancestors_no_object().iter().map(|x| x.class_object()));
-        self.completions_mro(ancestors, expected_attribute_name, res)
+        if include_object {
+            self.completions_mro(
+                iter::once(cls).chain(mro.ancestors(self.stdlib).map(|x| x.class_object())),
+                expected_attribute_name,
+                res,
+            );
+        } else {
+            self.completions_mro(
+                iter::once(cls).chain(mro.ancestors_no_object().iter().map(|x| x.class_object())),
+                expected_attribute_name,
+                res,
+            );
+        }
     }
 
     fn completions_super(
@@ -2954,9 +2964,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &ClassType,
         expected_attribute_name: Option<&Name>,
+        include_object: bool,
         res: &mut Vec<AttrInfo>,
     ) {
-        self.completions_class(cls.class_object(), expected_attribute_name, res);
+        self.completions_class(
+            cls.class_object(),
+            expected_attribute_name,
+            include_object,
+            res,
+        );
     }
 
     fn completions_module(
@@ -3023,10 +3039,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: AttributeBase,
         expected_attribute_name: Option<&Name>,
         include_types: bool,
+        include_object: bool,
         res: &mut Vec<AttrInfo>,
     ) {
         for base1 in &base.0 {
-            self.completions_inner1(base1, expected_attribute_name, res);
+            self.completions_inner1(base1, expected_attribute_name, include_object, res);
         }
         if include_types {
             for info in res {
@@ -3070,6 +3087,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         base1: &AttributeBase1,
         expected_attribute_name: Option<&Name>,
+        include_object: bool,
         res: &mut Vec<AttrInfo>,
     ) {
         match base1 {
@@ -3077,17 +3095,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | AttributeBase1::SelfType(class)
             | AttributeBase1::EnumLiteral(LitEnum { class, .. })
             | AttributeBase1::Quantified(_, class) => {
-                self.completions_class_type(class, expected_attribute_name, res)
+                self.completions_class_type(class, expected_attribute_name, include_object, res)
             }
-            AttributeBase1::ShapedArrayInstance(tensor) => {
-                self.completions_class_type(&tensor.base_class, expected_attribute_name, res)
-            }
-            AttributeBase1::LiteralString => {
-                self.completions_class_type(self.stdlib.str(), expected_attribute_name, res)
-            }
+            AttributeBase1::ShapedArrayInstance(tensor) => self.completions_class_type(
+                &tensor.base_class,
+                expected_attribute_name,
+                include_object,
+                res,
+            ),
+            AttributeBase1::LiteralString => self.completions_class_type(
+                self.stdlib.str(),
+                expected_attribute_name,
+                include_object,
+                res,
+            ),
             AttributeBase1::TypedDict(_) => self.completions_class_type(
                 self.stdlib.typed_dict_fallback(),
                 expected_attribute_name,
+                include_object,
                 res,
             ),
             AttributeBase1::SuperInstance(start_lookup_cls, obj) => {
@@ -3096,34 +3121,42 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 self.completions_super(cls, start_lookup_cls, expected_attribute_name, res)
             }
-            AttributeBase1::QuantifiedValue(q) => {
-                self.completions_class_type(q.class_type(self.stdlib), expected_attribute_name, res)
-            }
-            AttributeBase1::ClassObject(class) => {
-                self.completions_class(class.class_object(), expected_attribute_name, res)
-            }
+            AttributeBase1::QuantifiedValue(q) => self.completions_class_type(
+                q.class_type(self.stdlib),
+                expected_attribute_name,
+                include_object,
+                res,
+            ),
+            AttributeBase1::ClassObject(class) => self.completions_class(
+                class.class_object(),
+                expected_attribute_name,
+                include_object,
+                res,
+            ),
             AttributeBase1::BoundMethod(bound_func) => {
                 self.completions_class_type(
                     self.stdlib.method_type(),
                     expected_attribute_name,
+                    include_object,
                     res,
                 );
                 let mut func_bases = Vec::new();
                 self.as_attribute_base1(bound_func.clone().as_type(), &mut func_bases);
                 for base1 in func_bases {
-                    self.completions_inner1(&base1, expected_attribute_name, res);
+                    self.completions_inner1(&base1, expected_attribute_name, include_object, res);
                 }
             }
             AttributeBase1::TypeAny(_) | AttributeBase1::TypeNever => self.completions_class_type(
                 self.stdlib.builtins_type(),
                 expected_attribute_name,
+                include_object,
                 res,
             ),
             AttributeBase1::Module(module) => {
                 self.completions_module(module, expected_attribute_name, res);
             }
             AttributeBase1::ProtocolSubset(protocol_base) => {
-                self.completions_inner1(protocol_base, expected_attribute_name, res)
+                self.completions_inner1(protocol_base, expected_attribute_name, include_object, res)
             }
             AttributeBase1::Any(_) => {}
             AttributeBase1::Never => {}
@@ -3133,7 +3166,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AttributeBase1::Intersect(bases, _) => {
                 for b in bases {
-                    self.completions_inner1(b, expected_attribute_name, res);
+                    self.completions_inner1(b, expected_attribute_name, include_object, res);
                 }
             }
         }
@@ -3148,7 +3181,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Vec<AttrInfo> {
         let mut res = Vec::new();
         if let Some(base) = self.as_attribute_base(base) {
-            self.completions_inner(base, expected_attribute_name, include_types, &mut res);
+            self.completions_inner(
+                base,
+                expected_attribute_name,
+                include_types,
+                false,
+                &mut res,
+            );
+        }
+        res
+    }
+
+    pub fn completions_including_object(&self, base: Type, include_types: bool) -> Vec<AttrInfo> {
+        let mut res = Vec::new();
+        if let Some(base) = self.as_attribute_base(base) {
+            self.completions_inner(base, None, include_types, true, &mut res);
         }
         res
     }

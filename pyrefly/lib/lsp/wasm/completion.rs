@@ -948,55 +948,58 @@ impl Transaction<'_> {
         &self,
         handle: &Handle,
         base_type: Type,
+        include_object: bool,
         expected_type: Option<&Type>,
         completions: &mut Vec<RankedCompletion>,
     ) {
         self.ad_hoc_solve(handle, "completion_attributes", |solver| {
-            solver
-                .completions(base_type, None, true)
-                .iter()
-                .for_each(|attr| {
-                    let kind = match attr.ty {
-                        Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
-                        Some(Type::Function(_) | Type::Overload(_)) => {
-                            Some(CompletionItemKind::FUNCTION)
-                        }
-                        Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
-                        Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
-                        _ => Some(CompletionItemKind::FIELD),
-                    };
-                    let detail = attr
-                        .ty
-                        .clone()
-                        .map(|t| t.as_lsp_string(LspDisplayMode::Hover));
-                    let documentation = self.get_docstring_for_attribute(handle, attr);
-                    let is_incompatible = self.is_incompatible_with_expected_type(
-                        handle,
-                        expected_type,
-                        attr.ty.as_ref(),
-                    );
-                    let source = if attr.is_reexport {
-                        CompletionSource::Reexport
-                    } else {
-                        CompletionSource::Local
-                    };
-                    completions.push(RankedCompletion {
-                        item: CompletionItem {
-                            label: attr.name.as_str().to_owned(),
-                            detail,
-                            kind,
-                            documentation,
-                            tags: if attr.is_deprecated {
-                                Some(vec![CompletionItemTag::DEPRECATED])
-                            } else {
-                                None
-                            },
-                            ..Default::default()
+            let attributes = if include_object {
+                solver.completions_including_object(base_type, true)
+            } else {
+                solver.completions(base_type, None, true)
+            };
+            attributes.iter().for_each(|attr| {
+                let kind = match attr.ty {
+                    Some(Type::BoundMethod(_)) => Some(CompletionItemKind::METHOD),
+                    Some(Type::Function(_) | Type::Overload(_)) => {
+                        Some(CompletionItemKind::FUNCTION)
+                    }
+                    Some(Type::Module(_)) => Some(CompletionItemKind::MODULE),
+                    Some(Type::ClassDef(_)) => Some(CompletionItemKind::CLASS),
+                    _ => Some(CompletionItemKind::FIELD),
+                };
+                let detail = attr
+                    .ty
+                    .clone()
+                    .map(|t| t.as_lsp_string(LspDisplayMode::Hover));
+                let documentation = self.get_docstring_for_attribute(handle, attr);
+                let is_incompatible = self.is_incompatible_with_expected_type(
+                    handle,
+                    expected_type,
+                    attr.ty.as_ref(),
+                );
+                let source = if attr.is_reexport {
+                    CompletionSource::Reexport
+                } else {
+                    CompletionSource::Local
+                };
+                completions.push(RankedCompletion {
+                    item: CompletionItem {
+                        label: attr.name.as_str().to_owned(),
+                        detail,
+                        kind,
+                        documentation,
+                        tags: if attr.is_deprecated {
+                            Some(vec![CompletionItemTag::DEPRECATED])
+                        } else {
+                            None
                         },
-                        source,
-                        is_incompatible,
-                    });
+                        ..Default::default()
+                    },
+                    source,
+                    is_incompatible,
                 });
+            });
         });
     }
 
@@ -1113,7 +1116,7 @@ impl Transaction<'_> {
                 }
             }
             Some(IdentifierWithContext {
-                identifier: _,
+                identifier,
                 context: IdentifierContext::Attribute { base_range, .. },
             }) => {
                 let expected_type = self.get_expected_type_at(handle, position);
@@ -1124,6 +1127,7 @@ impl Transaction<'_> {
                     self.add_attribute_completions_for_type(
                         handle,
                         base_type,
+                        identifier.as_str().starts_with("__"),
                         expected_type.as_ref(),
                         &mut result,
                     );
@@ -1174,6 +1178,7 @@ impl Transaction<'_> {
                             self.add_attribute_completions_for_type(
                                 handle,
                                 class_type,
+                                false,
                                 None,
                                 &mut result,
                             );
