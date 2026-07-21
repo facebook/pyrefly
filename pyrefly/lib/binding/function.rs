@@ -32,6 +32,9 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtRaise;
 use ruff_python_ast::StmtReturn;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
+use ruff_python_ast::visitor::source_order::walk_expr;
+use ruff_python_ast::visitor::source_order::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
@@ -41,6 +44,7 @@ use crate::binding::binding::AnnotationTarget;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
 use crate::binding::binding::BindingDecoratedFunction;
+use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingUndecoratedFunction;
 use crate::binding::binding::BindingUndecoratedFunctionRange;
 use crate::binding::binding::BindingYield;
@@ -54,6 +58,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
@@ -84,6 +89,83 @@ struct Decorators {
     is_override: bool,
     is_classmethod: bool,
     decorators: Box<[Idx<KeyDecorator>]>,
+}
+
+struct SuperMethodCallFinder<'a> {
+    method_name: &'a Name,
+    found: bool,
+}
+
+impl<'a> SuperMethodCallFinder<'a> {
+    fn is_super_call(expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        let Expr::Name(name) = call.func.as_ref() else {
+            return false;
+        };
+        name.id.as_str() == "super"
+    }
+
+    fn is_super_method_call(&self, expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        let Expr::Attribute(attr) = call.func.as_ref() else {
+            return false;
+        };
+        attr.attr.id == *self.method_name && Self::is_super_call(attr.value.as_ref())
+    }
+
+    fn find(method_name: &'a Name, body: &[Stmt]) -> bool {
+        // Only the constructor-like dunders ever consult this flag (see
+        // `ClassField::requires_super_method_call`), so skip walking the body
+        // entirely for every other function.
+        if !(method_name == &dunder::INIT
+            || method_name == &dunder::NEW
+            || method_name == &dunder::INIT_SUBCLASS)
+        {
+            return false;
+        }
+        let mut finder = Self {
+            method_name,
+            found: false,
+        };
+        for stmt in body {
+            finder.visit_stmt(stmt);
+            if finder.found {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl<'a, 'b> SourceOrderVisitor<'a> for SuperMethodCallFinder<'b> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if self.found {
+            return;
+        }
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.found {
+            return;
+        }
+        match expr {
+            // A lambda body only runs when the lambda is called, so a `super()`
+            // call inside it does not count as the enclosing method calling super.
+            Expr::Lambda(_) => {}
+            _ if self.is_super_method_call(expr) => {
+                self.found = true;
+            }
+            _ => walk_expr(self, expr),
+        }
+    }
 }
 
 pub struct SelfAssignments {
@@ -181,7 +263,7 @@ impl<'a> SelfAttrNames<'a> {
                 (
                     n,
                     InstanceAttribute(
-                        ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)),
+                        vec![ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit))],
                         None,
                         r,
                         MethodSelfKind::Instance,
@@ -484,13 +566,20 @@ impl<'a> BindingsBuilder<'a> {
         let return_type_binding = {
             let kind = match (return_ann_with_range, implicit_return, stub_or_impl) {
                 (Some((range, annotation)), Some(implicit_return), FunctionStubOrImpl::Impl) => {
-                    // We have an explicit return annotation and we want to validate it.
-                    ReturnTypeKind::ShouldValidateAnnotation {
-                        range,
+                    self.insert_binding(
+                        KeyExpect::ValidateImplicitReturn(range),
+                        BindingExpect::ValidateImplicitReturn {
+                            annotation,
+                            implicit_return,
+                            is_async,
+                            is_generator,
+                            has_explicit_return: !return_keys.is_empty(),
+                        },
+                    );
+                    ReturnTypeKind::ShouldTrustAnnotation {
                         annotation,
-                        implicit_return,
+                        range,
                         is_generator,
-                        has_explicit_return: !return_keys.is_empty(),
                     }
                 }
                 // We have an explicit return annotation on a stub function, so we just trust it, ignoring the implicit return.
@@ -612,6 +701,7 @@ impl<'a> BindingsBuilder<'a> {
         class_key: Option<Idx<KeyClass>>,
     ) -> (
         FunctionStubOrImpl,
+        bool,
         Option<PlaceholderBodyKind>,
         bool,
         Option<SelfAssignments>,
@@ -654,6 +744,13 @@ impl<'a> BindingsBuilder<'a> {
             }
             _ => None,
         };
+        if decorators.is_overload && !body_is_trivial && placeholder_body_kind.is_none() {
+            self.error(
+                func_name.range(),
+                ErrorKind::UselessOverloadBody,
+                "`@overload` bodies should not contain executable logic".to_owned(),
+            );
+        }
         // A `...` body is always interpreted as a stub function.
         // Functions with other trivial bodies are interpreted as stubs in some contexts.
         let stub_or_impl = if body_is_ellipse
@@ -774,6 +871,7 @@ impl<'a> BindingsBuilder<'a> {
 
         (
             stub_or_impl,
+            body_is_ellipse,
             placeholder_body_kind,
             is_return_inferred,
             self_assignments,
@@ -889,19 +987,25 @@ impl<'a> BindingsBuilder<'a> {
             self.function_header(&mut x, &func_name, class_key, def_idx.usage(), parent);
 
         let docstring_range = Docstring::range_from_stmts(x.body.as_slice());
-        let (stub_or_impl, placeholder_body_kind, is_return_inferred, self_assignments) = self
-            .function_body(
-                &mut x.parameters,
-                mem::take(&mut x.body),
-                &decorators,
-                x.range,
-                x.is_async,
-                return_ann_with_range,
-                &func_name,
-                parent,
-                undecorated_idx,
-                class_key,
-            );
+        let calls_super_method = SuperMethodCallFinder::find(&func_name.id, &x.body);
+        let (
+            stub_or_impl,
+            has_ellipsis_body,
+            placeholder_body_kind,
+            is_return_inferred,
+            self_assignments,
+        ) = self.function_body(
+            &mut x.parameters,
+            mem::take(&mut x.body),
+            &decorators,
+            x.range,
+            x.is_async,
+            return_ann_with_range,
+            &func_name,
+            parent,
+            undecorated_idx,
+            class_key,
+        );
 
         // Pop the annotation scope to get back to the parent scope, and handle this
         // case where we need to track assignments to `self` from methods.
@@ -915,8 +1019,10 @@ impl<'a> BindingsBuilder<'a> {
                 def_index: func_def_index,
                 def: FunctionDefData::new(x),
                 stub_or_impl,
+                has_ellipsis_body: has_ellipsis_body && self.type_checking_depth == 0,
                 placeholder_body_kind,
                 is_return_inferred,
+                calls_super_method,
                 class_key,
                 decorators: decorators.decorators,
                 legacy_tparams: legacy_tparams.into_boxed_slice(),

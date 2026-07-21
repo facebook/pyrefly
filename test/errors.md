@@ -69,6 +69,23 @@ ERROR */bad.py:1:1-8: `+` is not supported * (glob)
 [1]
 ```
 
+## `full-text-with-github` preserves diagnostics in GitHub Actions logs
+
+```scrut
+$ echo "x: str = 0" > $TMPDIR/bad_combined.py && \
+> $PYREFLY check $TMPDIR/bad_combined.py --preset strict --output-format=full-text-with-github --summary=none
+ERROR `Literal[0]` is not assignable to `str` [bad-assignment]
+ --> */bad_combined.py:1:10 (glob)
+  |
+1 | x: str = 0
+  |    ---   ^
+  |    |
+  |    declared type
+  |
+::error file=*/bad_combined.py,line=1,col=10,endLine=1,endColumn=11,title=Pyrefly bad-assignment::`Literal[0]` is not assignable to `str` (glob)
+[1]
+```
+
 ## Source code snippet
 
 ```scrut

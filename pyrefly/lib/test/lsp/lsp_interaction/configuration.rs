@@ -17,12 +17,12 @@ use std::path::PathBuf;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::request::WorkspaceConfiguration;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_util::fs_anyhow::write;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_did_change_configuration() {

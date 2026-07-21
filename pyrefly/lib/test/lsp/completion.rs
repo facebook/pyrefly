@@ -7,14 +7,17 @@
 
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
+use lsp_types::CompletionItemTag;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::sys_info::PythonVersion;
 use ruff_text_size::TextSize;
 
 use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
+use crate::test::util::TestEnv;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
@@ -987,19 +990,152 @@ Completion Results:
 }
 
 #[test]
+fn no_value_completions_after_keyword_argument() {
+    // `foo(a=1, x|`: because a keyword argument precedes the cursor, the next
+    // argument must be a keyword name (Python forbids a positional after a
+    // keyword). Only keyword-argument completions (`a=`, `b=`) should appear;
+    // every value completion — locals, Python keywords, builtins, and
+    // auto-imports — must be suppressed.
+    let code = r#"
+def foo(a: int, b: str): ...
+xyz = 5
+foo(a=1, x
+#         ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let items =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        items.iter().any(|item| item.label == "b="),
+        "expected keyword-arg completion `b=`, got {items:?}"
+    );
+    for item in &items {
+        assert!(
+            item.label.ends_with('='),
+            "only keyword-argument completions should appear, got {:?}",
+            item.label
+        );
+        assert_ne!(
+            item.kind,
+            Some(CompletionItemKind::KEYWORD),
+            "Python keyword `{}` should be suppressed after a keyword argument",
+            item.label
+        );
+        assert_ne!(
+            item.data,
+            Some(serde_json::json!("builtin")),
+            "builtin `{}` should be suppressed after a keyword argument",
+            item.label
+        );
+        assert!(
+            item.additional_text_edits.is_none(),
+            "auto-import `{}` should be suppressed after a keyword argument",
+            item.label
+        );
+    }
+}
+
+#[test]
+fn value_completions_when_typing_keyword_argument_value() {
+    // `foo(a=1, b=my_v|`: the cursor is typing the *value* of keyword `b`, even
+    // though keyword `a=1` precedes it. Value completions (e.g. the local
+    // `my_value`) must still be offered — regression test for a false positive
+    // that suppressed them whenever any earlier keyword argument existed.
+    let code = r#"
+def foo(a: int, b: str): ...
+my_value = "s"
+foo(a=1, b=my_v
+#             ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let labels: Vec<String> = state
+        .transaction()
+        .completion(handle, position, ImportFormat::Absolute, true, None)
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert!(
+        labels.iter().any(|l| l == "my_value"),
+        "expected local `my_value` when typing a keyword-argument value, got {labels:?}"
+    );
+}
+
+#[test]
+fn no_statement_keywords_in_expression_context() {
+    // On the right-hand side of an assignment the cursor is in a nested
+    // expression, so statement keywords like `while`/`try`/`def` are invalid and
+    // must not be offered, while expression keywords like `None` remain.
+    let code = r#"
+x = w
+#    ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let keyword_labels: Vec<String> = state
+        .transaction()
+        .completion(handle, position, ImportFormat::Absolute, true, None)
+        .into_iter()
+        .filter(|item| item.kind == Some(CompletionItemKind::KEYWORD))
+        .map(|item| item.label)
+        .collect();
+    assert!(
+        keyword_labels.iter().any(|l| l == "None"),
+        "expected expression keyword `None`, got {keyword_labels:?}"
+    );
+    for stmt_kw in ["while", "try", "def", "class", "return"] {
+        assert!(
+            !keyword_labels.iter().any(|l| l == stmt_kw),
+            "statement keyword `{stmt_kw}` should be suppressed in expression context, got {keyword_labels:?}"
+        );
+    }
+}
+
+#[test]
+fn statement_keywords_available_at_statement_start() {
+    // At the start of a statement both expression and statement keywords are
+    // valid, so `while` should still be offered.
+    let code = r#"
+def f():
+    w
+#    ^
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let keyword_labels: Vec<String> = state
+        .transaction()
+        .completion(handle, position, ImportFormat::Absolute, true, None)
+        .into_iter()
+        .filter(|item| item.kind == Some(CompletionItemKind::KEYWORD))
+        .map(|item| item.label)
+        .collect();
+    assert!(
+        keyword_labels.iter().any(|l| l == "while"),
+        "expected statement keyword `while` at statement start, got {keyword_labels:?}"
+    );
+}
+
+#[test]
 fn kwargs_completion_with_existing_args() {
     let code = r#"
 def foo(a: int, b: str, c: bool): ...
-foo(1, 
-#      ^
+foo(1,
+#     ^
 "#;
     let report =
         get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
     assert_eq!(
         r#"
 # main.py
-3 | foo(1, 
-           ^
+3 | foo(1,
+          ^
 Completion Results:
 - (Variable) a=: int
 - (Variable) b=: str
@@ -1370,8 +1506,6 @@ Completion Results:
 - (Class) DivisionImpossible: from decimal import DivisionImpossible
 
 - (Function) disjoint_base: from typing_extensions import disjoint_base
-
-- (Function) fix_missing_locations: from ast import fix_missing_locations
 
 - (Function) timerfd_settime_ns: from os import timerfd_settime_ns
 
@@ -1826,16 +1960,16 @@ def foo(y: bool, z: bool):
 @overload
 def foo(x: int, y: str):
     print(x)
-foo(1, 
-#      ^
+foo(1,
+#     ^
 "#;
     let report =
         get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
     assert_eq!(
         r#"
 # main.py
-9 | foo(1, 
-           ^
+9 | foo(1,
+          ^
 Completion Results:
 - (Variable) x=: int
 - (Variable) y=: str
@@ -1857,16 +1991,16 @@ def foo(x: int, y: str): ...
 @overload
 def foo(x: int, z: bool): ...
 def foo(x, **kwargs): ...
-foo(1, 
-#      ^
+foo(1,
+#     ^
 "#;
     let report =
         get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
     assert_eq!(
         r#"
 # main.py
-8 | foo(1, 
-           ^
+8 | foo(1,
+          ^
 Completion Results:
 - (Variable) x=: int
 - (Variable) y=: str
@@ -2057,6 +2191,54 @@ Completion Results:
 }
 
 #[test]
+fn import_alias_has_no_completions() {
+    let code = r#"
+import pandas as pd
+#                  ^
+"#;
+    let files = [("main", code), ("pandas", ""), ("pdb", "")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.is_empty(),
+        "import aliases should not receive completions, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn from_import_alias_has_no_completions() {
+    let code = r#"
+from pandas import read_csv as pd
+#                                ^
+"#;
+    let files = [("main", code), ("pandas", "read_csv = 1\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    assert!(
+        completions.is_empty(),
+        "from-import aliases should not receive completions, got {:?}",
+        completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn autoimport_relative_on_builtins() {
     let code = r#"
 T = foooooo
@@ -2190,6 +2372,65 @@ T = spio
 }
 
 #[test]
+fn autoimport_does_not_duplicate_existing_module_import() {
+    let code = r#"
+import json
+
+jso
+#  ^
+"#;
+    let files = [("main", code), ("json", "def dumps(value): ...\n")];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let json = completions
+        .iter()
+        .filter(|item| item.label == "json")
+        .collect::<Vec<_>>();
+    assert_eq!(json.len(), 1, "expected one completion for imported module");
+    assert!(
+        json[0].additional_text_edits.is_none(),
+        "existing module import should not produce another import edit"
+    );
+}
+
+#[test]
+fn autoimport_does_not_duplicate_existing_module_import_after_another_import() {
+    let code = r#"
+import os
+import json
+
+jso
+#  ^
+"#;
+    let files = [
+        ("main", code),
+        ("os", "name = 'posix'\n"),
+        ("json", "def dumps(value): ...\n"),
+    ];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let json = completions
+        .iter()
+        .filter(|item| item.label == "json")
+        .collect::<Vec<_>>();
+    assert_eq!(json.len(), 1, "expected one completion for imported module");
+    assert!(
+        json[0].additional_text_edits.is_none(),
+        "existing module import should not produce another import edit"
+    );
+}
+
+#[test]
 fn autoimport_common_alias_bypasses_min_char_threshold() {
     let code = r#"
 T = np
@@ -2263,6 +2504,57 @@ Completion Results:
 }
 
 #[test]
+fn autoimport_demotes_deprecated_typing_alias() {
+    let code = r#"
+T = Iterable
+#          ^
+"#;
+    let mut env = TestEnv::new_with_version(PythonVersion::new(3, 9, 0))
+        .with_default_require_level(Require::Exports);
+    env.add("main", code);
+    let (state, handle_for) = env.to_state();
+    let handle = handle_for("main");
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(&handle, position, ImportFormat::Absolute, true, None);
+    let typing_index = completions
+        .iter()
+        .position(|item| {
+            item.label == "Iterable"
+                && item
+                    .detail
+                    .as_ref()
+                    .is_some_and(|detail| detail.contains("from typing import Iterable"))
+        })
+        .expect("expected typing.Iterable auto-import completion");
+    let collections_index = completions
+        .iter()
+        .position(|item| {
+            item.label == "Iterable"
+                && item
+                    .detail
+                    .as_ref()
+                    .is_some_and(|detail| detail.contains("from collections.abc import Iterable"))
+        })
+        .expect("expected collections.abc.Iterable auto-import completion");
+    let typing_tags = completions[typing_index]
+        .tags
+        .as_deref()
+        .unwrap_or_default();
+
+    assert!(
+        typing_tags.contains(&CompletionItemTag::DEPRECATED),
+        "expected typing.Iterable to be tagged deprecated"
+    );
+    assert!(
+        collections_index < typing_index,
+        "expected collections.abc.Iterable to sort before deprecated typing.Iterable"
+    );
+}
+
+#[test]
 fn autoimport_explicit_reexport_suggests_reexport_path() {
     let code = r#"
 T = Thing
@@ -2294,6 +2586,47 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn autoimport_aliased_import_uses_aliasing_module() {
+    let code = r#"
+x: MyM
+#     ^
+"#;
+    let files = [
+        ("main", code),
+        ("model", "class MyModel: pass\n"),
+        ("alias_user", "from model import MyModel as MyModelAlias\n"),
+    ];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+    let original = completions
+        .iter()
+        .find(|item| item.label == "MyModel")
+        .expect("expected MyModel to be in completions");
+    assert_eq!(
+        original.detail.as_deref(),
+        Some("from model import MyModel\n")
+    );
+
+    let alias = completions
+        .iter()
+        .find(|item| item.label == "MyModelAlias")
+        .expect("expected MyModelAlias to be in completions");
+    assert_eq!(
+        alias.detail.as_deref(),
+        Some("from alias_user import MyModelAlias\n")
+    );
+    assert_eq!(
+        alias.additional_text_edits.as_ref().unwrap()[0].new_text,
+        "from alias_user import MyModelAlias\n"
     );
 }
 
@@ -3014,8 +3347,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[@8]) -> None: ...
-- (Field) p: @8
+- (Method) m: def m(self: C[@3]) -> None: ...
+- (Field) p: @3
 "#
         .trim(),
         report.trim(),

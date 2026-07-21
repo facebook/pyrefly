@@ -22,6 +22,7 @@ use ruff_python_ast::ExprNoneLiteral;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::ParameterWithDefault;
@@ -38,6 +39,8 @@ use ruff_python_ast::StringLiteral;
 use ruff_python_ast::StringLiteralFlags;
 use ruff_python_ast::StringLiteralValue;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor;
+use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
 use ruff_python_ast::visitor::source_order::TraversalSignal;
 use ruff_python_parser::ParseError;
@@ -90,6 +93,39 @@ impl<'a> SourceOrderVisitor<'a> for CoveringNodeVisitor<'a> {
 
     fn leave_node(&mut self, _: AnyNodeRef<'a>) {
         self.level -= 1;
+    }
+}
+
+/// Finds a syntactic `yield`/`yield from`, stopping at nested scopes (function
+/// definitions, class definitions, lambdas) since yields there belong to those
+/// scopes, not the enclosing one. Shared by `Ast::body_contains_yield` and
+/// `Ast::expr_contains_yield`.
+struct YieldFinder {
+    found: bool,
+}
+
+impl<'a> visitor::Visitor<'a> for YieldFinder {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if self.found {
+            return;
+        }
+        match stmt {
+            // Nested function/class definitions create new scopes.
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            _ => visitor::walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.found {
+            return;
+        }
+        match expr {
+            Expr::Yield(_) | Expr::YieldFrom(_) => self.found = true,
+            // Lambda creates a new scope.
+            Expr::Lambda(_) => {}
+            _ => visitor::walk_expr(self, expr),
+        }
     }
 }
 
@@ -265,6 +301,18 @@ impl Ast {
         Identifier::new(x.id, x.range)
     }
 
+    /// The trailing identifier of a decorator expression, looking through calls and
+    /// attribute access: `foo`, `mod.foo`, `foo(...)`, and `mod.foo(...)` all yield
+    /// `foo`. `None` for shapes with no trailing name (e.g. a subscript).
+    pub fn decorator_trailing_name(decorator: &Expr) -> Option<&str> {
+        match decorator {
+            Expr::Name(name) => Some(name.id.as_str()),
+            Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+            Expr::Call(call) => Self::decorator_trailing_name(&call.func),
+            _ => None,
+        }
+    }
+
     /// Returns true if this is a synthesized empty name from parser error recovery.
     ///
     /// The parser uses empty identifiers when recovering from syntax errors.
@@ -384,6 +432,51 @@ impl Ast {
         covering_nodes
     }
 
+    /// The tightest AST node that strictly contains `target` — i.e. the parent
+    /// of the node whose range is `target`, or `None` at module top level.
+    pub fn parent_node(module: &ModModule, target: TextRange) -> Option<AnyNodeRef<'_>> {
+        Ast::locate_node(module, target.start())
+            .into_iter()
+            .find(|node| node.range() != target && node.range().contains_range(target))
+    }
+
+    /// Whether `node` must be wrapped in parentheses to preserve its meaning
+    /// when spliced in as a direct child of `parent` (the node that will contain
+    /// it, or `None` when the containing node is unknown).
+    ///
+    /// Self-delimiting expressions — names; string/bytes/bool/`None`/`...`
+    /// literals; f-strings; calls; subscripts; attribute access; and bracketed
+    /// containers — never need brackets. An integer literal is the only
+    /// context-sensitive case, so it is the only one that consults `parent`.
+    /// Everything else (tuples, boolean/binary/comparison/unary operations,
+    /// conditionals, lambdas, walrus, generators, await/yield) binds loosely and
+    /// is bracketed conservatively wherever it becomes a sub-expression,
+    /// regardless of `parent`.
+    pub fn needs_brackets(parent: Option<AnyNodeRef>, node: &Expr) -> bool {
+        match node {
+            Expr::Name(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+            | Expr::FString(_)
+            | Expr::List(_)
+            | Expr::Dict(_)
+            | Expr::Set(_)
+            | Expr::Call(_)
+            | Expr::Subscript(_)
+            | Expr::Attribute(_) => false,
+            Expr::NumberLiteral(number) => {
+                // `42.bit_length()` parses `42.` as a float, so an integer
+                // literal needs brackets only directly before attribute access.
+                matches!(number.value, Number::Int(_))
+                    && matches!(parent, Some(AnyNodeRef::ExprAttribute(_)))
+            }
+            _ => true,
+        }
+    }
+
     pub fn str_expr(s: &str, range: TextRange) -> Expr {
         Expr::StringLiteral(ExprStringLiteral {
             node_index: AtomicNodeIndex::default(),
@@ -419,38 +512,6 @@ impl Ast {
     /// statically-dead branch like `if False:`, where the binding phase skips
     /// traversal but Python still treats the function as a generator.
     pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
-        use ruff_python_ast::visitor;
-        use ruff_python_ast::visitor::Visitor;
-
-        struct YieldFinder {
-            found: bool,
-        }
-
-        impl<'a> Visitor<'a> for YieldFinder {
-            fn visit_stmt(&mut self, stmt: &'a Stmt) {
-                if self.found {
-                    return;
-                }
-                match stmt {
-                    // Nested function/class definitions create new scopes.
-                    Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
-                    _ => visitor::walk_stmt(self, stmt),
-                }
-            }
-
-            fn visit_expr(&mut self, expr: &'a Expr) {
-                if self.found {
-                    return;
-                }
-                match expr {
-                    Expr::Yield(_) | Expr::YieldFrom(_) => self.found = true,
-                    // Lambda creates a new scope.
-                    Expr::Lambda(_) => {}
-                    _ => visitor::walk_expr(self, expr),
-                }
-            }
-        }
-
         let mut finder = YieldFinder { found: false };
         for stmt in stmts {
             finder.visit_stmt(stmt);
@@ -459,6 +520,16 @@ impl Ast {
             }
         }
         false
+    }
+
+    /// Same as `body_contains_yield`, but for a single expression. Used to detect
+    /// generators when a `yield`/`yield from` is hidden in the statically-dead
+    /// branch of a ternary (e.g. `(yield 1) if sys.platform == "win32" else 0`),
+    /// which the binding phase skips traversing when the branch is unreachable.
+    pub fn expr_contains_yield(expr: &Expr) -> bool {
+        let mut finder = YieldFinder { found: false };
+        finder.visit_expr(expr);
+        finder.found
     }
 
     pub fn is_mangled_attr(name: &Name) -> bool {
@@ -525,5 +596,57 @@ impl Ast {
             Expr::BinOp(..) => Some("Binary operation"),
             _ => Some("Expression"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_expr_stmt(code: &str) -> Expr {
+        let (module, errors, _) = Ast::parse(code, PySourceType::Python);
+        assert!(errors.is_empty(), "unexpected parse errors in {code:?}");
+        match module.body.into_iter().next() {
+            Some(Stmt::Expr(stmt)) => *stmt.value,
+            other => panic!("expected an expression statement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn needs_brackets_classifies_by_node() {
+        // Self-delimiting expressions never need brackets.
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("name")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("f(x)")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("x[0]")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("[1, 2]")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("\"s\"")));
+        assert!(!Ast::needs_brackets(None, &parse_expr_stmt("42")));
+
+        // Loosely-binding expressions must be bracketed when nested. A bare
+        // tuple is the case the previous per-feature heuristics disagreed on.
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("1, 2")));
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("a and b")));
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("a + b")));
+        assert!(Ast::needs_brackets(None, &parse_expr_stmt("lambda: 1")));
+    }
+
+    #[test]
+    fn needs_brackets_wraps_int_literal_only_before_attribute_access() {
+        // `42.bit_length()` would parse `42.` as a float, so the integer needs
+        // brackets when it becomes the value of an attribute access.
+        let expr = parse_expr_stmt("(42).bit_length()\n");
+        let Expr::Call(call) = &expr else {
+            panic!("expected a call expression");
+        };
+        let Expr::Attribute(attribute) = call.func.as_ref() else {
+            panic!("expected an attribute access");
+        };
+        let int_literal = attribute.value.as_ref();
+        assert!(Ast::needs_brackets(
+            Some(AnyNodeRef::from(attribute)),
+            int_literal
+        ));
+        // The same literal in any other position stands alone.
+        assert!(!Ast::needs_brackets(None, int_literal));
     }
 }

@@ -5,14 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-mod init;
+// The LSP test harness (`object_model`, plus the `LspArgs`/`Message`/… types it
+// traffics in) lives in the `pyrefly_lsp_test` crate so the Pyrefly benchmarks
+// can share it; the modules below import it directly from there.
 
 mod basic;
 mod call_hierarchy;
+mod code_action_markdown_diagnostic;
 mod code_lens;
 mod completion;
 mod configuration;
 mod convert_module_package;
+mod cross_file_invalidation_project_mode;
 mod definition;
 mod diagnostic;
 mod did_change;
@@ -43,14 +47,13 @@ mod notebook_sync;
 mod notebook_tokens;
 mod notebook_type_definition;
 mod notebook_type_error_display_status;
-mod object_model;
 mod open_file_benchmark;
 mod progress;
 mod provide_type;
-mod pytorch_benchmark;
 mod references;
 mod rename;
 mod safe_delete_file;
+mod selection_range;
 mod semantic_tokens;
 mod type_definition;
 mod type_hierarchy;

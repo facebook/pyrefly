@@ -115,6 +115,7 @@ use crate::export::special::SpecialExport;
 use crate::module::bundled::BundledStub;
 use crate::module::finder::find_import_prefixes;
 use crate::module::typeshed::BundledTypeshedStdlib;
+use crate::module::typeshed::custom_typeshed_stdlib_config;
 use crate::solver::solver::VarRecurser;
 use crate::state::epoch::Epoch;
 use crate::state::errors::Errors;
@@ -186,7 +187,7 @@ pub struct ModuleChanges(pub ModuleDeps);
 
 // A single dependency, passed during lookup. Can be merged into ModuleDeps.
 //
-// The metadata-flavored lookups (`is_special_export`, `is_reexport`,
+// The metadata-flavored lookups (`is_special_export`, `reexport_source`,
 // `get_deprecated`, `is_final`, `docstring_range`,
 // `is_submodule_imported_implicitly`) all record "depends on the
 // metadata of this name" and funnel into the same `ModuleDeps` slot.
@@ -208,8 +209,10 @@ pub enum ModuleDep {
     NameMetadata(Name),
     /// `LookupExport::is_special_export`.
     IsSpecialExport(Name),
-    /// `LookupExport::is_reexport`.
-    IsReexport(Name),
+    /// `LookupExport::reexport_source`.
+    ReexportSource(Name),
+    /// `LookupExport::is_implicit_reexport`.
+    IsImplicitReexport(Name),
     /// `LookupExport::get_deprecated`.
     GetDeprecated(Name),
     /// `LookupExport::export_origin`.
@@ -329,7 +332,8 @@ impl ModuleDeps {
             }
             ModuleDep::NameMetadata(name)
             | ModuleDep::IsSpecialExport(name)
-            | ModuleDep::IsReexport(name)
+            | ModuleDep::ReexportSource(name)
+            | ModuleDep::IsImplicitReexport(name)
             | ModuleDep::GetDeprecated(name)
             | ModuleDep::ExportOrigin(name)
             | ModuleDep::DocstringRange(name)
@@ -426,7 +430,8 @@ impl ModuleDep {
             ModuleDep::NameExists(_) => "export_exists",
             ModuleDep::NameMetadata(_) => "name_metadata",
             ModuleDep::IsSpecialExport(_) => "is_special_export",
-            ModuleDep::IsReexport(_) => "is_reexport",
+            ModuleDep::ReexportSource(_) => "reexport_source",
+            ModuleDep::IsImplicitReexport(_) => "is_implicit_reexport",
             ModuleDep::GetDeprecated(_) => "get_deprecated",
             ModuleDep::ExportOrigin(_) => "export_origin",
             ModuleDep::DocstringRange(_) => "docstring_range",
@@ -657,6 +662,8 @@ pub(crate) struct TransactionData<'a> {
     pysa_reporter: Option<Box<crate::report::pysa::PysaReporter>>,
     /// When set, CinderX reporting writes per-module output during answer solving.
     cinderx_reporter: Option<Box<crate::report::cinderx::CinderxReporter>>,
+    /// When set, called per solved module while its bindings/answers are still live (before eviction).
+    solutions_hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
 }
 
 impl<'a> TransactionData<'a> {
@@ -797,6 +804,15 @@ impl<'a> Transaction<'a> {
         self.data.pysa_reporter = reporter;
     }
 
+    /// Set a hook called per solved module while its bindings/answers are still live (before
+    /// eviction), letting per-module analyses (e.g. `coverage`) read them without retaining them.
+    pub fn set_solutions_hook(
+        &mut self,
+        hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
+    ) {
+        self.data.solutions_hook = hook;
+    }
+
     /// Take the pysa reporter out of the transaction, consuming ownership.
     pub fn take_pysa_reporter(&mut self) -> Option<Box<crate::report::pysa::PysaReporter>> {
         self.data.pysa_reporter.take()
@@ -868,14 +884,24 @@ impl<'a> Transaction<'a> {
     }
 
     /// Look up the `ClassFields` for a class, which may be defined in another module.
+    /// Falls back to `Solutions` metadata when bindings are evicted (e.g. during `coverage`).
     pub fn get_class_fields(&self, source_handle: &Handle, class: &Class) -> Option<ClassFields> {
         let handle = Handle::new(
             class.module_name(),
             class.module_path().dupe(),
             source_handle.sys_info().dupe(),
         );
-        let bindings = self.get_bindings(&handle)?;
-        bindings.get_class_fields(class.index()).cloned()
+        if let Some(bindings) = self.get_bindings(&handle) {
+            bindings.get_class_fields(class.index()).cloned()
+        } else {
+            Some(
+                self.get_solutions(&handle)?
+                    .metadata()
+                    .get_class_checked(class.index())?
+                    .fields
+                    .clone(),
+            )
+        }
     }
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
@@ -1343,7 +1369,7 @@ impl<'a> Transaction<'a> {
         // Clean the module if it hasn't been cleaned in this epoch.
         // If try_start_clean returns None, the module is already checked.
         // Once checked, it stays checked for the duration of the epoch.
-        // We check the the epoch optimistically before calling try_start_clean
+        // We check the epoch optimistically before calling try_start_clean
         // to avoid taking the computing mutex.
         if !module_data.state.is_checked(self.data.now)
             && let Some(guard) = module_data.state.try_start_clean(self.data.now)
@@ -1424,6 +1450,8 @@ impl<'a> Transaction<'a> {
                 tensor_shapes,
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
+                strict_partial_subtyping: config
+                    .strict_partial_subtyping(module_data.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
@@ -1524,6 +1552,9 @@ impl<'a> Transaction<'a> {
                 }
                 if self.data.pysa_reporter.is_some() || self.data.cinderx_reporter.is_some() {
                     post.evict_ast();
+                }
+                if let Some(hook) = &self.data.solutions_hook {
+                    hook(&module_data.handle, self);
                 }
                 if !require.keep_bindings() && !require.keep_answers() {
                     // From now on we can use the answers directly, so evict the bindings/answers.
@@ -1761,7 +1792,11 @@ impl<'a> Transaction<'a> {
     /// Look up the location of an exported name in a module.
     /// Follows re-exports (ExportLocation::OtherModule) to find the original definition.
     /// Returns the module and text range where the name is defined.
-    fn lookup_export_location(&self, handle: &Handle, name: &Name) -> Option<(Module, TextRange)> {
+    pub(crate) fn lookup_export_location(
+        &self,
+        handle: &Handle,
+        name: &Name,
+    ) -> Option<(Module, TextRange)> {
         let module_data = self.get_module(handle);
         let exports = self.lookup_export(module_data);
         let export_map = exports.exports(&self.lookup(module_data));
@@ -1845,10 +1880,7 @@ impl<'a> Transaction<'a> {
             .updated_loaders
             .ensure(loader, || match self.readable.loaders.get(loader) {
                 Some(v) => v.dupe(),
-                None => Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
+                None => Arc::new(LoaderFindCache::new(loader.dupe())),
             })
             .0
             .dupe()
@@ -1886,8 +1918,9 @@ impl<'a> Transaction<'a> {
     /// redundant single-threaded work on rechecks and multi-epoch runs.
     ///
     /// Returns `true` if all entries were already cached (no work done).
-    fn compute_stdlib(&mut self, sys_infos: SmallSet<SysInfo>) -> bool {
+    fn compute_stdlib(&mut self, handles: &[Handle]) -> bool {
         // Filter out SysInfos that already have a computed stdlib.
+        let sys_infos: SmallSet<SysInfo> = handles.iter().map(|h| h.sys_info().dupe()).collect();
         let missing: SmallSet<SysInfo> = sys_infos
             .into_iter()
             .filter(|k| !self.data.stdlib.contains_key(k))
@@ -1895,10 +1928,30 @@ impl<'a> Transaction<'a> {
         if missing.is_empty() {
             return true;
         }
-        let loader = self.get_cached_loader(&BundledTypeshedStdlib::config());
         // Use defaults (disabled) for stdlib - depth limiting is for user code
         let thread_state = ThreadState::new(None);
         for k in missing.into_iter_hashed() {
+            // The stdlib is cached per `SysInfo`, so every handle sharing this `SysInfo`
+            // must resolve to the same `typeshed_path`; otherwise the cached stdlib would
+            // depend on which handle happened to be seen first. Enforce that invariant
+            // rather than silently loading the stdlib from an arbitrary handle's typeshed.
+            let typeshed_path = handles
+                .iter()
+                .filter(|h| h.sys_info() == &*k)
+                .map(|h| self.data.state.get_config(h).typeshed_path.clone())
+                .reduce(|a, b| {
+                    assert_eq!(
+                        a, b,
+                        "handles sharing a SysInfo must agree on typeshed_path"
+                    );
+                    a
+                })
+                .flatten();
+            // Load the stdlib from the user-provided typeshed if one is set; otherwise
+            // use the bundled typeshed.
+            let stdlib_config = typeshed_path
+                .map_or_else(BundledTypeshedStdlib::config, custom_typeshed_stdlib_config);
+            let loader = self.get_cached_loader(&stdlib_config);
             self.data
                 .stdlib
                 .insert_hashed(k.to_owned(), Arc::new(Stdlib::for_bootstrapping()));
@@ -2038,12 +2091,8 @@ impl<'a> Transaction<'a> {
         let run_number = self.data.state.run_count.fetch_add(1, Ordering::SeqCst);
         // Compute stdlib once before the epoch loop. Stdlib is deterministic for a
         // given SysInfo and does not depend on user code, so it only needs to run once.
-        let sys_infos = handles
-            .iter()
-            .map(|x| x.sys_info().dupe())
-            .collect::<SmallSet<_>>();
         let stdlib_start = Instant::now();
-        let stdlib_cached = self.compute_stdlib(sys_infos);
+        let stdlib_cached = self.compute_stdlib(handles);
         let compute_stdlib_time = stdlib_start.elapsed();
         {
             let mut stats = self.stats.lock();
@@ -2235,22 +2284,10 @@ impl<'a> Transaction<'a> {
     fn invalidate_find(&mut self) {
         let new_loaders = LockedMap::new();
         for loader in self.data.updated_loaders.keys() {
-            new_loaders.insert(
-                loader.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
         }
         for loader in self.readable.loaders.keys() {
-            new_loaders.insert(
-                loader.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
         }
         self.data.updated_loaders = new_loaders;
 
@@ -2310,13 +2347,7 @@ impl<'a> Transaction<'a> {
                 new_loaders.insert(c.dupe(), l.dupe());
             });
         configs.iter().for_each(|config| {
-            new_loaders.insert(
-                config.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    config.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
         });
         self.data.updated_loaders = new_loaders;
 
@@ -2428,6 +2459,8 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
+                strict_partial_subtyping: config
+                    .strict_partial_subtyping(m.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
@@ -2857,16 +2890,23 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         )?
     }
 
-    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool {
+    fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName> {
         self.with_exports(
             module,
-            |exports, lookup| {
-                matches!(
-                    exports.exports(lookup).get(name),
-                    Some(ExportLocation::OtherModule(..))
-                )
+            |exports, lookup| match exports.exports(lookup).get(name) {
+                Some(ExportLocation::OtherModule(other_module, _)) => Some(*other_module),
+                _ => None,
             },
-            ModuleDep::IsReexport(name.clone()),
+            ModuleDep::ReexportSource(name.clone()),
+        )
+        .flatten()
+    }
+
+    fn is_implicit_reexport(&self, module: ModuleName, name: &Name) -> bool {
+        self.with_exports(
+            module,
+            |exports, _lookup| exports.is_implicit_reexport(name),
+            ModuleDep::IsImplicitReexport(name.clone()),
         )
         .unwrap_or(false)
     }
@@ -3218,19 +3258,10 @@ pub struct State {
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
-    dir_cache_enabled: bool,
 }
 
 impl State {
     pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
-        Self::new_with_options(config_finder, thread_count, false)
-    }
-
-    pub fn new_with_options(
-        config_finder: ConfigFinder,
-        thread_count: ThreadCount,
-        dir_cache_enabled: bool,
-    ) -> Self {
         Self {
             threads: ThreadPool::new(thread_count),
             uniques: UniqueFactory::new(),
@@ -3238,7 +3269,6 @@ impl State {
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),
-            dir_cache_enabled,
         }
     }
 
@@ -3246,8 +3276,13 @@ impl State {
         &self.config_finder
     }
 
-    pub fn dir_cache_enabled(&self) -> bool {
-        self.dir_cache_enabled
+    /// Run `op` on the state's thread pool, which has an increased stack size.
+    pub fn install<OP, R>(&self, op: OP) -> R
+    where
+        OP: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.threads.install(op)
     }
 
     fn get_config(&self, handle: &Handle) -> ArcId<ConfigFile> {
@@ -3296,6 +3331,7 @@ impl State {
                 subscriber,
                 pysa_reporter: None,
                 cinderx_reporter: None,
+                solutions_hook: None,
             },
         }
     }
@@ -3369,6 +3405,7 @@ impl State {
                             subscriber: _,
                             pysa_reporter: _,
                             cinderx_reporter: _,
+                            solutions_hook: _,
                         },
                 },
             committing_transaction_guard,
