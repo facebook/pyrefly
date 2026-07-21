@@ -26,6 +26,8 @@ impl ConfigOptionMigrater for ErrorCodes {
         let warn_return_any = util::get_bool_or_default(mypy_cfg, "mypy", "warn_return_any");
         let warn_redundant_casts =
             util::get_bool_or_default(mypy_cfg, "mypy", "warn_redundant_casts");
+        let warn_unused_ignores =
+            util::get_bool_or_default(mypy_cfg, "mypy", "warn_unused_ignores");
         let disallow_untyped_defs =
             util::get_bool_or_default(mypy_cfg, "mypy", "disallow_untyped_defs");
         let disallow_incomplete_defs =
@@ -42,6 +44,7 @@ impl ConfigOptionMigrater for ErrorCodes {
         let mypy_flags = MypyErrorConfigFlags {
             warn_return_any,
             warn_redundant_casts,
+            warn_unused_ignores,
             disallow_untyped_defs,
             disallow_incomplete_defs,
             disallow_any_generics,
@@ -488,6 +491,49 @@ mod tests {
         assert_eq!(errors.severity(ErrorKind::RedundantCast), Severity::Warn);
         assert_eq!(errors.severity(ErrorKind::NoAnyReturn), Severity::Error);
         assert_eq!(errors.severity(ErrorKind::ExplicitAny), Severity::Ignore);
+    }
+
+    /// mypy `--strict` enables `warn_unused_ignores`. rustypy's migration
+    /// must surface redundant `# type: ignore` comments as an Error under
+    /// strict, matching mypy's strict-expansion (one of the 13 flags).
+    #[test]
+    fn test_migrate_from_mypy_strict_enables_unused_ignore() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "strict", Some("True".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let error_codes = ErrorCodes;
+        let _ = error_codes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        let errors = pyrefly_cfg
+            .root
+            .errors
+            .as_ref()
+            .expect("strict must produce an error config");
+        assert_eq!(
+            errors.severity(ErrorKind::UnusedIgnore),
+            Severity::Error,
+            "warn_unused_ignores is part of mypy --strict"
+        );
+    }
+
+    /// `warn_unused_ignores = true` on its own (without `strict`) must also
+    /// surface UnusedIgnore as an Error.
+    #[test]
+    fn test_migrate_from_mypy_warn_unused_ignores_alone() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "warn_unused_ignores", Some("True".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        let error_codes = ErrorCodes;
+        let _ = error_codes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        let errors = pyrefly_cfg
+            .root
+            .errors
+            .as_ref()
+            .expect("warn_unused_ignores must produce an error config");
+        assert_eq!(errors.severity(ErrorKind::UnusedIgnore), Severity::Error);
     }
 
     #[test]

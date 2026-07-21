@@ -120,6 +120,7 @@ pub fn expand_config_file_dir(path: &str) -> String {
 pub struct MypyErrorConfigFlags {
     pub warn_return_any: bool,
     pub warn_redundant_casts: bool,
+    pub warn_unused_ignores: bool,
     pub disallow_untyped_defs: bool,
     pub disallow_incomplete_defs: bool,
     pub disallow_any_generics: bool,
@@ -143,17 +144,18 @@ pub fn make_error_config(
     for error_code in enables {
         errors.insert(error_code, Severity::Error);
     }
-    if let Some(MypyErrorConfigFlags {
-        warn_return_any,
-        warn_redundant_casts,
-        disallow_untyped_defs,
-        disallow_incomplete_defs,
-        disallow_any_generics,
-        disallow_any_explicit,
-        strict,
-        report_deprecated_as_note,
-        allow_redefinitions,
-    }) = mypy_error_config_flags
+        if let Some(MypyErrorConfigFlags {
+            warn_return_any,
+            warn_redundant_casts,
+            warn_unused_ignores,
+            disallow_untyped_defs,
+            disallow_incomplete_defs,
+            disallow_any_generics,
+            disallow_any_explicit,
+            strict,
+            report_deprecated_as_note,
+            allow_redefinitions,
+        }) = mypy_error_config_flags
     {
         // These severities take precedence over enable/disable
         if warn_return_any || strict {
@@ -164,6 +166,13 @@ pub fn make_error_config(
                 ErrorKind::RedundantCast.to_name().to_owned(),
                 Severity::Warn,
             );
+        }
+        // mypy `warn_unused_ignores` (part of `--strict`) surfaces
+        // redundant `# type: ignore` comments. pyrefly's `UnusedIgnore`
+        // defaults to Ignore; under strict it must be an Error so the
+        // migration matches mypy's strict-expansion behavior.
+        if warn_unused_ignores || strict {
+            errors.insert(ErrorKind::UnusedIgnore.to_name().to_owned(), Severity::Error);
         }
         if disallow_untyped_defs || disallow_incomplete_defs || strict {
             errors.insert(
@@ -249,6 +258,7 @@ fn code_to_kind(errors: HashMap<String, Severity>) -> Option<ErrorDisplayConfig>
             "deprecated" => add(severity, ErrorKind::Deprecated),
             "name-match" => add(severity, ErrorKind::NameMismatch),
             "no-any-return" => add(severity, ErrorKind::NoAnyReturn),
+            "unused-ignore" => add(severity, ErrorKind::UnusedIgnore),
             _ => {}
         }
     }
