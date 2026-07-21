@@ -2021,7 +2021,7 @@ impl<'a> Transaction<'a> {
     ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
         let defs = self
             .ad_hoc_solve(handle, "attribute_definition", |solver| {
-                let completions = |ty| solver.completions(ty, Some(name), false);
+                let completions = |ty| solver.completions(ty, Some(name), false, false);
 
                 match base_type {
                     Type::Union(u) => u
@@ -3851,7 +3851,8 @@ impl<'a> Transaction<'a> {
                         is_deprecated: _,
                         definition,
                         is_reexport: _,
-                    } in solver.completions(base_type, Some(expected_name), false)
+                        is_from_object: _,
+                    } in solver.completions(base_type, Some(expected_name), false, false)
                     {
                         if let Some((TextRangeWithModule { module, range }, _)) = self
                             .resolve_attribute_definition(

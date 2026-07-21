@@ -2865,6 +2865,8 @@ pub struct AttrInfo {
     pub definition: AttrDefinition,
     /// is this defined in another module (true) or in this module (false)?
     pub is_reexport: bool,
+    /// Is this attribute inherited directly from `object`?
+    pub is_from_object: bool,
 }
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
@@ -2878,6 +2880,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     {
         let mut seen = SmallSet::new();
         for c in mro {
+            let is_from_object = c == self.stdlib.object().class_object();
             let Some(class_fields) = self.get_class_fields(c) else {
                 continue;
             };
@@ -2897,6 +2900,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     docstring_range: class_fields.field_docstring_range(fld),
                                 },
                                 is_reexport: false,
+                                is_from_object,
                             });
                         }
                     }
@@ -2914,6 +2918,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     .field_docstring_range(expected_attribute_name),
                             },
                             is_reexport: false,
+                            is_from_object,
                         });
                     }
                 }
@@ -2998,6 +3003,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         module_name: ModuleName::from_parts(submodule.parts()),
                     },
                     is_reexport: false,
+                    is_from_object: false,
                 });
                 return;
             }
@@ -3015,6 +3021,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             module_name,
                         },
                         is_reexport: self.exports.reexport_source(module_name, name).is_some(),
+                        is_from_object: false,
                     });
                 }
             }
@@ -3028,6 +3035,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             module_name,
                         },
                         is_reexport: self.exports.reexport_source(module_name, name).is_some(),
+                        is_from_object: false,
                     }));
                 }
             }
@@ -3178,6 +3186,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         base: Type,
         expected_attribute_name: Option<&Name>,
         include_types: bool,
+        include_object: bool,
     ) -> Vec<AttrInfo> {
         let mut res = Vec::new();
         if let Some(base) = self.as_attribute_base(base) {
@@ -3185,17 +3194,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 base,
                 expected_attribute_name,
                 include_types,
-                false,
+                include_object,
                 &mut res,
             );
-        }
-        res
-    }
-
-    pub fn completions_including_object(&self, base: Type, include_types: bool) -> Vec<AttrInfo> {
-        let mut res = Vec::new();
-        if let Some(base) = self.as_attribute_base(base) {
-            self.completions_inner(base, None, include_types, true, &mut res);
         }
         res
     }
