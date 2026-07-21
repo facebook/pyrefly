@@ -2519,3 +2519,93 @@ if TYPE_CHECKING:
     def f(a: str): ...
     "#,
 );
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4167: a comprehension argument is
+// contextually typed per candidate overload, so its literal element narrows and the call matches.
+testcase!(
+    test_overload_literal_narrowing_through_comprehension,
+    r#"
+from collections.abc import Sequence
+from typing import Literal, overload, reveal_type
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def sort_indices(sort_keys: Sequence[tuple[str, Order]]) -> str: ...
+@overload
+def sort_indices(sort_keys: str) -> int: ...
+def sort_indices(sort_keys: Sequence[tuple[str, Order]] | str) -> str | int:
+    return 0
+
+def f(names: list[str]) -> None:
+    reveal_type(sort_indices([(name, "ascending") for name in names]))  # E: revealed type: str
+"#,
+);
+
+// Set/dict comprehensions and generator expressions share the same un-flattened arm, so a
+// literal element is likewise narrowed against the candidate overload's parameter.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    test_overload_literal_narrowing_through_set_dict_generator,
+    r#"
+from collections.abc import Iterable
+from typing import Literal, overload, reveal_type
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def take_set(x: set[Order]) -> str: ...
+@overload
+def take_set(x: int) -> int: ...
+def take_set(x: set[Order] | int) -> str | int: return 0
+
+@overload
+def take_dict(x: dict[str, Order]) -> str: ...
+@overload
+def take_dict(x: int) -> int: ...
+def take_dict(x: dict[str, Order] | int) -> str | int: return 0
+
+@overload
+def take_iter(x: Iterable[Order]) -> str: ...
+@overload
+def take_iter(x: int) -> int: ...
+def take_iter(x: Iterable[Order] | int) -> str | int: return 0
+
+def f(keys: list[str]) -> None:
+    reveal_type(take_set({"ascending" for _ in keys}))  # E: revealed type: str
+    reveal_type(take_dict({k: "ascending" for k in keys}))  # E: revealed type: str
+    reveal_type(take_iter("ascending" for _ in keys))  # E: revealed type: str
+"#,
+);
+
+// Every overload here accepts the argument, so the assertions pin down *which* one wins: only a
+// hint that reaches the element selects the narrower one. Without contextual typing these still
+// resolve, just to the wider overload, so the test fails loudly rather than merely erroring.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    test_overload_comprehension_hint_selects_narrower_overload,
+    r#"
+from collections.abc import Iterable
+from typing import Literal, assert_type, overload
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def g(x: list[Order]) -> int: ...
+@overload
+def g(x: list[str]) -> str: ...
+def g(x: list[Order] | list[str]) -> int | str: return 0
+
+@overload
+def gen(x: Iterable[list[Order]]) -> int: ...
+@overload
+def gen(x: Iterable[list[str]]) -> str: ...
+def gen(x: Iterable[list[Order]] | Iterable[list[str]]) -> int | str: return 0
+
+def f(keys: list[str]) -> None:
+    assert_type(g(["ascending" for _ in keys]), int)
+    assert_type(g([k for k in keys]), str)
+    assert_type(gen(["ascending"] for _ in keys), int)
+    assert_type(gen([k] for k in keys), str)
+"#,
+);
