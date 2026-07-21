@@ -810,8 +810,14 @@ impl ConfigFile {
 impl ConfigFile {
     pub const PYREFLY_FILE_NAME: &str = "pyrefly.toml";
     pub const PYREFLY_HIDDEN_FILE_NAME: &str = ".pyrefly.toml";
+    pub const RUSTYPY_FILE_NAME: &str = "rustypy.toml";
+    pub const RUSTYPY_HIDDEN_FILE_NAME: &str = ".rustypy.toml";
     pub const PYPROJECT_FILE_NAME: &str = "pyproject.toml";
     pub const CONFIG_FILE_NAMES: &[&str] = &[
+        // rustypy-specific names take priority so a fork project prefers its
+        // own config over a leftover `pyrefly.toml` from the upstream tool.
+        Self::RUSTYPY_FILE_NAME,
+        Self::RUSTYPY_HIDDEN_FILE_NAME,
         Self::PYREFLY_FILE_NAME,
         Self::PYREFLY_HIDDEN_FILE_NAME,
         Self::PYPROJECT_FILE_NAME,

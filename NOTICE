@@ -1,0 +1,17 @@
+rustypy
+=======
+
+rustypy is a fork of Meta's pyrefly (https://github.com/facebook/pyrefly).
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+This source code is licensed under the MIT license found in the LICENSE
+file in the root directory of this source tree.
+
+The original pyrefly project is:
+
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  Licensed under the MIT License.
+
+rustypy retains all upstream per-file copyright headers. Contributions made
+on top of the upstream code are licensed under the same MIT terms.

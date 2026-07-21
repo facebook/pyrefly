@@ -20,9 +20,14 @@ use crate::config::ConfigFile;
 const PYTHON_TOOL_NAMES: &[&str] = &["ruff", "mypy", "pyright"];
 
 /// Wrapper used to (de)serialize pyrefly configs from pyproject.toml files.
+///
+/// Accepts either `[tool.rustypy]` (preferred, fork-native) or the legacy
+/// `[tool.pyrefly]` section. If both are present, `rustypy` wins and `pyrefly`
+/// is ignored. On write we always emit `[tool.pyrefly]` to preserve upstream
+/// compatibility with tooling that greps for that section name.
 #[derive(Debug, Serialize, Deserialize)]
 struct Tool {
-    #[serde(default)]
+    #[serde(default, alias = "rustypy")]
     pyrefly: Option<ConfigFile>,
     /// Catch-all for other `[tool.*]` sections. We check this for known
     /// Python tool names (see `PYTHON_TOOL_NAMES`) to detect Python project roots.
@@ -287,6 +292,25 @@ build-backend = "setuptools.build_meta"
 
         assert_eq!(toml_content.trim(), toml_expected.trim());
 
+        Ok(())
+    }
+
+    /// rustypy fork accepts `[tool.rustypy]` as an alias for `[tool.pyrefly]`.
+    /// Having both sections in the same pyproject.toml is a user error
+    /// (serde reports `duplicate field`); a project must pick one name.
+    #[test]
+    fn test_tool_rustypy_alias_parses() -> anyhow::Result<()> {
+        let content = r#"[tool.rustypy]
+project-includes = ["src/**/*.py"]
+"#;
+        let parsed: PyProject = toml::from_str(content)?;
+        let cfg = parsed
+            .pyrefly()
+            .expect("[tool.rustypy] must deserialize as the pyrefly config");
+        assert_eq!(
+            cfg.project_includes,
+            Globs::new(vec!["src/**/*.py".to_owned()]).unwrap(),
+        );
         Ok(())
     }
 }

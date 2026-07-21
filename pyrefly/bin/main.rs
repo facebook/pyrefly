@@ -29,12 +29,12 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(target_os = "windows")]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// Main CLI entrypoint for Pyrefly.
+/// Main CLI entrypoint for rustypy (a pyrefly fork).
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser)]
-#[command(name = "pyrefly")]
-#[command(about = "A fast Python type checker", long_about = None)]
-#[command(version)]
+#[command(name = "rustypy")]
+#[command(about = "A fast Python type checker (pyrefly fork)", long_about = None)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Args {
     /// Common global arguments shared across commands.
     #[command(flatten)]
