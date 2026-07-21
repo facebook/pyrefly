@@ -108,7 +108,7 @@ impl PluginRegistry {
         let s = module.as_str();
         self.plugins
             .iter()
-            .any(|p| p.owned_modules().iter().any(|m| *m == s))
+            .any(|p| p.owned_modules().contains(&s))
     }
 }
 
