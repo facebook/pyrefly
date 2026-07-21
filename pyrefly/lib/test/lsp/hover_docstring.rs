@@ -21,11 +21,12 @@ fn test_report_factory(
     file_content: &'static str,
 ) -> impl Fn(&State, &Handle, ruff_text_size::TextSize) -> std::string::String {
     move |state: &State, handle: &Handle, position: TextSize| -> String {
-        let results = state
+        let raw = state
             .transaction()
             .find_definition(handle, position, FindPreference::default())
             .map(Vec1::into_vec)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let results = raw
             .into_iter()
             .filter_map(|t| {
                 let docstring_range = t.docstring_range?;
@@ -377,6 +378,91 @@ Docstring Result: `Test docstring`
 
 
 # lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// Regression for rustypy fork: hovering a call to an `@overload`-decorated
+/// function must still surface a docstring. Upstream pyrefly dropped the
+/// docstring when the function came from a `.pyi` stub (no implementation
+/// exists to fall back to), so the hover showed nothing. The expected
+/// behavior (matching pyright) is that the docstring of the matched
+/// `@overload` stub is shown.
+#[test]
+fn overload_stub_docstring_test() {
+    let stub = r#"
+from typing import overload, Any
+
+@overload
+def f(x: int) -> int:
+    """Int overload docstring"""
+    ...
+
+@overload
+def f(x: str) -> str:
+    """Str overload docstring"""
+    ...
+
+def f(x: Any) -> Any: ...
+"#;
+    let code = r#"
+import lib
+lib.f(1)
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("lib", stub)],
+        test_report_factory(stub),
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | lib.f(1)
+         ^
+Docstring Result: `Int overload docstring`
+
+
+# lib.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// When the matched `@overload` stub has no docstring, fall back to the
+/// implementation's docstring rather than showing nothing.
+#[test]
+fn overload_fallback_to_impl_docstring_test() {
+    let code = r#"
+from typing import overload
+
+@overload
+def f(x: int) -> int:
+    ...
+
+@overload
+def f(x: str) -> str:
+    ...
+
+def f(x):
+    """Impl docstring"""
+    return x
+
+print(f(1))
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code)],
+        test_report_factory(code),
+    );
+    assert_eq!(
+        r#"
+# main.py
+16 | print(f(1))
+            ^
+Docstring Result: `Impl docstring`
 "#
         .trim(),
         report.trim(),
