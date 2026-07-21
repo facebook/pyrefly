@@ -13,6 +13,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use dupe::Dupe;
 use parse_display::Display;
@@ -295,8 +296,41 @@ pub enum ClassKind {
     DataclassField,
 }
 
+/// Override hook for `ClassKind::from_qname`. rustypy plugins implement this
+/// to classify framework-specific qnames (e.g. SQLAlchemy's `Mapped`) that
+/// the builtin match table does not recognize. Registered once at startup
+/// via [`set_class_kind_override`].
+pub trait ClassKindOverride: Send + Sync {
+    /// Return `Some(kind)` to override the builtin classification for this
+    /// qname, or `None` to fall through to the builtin table.
+    fn class_kind_for_qname(&self, qname: &QName) -> Option<ClassKind>;
+}
+
+static CLASS_KIND_OVERRIDE: OnceLock<Box<dyn ClassKindOverride + Send + Sync>> = OnceLock::new();
+
+/// Install the plugin override hook. Called once at engine startup; a second
+/// call is a no-op (the first registration wins). The hook lives for the
+/// process lifetime, which matches rustypy's single-binary CLI/LSP model.
+///
+/// Returns `true` if this call installed the hook, `false` if a previous call
+/// already did.
+pub fn set_class_kind_override(hook: Box<dyn ClassKindOverride + Send + Sync>) -> bool {
+    CLASS_KIND_OVERRIDE.set(hook).is_ok()
+}
+
 impl ClassKind {
     fn from_qname(qname: &QName) -> Self {
+        // Consult the plugin override hook first. rustypy plugins (SQLAlchemy,
+        // Celery, etc.) register a `ClassKindOverride` at startup to classify
+        // framework-specific qnames the builtin table below does not know.
+        // Upstream pyrefly has no such hook; every integration is hardcoded
+        // in this match. The override is optional and `None` falls through.
+        if let Some(kind) = CLASS_KIND_OVERRIDE
+            .get()
+            .and_then(|hook| hook.class_kind_for_qname(qname))
+        {
+            return kind;
+        }
         let name = qname.id();
         match (qname.module_name().as_str(), name.as_str()) {
             ("builtins", "staticmethod") => Self::StaticMethod(name.clone()),

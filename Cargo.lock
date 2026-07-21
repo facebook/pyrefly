@@ -2132,6 +2132,7 @@ dependencies = [
  "ruff_python_parser",
  "ruff_source_file",
  "ruff_text_size",
+ "rustypy_plugin",
  "serde",
  "serde_json",
  "serde_repr",
@@ -2714,6 +2715,15 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "rustypy_plugin"
+version = "1.2.0-dev.2"
+dependencies = [
+ "pyrefly_python",
+ "pyrefly_types",
+ "starlark_map",
+]
 
 [[package]]
 name = "ryu"

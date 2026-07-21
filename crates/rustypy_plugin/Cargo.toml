@@ -1,0 +1,15 @@
+[package]
+name = "rustypy_plugin"
+version = "1.2.0-dev.2"
+authors = ["Meta", "rustypy contributors"]
+edition = "2024"
+repository = "https://github.com/facebook/pyrefly"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pyrefly_python = { path = "../pyrefly_python" }
+pyrefly_types = { path = "../pyrefly_types" }
+starlark_map = "0.14.2"

@@ -51,6 +51,9 @@ async fn run() -> anyhow::Result<ExitCode> {
     let filtered_args = filter_unrecognized_lsp_args(expanded_args);
     let args = Args::parse_from(filtered_args);
     args.common.init(false);
+    // Install built-in framework plugins (SQLAlchemy, Celery, ...) as the
+    // global ClassKind override before any type checking runs.
+    rustypy_plugin::install_default_override();
     let thread_count = args.common.thread_count();
     let (status, _) = args
         .command

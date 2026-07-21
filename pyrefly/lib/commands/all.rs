@@ -72,6 +72,9 @@ pub enum Command {
     Suppress(SuppressArgs),
     /// Generate .pyi stub files from Python source files.
     Stubgen(StubgenArgs),
+
+    /// List built-in framework plugins and the modules they own.
+    Plugins,
 }
 
 impl Command {
@@ -123,6 +126,22 @@ impl Command {
             }
             Command::Stubgen(args) => {
                 Ok((args.run(config_configurer_wrapper, thread_count)?, None))
+            }
+            Command::Plugins => {
+                let registry = rustypy_plugin::PluginRegistry::builtins();
+                println!("Registered rustypy plugins:");
+                if registry.iter().count() == 0 {
+                    println!("  (none)");
+                }
+                for plugin in registry.iter() {
+                    let modules = plugin.owned_modules();
+                    if modules.is_empty() {
+                        println!("  {}", plugin.name());
+                    } else {
+                        println!("  {} (modules: {})", plugin.name(), modules.join(", "));
+                    }
+                }
+                Ok((CommandExitStatus::Success, None))
             }
         }
     }
