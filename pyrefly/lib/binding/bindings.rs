@@ -196,6 +196,7 @@ table! {
 #[derive(Clone, Debug)]
 struct BindingsInner {
     module_info: ModuleInfo,
+    sys_info: SysInfo,
     table: BindingTable,
     metadata: Arc<BindingsMetadata>,
     /// Multi-line ranges and ignore-all directives, computed from the AST
@@ -351,6 +352,7 @@ impl Bindings {
         let module_info = Module::new(module_name, module_path, contents);
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: SysInfo::default(),
             table: Default::default(),
             metadata: Arc::new(BindingsMetadata::new()),
             module_ranges: Arc::new(ModuleRanges {
@@ -380,6 +382,10 @@ impl Bindings {
 
     pub fn module(&self) -> &ModuleInfo {
         &self.0.module_info
+    }
+
+    pub fn sys_info(&self) -> &SysInfo {
+        &self.0.sys_info
     }
 
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
@@ -736,6 +742,7 @@ impl Bindings {
         let module_deletes = scope_trace.module_deletes().clone();
         Self(Arc::new(BindingsInner {
             module_info,
+            sys_info: builder.sys_info,
             table: builder.table,
             metadata: Arc::new(builder.metadata),
             module_ranges,

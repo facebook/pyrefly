@@ -787,20 +787,49 @@ impl<'a> BindingsBuilder<'a> {
                 // Process the test before forking so walrus-defined names are
                 // in the base flow and visible to both branches.
                 self.ensure_expr(&mut x.test, &mut Usage::non_pinning_value_from(usage));
+                let static_test = self.sys_info.evaluate_bool_with_sys_info(&x.test);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.start_fork_and_branch(x.range);
-                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
-                self.ensure_expr(&mut x.body, usage);
-                // Negate the narrow ops for the `orelse`, then merge the Flows.
-                // TODO(stroxler): We eventually want to drop all narrows but merge values.
-                self.next_branch();
-                self.bind_narrow_ops(
-                    &narrow_ops.negate(),
-                    NarrowUseLocation::Span(x.range),
-                    usage,
-                );
-                self.ensure_expr(&mut x.orelse, usage);
-                self.finish_branch();
+                match static_test {
+                    Some(true) => {
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(x.body.range()),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.body, usage);
+                        self.finish_branch();
+                    }
+                    Some(false) => {
+                        self.abandon_branch();
+                        self.start_branch();
+                        self.bind_narrow_ops(
+                            &narrow_ops.negate(),
+                            NarrowUseLocation::Span(x.range),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                    None => {
+                        self.bind_narrow_ops(
+                            &narrow_ops,
+                            NarrowUseLocation::Span(x.body.range()),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.body, usage);
+                        // Negate the narrow ops for the `orelse`, then merge the Flows.
+                        // TODO(stroxler): We eventually want to drop all narrows but merge values.
+                        self.next_branch();
+                        self.bind_narrow_ops(
+                            &narrow_ops.negate(),
+                            NarrowUseLocation::Span(x.range),
+                            usage,
+                        );
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                }
                 self.finish_exhaustive_fork();
             }
             Expr::BoolOp(ExprBoolOp {

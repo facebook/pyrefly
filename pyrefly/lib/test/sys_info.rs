@@ -193,6 +193,35 @@ assert_type(Y(), int)
 );
 
 testcase!(
+    test_platform_ternary_linux,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+inverted: int = 0 if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+
+def condition() -> bool:
+    return False
+
+subprocess.CREATE_NO_WINDOW if condition() else 0  # E: No attribute `CREATE_NO_WINDOW` in module `subprocess`
+"#,
+);
+
+testcase!(
+    test_platform_ternary_windows,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else "not windows"
+inverted: int = "not windows" if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+"#,
+);
+
+testcase!(
     test_platform_membership,
     r#"
 from typing import assert_type

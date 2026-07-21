@@ -516,6 +516,52 @@ impl SysInfo {
         Some(self.evaluate(x)?.to_bool())
     }
 
+    /// Return true/false only when evaluation depends on the configured Python environment.
+    pub fn evaluate_bool_with_sys_info(&self, x: &Expr) -> Option<bool> {
+        Self::depends_on_sys_info(x).then(|| self.evaluate_bool(x))?
+    }
+
+    fn depends_on_sys_info(x: &Expr) -> bool {
+        match x {
+            Expr::Compare(x) => {
+                Self::depends_on_sys_info(&x.left)
+                    || x.comparators.iter().any(Self::depends_on_sys_info)
+            }
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+                matches!(
+                    &**value,
+                    Expr::Name(name)
+                        if (&name.id == "sys" && matches!(attr.as_str(), "platform" | "version_info"))
+                            || (&name.id == "os" && attr.as_str() == "name")
+                            || Self::is_type_checking_constant_name(attr.as_str())
+                ) || Self::depends_on_sys_info(value)
+            }
+            Expr::Name(name) => Self::is_type_checking_constant_name(name.id()),
+            Expr::Call(x) => {
+                Self::depends_on_sys_info(&x.func)
+                    || x.arguments.args.iter().any(Self::depends_on_sys_info)
+                    || x.arguments
+                        .keywords
+                        .iter()
+                        .any(|x| Self::depends_on_sys_info(&x.value))
+            }
+            Expr::Subscript(x) => {
+                Self::depends_on_sys_info(&x.value) || Self::depends_on_sys_info(&x.slice)
+            }
+            Expr::Tuple(x) => x.elts.iter().any(Self::depends_on_sys_info),
+            Expr::List(x) => x.elts.iter().any(Self::depends_on_sys_info),
+            Expr::Set(x) => x.elts.iter().any(Self::depends_on_sys_info),
+            Expr::BoolOp(x) => x.values.iter().any(Self::depends_on_sys_info),
+            Expr::UnaryOp(x) => Self::depends_on_sys_info(&x.operand),
+            Expr::Slice(x) => {
+                x.lower.as_deref().is_some_and(Self::depends_on_sys_info)
+                    || x.upper.as_deref().is_some_and(Self::depends_on_sys_info)
+                    || x.step.as_deref().is_some_and(Self::depends_on_sys_info)
+            }
+            _ => false,
+        }
+    }
+
     fn is_type_checking_constant_name(x: &str) -> bool {
         x == "TYPE_CHECKING" || x == "TYPE_CHECKING_WITH_PYREFLY"
     }
