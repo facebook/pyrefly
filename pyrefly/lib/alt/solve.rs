@@ -152,7 +152,6 @@ use crate::state::loader::FindingOrError;
 use crate::types::annotation::Annotation;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
@@ -5949,6 +5948,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                                 .dataclass_transform_metadata
                                                 .is_some()
                                     )
+                                {
+                                    continue;
+                                }
+                                // Generic identity and callable-returning decorators are common
+                                // and do not provide a concrete replacement value to model.
+                                if !decorator
+                                    .ty
+                                    .callable_signatures()
+                                    .iter()
+                                    .any(|callable| matches!(&callable.ret, Type::ClassType(_)))
                                 {
                                     continue;
                                 }

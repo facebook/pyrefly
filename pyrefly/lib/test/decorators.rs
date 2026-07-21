@@ -792,6 +792,7 @@ from typing import Any, Callable, assert_type
 
 def unknown_return[T](cls: type[T]) -> Any: ...
 def callable_return[T](cls: type[T]) -> Callable[[], T]: ...
+def identity_return[T](cls: T) -> T: ...
 
 @unknown_return
 class UnknownDecorated:
@@ -803,10 +804,17 @@ class CallableDecorated:
     def method(self) -> int:
         return 2
 
+@identity_return
+class IdentityDecorated:
+    def method(self) -> int:
+        return 3
+
 assert_type(UnknownDecorated, type[UnknownDecorated])
 assert_type(UnknownDecorated().method(), int)
 assert_type(CallableDecorated, type[CallableDecorated])
 assert_type(CallableDecorated().method(), int)
+assert_type(IdentityDecorated, type[IdentityDecorated])
+assert_type(IdentityDecorated().method(), int)
 "#,
 );
 
