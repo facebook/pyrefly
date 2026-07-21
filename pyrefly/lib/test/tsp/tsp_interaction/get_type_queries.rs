@@ -12,6 +12,8 @@ use lsp_types::Url;
 use tempfile::TempDir;
 use tsp_types::TypeKind;
 
+use crate::module::bundled::BundledStub;
+use crate::module::typeshed::typeshed;
 use crate::test::tsp::tsp_interaction::object_model::TspInteraction;
 use crate::test::tsp::tsp_interaction::object_model::get_current_snapshot;
 use crate::test::tsp::tsp_interaction::object_model::write_pyproject;
@@ -397,6 +399,67 @@ fn test_get_computed_type_function_is_function_type() {
         result.get("returnType").is_some(),
         "Expected returnType field on FunctionType"
     );
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_in_unopened_file() {
+    // Regression test for https://github.com/facebook/pyrefly/issues/4228:
+    // `getComputedType` is keyed by `(uri, range)` and must resolve nodes in any
+    // analyzable file, not only open documents. Here `lib.py` is on disk and
+    // imported by the open `main.py`, but is itself never `didOpen`ed; querying a
+    // node in it must still return a type rather than `null`.
+    // Keep `temp_dir` alive for the whole test so `lib.py` stays on disk while
+    // the (unopened) file is queried.
+    let temp_dir = TempDir::new().unwrap();
+    write_pyproject(temp_dir.path());
+    let lib_path = temp_dir.path().join("lib.py");
+    std::fs::write(&lib_path, "def g() -> None: ...\n").unwrap();
+    let lib_uri = Url::from_file_path(&lib_path).unwrap().to_string();
+
+    let main_path = temp_dir.path().join("main.py");
+    std::fs::write(&main_path, "import lib\nx = lib.g()\n").unwrap();
+
+    let mut tsp = TspInteraction::new();
+    tsp.set_root(temp_dir.path().to_path_buf());
+    tsp.initialize(Default::default());
+    tsp.server.did_open("main.py");
+    tsp.client.expect_any_message();
+    let snapshot = get_current_snapshot(&mut tsp, 2);
+
+    // Query the `g` function definition in the unopened `lib.py`.
+    let result = get_computed_type_ok(&mut tsp, &lib_uri, 0, 4, snapshot);
+    assert_kind(&result, TypeKind::Function);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_in_bundled_typeshed() {
+    // The real-world case behind #4228: Pylance never `didOpen`s bundled stdlib
+    // stubs, so nodes inside `builtins.pyi` (which no editor opens) must still
+    // resolve. This exercises the by-path lookup that reuses the bundled
+    // typeshed handle the checker already analyzed.
+    let builtins = typeshed()
+        .unwrap()
+        .materialized_path_on_disk()
+        .unwrap()
+        .join("builtins.pyi");
+    let builtins_uri = Url::from_file_path(&builtins).unwrap().to_string();
+    let content = std::fs::read_to_string(&builtins).unwrap();
+    // Target the `object` identifier in `class object` (version-stable).
+    let (line, character) = content
+        .lines()
+        .enumerate()
+        .find_map(|(i, l)| l.find("class object").map(|c| (i as u32, (c + 6) as u32)))
+        .expect("builtins.pyi should define `class object`");
+
+    // `builtins` is loaded implicitly by any check, without opening any file.
+    let (mut tsp, _file_uri, snapshot) = setup_project("x = 1\n");
+
+    let result = get_computed_type_ok(&mut tsp, &builtins_uri, line, character, snapshot);
+    assert_kind(&result, TypeKind::Class);
 
     tsp.shutdown();
 }

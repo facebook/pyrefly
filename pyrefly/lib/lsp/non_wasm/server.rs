@@ -6373,6 +6373,44 @@ impl Server {
         )
     }
 
+    /// Build a read transaction and the handle the type checker analyzes `path`
+    /// under, so `(uri, range)` queries resolve for any analyzable file rather
+    /// than only open documents.
+    ///
+    /// Open files are served from their in-memory overlay (already committed by
+    /// the recheck that ran on `didOpen`). For anything else we reuse the handle
+    /// the file was already analyzed under — an imported dependency's filesystem
+    /// handle, or a bundled stdlib stub's `BundledTypeshed` handle whose
+    /// `SysInfo` we can't reconstruct here, hence the by-path lookup — and force
+    /// a full solve (`Require::Everything` is the only level that retains
+    /// bindings/answers, which the type lookup reads) so narrowed/computed types
+    /// are available. A file that isn't analyzed yet falls back to a fresh
+    /// filesystem handle read from disk.
+    fn query_transaction_and_handle<'a>(&'a self, path: &Path) -> (Transaction<'a>, Handle) {
+        if self.open_files.read().contains_key(path) {
+            return (
+                self.state.transaction(),
+                make_open_handle(&self.state, path),
+            );
+        }
+        let mut transaction = self.state.transaction();
+        // Imported dependencies live under a filesystem handle we can rebuild
+        // directly; only scan when that misses (bundled stubs, unusual SysInfo).
+        let fs_handle =
+            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()));
+        let handle = if transaction.get_module_info(&fs_handle).is_some() {
+            fs_handle
+        } else {
+            transaction
+                .handles()
+                .into_iter()
+                .find(|h| !h.path().is_memory() && to_real_path(h.path()).as_deref() == Some(path))
+                .unwrap_or(fs_handle)
+        };
+        transaction.run(&[handle.dupe()], Require::Everything, None);
+        (transaction, handle)
+    }
+
     /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
     /// start a transaction, returning it alongside the handle and the resolved
     /// in-file position.
@@ -6388,8 +6426,7 @@ impl Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let position =
             module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
@@ -6616,8 +6653,7 @@ impl TspInterface for Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let handle = make_open_handle(&self.state, &path);
-        let transaction = self.state.transaction();
+        let (transaction, handle) = self.query_transaction_and_handle(&path);
         let module_info = transaction.get_module_info(&handle)?;
         let start = module_info.from_lsp_position(
             lsp_types::Position {
