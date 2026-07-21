@@ -2387,20 +2387,7 @@ impl<'a> Transaction<'a> {
 
         let mut results: Vec<FindDefinitionItem> = Vec::with_capacity(location_count);
         for (module_info, ranges) in modules_to_ranges.into_iter() {
-            let ast = {
-                let handle = Handle::new(
-                    module_info.name(),
-                    module_info.path().dupe(),
-                    handle.sys_info().dupe(),
-                );
-                self.get_ast(&handle).unwrap_or_else(|| {
-                    // We may not have the AST available for the handle if it's not opened -- in that case,
-                    // Re-parse the module to get the AST.
-                    Ast::parse(module_info.contents(), module_info.source_type())
-                        .0
-                        .into()
-                })
-            };
+            let ast = self.get_ast_or_parse_module(handle, &module_info);
 
             for range in ranges.into_iter() {
                 let (metadata, definition_range) = if let Some(param_range) =
@@ -2425,6 +2412,17 @@ impl<'a> Transaction<'a> {
             }
         }
         results
+    }
+
+    /// Return the cached AST for a module, parsing it if the module is not open.
+    fn get_ast_or_parse_module(&self, handle: &Handle, module: &ModuleInfo) -> Arc<ModModule> {
+        let module_handle = Handle::new(
+            module.name(),
+            module.path().dupe(),
+            handle.sys_info().dupe(),
+        );
+        self.get_ast(&module_handle)
+            .unwrap_or_else(|| Ast::parse(module.contents(), module.source_type()).0.into())
     }
 
     fn get_callee_location(
@@ -3824,16 +3822,13 @@ impl<'a> Transaction<'a> {
         };
         // Only callable parameters can be referenced by keyword arguments. Attributes, modules,
         // and other variable kinds are covered by the regular reference indexes above.
-        if is_parameter_definition
-            && let Some(keyword_references) = self
-                .keyword_argument_references_from_parameter_definition(
-                    handle,
-                    module,
-                    definition_range,
-                    &definition_name,
-                )
-        {
-            references.extend(keyword_references);
+        if is_parameter_definition {
+            references.extend(self.keyword_argument_references_from_parameter_definition(
+                handle,
+                module,
+                definition_range,
+                &definition_name,
+            ));
         }
         references.sort_by_key(|range| range.start());
         references.dedup();
@@ -3962,29 +3957,13 @@ impl<'a> Transaction<'a> {
         definition_module: &ModuleInfo,
         definition_range: TextRange,
         expected_name: &Name,
-    ) -> Option<Vec<TextRange>> {
+    ) -> Vec<TextRange> {
         let keyword_args = self.collect_local_keyword_arguments_by_name(handle, expected_name);
         if keyword_args.is_empty() {
-            return Some(Vec::new());
+            return Vec::new();
         }
 
-        let definition_ast = if handle.path() == definition_module.path() {
-            self.get_ast(handle)?
-        } else {
-            let definition_handle = Handle::new(
-                definition_module.name(),
-                definition_module.path().dupe(),
-                handle.sys_info().dupe(),
-            );
-            self.get_ast(&definition_handle).unwrap_or_else(|| {
-                Ast::parse(
-                    definition_module.contents(),
-                    definition_module.source_type(),
-                )
-                .0
-                .into()
-            })
-        };
+        let definition_ast = self.get_ast_or_parse_module(handle, definition_module);
 
         let mut references = Vec::new();
         for (kw_identifier, callee_kind) in keyword_args {
@@ -4010,7 +3989,7 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        Some(references)
+        references
     }
 
     fn local_variable_references_from_local_definition(

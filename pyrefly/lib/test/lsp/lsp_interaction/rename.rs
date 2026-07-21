@@ -305,7 +305,7 @@ fn test_rename_kwarg_across_files() {
                 Url::from_file_path(&uses).unwrap().to_string(): [
                     {
                         "newText":"note",
-                        "range":{"start":{"line":3,"character":31},"end":{"line":3,"character":38}}
+                        "range":{"start":{"line":6,"character":31},"end":{"line":6,"character":38}}
                     },
                 ]
             }
