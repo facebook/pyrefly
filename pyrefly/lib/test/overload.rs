@@ -2337,3 +2337,64 @@ def f(tag: Literal[1, 2], xs: list[Callable[..., str]]) -> int | str:
 assert_type(f(2, [lambda value: value + "x"]), str)
     "#,
 );
+
+// https://github.com/facebook/pyrefly/issues/4167: a comprehension argument must be
+// contextually typed against the candidate overload's parameter, so a literal element
+// (`"ascending"`) narrows to the expected `Literal` and the `Sequence[tuple[str, Order]]`
+// overload matches, rather than the comprehension being inferred context-free as
+// `list[tuple[str, str]]`.
+testcase!(
+    test_overload_literal_narrowing_through_comprehension,
+    r#"
+from collections.abc import Sequence
+from typing import Literal, overload, reveal_type
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def sort_indices(sort_keys: Sequence[tuple[str, Order]]) -> str: ...
+@overload
+def sort_indices(sort_keys: str) -> int: ...
+def sort_indices(sort_keys: Sequence[tuple[str, Order]] | str) -> str | int:
+    return 0
+
+def f(names: list[str]) -> None:
+    reveal_type(sort_indices([(name, "ascending") for name in names]))  # E: revealed type: str
+"#,
+);
+
+// Set/dict comprehensions and generator expressions share the same un-flattened arm, so a
+// literal element is likewise narrowed against the candidate overload's parameter.
+// https://github.com/facebook/pyrefly/issues/4167
+testcase!(
+    test_overload_literal_narrowing_through_set_dict_generator,
+    r#"
+from collections.abc import Iterable
+from typing import Literal, overload, reveal_type
+
+Order = Literal["ascending", "descending"]
+
+@overload
+def take_set(x: set[Order]) -> str: ...
+@overload
+def take_set(x: int) -> int: ...
+def take_set(x: set[Order] | int) -> str | int: return 0
+
+@overload
+def take_dict(x: dict[str, Order]) -> str: ...
+@overload
+def take_dict(x: int) -> int: ...
+def take_dict(x: dict[str, Order] | int) -> str | int: return 0
+
+@overload
+def take_iter(x: Iterable[Order]) -> str: ...
+@overload
+def take_iter(x: int) -> int: ...
+def take_iter(x: Iterable[Order] | int) -> str | int: return 0
+
+def f(keys: list[str]) -> None:
+    reveal_type(take_set({"ascending" for _ in keys}))  # E: revealed type: str
+    reveal_type(take_dict({k: "ascending" for k in keys}))  # E: revealed type: str
+    reveal_type(take_iter("ascending" for _ in keys))  # E: revealed type: str
+"#,
+);

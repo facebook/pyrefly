@@ -79,10 +79,20 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
-            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_))) => {
+            TypeOrExpr::Expr(
+                e @ (Expr::Dict(_)
+                | Expr::List(_)
+                | Expr::Set(_)
+                | Expr::ListComp(_)
+                | Expr::SetComp(_)
+                | Expr::DictComp(_)
+                | Expr::Generator(_)),
+            ) => {
                 // Hack: don't flatten mutable builtin containers into types before calling a
                 // function, as we know these containers often need to be contextually typed using
-                // the function's parameter types.
+                // the function's parameter types. Comprehensions and generators are included for
+                // the same reason: their element/key/value types must be inferred against the
+                // parameter hint (e.g. to narrow a literal element) rather than eagerly here.
                 TypeOrExpr::Expr(e)
             }
             TypeOrExpr::Expr(e) => {
