@@ -109,12 +109,21 @@ impl CallWithTypes {
         errors: &ErrorCollector,
     ) -> TypeOrExpr<'a> {
         match x {
-            TypeOrExpr::Expr(e @ (Expr::Dict(_) | Expr::List(_) | Expr::Set(_)))
-                if !nests_calls_to_depth(e, MIN_FLATTEN_CALL_DEPTH) =>
-            {
+            TypeOrExpr::Expr(
+                e @ (Expr::Dict(_)
+                | Expr::List(_)
+                | Expr::Set(_)
+                | Expr::ListComp(_)
+                | Expr::SetComp(_)
+                | Expr::DictComp(_)
+                | Expr::Generator(_)),
+            ) if !nests_calls_to_depth(e, MIN_FLATTEN_CALL_DEPTH) => {
                 // Hack: keep mutable builtin containers as expressions, since they often need to be
                 // contextually typed against the function's parameter types, unless nesting depth
                 // reaches or exceeds `MIN_FLATTEN_CALL_DEPTH` to avoid exponential blowup.
+                // Comprehensions and generators are included for the same reason: their
+                // element/key/value types must be inferred against the parameter hint (e.g. to
+                // narrow a literal element) rather than eagerly here.
                 TypeOrExpr::Expr(e)
             }
             TypeOrExpr::Expr(e) => {
