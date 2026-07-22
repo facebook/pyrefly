@@ -922,6 +922,7 @@ type TA = int | str | bytes
 class C: pass
 
 type TB = TA | C
+type TC = TB
 "#,
     )
 }
@@ -975,6 +976,20 @@ def f3(x: TB | float) -> TB | float:
   return x
 
 c3: Callable[[int], int] = f3  # E: `(x: TB | float) -> TB | float` is not assignable to `(int) -> int`
+    "#,
+);
+
+testcase!(
+    test_outer_union_alias_display_name,
+    env_with_large_alias_union(),
+    r#"
+from bar import TC
+from typing import Callable
+
+def f(x: TC) -> TC:
+  return x
+
+c: Callable[[int], int] = f  # E: `(x: TC) -> TC` is not assignable to `(int) -> int`
     "#,
 );
 

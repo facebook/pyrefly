@@ -6246,9 +6246,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 let mut aliased_type =
                     self.untype_opt_with_context(ta.as_type(), range, errors, context)?;
-                if let Type::Union(f) = &mut aliased_type
-                    && f.display_name.is_none()
-                {
+                if let Type::Union(f) = &mut aliased_type {
                     f.display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
                 Some(aliased_type)
