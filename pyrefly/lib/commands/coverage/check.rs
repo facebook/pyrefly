@@ -117,3 +117,65 @@ impl CheckArgs {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    /// Run `pyrefly coverage check` on a one-file project with the given extra args.
+    fn run_check(source: &str, extra_args: &[&str]) -> anyhow::Result<CommandExitStatus> {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("pyrefly.toml"),
+            "search-path = ['.']\nskip-interpreter-query = true\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("main.py"), source).unwrap();
+        let file = dir.path().join("main.py").display().to_string();
+        let args = ["coverage-check", file.as_str()]
+            .into_iter()
+            .chain(extra_args.iter().copied());
+        CheckArgs::parse_from(args).run(None, TEST_THREAD_COUNT)
+    }
+
+    /// Coverage exactly at the threshold passes; just below it exits with a user error.
+    #[test]
+    fn test_fail_under_boundary() {
+        let source = "def f(x) -> int: ...\n"; // 1 of 2 slots typed
+        let check = |threshold| run_check(source, &["--fail-under", threshold]).unwrap();
+        assert_eq!(check("50"), CommandExitStatus::Success);
+        assert_eq!(check("50.01"), CommandExitStatus::UserError);
+    }
+
+    /// A fully-typed project passes the default 100% threshold.
+    #[test]
+    fn test_fully_typed_passes() {
+        assert_eq!(
+            run_check("def f(x: int) -> int: ...\n", &[]).unwrap(),
+            CommandExitStatus::Success
+        );
+    }
+
+    /// `Any` annotations count as covered by default, but not under `--strict` (gh-4024).
+    #[test]
+    fn test_strict_any() {
+        let source = "from typing import Any\n\ndef f(x: Any) -> Any: ...\n";
+        assert_eq!(run_check(source, &[]).unwrap(), CommandExitStatus::Success);
+        assert_eq!(
+            run_check(source, &["--strict"]).unwrap(),
+            CommandExitStatus::UserError
+        );
+    }
+
+    /// Out-of-range `--fail-under` values are rejected before any checking happens.
+    #[test]
+    fn test_fail_under_out_of_range() {
+        for arg in ["--fail-under=100.1", "--fail-under=-0.1"] {
+            let err = run_check("", &[arg]).unwrap_err();
+            assert!(err.to_string().contains("--fail-under"), "{err}");
+        }
+    }
+}

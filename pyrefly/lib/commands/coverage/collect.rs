@@ -3182,4 +3182,98 @@ def g(x: int) -> int:
         let report = build_module_report_for_test_with_env("schema_classes_attrs.py", env);
         compare_snapshot("schema_classes_attrs.expected.json", &report);
     }
+
+    // --- prefer-stubs end-to-end tests ---
+
+    const STUB_TEST_CONFIG: &str = "search-path = ['.']\nskip-interpreter-query = true\n";
+    /// `g` exists only in the `.py`, untyped.
+    const STUB_TEST_PY: &str = "def f() -> int: ...\ndef g(x): ...\n";
+    const STUB_TEST_PYI: &str = "def f() -> int: ...\n";
+
+    /// Run `collect_module_reports` over `dir` with `prefer_stubs` enabled.
+    fn collect_reports_with_stubs(dir: &Path) -> (Vec<ModuleReport>, Vec<Error>) {
+        let globs = FilteredGlobs::new(
+            Globs::new(vec![dir.display().to_string()]).unwrap(),
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+        collect_module_reports(
+            Box::new(globs),
+            default_config_finder(None),
+            true,
+            None,
+            false,
+            Some(false),
+            TEST_THREAD_COUNT,
+        )
+        .unwrap()
+    }
+
+    /// One stub report: `f` typed, `g` merged as untyped with its finding in the `.py`.
+    fn assert_stub_merged_report(reports: &[ModuleReport], errors: &[Error]) {
+        let [report] = reports else {
+            panic!("expected exactly one report, got {}", reports.len());
+        };
+        assert_eq!(report.name, "foo");
+        assert!(report.path.ends_with("foo.pyi"), "{}", report.path);
+
+        let slots = |name: &str| {
+            report
+                .symbol_reports
+                .iter()
+                .find(|s| s.name() == name)
+                .unwrap_or_else(|| panic!("no symbol named {name}"))
+                .slots()
+        };
+        assert_eq!((slots("foo.f").n_typable, slots("foo.f").n_typed), (1, 1));
+        assert_eq!((slots("foo.g").n_typable, slots("foo.g").n_untyped), (2, 2));
+
+        let [error] = errors else {
+            panic!("expected exactly one finding, got {}", errors.len());
+        };
+        assert!(
+            error.msg_header().contains("foo.g"),
+            "{}",
+            error.msg_header()
+        );
+        assert!(
+            error.path().to_string().ends_with("foo.py"),
+            "{}",
+            error.path()
+        );
+    }
+
+    /// A co-located `.pyi` shadows its `.py`; uncovered `.py` symbols merge into its report.
+    #[test]
+    fn test_prefer_stubs_end_to_end() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("pyrefly.toml"), STUB_TEST_CONFIG).unwrap();
+        std::fs::write(dir.path().join("foo.py"), STUB_TEST_PY).unwrap();
+        std::fs::write(dir.path().join("foo.pyi"), STUB_TEST_PYI).unwrap();
+
+        let (reports, errors) = collect_reports_with_stubs(dir.path());
+        assert_stub_merged_report(&reports, &errors);
+    }
+
+    /// A stubs-only project's `.py` is found via site-package-path and merged the same way.
+    #[test]
+    fn test_prefer_stubs_site_package_fallback() {
+        let site = TempDir::new().unwrap();
+        std::fs::write(site.path().join("foo.py"), STUB_TEST_PY).unwrap();
+
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("pyrefly.toml"),
+            format!(
+                "{STUB_TEST_CONFIG}site-package-path = ['{}']\n",
+                site.path().display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("foo.pyi"), STUB_TEST_PYI).unwrap();
+
+        let (reports, errors) = collect_reports_with_stubs(dir.path());
+        assert_stub_merged_report(&reports, &errors);
+    }
 }
