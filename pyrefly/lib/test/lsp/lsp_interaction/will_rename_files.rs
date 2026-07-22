@@ -434,6 +434,50 @@ fn test_will_rename_files_updates_relative_package_import() {
 }
 
 #[test]
+fn test_will_rename_files_rewrites_relative_import_as_absolute_on_move() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    let root_path = root.path().join("package_relative_rename");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("pkg/a.py");
+
+    interaction
+        .client
+        .will_rename_files("pkg/a.py", "other/a.py")
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(root_path.join("pkg/b.py")).unwrap().to_string(): [
+                    {
+                        "newText": "other.a",
+                        "range": {
+                            "start": {"line": 5, "character": 5},
+                            "end": {"line": 5, "character": 7}
+                        }
+                    },
+                ],
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_will_rename_files_document_changes() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {

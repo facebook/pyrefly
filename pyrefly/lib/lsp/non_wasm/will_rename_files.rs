@@ -26,6 +26,8 @@ use pyrefly_util::lock::RwLock;
 use rayon::prelude::*;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
 use tracing::info;
 
 use crate::lsp::non_wasm::module_helpers::PathRemapper;
@@ -102,31 +104,45 @@ impl<'a> RenameUsageVisitor<'a> {
                 let Some(replacement) = self.replacement_for_module(imported_module) else {
                     return;
                 };
-                let new_import_name = if import_from.level == 0 {
-                    replacement
+                let (range, new_text) = if import_from.level == 0 {
+                    (module.range(), replacement)
                 } else {
-                    let Some(current_package) = self.current_module_name.new_maybe_relative(
-                        self.is_init,
-                        import_from.level,
-                        None,
-                    ) else {
-                        return;
-                    };
+                    let current_package = self
+                        .current_module_name
+                        .new_maybe_relative(self.is_init, import_from.level, None)
+                        .expect("resolved above with the same number of dots");
                     let current_package_prefix = if current_package.as_str().is_empty() {
                         String::new()
                     } else {
                         format!("{}.", current_package.as_str())
                     };
-                    let Some(relative_replacement) =
-                        replacement.strip_prefix(&current_package_prefix)
-                    else {
-                        return;
-                    };
-                    relative_replacement.to_owned()
+                    match replacement.strip_prefix(&current_package_prefix) {
+                        Some(relative_replacement) => {
+                            (module.range(), relative_replacement.to_owned())
+                        }
+                        // Keeping the original dots would resolve against the wrong package.
+                        // Ruff stores their count but not their range, so we can just locate them
+                        // in the source before replacing the whole path.
+                        None => {
+                            let before_module =
+                                TextRange::new(import_from.range().start(), module.range().start());
+                            let dots_offset = self
+                                .lined_buffer
+                                .code_at(before_module)
+                                .find('.')
+                                .expect("relative import has a dot before the module name");
+                            let dots_start = before_module.start()
+                                + TextSize::try_from(dots_offset).expect("offset fits in u32");
+                            (
+                                TextRange::new(dots_start, module.range().end()),
+                                replacement,
+                            )
+                        }
+                    }
                 };
                 self.edits.push(TextEdit {
-                    range: self.lined_buffer.to_lsp_range(module.range(), None),
-                    new_text: new_import_name,
+                    range: self.lined_buffer.to_lsp_range(range, None),
+                    new_text,
                 });
             }
             _ => {}
