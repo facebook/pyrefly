@@ -64,7 +64,10 @@ pub(crate) fn add_pyrefly_ignore_code_action(
 fn should_offer_pyrefly_ignore(module_info: &ModuleInfo, error: &Error) -> bool {
     !module_info.is_notebook()
         && !module_info.is_generated()
-        && error.error_kind() != ErrorKind::UnusedIgnore
+        && !matches!(
+            error.error_kind(),
+            ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore
+        )
 }
 
 fn get_line_text_and_range(
