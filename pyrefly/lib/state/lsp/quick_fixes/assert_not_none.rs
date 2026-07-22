@@ -9,6 +9,7 @@ use dupe::Dupe;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module::Module;
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -36,6 +37,12 @@ pub(crate) fn assert_not_none_code_action(
         .into_iter()
         .find_map(|node| match node {
             AnyNodeRef::ExprName(name) if name.range().contains_range(error.range()) => Some(name),
+            AnyNodeRef::ExprAttribute(attribute)
+                if attribute.range().contains_range(error.range())
+                    && let Expr::Name(name) = attribute.value.as_ref() =>
+            {
+                Some(name)
+            }
             _ => None,
         })?;
     let statement = find_enclosing_statement_range(ast, error.range())?;

@@ -446,6 +446,27 @@ impl Error {
         self
     }
 
+    /// Merge editor fixes when both values describe the same user-facing diagnostic.
+    pub(crate) fn merge_if_same_diagnostic(&mut self, other: &Self) -> bool {
+        if self.module != other.module
+            || self.range != other.range
+            || self.display_range != other.display_range
+            || self.error_kind != other.error_kind
+            || self.severity != other.severity
+            || self.msg_header != other.msg_header
+            || self.msg_details != other.msg_details
+            || self.secondary_annotations != other.secondary_annotations
+        {
+            return false;
+        }
+        for fix in &other.quick_fixes {
+            if !self.quick_fixes.contains(fix) {
+                self.quick_fixes.push(fix.clone());
+            }
+        }
+        true
+    }
+
     pub fn display_range(&self) -> &DisplayRange {
         &self.display_range
     }

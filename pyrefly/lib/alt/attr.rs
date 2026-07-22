@@ -41,6 +41,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::error::error::ErrorQuickFix;
 use crate::error::style::ErrorStyle;
 use crate::solver::solver::SubsetError;
 use crate::state::loader::FindingOrError;
@@ -605,10 +606,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check if we have a partial union failure (attribute exists on some union members
         // but not others) before consuming the vectors. This helps us decide whether to suggest.
         let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
+        let mut can_narrow_none = is_partial_union_failure
+            && error.is_empty()
+            && not_found.iter().all(|missing| {
+                matches!(
+                    missing,
+                    NotFoundOn::ClassInstance(class, _)
+                        if class == self.stdlib.none_type().class_object()
+                )
+            });
         for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
                 Err(err) => {
+                    can_narrow_none = false;
                     error_messages.push(err.to_error_msg(attr_name));
                     success = false;
                 }
@@ -644,11 +655,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 msg.push(format!("Did you mean `{suggestion}`?"));
             }
             let (header, details) = msg.split_off_first();
-            errors
+            let mut builder = errors
                 .error_builder(range, ErrorKind::MissingAttribute, header)
                 .with_details(details)
-                .with_context(context)
-                .emit();
+                .with_context(context);
+            if can_narrow_none {
+                builder = builder.with_quick_fix(ErrorQuickFix::AssertNotNone);
+            }
+            builder.emit();
             self.heap.mk_any_error()
         } else {
             self.heap.mk_any_error() // we've encountered internal errors (already logged above)

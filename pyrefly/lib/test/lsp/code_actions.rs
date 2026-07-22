@@ -63,6 +63,19 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     report
 }
 
+fn get_test_report_with_error_count(state: &State, handle: &Handle, position: TextSize) -> String {
+    let error_count = state
+        .transaction()
+        .get_errors(vec![handle])
+        .collect_errors()
+        .ordinary
+        .len();
+    format!(
+        "Error count: {error_count}\n{}",
+        get_test_report(state, handle, position)
+    )
+}
+
 fn apply_refactor_edits_for_module(
     module: &ModuleInfo,
     edits: &[(Module, TextRange, String)],
@@ -1050,6 +1063,57 @@ def f(x: int | None) -> None:
     );
     assert!(
         report.contains("    assert x is not None\n    g(x)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_receiver() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int
+
+def f(x: T | None) -> None:
+    x.y
+#   ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    x.y"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_augmented_assignment() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int
+
+def f(x: T | None) -> None:
+    x.y += 1
+#   ^
+"#,
+        )],
+        get_test_report_with_error_count,
+    );
+    assert!(report.contains("Error count: 1"), "{report}");
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    x.y += 1"),
         "{report}"
     );
 }
