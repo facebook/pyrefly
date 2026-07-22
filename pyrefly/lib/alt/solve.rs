@@ -6601,9 +6601,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     context,
                     preserve_aliases,
                 )?;
-                if let Type::Union(f) = &mut aliased_type
-                    && f.display_name.is_none()
-                {
+                if let Type::Union(f) = &mut aliased_type {
                     f.display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
                 if preserve_aliases {
