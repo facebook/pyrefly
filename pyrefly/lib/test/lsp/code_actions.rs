@@ -1121,6 +1121,55 @@ Code Actions Results:
     );
 }
 
+fn remove_unused_ignore_quickfix(code: &str, suppression: &str) -> (String, String) {
+    let mut env = TestEnv::new();
+    env.add("main", code);
+    let (state, handle_for_module) = env.enable_unused_ignore_errors().to_state();
+    let handle = handle_for_module("main");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+    let position = TextSize::try_from(code.find(suppression).unwrap()).unwrap();
+    let (title, edits) = transaction
+        .local_quickfix_code_actions_sorted(
+            &handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(title, _)| title.starts_with("Remove unused"))
+        .expect("expected remove-unused-ignore quick fix");
+    (title, apply_refactor_edits_for_module(&module_info, &edits))
+}
+
+#[test]
+fn quickfix_remove_unused_type_ignore_line() {
+    let code = "# type: ignore\nx = 1\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# type: ignore");
+    assert_eq!(title, "Remove unused `# type: ignore` comment");
+    assert_eq!(after, "x = 1\n");
+}
+
+#[test]
+fn quickfix_remove_unused_inline_pyrefly_ignore() {
+    let code = "x = 1  # pyrefly: ignore\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(title, "Remove unused `# pyrefly: ignore` comment");
+    assert_eq!(after, "x = 1\n");
+}
+
+#[test]
+fn quickfix_remove_partially_unused_pyrefly_ignore_codes() {
+    let code = "x: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name]\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(title, "Remove unused suppression codes");
+    assert_eq!(
+        after,
+        "x: int = \"bad\"  # pyrefly: ignore [bad-assignment]\n"
+    );
+}
+
 #[test]
 fn insertion_test_existing_imports() {
     let report = get_batched_lsp_operations_report_allow_error(
