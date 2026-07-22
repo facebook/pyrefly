@@ -708,7 +708,10 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
             .type_order
             .get_protocol_member_names(protocol.class_object());
         for name in protocol_members {
-            let allow_residual_capture = name == dunder::CALL;
+            // `divmod` uses another argument to select an overloaded dunder branch, so its
+            // protocol check must preserve every candidate until the call is fully solved.
+            let prefer_first_matching_overload = name == dunder::DIVMOD || name == dunder::RDIVMOD;
+            let allow_residual_capture = name == dunder::CALL || prefer_first_matching_overload;
             if name == dunder::INIT || name == dunder::NEW {
                 // Protocols can't be instantiated
                 continue;
@@ -737,9 +740,15 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                         &got,
                         &want_no_self,
                         allow_residual_capture,
+                        prefer_first_matching_overload,
                     )?;
                 } else {
-                    self.is_subset_eq_for_protocol_member(&got, &want, allow_residual_capture)?;
+                    self.is_subset_eq_for_protocol_member(
+                        &got,
+                        &want,
+                        allow_residual_capture,
+                        prefer_first_matching_overload,
+                    )?;
                 }
             } else {
                 self.type_order.is_protocol_subset_at_attr(
@@ -747,7 +756,12 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
                     &protocol,
                     &name,
                     &mut |got, want| {
-                        self.is_subset_eq_for_protocol_member(got, want, allow_residual_capture)
+                        self.is_subset_eq_for_protocol_member(
+                            got,
+                            want,
+                            allow_residual_capture,
+                            prefer_first_matching_overload,
+                        )
                     },
                 )?;
             }
@@ -760,9 +774,17 @@ impl<'a, Ans: LookupAnswer> Subset<'a, Ans> {
         got: &Type,
         want: &Type,
         allow_residual_capture: bool,
+        prefer_first_matching_overload: bool,
     ) -> Result<(), SubsetError> {
         if allow_residual_capture {
-            self.is_subset_eq(got, want)
+            let call_context = if prefer_first_matching_overload {
+                self.active_call_context
+                    .clone()
+                    .with_first_matching_overload()
+            } else {
+                self.active_call_context.clone()
+            };
+            self.with_active_call_context(call_context, |me| me.is_subset_eq(got, want))
         } else {
             self.with_active_call_context(
                 self.active_call_context.clone().with_outside_context(),

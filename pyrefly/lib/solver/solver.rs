@@ -721,13 +721,14 @@ type OverloadWitnessCapturesByHash = SmallMap<u64, Vec<OverloadBranchCapture>>;
 #[derive(Debug, Default)]
 struct WitnessCaptures {
     overload: OverloadWitnessCapturesByHash,
+    overload_first_match: SmallSet<u64>,
     generic: Vec<GenericWitnessCapture>,
 }
 
 impl WitnessCaptures {
     #[cfg(debug_assertions)]
     fn is_empty(&self) -> bool {
-        self.overload.is_empty() && self.generic.is_empty()
+        self.overload.is_empty() && self.overload_first_match.is_empty() && self.generic.is_empty()
     }
 
     fn captured_vars(&self) -> SmallSet<Var> {
@@ -2345,6 +2346,7 @@ impl Solver {
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
         overload_witness_captures: &mut OverloadWitnessCapturesByHash,
+        overload_first_match: &SmallSet<u64>,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> OverloadPruningByWitness {
         overload_witness_captures
@@ -2395,7 +2397,12 @@ impl Solver {
                         surviving_by_witness = Some(surviving_for_solved_var);
                     }
                 }
-                let surviving_branch_indices = surviving_by_witness?;
+                let mut surviving_branch_indices = surviving_by_witness?;
+                if overload_first_match.contains(witness_hash)
+                    && let Some(first) = surviving_branch_indices.iter().min().copied()
+                {
+                    surviving_branch_indices.retain(|index| *index == first);
+                }
                 solved_constraints
                     .sort_by(|left, right| left.quantified_name.cmp(&right.quantified_name));
                 let all_pruned = surviving_branch_indices.is_empty();
@@ -2575,6 +2582,7 @@ impl Solver {
             self.compute_overload_pruning_by_witness(
                 &solved_vars,
                 &mut captures.overload,
+                &captures.overload_first_match,
                 is_subset,
             )
         } else {
@@ -3467,6 +3475,7 @@ impl ResidualWitnessContext {
 pub struct CallContext {
     witness: Option<ResidualWitnessContext>,
     argument_side: ArgumentSide,
+    prefer_first_matching_overload: bool,
     deferred_quantified_vars: Arc<Mutex<SmallSet<Var>>>,
     /// Witness captures scoped to this call-context lineage. Must not leak
     /// across `with_outside_context` boundaries.
@@ -3482,6 +3491,7 @@ impl Default for CallContext {
         Self {
             witness: None,
             argument_side: ArgumentSide::default(),
+            prefer_first_matching_overload: false,
             deferred_quantified_vars: Arc::new(Mutex::new(SmallSet::new())),
             witness_captures: Default::default(),
             require_boundary_consumption: Arc::new(AtomicBool::new(false)),
@@ -3505,6 +3515,11 @@ impl CallContext {
         self
     }
 
+    pub(crate) fn with_first_matching_overload(mut self) -> Self {
+        self.prefer_first_matching_overload = true;
+        self
+    }
+
     pub fn require_boundary_consumption(self) -> Self {
         self.require_boundary_consumption
             .store(true, Ordering::Relaxed);
@@ -3519,6 +3534,7 @@ impl CallContext {
         // this scope must still be finished when the outer boundary drains.
         self.witness = Default::default();
         self.argument_side = Default::default();
+        self.prefer_first_matching_overload = false;
         self.witness_captures = Default::default();
         self
     }
@@ -3591,6 +3607,9 @@ impl CallContext {
     ) {
         let mut captures = self.witness_captures.lock();
         captures.overload.insert(witness_hash, branch_captures);
+        if self.prefer_first_matching_overload {
+            captures.overload_first_match.insert(witness_hash);
+        }
     }
 
     /// Record generic residual information from a completed witness check.

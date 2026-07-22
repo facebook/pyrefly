@@ -20,6 +20,35 @@ def f(a: int, b: int) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3822
+testcase!(
+    test_divmod_overloaded_dunder,
+    r#"
+from typing import assert_type, overload
+
+class LHS:
+    @overload
+    def __divmod__(self, other: "RHS") -> tuple["RHS", "RHS"]: ...  # type: ignore[overload-overlap]
+    @overload
+    def __divmod__(self, other: object) -> tuple[LHS, LHS]: ...
+
+class RHS: ...
+
+class Reflected:
+    @overload
+    def __rdivmod__(self, other: int) -> tuple[int, int]: ...  # type: ignore[overload-overlap]
+    @overload
+    def __rdivmod__(self, other: object) -> tuple[Reflected, Reflected]: ...
+
+class Other: ...
+
+assert_type(divmod(LHS(), RHS()), tuple[RHS, RHS])
+assert_type(divmod(LHS(), 1), tuple[LHS, LHS])
+assert_type(divmod(1, Reflected()), tuple[int, int])
+assert_type(divmod(Other(), Reflected()), tuple[Reflected, Reflected])
+"#,
+);
+
 testcase!(
     test_bounded_type_var_comparison,
     r#"
