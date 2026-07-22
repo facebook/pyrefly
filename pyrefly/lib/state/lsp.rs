@@ -2973,6 +2973,18 @@ impl<'a> Transaction<'a> {
                 }
             }
             if error_range.contains_range(range)
+                && let Some(action) = quick_fixes::assert_not_none::assert_not_none_code_action(
+                    &module_info,
+                    &ast,
+                    &error,
+                )
+            {
+                let key = (action.0.clone(), action.2, action.3.clone());
+                if other_action_keys.insert(key) {
+                    other_actions.push(action);
+                }
+            }
+            if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::pyrefly_ignore::add_pyrefly_ignore_code_action(
                     &module_info,
                     &error,

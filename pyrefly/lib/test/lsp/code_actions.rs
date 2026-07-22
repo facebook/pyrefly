@@ -1032,6 +1032,29 @@ takes_status("active")
 }
 
 #[test]
+fn quickfix_narrow_optional_argument() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"def g(y: int) -> None: ...
+def f(x: int | None) -> None:
+    g(x)
+#     ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    g(x)"),
+        "{report}"
+    );
+}
+
+#[test]
 fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
