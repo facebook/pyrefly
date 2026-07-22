@@ -47,6 +47,7 @@ pub struct SecondaryAnnotation {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
+    AssertNotNone,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
