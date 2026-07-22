@@ -104,23 +104,6 @@ pub enum SlotRank {
     Typed,
 }
 
-impl SlotRank {
-    /// Map (has_annotation, is_type_known) to a rank.
-    pub fn classify(has_annotation: bool, is_type_known: bool) -> Self {
-        match (has_annotation, is_type_known) {
-            (false, _) => SlotRank::Untyped,
-            (true, true) => SlotRank::Typed,
-            (true, false) => SlotRank::Any,
-        }
-    }
-}
-
-impl From<&Parameter> for SlotRank {
-    fn from(param: &Parameter) -> Self {
-        SlotRank::classify(param.annotation.is_some(), param.is_type_known)
-    }
-}
-
 impl From<SlotRank> for SlotCounts {
     fn from(rank: SlotRank) -> Self {
         match rank {
@@ -147,17 +130,12 @@ pub struct Location {
     pub column: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
-/// Information about a single function parameter.
+/// Slot info for a single function parameter, as consumed by overload merging.
+#[derive(Debug, Clone)]
 pub struct Parameter {
-    pub name: String,
-    pub annotation: Option<String>,
-    /// Whether the resolved type contains no `Any`.
-    pub is_type_known: bool,
     /// Overload merge key (`None` for self/cls and implicit params).
-    #[serde(skip_serializing)]
     pub merge_key: Option<ParamKey>,
-    pub location: Location,
+    pub rank: SlotRank,
 }
 
 /// Renamed from `Suppression` to avoid collision with `pyrefly_python::ignore::Suppression`.
@@ -169,40 +147,33 @@ pub struct ReportSuppression {
     pub location: Location,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Function {
     pub name: String,
-    pub return_annotation: Option<String>,
-    #[serde(skip)]
     pub return_rank: SlotRank,
     pub parameters: Vec<Parameter>,
-    pub is_type_known: bool,
     /// Property role if this function is a property accessor, `None` otherwise.
-    #[serde(skip)]
     pub property_role: Option<PropertyRole>,
     /// Number of non-self/cls, non-implicit params (for symbol counting).
     pub n_params: usize,
     pub slots: SlotCounts,
     pub location: Location,
-    /// Byte span of the symbol, for rendering diagnostics; not serialized.
-    #[serde(skip)]
+    /// Byte span of the symbol, for rendering diagnostics.
     pub range: TextRange,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ReportClass {
     pub name: String,
     pub location: Location,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Variable {
     pub name: String,
-    pub annotation: Option<String>,
     pub slots: SlotCounts,
     pub location: Location,
-    /// Byte span of the symbol, for rendering diagnostics; not serialized.
-    #[serde(skip)]
+    /// Byte span of the symbol, for rendering diagnostics.
     pub range: TextRange,
 }
 

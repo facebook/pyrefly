@@ -205,7 +205,7 @@ fn merge_overloads(functions: &mut Vec<Function>) {
             for param in &func.parameters {
                 if let Some(key) = &param.merge_key {
                     let entry = param_slots.entry(key.clone()).or_insert(SlotRank::Skip);
-                    *entry = (*entry).max(param.into());
+                    *entry = (*entry).max(param.rank);
                 }
             }
         }
@@ -222,7 +222,6 @@ fn merge_overloads(functions: &mut Vec<Function>) {
 
         functions[indices[0]].slots = slots;
         functions[indices[0]].n_params = n_params;
-        functions[indices[0]].is_type_known = slots.n_untyped == 0 && slots.n_any == 0;
         to_remove.extend(indices[1..].iter().copied());
     }
 
@@ -239,33 +238,27 @@ fn merge_overloads(functions: &mut Vec<Function>) {
 /// Classify an annotation slot from resolver output. Bare qualifiers
 /// (e.g. `Final`) have unresolved annotation types but still count as typed.
 fn classify_annotation_rank(has_annotation: bool, resolved_is_known: Option<bool>) -> SlotRank {
-    match resolved_is_known {
-        Some(is_known) => SlotRank::classify(true, is_known),
-        None if has_annotation => SlotRank::Typed,
-        None => SlotRank::Untyped,
+    match (resolved_is_known, has_annotation) {
+        (Some(false), _) => SlotRank::Any,
+        (Some(true), _) | (None, true) => SlotRank::Typed,
+        (None, false) => SlotRank::Untyped,
     }
 }
 
-/// Annotation source text and slot classification for an optional annotation binding.
+/// Slot classification for an optional annotation binding.
 fn classify_annotation(
-    module: &Module,
     bindings: &Bindings,
     answers: &Answers,
     annotation_idx: Option<Idx<KeyAnnotation>>,
-) -> (Option<String>, SlotCounts) {
-    let annotation_text = annotation_idx.and_then(|idx| match bindings.get(idx) {
-        BindingAnnotation::AnnotateExpr(_, expr, _) => {
-            Some(module.code_at(expr.range()).to_owned())
-        }
-        _ => None,
-    });
+) -> SlotCounts {
+    let has_annotation = annotation_idx
+        .is_some_and(|idx| matches!(bindings.get(idx), BindingAnnotation::AnnotateExpr(..)));
     let resolved_ty = annotation_idx.and_then(|idx| {
         answers
             .get_idx(idx)
             .and_then(|awt| awt.annotation.ty.as_ref().map(is_type_known))
     });
-    let slots = classify_annotation_rank(annotation_text.is_some(), resolved_ty).into();
-    (annotation_text, slots)
+    classify_annotation_rank(has_annotation, resolved_ty).into()
 }
 
 /// Returns true if the name is public: does not start with `_`, or is a dunder (`__x__`).
@@ -526,16 +519,16 @@ fn parse_variables(
             Some(ExportLocation::ThisModule(export)) => export.location,
             _ => continue,
         };
-        let (annotation, slots) = match binding {
+        let slots = match binding {
             BindingExport::AnnotatedForward(annot_idx, key_idx) => {
                 // IMPLICIT: type aliases are type-level constructs with 0 slots.
                 if matches!(
                     bindings.get(*key_idx),
                     Binding::TypeAlias(_) | Binding::TypeAliasRef(_)
                 ) {
-                    (None, SlotCounts::default())
+                    SlotCounts::default()
                 } else {
-                    classify_annotation(module, bindings, answers, Some(*annot_idx))
+                    classify_annotation(bindings, answers, Some(*annot_idx))
                 }
             }
             BindingExport::Forward(idx) | BindingExport::PromoteForward(idx) => {
@@ -547,16 +540,16 @@ fn parse_variables(
                     | Binding::ParamSpec(_)
                     | Binding::TypeVarTuple(_)
                     | Binding::TypeAlias(_)
-                    | Binding::TypeAliasRef(_) => (None, SlotCounts::default()),
+                    | Binding::TypeAliasRef(_) => SlotCounts::default(),
                     // Functions and classes are handled by parse_functions/parse_classes;
                     // skip them here even when excluded (e.g. @type_check_only).
                     Binding::Function(..) | Binding::ClassDef(..) => continue,
                     // IMPLICIT: non-call assignments have 0 slots;
                     // call assignments are untyped (1 slot)
-                    Binding::NameAssign(na) => (None, untyped_if_call(na.expr.as_ref())),
+                    Binding::NameAssign(na) => untyped_if_call(na.expr.as_ref()),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
                         Binding::Function(..) | Binding::ClassDef(..) => continue,
-                        Binding::Expr(_, expr) => (None, untyped_if_call(expr.as_ref())),
+                        Binding::Expr(_, expr) => untyped_if_call(expr.as_ref()),
                         _ => {
                             unreachable!(
                                 "MultiTargetAssign RHS should be Expr, Function, or ClassDef"
@@ -569,13 +562,12 @@ fn parse_variables(
                     {
                         continue;
                     }
-                    _ => (None, SlotCounts::untyped()),
+                    _ => SlotCounts::untyped(),
                 }
             }
         };
         variables.push(Variable {
             name: qualified_name,
-            annotation,
             slots,
             location: range_to_location(module, range),
             range,
@@ -628,9 +620,8 @@ fn inherited_annotation_slots(
                 | ClassFieldDefinition::AssignedInBody { annotation, .. } => *annotation,
                 _ => None,
             }?;
-            let m = transaction.get_module_info(&h)?;
             let a = transaction.get_answers(&h)?;
-            Some(classify_annotation(&m, &b, &a, Some(annot)).1)
+            Some(classify_annotation(&b, &a, Some(annot)))
         })
 }
 
@@ -687,7 +678,7 @@ fn parse_instance_attrs(
         // Only count instance attrs from recognized methods (__init__, etc.)
         // or a schema class body field. We handle recognized-method fields with full
         // slot classification, and schema body fields as IMPLICIT (0 typable).
-        let (annotation, slots) = match &field.definition {
+        let slots = match &field.definition {
             ClassFieldDefinition::DefinedInMethod {
                 annotation, method, ..
             } => {
@@ -704,9 +695,9 @@ fn parse_instance_attrs(
                         &field.name,
                     )
                 {
-                    (None, slots)
+                    slots
                 } else {
-                    classify_annotation(module, bindings, answers, *annotation)
+                    classify_annotation(bindings, answers, *annotation)
                 }
             }
             // Schema class fields are always IMPLICIT regardless of whether they're
@@ -716,7 +707,7 @@ fn parse_instance_attrs(
             | ClassFieldDefinition::AssignedInBody { .. }
                 if is_schema_class(bindings, answers, cls_binding) =>
             {
-                (None, SlotCounts::default())
+                SlotCounts::default()
             }
             // Non-schema fields only count when initialized in a recognized method,
             // or declared in a stub.
@@ -727,7 +718,7 @@ fn parse_instance_attrs(
                 if !initialized_in_recognized_method && !module.path().is_interface() {
                     continue;
                 }
-                classify_annotation(module, bindings, answers, Some(*annotation))
+                classify_annotation(bindings, answers, Some(*annotation))
             }
             _ => continue,
         };
@@ -736,7 +727,6 @@ fn parse_instance_attrs(
         let range = field.range;
         attrs.push(Variable {
             name: format!("{}.{}", class_name, field.name),
-            annotation,
             slots,
             location: range_to_location(module, range),
             range,
@@ -833,20 +823,16 @@ fn parse_functions(
             };
 
             let return_idx = bindings.key_to_idx(&Key::ReturnType(*id));
-            let return_annotation = return_annotation_range(bindings, return_idx)
-                .map(|range| module.code_at(range).to_owned());
-
-            let resolved_return_ty = return_annotation
-                .as_ref()
-                .and_then(|_| answers.get_type_at(return_idx).map(|t| is_type_known(&t)));
-            let is_return_type_known =
-                classify_annotation_rank(return_annotation.is_some(), resolved_return_ty)
-                    == SlotRank::Typed;
+            let is_return_annotated = has_return_annotation(bindings, return_idx);
+            let resolved_return_ty = if is_return_annotated {
+                answers.get_type_at(return_idx).map(|t| is_type_known(&t))
+            } else {
+                None
+            };
 
             let mut parameters = Vec::new();
             let implicit_receiver = has_implicit_receiver(fun, answers, decorated.undecorated_idx);
             let all_params = params_with_keys(&fun.def.parameters, implicit_receiver);
-            let mut all_params_type_known = true;
 
             let property_role = answers
                 .get_type_at(idx)
@@ -864,19 +850,14 @@ fn parse_functions(
             let return_rank = if skip_return {
                 SlotRank::Skip
             } else {
-                SlotRank::classify(return_annotation.is_some(), is_return_type_known)
+                classify_annotation_rank(is_return_annotated, resolved_return_ty)
             };
             let mut func_slots = SlotCounts::from(return_rank);
             let mut n_params = 0usize;
             let mut non_self_index = 0usize;
 
             for (merge_key, param) in &all_params {
-                let param_name = param.name.as_str();
                 let is_self = merge_key.is_none();
-                let param_annotation = param
-                    .annotation
-                    .as_ref()
-                    .map(|ann| module.code_at(ann.range()).to_owned());
 
                 let resolved_param_ty = if param.annotation.is_some() {
                     let annot_key = KeyAnnotation::Annotation(ShortIdentifier::new(&param.name));
@@ -890,9 +871,7 @@ fn parse_functions(
                 } else {
                     None
                 };
-                let is_param_type_known = is_self
-                    || classify_annotation_rank(param_annotation.is_some(), resolved_param_ty)
-                        == SlotRank::Typed;
+                let rank = classify_annotation_rank(param.annotation.is_some(), resolved_param_ty);
 
                 // Implicit dunder params are always excluded, even when annotated.
                 let is_implicit_param = !is_self
@@ -910,39 +889,22 @@ fn parse_functions(
                     non_self_index += 1;
                 }
 
-                if !is_param_type_known && effective_key.is_some() {
-                    all_params_type_known = false;
-                }
-
                 // Deleters have 0 typables; skip parameter slots entirely.
                 if effective_key.is_some() && !is_property_deleter {
-                    func_slots = func_slots.merge(
-                        SlotRank::classify(param_annotation.is_some(), is_param_type_known).into(),
-                    );
+                    func_slots = func_slots.merge(rank.into());
                     n_params += 1;
                 }
 
                 parameters.push(Parameter {
-                    name: param_name.to_owned(),
-                    annotation: param_annotation,
-                    is_type_known: is_param_type_known,
                     merge_key: effective_key,
-                    location: range_to_location(module, param.range),
+                    rank,
                 });
             }
 
-            let is_fully_annotated = return_annotation.is_some()
-                && parameters
-                    .iter()
-                    .all(|p| p.merge_key.is_none() || p.annotation.is_some());
-            let is_type_known = is_fully_annotated && is_return_type_known && all_params_type_known;
-
             functions.push(Function {
                 name: func_name,
-                return_annotation,
                 return_rank,
                 parameters,
-                is_type_known,
                 property_role,
                 n_params,
                 slots: func_slots,
@@ -978,10 +940,8 @@ fn parse_functions(
                     slots: target_func.slots,
                     location,
                     range,
-                    return_annotation: target_func.return_annotation.clone(),
                     return_rank: target_func.return_rank,
                     parameters: target_func.parameters.clone(),
-                    is_type_known: target_func.is_type_known,
                     property_role: target_func.property_role.clone(),
                     n_params: target_func.n_params,
                 });
@@ -991,13 +951,12 @@ fn parse_functions(
     functions
 }
 
-fn return_annotation_range(bindings: &Bindings, return_idx: Idx<Key>) -> Option<TextRange> {
-    if let Binding::ReturnType(ret) = bindings.get(return_idx)
-        && let ReturnTypeKind::ShouldTrustAnnotation { range, .. } = &ret.kind
-    {
-        Some(*range)
+/// Whether the function has an explicit return annotation.
+fn has_return_annotation(bindings: &Bindings, return_idx: Idx<Key>) -> bool {
+    if let Binding::ReturnType(ret) = bindings.get(return_idx) {
+        matches!(ret.kind, ReturnTypeKind::ShouldTrustAnnotation { .. })
     } else {
-        None
+        false
     }
 }
 
@@ -2377,125 +2336,6 @@ mod tests {
     fn test_report_multi_tool_suppressions() {
         let report = build_module_report_for_test("multi_tool_suppressions.py");
         compare_snapshot("multi_tool_suppressions.expected.json", &report);
-    }
-
-    #[test]
-    fn test_is_fully_annotated() {
-        /// Helper to create a Function for testing annotation completeness.
-        fn make_function(name: &str, has_return: bool, params: Vec<(&str, bool)>) -> Function {
-            Function {
-                name: name.to_owned(),
-                return_annotation: if has_return {
-                    Some("int".to_owned())
-                } else {
-                    None
-                },
-                return_rank: SlotRank::classify(has_return, has_return),
-                parameters: params
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (param_name, annotated))| {
-                        let is_self =
-                            i == 0 && (matches!(param_name, "self" | "cls") || name == "__new__");
-                        Parameter {
-                            name: param_name.to_owned(),
-                            annotation: if annotated {
-                                Some("str".to_owned())
-                            } else {
-                                None
-                            },
-                            is_type_known: annotated,
-                            merge_key: if is_self {
-                                None
-                            } else {
-                                Some(ParamKey::Named(param_name.to_owned()))
-                            },
-                            location: Location { line: 1, column: 1 },
-                        }
-                    })
-                    .collect(),
-                is_type_known: false, // Not relevant for annotation-only tests
-                property_role: None,
-                n_params: 0,
-                slots: SlotCounts::default(),
-                location: Location { line: 1, column: 1 },
-                range: TextRange::default(),
-            }
-        }
-
-        /// Name-based approximation of `has_implicit_receiver` for test convenience.
-        fn is_fully_annotated(function: &Function) -> bool {
-            if function.return_annotation.is_none() {
-                return false;
-            }
-            function
-                .parameters
-                .iter()
-                .all(|p| p.merge_key.is_none() || p.annotation.is_some())
-        }
-
-        // Fully annotated function
-        assert!(is_fully_annotated(&make_function(
-            "foo",
-            true,
-            vec![("x", true)]
-        )));
-
-        // self as first param is exempt
-        assert!(is_fully_annotated(&make_function(
-            "bar",
-            true,
-            vec![("self", false), ("y", true)]
-        )));
-
-        // cls as first param is exempt
-        assert!(is_fully_annotated(&make_function(
-            "cls_method",
-            true,
-            vec![("cls", false)]
-        )));
-
-        // Missing return annotation
-        assert!(!is_fully_annotated(&make_function(
-            "no_return",
-            false,
-            vec![]
-        )));
-
-        // Missing parameter annotation
-        assert!(!is_fully_annotated(&make_function(
-            "missing_param",
-            true,
-            vec![("x", false)]
-        )));
-
-        // "self" as a non-first parameter should NOT be exempt
-        assert!(!is_fully_annotated(&make_function(
-            "bad_self",
-            true,
-            vec![("x", true), ("self", false)]
-        )));
-
-        // "cls" as a non-first parameter should NOT be exempt
-        assert!(!is_fully_annotated(&make_function(
-            "bad_cls",
-            true,
-            vec![("x", true), ("cls", false)]
-        )));
-
-        // __new__ first param is exempt regardless of name
-        assert!(is_fully_annotated(&make_function(
-            "__new__",
-            true,
-            vec![("_cls", false), ("x", true)]
-        )));
-
-        // __new__ with standard "cls" name is also exempt
-        assert!(is_fully_annotated(&make_function(
-            "__new__",
-            true,
-            vec![("cls", false), ("x", true)]
-        )));
     }
 
     // ──── Phase 1: Tests that validate existing pyrefly behaviour ────
