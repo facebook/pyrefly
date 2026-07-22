@@ -646,6 +646,7 @@ pub fn remove_unused_ignores_from_serialized(
                                         &unused_codes,
                                     ) {
                                         updated_line = Cow::Owned(updated);
+                                        unused_count += 1;
                                     }
                                 }
                             }
@@ -674,11 +675,11 @@ pub fn remove_unused_ignores_from_serialized(
                                     .trim_end()
                                     .to_owned(),
                             );
+                            unused_count += 1;
                         }
                     }
 
                     if let Cow::Owned(updated_line) = updated_line {
-                        unused_count += 1;
                         if !updated_line.trim().is_empty() {
                             buf.push_str(&updated_line);
                             buf.push_str(line_ending);
@@ -1574,7 +1575,7 @@ def f() -> int:
                     message: "Unused `# type: ignore` comment".to_owned(),
                 },
             ];
-            assert_remove_ignores_from_serialized_with_flag(input, errors, want, 1, true);
+            assert_remove_ignores_from_serialized_with_flag(input, errors, want, 2, true);
         }
     }
 
