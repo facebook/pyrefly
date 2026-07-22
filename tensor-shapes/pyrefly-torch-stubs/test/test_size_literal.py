@@ -15,6 +15,6 @@ if TYPE_CHECKING:
 
 def test_size_with_negative():
     """Test size with -1"""
-    x: Tensor[10, 20, 30] = torch.randn(10, 20, 30)
+    x: Tensor[[10, 20, 30]] = torch.randn(10, 20, 30)
     s = x.size(-1)
     assert_type(s, Literal[30])  # Should be int

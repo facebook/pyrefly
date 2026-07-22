@@ -1505,6 +1505,41 @@ TypeVar('T')
 }
 
 #[test]
+fn test_import_for_unimported_directives() {
+    for (directive, call) in [
+        ("reveal_type", "reveal_type(1)\n"),
+        ("assert_type", "assert_type(1, int)\n"),
+    ] {
+        let files = [("main", call)];
+        let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::new(TextSize::new(0), TextSize::new(0)),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        let expected_title = format!("Insert import: `from typing import {directive}`");
+        let (_, edits) = actions
+            .iter()
+            .find(|(title, _)| title == &expected_title)
+            .unwrap_or_else(|| panic!("expected import quick fix for `{directive}`"));
+        assert_eq!(edits.len(), 1);
+
+        let expected_import = format!("from typing import {directive}\n");
+        assert_eq!(expected_import, edits[0].2);
+        assert_eq!(
+            format!("{expected_import}{call}"),
+            apply_refactor_edits_for_module(&module_info, edits)
+        );
+    }
+}
+
+#[test]
 fn generate_code_actions_infer_callsite_types() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
@@ -3649,12 +3684,13 @@ A = 1
 
 #[test]
 fn convert_star_import_multiline() {
-    // Multi-line star imports with parentheses should be handled correctly.
+    // A star import whose statement spans multiple lines should have its full
+    // range replaced. `*` can't be parenthesized, so a backslash continuation is
+    // the only valid multi-line star import.
     let code_main = r#"
 # MULTILINE-START
-from foo import (
-    *,
-)
+from foo import \
+    *
 # MULTILINE-END
 x = A
 "#;
@@ -3803,7 +3839,36 @@ def greet(name, param):
     )
 
 def caller():
-    greet("Ada", "Hello " + ("Ada"))
+    greet("Ada", "Hello " + "Ada")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_parenthesizes_int_before_attribute() {
+    let code = r#"
+def f(x):
+    return (
+        # EXTRACT-START
+        x.bit_length()
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def f(x, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42, (42).bit_length())
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3834,7 +3899,7 @@ def add_one(x, param):
     return param
 
 def caller():
-    add_one(3, (3) + 1)
+    add_one(3, 3 + 1)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3873,7 +3938,7 @@ class Greeter:
 
 def caller():
     greeter = Greeter()
-    greeter.greet("Ada", greeter.prefix + ("Ada"))
+    greeter.greet("Ada", greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3902,7 +3967,7 @@ def mix(x, *, param, y):
     )
 
 def caller():
-    mix(1, param=(1) + (2), y=2)
+    mix(1, param=1 + 2, y=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3964,7 +4029,7 @@ class Utils:
         )
 
 def caller():
-    Utils.join("Hi ", "Ada", ("Hi ") + ("Ada"))
+    Utils.join("Hi ", "Ada", "Hi " + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3993,7 +4058,7 @@ def add(a, b, param):
     )
 
 def caller():
-    add(1, param=(1) + (2), b=2)
+    add(1, param=1 + 2, b=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4030,7 +4095,7 @@ class Greeter:
         )
 
 def caller():
-    Greeter.greet("Ada", Greeter.prefix + ("Ada"))
+    Greeter.greet("Ada", Greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4660,7 +4725,7 @@ def compute():
     let expected = r#"
 def add(a):
 #          ^
-    return a + (2)
+    return a + 2
 
 def compute():
     return add(1)

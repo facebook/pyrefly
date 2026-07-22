@@ -325,6 +325,41 @@ assert_type(C().f("any", b"thing"), Any)
 );
 
 testcase!(
+    test_class_decorator_returning_type_any,
+    r#"
+from typing import Any, assert_type
+
+def erase_class(cls: type[Any]) -> type[Any]: ...
+def inferred_type_any(cls: type[Any]): return cls
+def returns_any(cls: type[Any]) -> Any: ...
+
+# Only an explicit `-> type[Any]` return annotation erases the class interface.
+@erase_class
+class C:
+    def __init__(self, x: int) -> None: ...
+
+assert_type(C, type[Any])
+assert_type(C(unknown=1, arbitrary="x"), Any)
+
+# An inferred `type[Any]` return type must not erase the class interface.
+@inferred_type_any
+class D:
+    def __init__(self, x: int) -> None: ...
+
+D(x=1)
+D(x=1, unknown=2)  # E: Unexpected keyword argument `unknown`
+
+# A bare `Any` return type (not `type[Any]`) must not erase the class interface.
+@returns_any
+class E:
+    def __init__(self, x: int) -> None: ...
+
+E(x=1)
+E(x=1, unknown=2)  # E: Unexpected keyword argument `unknown`
+    "#,
+);
+
+testcase!(
     test_decorate_to_generic_callable,
     r#"
 from typing import Any, Callable, TypeVar, assert_type
@@ -938,5 +973,175 @@ class Other:
 class MixNoNew(CNoNew, Other): ...  # E: incompatible disjoint bases `A`, `Other`
 # CNew synthesizes `y`, becoming its own representative.
 class MixNew(CNew, Other): ...  # E: incompatible disjoint bases `CNew`, `Other`
+"#,
+);
+
+testcase!(
+    test_unannotated_class_decorator_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+def my_decorator(cls):
+    return cls
+
+@my_decorator
+class A: ...
+"#,
+);
+
+testcase!(
+    test_typed_class_decorator_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+from typing import TypeVar
+T = TypeVar("T")
+
+def typed(cls: type[T]) -> type[T]:
+    return cls
+
+@typed
+class B: ...
+"#,
+);
+
+testcase!(
+    test_class_decorator_explicit_any_return_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+from typing import Any
+
+def anydec(cls) -> Any: ...
+
+@anydec
+class C: ...
+"#,
+);
+
+testcase!(
+    test_unannotated_callable_instance_class_decorator_no_error,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+class Decorator:
+    def __call__(self, cls):
+        return cls
+
+@Decorator()
+class D: ...
+"#,
+);
+
+testcase!(
+    test_implicit_any_class_decorator,
+    TestEnv::new().enable_untyped_class_decorator_error(),
+    r#"
+def untyped(x):
+    return x
+
+d = untyped(1)
+
+@d  # E: Untyped class decorator
+class C: ...
+"#,
+);
+
+testcase!(
+    test_untyped_function_decorator,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+@my_decorator  # E: Untyped function decorator obscures the type of function `g`
+def g() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_untyped_method_decorator,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+class C:
+    @my_decorator  # E: Untyped function decorator obscures the type of function `m`
+    def m(self) -> int:
+        return 1
+"#,
+);
+
+testcase!(
+    test_unannotated_function_decorator_no_error,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+# An unannotated decorator function's own type is a callable, not `Any`, so it does not
+# fire (matching the class-decorator rule).
+def my_decorator(f):
+    return f
+
+@my_decorator
+def g() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_typed_function_decorator_no_error,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Callable
+
+def typed(f: Callable[[], int]) -> Callable[[], int]:
+    return f
+
+@typed
+def h() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_function_decorator_explicit_any_return_no_error,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+def anydec(f) -> Any: ...
+
+@anydec
+def k() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_implicit_any_function_decorator,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+def untyped(x):
+    return x
+
+# `d` has an implicit `Any` type (from an untyped call), which obscures the function too.
+d = untyped(1)
+
+@d  # E: Untyped function decorator obscures the type of function `g`
+def g() -> int:
+    return 1
+"#,
+);
+
+testcase!(
+    test_untyped_function_decorator_suppressed,
+    TestEnv::new().enable_untyped_function_decorator_error(),
+    r#"
+from typing import Any
+
+my_decorator: Any = lambda f: f
+
+@my_decorator  # pyrefly: ignore[untyped-function-decorator]
+def g() -> int:
+    return 1
 "#,
 );

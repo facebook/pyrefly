@@ -1010,6 +1010,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
 
+        // `@uses_shape_dsl` may sit on a single overload (e.g. a shape-DSL variant that
+        // follows a plain-TypeVar fast path). The set-wide `shape_transform` only carries
+        // the first overload's decorator, so prefer this overload's own transform and only
+        // fall back to the set-wide one (e.g. an implementation-level decorator).
+        let shape_transform = callable
+            .1
+            .metadata
+            .flags
+            .shape_transform
+            .as_deref()
+            .or(shape_transform);
+
         let call_errors = self.error_collector();
         let (res, specialization_errors, argmap) = self.callable_infer(
             callable.1.signature.clone(),

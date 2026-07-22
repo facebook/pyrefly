@@ -656,7 +656,6 @@ def test(x: tuple[int, ...] | tuple[int, *tuple[int, ...], int] | tuple[int, int
 );
 
 testcase!(
-    bug = "we don't narrow attributes in a positional pattern",
     test_match_class_union,
     r#"
 from typing import assert_type, assert_never, Literal
@@ -673,17 +672,16 @@ class Bar:
 def test(x: Foo | Bar) -> None:
     match x:
         case Foo(1, "a"):
-            # we should narrow x.x and x.y to literals
             assert_type(x, Foo)
-            assert_type(x.x, int)
-            assert_type(x.y, str)
+            assert_type(x.x, Literal[1])
+            assert_type(x.y, Literal["a"])
         case Foo(x = 1, y = ""):
             assert_type(x, Foo)
             assert_type(x.x, Literal[1])
             assert_type(x.y, Literal[""])
         case Bar("bar"):
             assert_type(x, Bar)
-            assert_type(x.x, str)  # we want to narrow this to Literal["bar"]
+            assert_type(x.x, Literal["bar"])
 
 def test_keyword_irrefutable(x: Foo | Bar) -> None:
     match x:

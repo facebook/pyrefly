@@ -1098,18 +1098,96 @@ unittest.main()
 );
 
 testcase!(
-    bug = "In the presence of collisions, the runtime result can be order-dependent",
     test_ambiguous_pkg_attribute_vs_submodule,
     r#"
-# The behavior when a package `__init__` attribute and a submodule collide can
-# be ambiguous. We currently do not model this fully, and instead use the distinction
-# between `import pkg.xyz` vs `from pkg import xyz` (which is correlated with the
-# runtime behavior but not entirely the same) to approximate.
-#
-# One example where this leads us astray is with unittest.main; the following
-# snippet works at runtime:
+# When a package `__init__` attribute and a same-named submodule collide, the
+# runtime result can be order-dependent. When the colliding name is explicitly
+# re-exported by the package (as `unittest` does with
+# `from .main import main as main`, where `main = TestProgram`), that binding wins
+# at runtime even if the submodule is imported directly, so the call below is valid.
+# See https://github.com/facebook/pyrefly/issues/322
 import unittest.main
-unittest.main()  # E: Expected a callable, got `Module[unittest.main]`
+unittest.main()
+    "#,
+);
+
+fn env_reexport_from_same_submodule() -> TestEnv {
+    let mut t = TestEnv::new();
+    // Synthetic version of the `unittest.main` case, independent of typeshed: `pkg.__init__`
+    // re-exports `name` *from* the same-named submodule `pkg.name`. The `from .name` load is a
+    // side effect of `__init__`, so the `name = ...` binding wins even after a direct
+    // `import pkg.name`, and `pkg.name()` resolves to the callable rather than the module.
+    t.add_with_path("pkg", "pkg/__init__.py", "from .name import name as name");
+    t.add_with_path("pkg.name", "pkg/name.py", "def name() -> int: ...");
+    t
+}
+
+testcase!(
+    test_reexport_from_same_submodule_shadows,
+    env_reexport_from_same_submodule(),
+    r#"
+# `pkg.__init__` re-exports `name` from the same-named submodule `pkg.name`, so at runtime
+# the re-exported callable wins over the submodule binding even after `import pkg.name`, and
+# the call below is valid. See https://github.com/facebook/pyrefly/issues/322
+import pkg.name
+pkg.name()
+    "#,
+);
+
+fn env_reexport_from_other_submodule() -> TestEnv {
+    let mut t = TestEnv::new();
+    // `pkg.__init__` re-exports `name` from `pkg.other`, NOT from `pkg.name`. At runtime
+    // this does not trigger a side-effect import of `pkg.name`, so a subsequent
+    // `import pkg.name` binds the submodule onto `pkg` after `__init__` executes, and
+    // the submodule wins over the re-exported attribute.
+    t.add_with_path("pkg", "pkg/__init__.py", "from .other import name as name");
+    t.add_with_path("pkg.other", "pkg/other.py", "def name() -> int: ...");
+    t.add_with_path("pkg.name", "pkg/name.py", "");
+    t
+}
+
+testcase!(
+    test_reexport_from_other_submodule_does_not_shadow,
+    env_reexport_from_other_submodule(),
+    r#"
+# `pkg.__init__` re-exports `name` from `pkg.other` (a *different* module than the
+# same-named submodule `pkg.name`), so at runtime the direct `import pkg.name`
+# below binds the submodule onto `pkg` after `__init__` and the submodule wins.
+# See https://github.com/facebook/pyrefly/issues/322
+import pkg.name
+pkg.name()  # E: Expected a callable, got `Module[pkg.name]`
+    "#,
+);
+
+fn env_reexport_from_other_submodule_with_implicit_import() -> TestEnv {
+    let mut t = TestEnv::new();
+    // `pkg.__init__` re-exports `name` from `pkg.other` and *also* imports the same-named
+    // submodule `pkg.name` in an unrelated statement. The re-export does not originate from
+    // `pkg.name`, so at runtime the submodule binding still wins even though `pkg.name` is
+    // implicitly imported by `__init__`. The two facts "`name` is re-exported" and "`pkg.name`
+    // is implicitly imported" must not be combined: only a re-export *sourced from* the
+    // same-named submodule shadows it. See https://github.com/facebook/pyrefly/issues/322
+    t.add_with_path(
+        "pkg",
+        "pkg/__init__.py",
+        "from .other import name as name\nimport pkg.name",
+    );
+    t.add_with_path("pkg.other", "pkg/other.py", "def name() -> int: ...");
+    t.add_with_path("pkg.name", "pkg/name.py", "");
+    t
+}
+
+testcase!(
+    test_reexport_from_other_submodule_with_implicit_import_does_not_shadow,
+    env_reexport_from_other_submodule_with_implicit_import(),
+    r#"
+# `pkg.__init__` re-exports `name` from `pkg.other` but separately imports the same-named
+# submodule `pkg.name`, so the submodule wins at runtime and the call below is invalid.
+# The re-export (`name`) and the implicit submodule import (`pkg.name`) come from unrelated
+# statements, so they must not be combined to suppress the error.
+# See https://github.com/facebook/pyrefly/issues/322
+import pkg.name
+pkg.name()  # E: Expected a callable, got `Module[pkg.name]`
     "#,
 );
 

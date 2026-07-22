@@ -3,12 +3,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Test if Dim type variables work correctly in non-Tensor contexts"""
+"""Test if Int type variables work correctly in non-Tensor contexts"""
 
 from typing import Any, assert_type
 
 
-# Test 1: Dim type variable in a regular generic class
+# Test 1: Int type variable in a regular generic class
 class MyContainer[N]:
     def __init__(self, value: int):
         self.value = value
@@ -24,9 +24,9 @@ result = process_container(container)
 assert_type(result, MyContainer[Any])
 
 
-# Test 2: Dim type variable as a regular parameter (not in subscript)
+# Test 2: Int type variable as a regular parameter (not in subscript)
 def identity_dim[N](x: int) -> int:
-    """Function with Dim type param but not used in subscript"""
+    """Function with Int type param but not used in subscript"""
     return x
 
 

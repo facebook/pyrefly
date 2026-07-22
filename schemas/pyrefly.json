@@ -277,6 +277,26 @@
             }
           ]
         },
+        "coverage": {
+          "description": "Include/exclude overrides used only by the pyrefly coverage commands. Each field falls back to the corresponding project glob setting when unset.",
+          "type": "object",
+          "properties": {
+            "includes": {
+              "description": "The glob patterns describing which files the coverage commands report on. Takes precedence over project-includes when set.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "excludes": {
+              "description": "The glob patterns describing which files the coverage commands skip. Takes precedence over project-excludes when set, and the --project-excludes flag over both.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "sub-config": {
           "description": "Override specific config values for matched paths in your project. SubConfigs allow fine-grained configuration based on filepath glob matching.",
           "type": "array",

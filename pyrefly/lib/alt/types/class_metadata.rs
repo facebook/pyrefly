@@ -472,6 +472,10 @@ impl ClassSynthesizedFields {
         self.0.get(name)
     }
 
+    pub fn get_index_of(&self, name: &Name) -> Option<usize> {
+        self.0.get_index_of(name)
+    }
+
     /// Combines two sets of synthesized fields, with the second set
     /// overwriting any fields in the first set that have the same name.
     pub fn combine(mut self, other: Self) -> Self {
@@ -567,8 +571,6 @@ pub struct TypedDictMetadata {
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct EnumMetadata {
     pub cls: ClassType,
-    /// Whether this enum inherits from enum.Flag.
-    pub is_flag: bool,
     /// Is there any `_value_` field present.
     pub has_value: bool,
     /// Whether this is a special Django enum.
