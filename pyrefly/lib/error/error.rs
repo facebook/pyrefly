@@ -16,6 +16,7 @@ use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticTag;
 use lsp_types::Url;
+use pyrefly_python::ignore::SuppressionEdit;
 use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
 use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
@@ -55,6 +56,13 @@ pub struct SecondaryAnnotation {
 pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
     AssertNotNone,
+    RemoveUnusedSuppression(SuppressionEdit),
+}
+
+impl From<SuppressionEdit> for ErrorQuickFix {
+    fn from(edit: SuppressionEdit) -> Self {
+        Self::RemoveUnusedSuppression(edit)
+    }
 }
 
 /// Whether an error was compared with the configured baseline.
@@ -105,7 +113,7 @@ pub struct Error {
     msg_details: Option<Box<str>>,
     /// Additional labeled spans in the same file for richer diagnostics.
     secondary_annotations: Vec<SecondaryAnnotation>,
-    /// Structured fixes that can be exposed by editor integrations.
+    /// Structured fixes used by editor and command integrations.
     quick_fixes: Vec<ErrorQuickFix>,
     /// Whether to mark `range` with the LSP `DEPRECATED` tag, which editors render as a
     /// strikethrough. This is only correct when `range` is the reference to the deprecated
