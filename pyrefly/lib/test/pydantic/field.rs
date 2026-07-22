@@ -254,6 +254,22 @@ Foo()  # E: Missing argument `a`
 );
 
 pydantic_testcase!(
+    test_inherited_fields_are_init_fields,
+    r#"
+from pydantic import BaseModel
+
+class SuperBase(BaseModel, extra="forbid"):
+    x: int
+
+class Derived(SuperBase, extra="forbid"):
+    z: int
+
+Derived(x=1, z=1)
+Derived(z=1)  # E: Missing argument `x`
+    "#,
+);
+
+pydantic_testcase!(
     test_pydantic_dataclass_underscore_field_is_init_param,
     r#"
 from pydantic.dataclasses import dataclass
@@ -468,5 +484,21 @@ class Right:
     __slots__ = ("y",)
 
 class Conflict(Left, Right): ...  # E: inherits from incompatible disjoint bases `BaseModel`, `Right`
+"#,
+);
+
+// pydantic field named 'self' must not collide with the synthesized '__init__''s implicit 'self' param.
+// same as the stdlib dataclass fix.
+pydantic_testcase!(
+    test_pydantic_field_named_self,
+    r#"
+from pydantic import BaseModel
+from typing import assert_type
+
+class Model(BaseModel):
+    self: str
+
+m = Model(self="test")
+assert_type(m.self, str)
 "#,
 );

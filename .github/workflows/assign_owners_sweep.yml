@@ -1,0 +1,193 @@
+name: Assign team owners to unassigned PRs
+
+# On-demand sweep that assigns a Pyrefly team engineer (from .github/owners.json)
+# to open PRs that have no assignee, no merge conflict, and a signed CLA — the
+# PRs that are ready for a team member to shepherd but nobody has picked up.
+#
+# Selection is least-loaded (balanced against each owner's current open-PR
+# backlog) and each assignment is announced in the team Google Chat space.
+#
+# Run manually from the Actions tab. Keep "dry_run" checked to preview what
+# would happen (logs only, plus the exact Google Chat messages), then uncheck it
+# to actually assign — mirroring backfill_importer_assignees.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only log what would be assigned/notified, without assigning"
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  assign-owners:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read owners.json
+      checks: read # read the Meta CLA check run
+      issues: write # addAssignees is the issues API
+      pull-requests: write
+    steps:
+      - name: Assign least-loaded owner to eligible open PRs
+        uses: actions/github-script@v8
+        env:
+          GCHAT_WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // workflow_dispatch inputs arrive as strings; default to dry-run
+            // unless explicitly unchecked (matches backfill_importer_assignees).
+            const dryRun = (context.payload.inputs && context.payload.inputs.dry_run) !== 'false';
+            const { owner, repo } = context.repo;
+
+            // Pyrefly team GitHub handles — single source of truth in
+            // .github/owners.json. Lower-cased for case-insensitive matching.
+            const ownersFile = await github.rest.repos.getContent({
+              owner, repo, path: '.github/owners.json',
+            });
+            const owners = JSON.parse(
+              Buffer.from(ownersFile.data.content, 'base64').toString('utf8'),
+            ).map((o) => o.toLowerCase());
+            if (owners.length === 0) {
+              console.log('owners.json is empty, nothing to assign');
+              return;
+            }
+
+            // Round-robin pool = owners minus intentionally non-assignable
+            // members: managers, hands-off maintainers, and anyone not
+            // responsible for reviewing PRs. They stay in owners.json (still
+            // team members for auto_assign.yml) but never receive sweep
+            // assignments.
+            const NOT_ASSIGNABLE = new Set(['lolpack', 'ndmitchell', 'javabster', 'yangdanny97']);
+            const assignable = owners.filter((o) => !NOT_ASSIGNABLE.has(o));
+            if (assignable.length === 0) {
+              console.log('No assignable owners after exclusions, nothing to assign');
+              return;
+            }
+
+            // Optional GitHub-handle -> Google Chat user ID map for real
+            // @-mentions in the notification. Missing handles fall back to a
+            // plain-text name.
+            let gchatIds = {};
+            try {
+              const idsFile = await github.rest.repos.getContent({
+                owner, repo, path: '.github/gchat_ids.json',
+              });
+              gchatIds = JSON.parse(Buffer.from(idsFile.data.content, 'base64').toString('utf8'));
+            } catch (e) {
+              console.log('No .github/gchat_ids.json found; notifications will use plain-text names');
+            }
+
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+
+            // Seed per-owner load from PRs already assigned to each assignable
+            // owner so least-loaded balances against the standing backlog, not
+            // just this run's picks.
+            const load = new Map(assignable.map((o) => [o, 0]));
+            for (const pr of prs) {
+              for (const a of pr.assignees || []) {
+                const key = a.login.toLowerCase();
+                if (load.has(key)) load.set(key, load.get(key) + 1);
+              }
+            }
+
+            // The CLA gate is a completed "meta-cla" check run on the PR head
+            // SHA: conclusion "success" once signed, "action_required" while
+            // unsigned. It is a check run, not a commit status. Use the newest
+            // meta-cla run (re-runs append), falling back to a name match.
+            const isClaSigned = async (sha) => {
+              const checks = await github.paginate(github.rest.checks.listForRef, {
+                owner, repo, ref: sha, per_page: 100,
+              });
+              const cla = checks
+                .filter((c) => (c.app && c.app.slug === 'meta-cla') || /cla/i.test(c.name))
+                .sort((a, b) => new Date(b.started_at || 0) - new Date(a.started_at || 0));
+              return cla.length > 0 && cla[0].conclusion === 'success';
+            };
+
+            // pulls.list omits mergeability; fetch the PR for it. GitHub computes
+            // it asynchronously, so `mergeable` can be null right after a push —
+            // re-fetch once, then treat a still-unknown result as "skip" rather
+            // than risk assigning a conflicted PR. A true conflict is
+            // mergeable === false / mergeable_state "dirty"; "blocked" (awaiting
+            // checks/CLA/review) is NOT a conflict and must not be excluded.
+            const hasNoConflict = async (number) => {
+              for (let attempt = 0; attempt < 2; attempt++) {
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+                if (pr.mergeable !== null) {
+                  return pr.mergeable === true && pr.mergeable_state !== 'dirty';
+                }
+                await new Promise((r) => setTimeout(r, 3000));
+              }
+              console.log(`#${number}: mergeability still unknown, skipping`);
+              return false;
+            };
+
+            // GChat webhooks accept a simple {text}. Mentions need numeric user
+            // IDs (not GitHub handles), so the assignee is named in plain text.
+            const notify = async (assignee, pr) => {
+              // Real @-mention when we have the Google Chat user ID, else name.
+              const who = gchatIds[assignee] ? `<users/${gchatIds[assignee]}>` : `*${assignee}*`;
+              const text = `🔔 ${who} you've been assigned PR #${pr.number}: ${pr.title}\n${pr.html_url}`;
+              if (dryRun) {
+                console.log(`[dry-run] would post to Google Chat: ${text.replace(/\n/g, ' ')}`);
+                return;
+              }
+              const webhook = process.env.GCHAT_WEBHOOK;
+              if (!webhook) {
+                console.log('GOOGLE_CHAT_WEBHOOK_URL secret not set, skipping notification');
+                return;
+              }
+              const res = await fetch(webhook, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+                body: JSON.stringify({ text }),
+              });
+              if (!res.ok) {
+                console.log(`Google Chat POST failed for #${pr.number}: ${res.status} ${await res.text()}`);
+              }
+            };
+
+            let assigned = 0;
+            for (const pr of prs) {
+              if ((pr.assignees || []).length > 0) continue;
+              if (pr.draft) continue; // drafts aren't ready for a shepherd yet
+
+              if (!(await isClaSigned(pr.head.sha))) {
+                console.log(`#${pr.number}: CLA not signed, skipping`);
+                continue;
+              }
+              if (!(await hasNoConflict(pr.number))) {
+                console.log(`#${pr.number}: merge conflict / unknown mergeability, skipping`);
+                continue;
+              }
+
+              // Least-loaded assignable owner; ties break by owners.json order.
+              const pick = assignable.reduce(
+                (best, o) => (load.get(o) < load.get(best) ? o : best),
+                assignable[0],
+              );
+
+              if (!dryRun) {
+                await github.rest.issues.addAssignees({
+                  owner, repo, issue_number: pr.number, assignees: [pick],
+                });
+                // GitHub silently drops assignees lacking repo access, so verify.
+                const { data: after } = await github.rest.issues.get({ owner, repo, issue_number: pr.number });
+                if (!(after.assignees || []).some((a) => a.login.toLowerCase() === pick)) {
+                  console.log(`#${pr.number}: could not assign ${pick} (no repo access?)`);
+                  continue;
+                }
+              }
+
+              load.set(pick, load.get(pick) + 1);
+              console.log(`${dryRun ? '[dry-run] would assign' : '#' + pr.number + ': assigned'} ${pick}${dryRun ? ` to #${pr.number}` : ''} (load now ${load.get(pick)})`);
+              await notify(pick, pr);
+              assigned++;
+            }
+
+            console.log(`Scanned ${prs.length} open PRs. ${dryRun ? 'Would assign' : 'Assigned'}: ${assigned}.`);

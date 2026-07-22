@@ -210,6 +210,23 @@ def test_introduce_narrow_with_assignment(c0: C, c1: C):
 );
 
 testcase!(
+    test_attr_assignment_optional_augassign,
+    r#"
+from typing import assert_type
+def question() -> bool:
+    return True
+class C:
+    x: int | None
+c = C()
+c.x = abs(int(0))
+assert_type(c.x, int)
+if question():
+    c.x += 2
+    assert_type(c.x, int)
+"#,
+);
+
+testcase!(
     test_attr_assignment_invalidation,
     r#"
 from typing import Any, Literal, assert_type

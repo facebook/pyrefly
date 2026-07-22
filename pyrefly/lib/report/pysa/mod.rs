@@ -229,7 +229,7 @@ impl PysaReporter {
         handles: &[Handle],
         format: PysaFormat,
     ) -> anyhow::Result<Box<Self>> {
-        tracing::info!("Writing pysa results to `{}`", pysa_directory.display());
+        tracing::debug!("Writing pysa results to `{}`", pysa_directory.display());
 
         pyrefly_util::fs_anyhow::create_dir_all(pysa_directory)?;
         let definitions_directory = pysa_directory.join("definitions");

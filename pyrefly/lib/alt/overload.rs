@@ -373,23 +373,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *targs = chosen_targs;
         }
-        // Record the closest overload to power IDE services.
-        let mut overload_trace = |target: &TargetWithTParams<Function>| {
-            let tparams = target
-                .0
-                .as_ref()
-                .filter(|tparams| !tparams.is_empty())
-                .cloned();
-            OverloadTrace::new(target.1.signature.clone(), tparams)
-        };
-        let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
-        let closest_overload_trace = overload_trace(closest_overload.func);
-        self.record_overload_trace(
-            arguments_range,
-            all_overload_traces,
-            closest_overload_trace,
-            matched,
-        );
+        // Record the closest overload to power IDE services. Guard on the trace
+        // sink before building the (per-signature cloned) traces, which would
+        // otherwise be wasted work in a normal non-tracing check.
+        if self.current().tracing_enabled() {
+            let mut overload_trace = |target: &TargetWithTParams<Function>| {
+                let tparams = target
+                    .0
+                    .as_ref()
+                    .filter(|tparams| !tparams.is_empty())
+                    .cloned();
+                OverloadTrace::new(target.1.signature.clone(), tparams)
+            };
+            let all_overload_traces = overloads.iter().map(&mut overload_trace).collect();
+            let closest_overload_trace = overload_trace(closest_overload.func);
+            self.record_overload_trace(
+                arguments_range,
+                all_overload_traces,
+                closest_overload_trace,
+                matched,
+            );
+        }
         if matched {
             // If the selected overload is deprecated, we log a deprecation error.
             if let Some(deprecation) = &closest_overload.func.1.metadata.flags.deprecation {
@@ -1005,6 +1009,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // ctor_targs if this overload is chosen.
         let mut overload_ctor_targs = ctor_targs.as_ref().map(|x| (**x).clone());
         let tparams = callable.0.as_deref();
+
+        // `@uses_shape_dsl` may sit on a single overload (e.g. a shape-DSL variant that
+        // follows a plain-TypeVar fast path). The set-wide `shape_transform` only carries
+        // the first overload's decorator, so prefer this overload's own transform and only
+        // fall back to the set-wide one (e.g. an implementation-level decorator).
+        let shape_transform = callable
+            .1
+            .metadata
+            .flags
+            .shape_transform
+            .as_deref()
+            .or(shape_transform);
 
         let call_errors = self.error_collector();
         let (res, specialization_errors, argmap) = self.callable_infer(

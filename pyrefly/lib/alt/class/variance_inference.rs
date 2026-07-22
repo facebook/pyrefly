@@ -14,9 +14,10 @@ use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
-use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::heap::TypeHeap;
-use pyrefly_types::shaped_array::ShapedArrayShape;
+use pyrefly_types::shaped_array::IntTupleView;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -26,6 +27,7 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
+use crate::alt::class::class_field::ClassFieldVariance;
 use crate::alt::types::class_bases::ClassBases;
 use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::types::callable::Callable;
@@ -37,6 +39,7 @@ use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
 use crate::types::type_var::Variance;
+use crate::types::types::Forallable;
 use crate::types::types::OverloadType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
@@ -141,6 +144,28 @@ fn handle_tuple_type(
     }
 }
 
+fn on_int(
+    dim: &Int,
+    inj: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    match dim {
+        Int::Literal(_) | Int::Int => {}
+        Int::Symbolic(ty) => {
+            on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+        }
+        Int::Add(left, right)
+        | Int::Sub(left, right)
+        | Int::Mul(left, right)
+        | Int::FloorDiv(left, right)
+        | Int::Pow(left, right) => {
+            on_int(left, inj, on_edge, on_var);
+            on_int(right, inj, on_edge, on_var);
+        }
+    }
+}
+
 fn on_type(
     variance: Variance,
     inj: bool,
@@ -151,26 +176,7 @@ fn on_type(
     let sigs = typ.callable_signatures();
     if !sigs.is_empty() {
         for callable in sigs {
-            // Walk return type covariantly
-            on_type(variance, inj, &callable.ret, on_edge, on_var);
-
-            // Walk parameters contravariantly
-            match &callable.params {
-                Params::List(param_list) => {
-                    for param in param_list.items().iter() {
-                        on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
-                    }
-                }
-                Params::Ellipsis | Params::Materialization => {
-                    // Unknown params
-                }
-                Params::ParamSpec(prefix, param_spec) => {
-                    for p in prefix.iter() {
-                        on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
-                    }
-                    on_type(variance.inv(), inj, param_spec, on_edge, on_var);
-                }
-            }
+            on_callable(variance, inj, callable, false, on_edge, on_var);
         }
         return;
     }
@@ -220,20 +226,27 @@ fn on_type(
             let mut visit_dim = |ty: &Type| {
                 on_type(Variance::Invariant, inj, ty, on_edge, on_var);
             };
-            match &tensor.shape {
-                ShapedArrayShape::Concrete(dims) => {
+            match tensor.shape().view() {
+                IntTupleView::Concrete(dims) => {
                     for dim in dims {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
-                ShapedArrayShape::Unpacked(f) => {
-                    let (prefix, middle, suffix) = &**f;
+                IntTupleView::Gradual => {
+                    let middle = gradual_size();
+                    visit_dim(&middle);
+                }
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                } => {
                     for dim in prefix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                     visit_dim(middle);
                     for dim in suffix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
             }
@@ -244,28 +257,130 @@ fn on_type(
                 on_type(Variance::Invariant, inj, ty, on_edge, on_var);
             }
         }
+        Type::DataFrame(schema) => {
+            // Delegate to the underlying instance; column types are invariant.
+            on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
+            for (_, ty) in &schema.columns {
+                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+            }
+        }
         Type::Tuple(t) => {
             handle_tuple_type(t, variance, inj, on_edge, on_var);
         }
-        Type::Dim(inner) => {
-            // Dim wraps a dimension type - invariant
-            on_type(Variance::Invariant, inj, inner, on_edge, on_var);
+        Type::Int(dim) => {
+            // Symbolic integer expressions contain types, all invariant.
+            on_int(dim, inj, on_edge, on_var);
         }
-        Type::Size(dim) => {
-            // SizeExpr expressions contain types - all invariant
-            match dim {
-                SizeExpr::Literal(_) => {}
-                SizeExpr::Add(l, r)
-                | SizeExpr::Sub(l, r)
-                | SizeExpr::Mul(l, r)
-                | SizeExpr::FloorDiv(l, r)
-                | SizeExpr::Pow(l, r) => {
-                    on_type(Variance::Invariant, inj, l, on_edge, on_var);
-                    on_type(Variance::Invariant, inj, r, on_edge, on_var);
+        _ => {}
+    }
+}
+
+fn on_callable(
+    variance: Variance,
+    inj: bool,
+    callable: &Callable,
+    skip_receiver: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    // Walk return type covariantly.
+    on_type(variance, inj, &callable.ret, on_edge, on_var);
+
+    // Walk parameters contravariantly. Receiver-bound methods skip their first parameter
+    // because lookup either binds it from dynamic dispatch or requantifies it for class access.
+    match &callable.params {
+        Params::List(param_list) | Params::Partial(param_list) => {
+            for param in param_list.items().iter().skip(usize::from(skip_receiver)) {
+                on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
+            }
+        }
+        Params::Ellipsis | Params::Materialization => {
+            // Unknown params
+        }
+        Params::ParamSpec(prefix, param_spec) => {
+            for p in prefix.iter().skip(usize::from(skip_receiver)) {
+                on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
+            }
+            on_type(variance.inv(), inj, param_spec, on_edge, on_var);
+        }
+    }
+}
+
+fn on_method(
+    variance: Variance,
+    inj: bool,
+    typ: &Type,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    on_method_impl(variance, inj, typ, true, on_edge, on_var);
+}
+
+fn on_method_impl(
+    variance: Variance,
+    inj: bool,
+    typ: &Type,
+    metadata_free_callable_is_method: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    let skip_receiver = |metadata: &FuncMetadata| !metadata.flags.is_staticmethod;
+    match typ {
+        Type::Callable(callable) if metadata_free_callable_is_method => {
+            on_callable(variance, inj, callable, true, on_edge, on_var)
+        }
+        Type::Callable(_) => on_type(variance, inj, typ, on_edge, on_var),
+        Type::Function(func) => on_callable(
+            variance,
+            inj,
+            &func.signature,
+            skip_receiver(&func.metadata),
+            on_edge,
+            on_var,
+        ),
+        Type::Forall(forall) => match &forall.body {
+            Forallable::Callable(callable) if metadata_free_callable_is_method => {
+                on_callable(variance, inj, callable, true, on_edge, on_var)
+            }
+            Forallable::Callable(_) => on_type(variance, inj, typ, on_edge, on_var),
+            Forallable::Function(func) => on_callable(
+                variance,
+                inj,
+                &func.signature,
+                skip_receiver(&func.metadata),
+                on_edge,
+                on_var,
+            ),
+            Forallable::TypeAlias(_) => on_type(variance, inj, typ, on_edge, on_var),
+        },
+        Type::Overload(overload) => {
+            for signature in overload.signatures.iter() {
+                match signature {
+                    OverloadType::Function(func) => on_callable(
+                        variance,
+                        inj,
+                        &func.signature,
+                        skip_receiver(&func.metadata),
+                        on_edge,
+                        on_var,
+                    ),
+                    OverloadType::Forall(forall) => on_callable(
+                        variance,
+                        inj,
+                        &forall.body.signature,
+                        skip_receiver(&forall.body.metadata),
+                        on_edge,
+                        on_var,
+                    ),
                 }
             }
         }
-        _ => {}
+        Type::Union(union) => {
+            for ty in &union.members {
+                on_method_impl(variance, inj, ty, false, on_edge, on_var);
+            }
+        }
+        _ => on_type(variance, inj, typ, on_edge, on_var),
     }
 }
 
@@ -309,22 +424,33 @@ fn on_class(
             continue;
         }
 
-        let (ty, _, read_only) = field.for_variance_inference();
-        // TODO: We need a much better way to distinguish between fields and methods than this
-        // currently, class field representation isn't good enough but we need to fix that soon
-        let variance =
-            if ty.is_toplevel_callable() || is_private_field(name) || read_only || field.is_final()
-            {
-                Variance::Covariant
-            } else {
-                Variance::Invariant
-            };
-        on_type(variance, true, ty, on_edge, on_var);
-
-        // For properties with both a getter and setter, the stored type is the setter function,
-        // but the getter is stored separately. Walk it so its covariant contribution is counted.
-        if let Some(getter) = ty.is_property_setter_with_getter() {
-            on_type(Variance::Covariant, true, &getter, on_edge, on_var);
+        match field.variance_inference() {
+            ClassFieldVariance::Method(ty) => {
+                on_method(Variance::Covariant, true, ty, on_edge, on_var);
+            }
+            ClassFieldVariance::Property(ty) => {
+                on_method(Variance::Covariant, true, ty, on_edge, on_var);
+                // For properties with both a getter and setter, the stored type is the setter
+                // function, but the getter is stored separately. Walk it so its covariant
+                // contribution is counted.
+                if let Some(getter) = ty.is_property_setter_with_getter() {
+                    on_method(Variance::Covariant, true, &getter, on_edge, on_var);
+                }
+            }
+            ClassFieldVariance::Field { ty, read_only } => {
+                // TODO: We still need a better distinction between callable-valued fields and
+                // descriptors, but receiver skipping only applies to fields modeled as methods.
+                let variance = if ty.is_toplevel_callable()
+                    || is_private_field(name)
+                    || read_only
+                    || field.is_final()
+                {
+                    Variance::Covariant
+                } else {
+                    Variance::Invariant
+                };
+                on_type(variance, true, ty, on_edge, on_var);
+            }
         }
     }
 }
@@ -371,7 +497,7 @@ fn check_callable_variance(
             violations,
         );
     }
-    if let Params::List(param_list) = &callable.params {
+    if let Params::List(param_list) | Params::Partial(param_list) = &callable.params {
         for param in param_list.items().iter() {
             if let Type::Quantified(q) = param.as_type() {
                 check_typevar(

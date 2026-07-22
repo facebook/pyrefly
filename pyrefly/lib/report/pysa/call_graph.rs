@@ -2321,7 +2321,7 @@ impl<'a> CallGraphVisitor<'a> {
                 }
                 _ => CallCallees::new_unresolved(UnresolvedReason::UnexpectedPyreflyTarget),
             },
-            Some(CallTargetLookup::Error(targets)) => {
+            Some(CallTargetLookup::Error(_, targets)) => {
                 if targets.is_empty() {
                     debug_println!(
                         self.debug,

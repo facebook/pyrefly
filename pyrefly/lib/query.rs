@@ -8,9 +8,13 @@
 //! Query interface for pyrefly. Just experimenting for the moment - not intended for external use.
 
 use core::panic;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::iter;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use dashmap::DashMap;
 use dupe::Dupe;
@@ -37,6 +41,7 @@ use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassFields;
+use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
@@ -106,6 +111,20 @@ use crate::state::state::TransactionHandle;
 use crate::types::display::LspDisplayMode;
 use crate::types::display::TypeDisplayContext;
 
+mod type_table;
+pub use ruff_python_ast::Decorator as TypeQueryDecorator;
+pub use ruff_python_ast::Expr as TypeQueryExpr;
+pub use ruff_python_ast::Stmt as TypeQueryStmt;
+pub use ruff_python_ast::StmtClassDef as TypeQueryStmtClassDef;
+pub use ruff_python_ast::StmtFunctionDef as TypeQueryStmtFunctionDef;
+pub use type_table::IndexedTypeShapeKind;
+pub use type_table::LocatedTypeTableRef;
+pub use type_table::SerializedTypeTableEntry;
+use type_table::TypeTableBuilder;
+pub use type_table::TypeTableResponseData;
+use type_table::located_type_table_refs;
+use type_table::type_to_indexed_shape;
+
 const REPR: Name = Name::new_static("__repr__");
 
 /// Cache for type resolution to avoid expensive re-typechecking.
@@ -158,6 +177,14 @@ const CALLEE_KIND_METHOD: &str = "method";
 const CALLEE_KIND_CLASSMETHOD: &str = "classmethod";
 const CALLEE_KIND_STATICMETHOD: &str = "staticmethod";
 
+/// Records a single expression selected by a filtered query walker.
+///
+/// This callback does not recurse into child expressions. Walkers that include
+/// an expression are responsible for walking its children if they want them.
+/// Returns whether the expression produced a located type.
+pub type TypeQueryExprVisitor<'a> = dyn FnMut(&'a Expr, Option<&'a Expr>) -> bool + 'a;
+pub type TypeQueryStmtWalker = dyn for<'a> Fn(&'a [Stmt], &mut TypeQueryExprVisitor<'a>);
+
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct Callee {
     /// What kind of callable is this? Distinguishes various kinds of methods from normal functions.
@@ -174,6 +201,25 @@ pub struct Attribute {
     pub annotation: String,
     pub is_final: bool,
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct TypeQueryTiming {
+    pub located_count: usize,
+    pub setup: Duration,
+    pub stringify: Duration,
+    pub cache: Duration,
+    pub transform: Duration,
+    pub total: Duration,
+    pub shape_profiles: TypeQueryProfileMap,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TypeQueryProfile {
+    pub count: usize,
+    pub total: Duration,
+}
+
+pub type TypeQueryProfileMap = HashMap<&'static str, TypeQueryProfile>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TypeShape {
@@ -203,6 +249,13 @@ pub enum TypeShapeKind {
     Callable {
         params: Vec<TypeShape>,
         return_type: Box<TypeShape>,
+        /// Whether the callable is a `@staticmethod`. Structured consumers use
+        /// this to recover the `typing.StaticMethod[...]` wrapper that is
+        /// otherwise only present in the `display` string, so a value-position
+        /// reference to a static method (e.g. a `key=` callback) keeps its
+        /// static-method identity.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        is_staticmethod: bool,
     },
     /// A type parameter, with any bound or constraint types attached.
     TypeVariable {
@@ -218,7 +271,7 @@ pub enum TypeShapeKind {
 /// `Type::TypedDict`, and `Type::PartialTypedDict`.
 /// They are not synthesized from class metadata, and therefore are not emitted
 /// for class/type-position shapes that would require metadata lookup.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeShapeTrait {
     /// A non-partial typed dict value shape.
@@ -264,7 +317,7 @@ fn is_static_method(ty: &Type) -> bool {
 fn bound_of_type_var(ty: &Type) -> Option<&Type> {
     match ty {
         Type::Quantified(q) | Type::QuantifiedValue(q)
-            if q.kind == QuantifiedKind::TypeVar
+            if q.is_type_var()
                 && let Restriction::Bound(bound) = &q.restriction =>
         {
             Some(bound)
@@ -317,6 +370,7 @@ fn type_to_string(ty: &Type) -> String {
 struct TypeShapeContext<'a> {
     transaction: &'a Transaction<'a>,
     source_handle: &'a Handle,
+    profile: Option<&'a Mutex<TypeQueryProfileMap>>,
 }
 
 impl TypeShapeContext<'_> {
@@ -338,14 +392,83 @@ impl TypeShapeContext<'_> {
 }
 
 fn type_shape_from(context: &TypeShapeContext, ty: &Type, display: String) -> TypeShape {
-    TypeShape {
-        display,
-        kind: type_shape_kind(context, ty),
+    if let Some(profile) = context.profile {
+        let kind_name = type_kind_name(ty);
+        let start = Instant::now();
+        let kind = type_shape_kind(context, ty);
+        let elapsed = start.elapsed();
+        let mut profile = profile.lock();
+        let entry = profile.entry(kind_name).or_default();
+        entry.count += 1;
+        entry.total += elapsed;
+        TypeShape { display, kind }
+    } else {
+        TypeShape {
+            display,
+            kind: type_shape_kind(context, ty),
+        }
     }
 }
 
 fn type_to_shape(context: &TypeShapeContext, ty: &Type) -> TypeShape {
     type_shape_from(context, ty, type_to_string(ty))
+}
+
+fn type_kind_name(ty: &Type) -> &'static str {
+    match ty {
+        Type::ClassDef(_) => "class_def",
+        Type::ClassType(_) => "class_type",
+        Type::TypedDict(_) => "typed_dict",
+        Type::PartialTypedDict(_) => "partial_typed_dict",
+        Type::Type(_) => "type",
+        Type::Callable(_) => "callable",
+        Type::Function(_) => "function",
+        Type::BoundMethod(_) => "bound_method",
+        Type::Overload(_) => "overload",
+        Type::Forall(_) => "forall",
+        Type::Union(_) => "union",
+        Type::Intersect(_) => "intersect",
+        Type::Tuple(_) => "tuple",
+        Type::Literal(_) => "literal",
+        Type::Sentinel(_) => "sentinel",
+        Type::LiteralString(_) => "literal_string",
+        Type::Quantified(_) => "quantified",
+        Type::QuantifiedValue(_) => "quantified_value",
+        Type::TypeVar(_) => "type_var",
+        Type::ParamSpec(_) => "param_spec",
+        Type::TypeVarTuple(_) => "type_var_tuple",
+        Type::ElementOfTypeVarTuple(_) => "element_of_type_var_tuple",
+        Type::TypeGuard(_) => "type_guard",
+        Type::TypeIs(_) => "type_is",
+        Type::Annotated(_, _) => "annotated",
+        Type::Unpack(_) => "unpack",
+        Type::Concatenate(_, _) => "concatenate",
+        Type::ParamSpecValue(_) => "param_spec_value",
+        Type::Args(_) => "args",
+        Type::ArgsValue(_) => "args_value",
+        Type::Kwargs(_) => "kwargs",
+        Type::KwargsValue(_) => "kwargs_value",
+        Type::Module(_) => "module",
+        Type::TypeAlias(_) => "type_alias",
+        Type::UntypedAlias(_) => "untyped_alias",
+        Type::SuperInstance(_) => "super_instance",
+        Type::SelfType(_) => "self_type",
+        Type::CallableResidual(_) => "callable_residual",
+        Type::KwCall(_) => "kw_call",
+        Type::Any(_) => "any",
+        Type::Never(_) => "never",
+        Type::None => "none",
+        Type::SpecialForm(_) => "special_form",
+        Type::Ellipsis => "ellipsis",
+        Type::Materialization => "materialization",
+        Type::Var(_) => "var",
+        Type::ShapedArray(_) => "shaped_array",
+        Type::IntTuple(_) => "int_tuple",
+        Type::NNModule(_) => "nn_module",
+        Type::DataFrame(_) => "data_frame",
+        Type::Int(_) => "int",
+        Type::TypeForm(_) => "type_form",
+    }
 }
 
 fn type_shape_kind(context: &TypeShapeContext, ty: &Type) -> TypeShapeKind {
@@ -378,8 +501,12 @@ fn type_shape_kind(context: &TypeShapeContext, ty: &Type) -> TypeShapeKind {
         Type::Type(inner) => {
             named_type_shape_kind("typing.Type", vec![type_to_shape(context, inner)])
         }
-        Type::Callable(callable) => callable_shape(context, callable),
-        Type::Function(function) => callable_shape(context, &function.signature),
+        Type::Callable(callable) => callable_shape(context, callable, false),
+        Type::Function(function) => callable_shape(
+            context,
+            &function.signature,
+            function.metadata.flags.is_staticmethod,
+        ),
         Type::BoundMethod(bound_method) => {
             let function_type = bound_method.func.clone().as_type();
             named_type_shape_kind(
@@ -423,7 +550,7 @@ fn type_shape_kind(context: &TypeShapeContext, ty: &Type) -> TypeShapeKind {
         ),
         Type::Literal(literal) => named_type_shape_kind(
             "typing.Literal",
-            vec![named_leaf(literal.value.to_string())],
+            vec![named_leaf(literal_value_shape_name(&literal.value))],
         ),
         Type::Sentinel(sentinel) => {
             named_type_shape_kind("sentinel", vec![named_leaf(format!("{}", sentinel))])
@@ -539,6 +666,7 @@ fn type_shape_kind(context: &TypeShapeContext, ty: &Type) -> TypeShapeKind {
         Type::Materialization => named_type_shape_kind("Materialization", Vec::new()),
         Type::Var(_) => named_type_shape_kind("typing.Any", Vec::new()),
         Type::ShapedArray(_) => named_type_shape_kind("Tensor", Vec::new()),
+        Type::IntTuple(_) => named_type_shape_kind("IntTuple", Vec::new()),
         Type::NNModule(module) => {
             let args = module
                 .class
@@ -549,8 +677,8 @@ fn type_shape_kind(context: &TypeShapeContext, ty: &Type) -> TypeShapeKind {
                 .collect::<Vec<_>>();
             named_type_shape_kind(qname_to_string(module.class.qname()), args)
         }
-        Type::Size(_) => named_type_shape_kind("Size", Vec::new()),
-        Type::Dim(inner) => named_type_shape_kind("Dim", vec![type_to_shape(context, inner)]),
+        Type::DataFrame(schema) => type_shape_kind(context, &schema.underlying_type()),
+        Type::Int(_) => named_type_shape_kind("Int", Vec::new()),
         Type::TypeForm(inner) => {
             named_type_shape_kind("typing.TypeForm", vec![type_to_shape(context, inner)])
         }
@@ -598,6 +726,24 @@ fn named_leaf(name: impl Into<String>) -> TypeShape {
     named_type_shape(name, Vec::new())
 }
 
+/// Render a literal value for the structured type-shape leaf. Enum members must
+/// carry their class's full module-qualified name (matching `qname_to_string`,
+/// the `ClassType`/`ClassDef` arms, and the module-qualified display string);
+/// the bare `Lit::Display` only emits the short class name. Shared with the
+/// type-table path in `query::type_table`.
+pub(crate) fn literal_value_shape_name(value: &Lit) -> String {
+    match value {
+        Lit::Enum(lit_enum) => {
+            format!(
+                "{}.{}",
+                qname_to_string(lit_enum.class.qname()),
+                lit_enum.member
+            )
+        }
+        _ => value.to_string(),
+    }
+}
+
 fn format_type_application(name: &str, args: &[TypeShape]) -> String {
     if args.is_empty() {
         name.to_owned()
@@ -630,18 +776,22 @@ fn typed_dict_shape(
                 typed_dict_traits(is_partial),
             )
         }
-        TypedDict::Anonymous(_) if is_partial => named_type_shape_kind_with_traits(
-            "NonTotalTypedDictionary",
-            Vec::new(),
-            None,
-            typed_dict_traits(is_partial),
-        ),
-        TypedDict::Anonymous(_) => named_type_shape_kind_with_traits(
-            "TypedDictionary",
-            Vec::new(),
-            None,
-            typed_dict_traits(is_partial),
-        ),
+        // An anonymous TypedDict has no class identity; structurally it is a
+        // `dict[str, <union of field value types>]` (all keys are string
+        // literals). Emit it as that dict -- matching the display string and a
+        // real dict -- so the structured shape keeps the field value types
+        // instead of collapsing to an opaque `TypedDictionary` marker.
+        TypedDict::Anonymous(inner) => {
+            let heap = TypeHeap::new();
+            let value_type = inner.compute_value_type(&heap);
+            named_type_shape_kind(
+                "builtins.dict",
+                vec![
+                    named_leaf("builtins.str"),
+                    type_to_shape(context, &value_type),
+                ],
+            )
+        }
     }
 }
 
@@ -653,16 +803,21 @@ fn typed_dict_traits(is_partial: bool) -> Vec<TypeShapeTrait> {
     }
 }
 
-fn callable_shape(context: &TypeShapeContext, callable: &Callable) -> TypeShapeKind {
+fn callable_shape(
+    context: &TypeShapeContext,
+    callable: &Callable,
+    is_staticmethod: bool,
+) -> TypeShapeKind {
     TypeShapeKind::Callable {
         params: callable_param_types(context, &callable.params),
         return_type: Box::new(type_to_shape(context, &callable.ret)),
+        is_staticmethod,
     }
 }
 
 fn callable_param_types(context: &TypeShapeContext, params: &Params) -> Vec<TypeShape> {
     match params {
-        Params::List(params) => param_list_to_shapes(context, params),
+        Params::List(params) | Params::Partial(params) => param_list_to_shapes(context, params),
         Params::ParamSpec(prefix, param_spec) => prefix
             .iter()
             .map(|param| prefix_param_to_shape(context, param))
@@ -1615,9 +1770,6 @@ impl Query {
                             value,
                             annotation,
                             alias_of: _,
-                        }
-                        | ClassFieldDefinition::DefinedInMethod {
-                            value, annotation, ..
                         } => {
                             annotation
                                 .and_then(|idx| answers.get_idx(idx))
@@ -1625,6 +1777,23 @@ impl Query {
                                 // Fall back to expression type trace
                                 .or_else(|| {
                                     if let ExprOrBinding::Expr(expr) = value.as_ref() {
+                                        answers.get_type_trace(expr.range())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                // Final fallback: ClassField.ty()
+                                .or_else(|| answers.get_idx(class_field_idx).map(|cf| cf.ty()))
+                        }
+                        ClassFieldDefinition::DefinedInMethod {
+                            values, annotation, ..
+                        } => {
+                            annotation
+                                .and_then(|idx| answers.get_idx(idx))
+                                .and_then(|a| a.annotation.ty.clone())
+                                // Fall back to expression type trace
+                                .or_else(|| {
+                                    if let Some(ExprOrBinding::Expr(expr)) = values.first() {
                                         answers.get_type_trace(expr.range())
                                     } else {
                                         None
@@ -1671,7 +1840,7 @@ impl Query {
         name: ModuleName,
         path: ModulePath,
     ) -> Option<Vec<(PythonASTRange, String)>> {
-        self.get_types_in_file_with(name, path, |_context, _ty, display| display)
+        self.get_types_in_file_transformed(name, path, true, None, |_context, _ty, display| display)
     }
 
     pub fn get_type_shapes_in_file(
@@ -1679,18 +1848,167 @@ impl Query {
         name: ModuleName,
         path: ModulePath,
     ) -> Option<Vec<(PythonASTRange, TypeShape)>> {
-        self.get_types_in_file_with(name, path, type_shape_from)
+        self.get_type_shapes_in_file_filtered(name, path, None)
     }
 
-    fn get_types_in_file_with<T, F>(
+    pub fn get_type_shapes_in_file_filtered(
         &self,
         name: ModuleName,
         path: ModulePath,
+        walker: Option<&TypeQueryStmtWalker>,
+    ) -> Option<Vec<(PythonASTRange, TypeShape)>> {
+        self.get_types_in_file_transformed(name, path, true, walker, type_shape_from)
+    }
+
+    pub fn get_type_shapes_in_file_with_timing(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+    ) -> Option<(Vec<(PythonASTRange, TypeShape)>, TypeQueryTiming)> {
+        self.get_type_shapes_in_file_with_timing_filtered(name, path, None)
+    }
+
+    pub fn get_type_shapes_in_file_with_timing_filtered(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        walker: Option<&TypeQueryStmtWalker>,
+    ) -> Option<(Vec<(PythonASTRange, TypeShape)>, TypeQueryTiming)> {
+        self.get_types_in_file_with_timing(name, path, true, walker, type_shape_from)
+    }
+
+    /// `include_display` controls whether each located type carries its display
+    /// string. Structured clients that resolve types from the table alone can pass
+    /// `false` to skip per-location `type_to_string` (and the write-only type-cache
+    /// population) on the server and omit `display` from the wire.
+    pub fn get_type_table_in_file(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        include_display: bool,
+    ) -> Option<TypeTableResponseData> {
+        self.get_type_table_in_file_filtered(name, path, include_display, None)
+    }
+
+    pub fn get_type_table_in_file_filtered(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        include_display: bool,
+        walker: Option<&TypeQueryStmtWalker>,
+    ) -> Option<TypeTableResponseData> {
+        let type_table = RefCell::new(TypeTableBuilder::new());
+        let types = self.get_types_in_file_transformed(
+            name,
+            path,
+            include_display,
+            walker,
+            |context, ty, display| {
+                let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
+                (type_index, display)
+            },
+        )?;
+        Some(TypeTableResponseData {
+            type_table: type_table.into_inner().into_type_table(),
+            types: located_type_table_refs(types, include_display),
+        })
+    }
+
+    pub fn get_type_table_in_file_with_timing(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        include_display: bool,
+    ) -> Option<(TypeTableResponseData, TypeQueryTiming)> {
+        self.get_type_table_in_file_with_timing_filtered(name, path, include_display, None)
+    }
+
+    pub fn get_type_table_in_file_with_timing_filtered(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        include_display: bool,
+        walker: Option<&TypeQueryStmtWalker>,
+    ) -> Option<(TypeTableResponseData, TypeQueryTiming)> {
+        let type_table = RefCell::new(TypeTableBuilder::new());
+        let (types, timing) = self.get_types_in_file_with_timing(
+            name,
+            path,
+            include_display,
+            walker,
+            |context, ty, display| {
+                let type_index = type_to_indexed_shape(context, ty, &mut type_table.borrow_mut());
+                (type_index, display)
+            },
+        )?;
+        Some((
+            TypeTableResponseData {
+                type_table: type_table.into_inner().into_type_table(),
+                types: located_type_table_refs(types, include_display),
+            },
+            timing,
+        ))
+    }
+
+    fn get_types_in_file_transformed<T, F>(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        include_display: bool,
+        walker: Option<&TypeQueryStmtWalker>,
         transform: F,
     ) -> Option<Vec<(PythonASTRange, T)>>
     where
         F: Fn(&TypeShapeContext, &Type, String) -> T,
     {
+        self.get_types_in_file_with_optional_timing(
+            name,
+            path,
+            include_display,
+            walker,
+            transform,
+            None,
+        )
+    }
+
+    fn get_types_in_file_with_timing<T, F>(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        include_display: bool,
+        walker: Option<&TypeQueryStmtWalker>,
+        transform: F,
+    ) -> Option<(Vec<(PythonASTRange, T)>, TypeQueryTiming)>
+    where
+        F: Fn(&TypeShapeContext, &Type, String) -> T,
+    {
+        let mut timing = TypeQueryTiming::default();
+        let total_start = Instant::now();
+        let types = self.get_types_in_file_with_optional_timing(
+            name,
+            path,
+            include_display,
+            walker,
+            transform,
+            Some(&mut timing),
+        )?;
+        timing.total = total_start.elapsed();
+        Some((types, timing))
+    }
+
+    fn get_types_in_file_with_optional_timing<T, F>(
+        &self,
+        name: ModuleName,
+        path: ModulePath,
+        include_display: bool,
+        walker: Option<&TypeQueryStmtWalker>,
+        transform: F,
+        mut timing: Option<&mut TypeQueryTiming>,
+    ) -> Option<Vec<(PythonASTRange, T)>>
+    where
+        F: Fn(&TypeShapeContext, &Type, String) -> T,
+    {
+        let setup_start = timing.as_ref().map(|_| Instant::now());
         let handle = self.make_handle(name, path);
 
         let transaction = self.state.transaction();
@@ -1698,12 +2016,17 @@ impl Query {
         let module_info = transaction.get_module_info(&handle)?;
         let answers = transaction.get_answers(&handle)?;
         let bindings = transaction.get_bindings(&handle)?;
+        let profile = timing
+            .as_ref()
+            .map(|_| Mutex::new(TypeQueryProfileMap::new()));
         let type_shape_context = TypeShapeContext {
             transaction: &transaction,
             source_handle: &handle,
+            profile: profile.as_ref(),
         };
-
-        let mut res = Vec::new();
+        if let (Some(timing), Some(setup_start)) = (timing.as_deref_mut(), setup_start) {
+            timing.setup = setup_start.elapsed();
+        }
 
         fn add_type<T, F>(
             ty: &Type,
@@ -1715,19 +2038,51 @@ impl Query {
             type_cache: &TypeCache,
             transform: &F,
             type_shape_context: &TypeShapeContext,
+            include_display: bool,
+            timing: &mut Option<&mut TypeQueryTiming>,
         ) where
             F: Fn(&TypeShapeContext, &Type, String) -> T,
         {
-            let display = type_to_string(ty);
-            // Only clone ty if not already in cache
-            type_cache
-                .cache
-                .entry(display.clone())
-                .or_insert_with(|| ty.clone());
+            // The display string is only needed by callers that ship it per location.
+            // When they opt out we skip both `type_to_string` and the type-cache
+            // population (the cache is keyed on display and only read by is_subtype).
+            let display = if include_display {
+                let stringify_start = timing.as_ref().map(|_| Instant::now());
+                let display = type_to_string(ty);
+                if let (Some(timing), Some(stringify_start)) =
+                    (timing.as_deref_mut(), stringify_start)
+                {
+                    timing.stringify += stringify_start.elapsed();
+                }
+
+                // Only clone ty if not already in cache
+                let cache_start = timing.as_ref().map(|_| Instant::now());
+                type_cache
+                    .cache
+                    .entry(display.clone())
+                    .or_insert_with(|| ty.clone());
+                if let (Some(timing), Some(cache_start)) = (timing.as_deref_mut(), cache_start) {
+                    timing.cache += cache_start.elapsed();
+                }
+                display
+            } else {
+                String::new()
+            };
+
+            let transform_start = timing.as_ref().map(|_| Instant::now());
+            let transformed = transform(type_shape_context, ty, display);
+            if let (Some(timing), Some(transform_start)) = (timing.as_deref_mut(), transform_start)
+            {
+                timing.transform += transform_start.elapsed();
+            }
+
             res.push((
                 python_ast_range_for_expr(module_info, range, e, parent),
-                transform(type_shape_context, ty, display),
+                transformed,
             ));
+            if let Some(timing) = timing.as_deref_mut() {
+                timing.located_count += 1;
+            }
         }
         fn try_find_key_for_name(name: &ExprName, bindings: &Bindings) -> Option<Key> {
             let key = Key::BoundName(ShortIdentifier::expr_name(name));
@@ -1751,7 +2106,10 @@ impl Query {
             type_cache: &TypeCache,
             transform: &F,
             type_shape_context: &TypeShapeContext,
-        ) where
+            include_display: bool,
+            timing: &mut Option<&mut TypeQueryTiming>,
+        ) -> bool
+        where
             F: Fn(&TypeShapeContext, &Type, String) -> T,
         {
             let range = x.range();
@@ -1769,7 +2127,10 @@ impl Query {
                     type_cache,
                     transform,
                     type_shape_context,
+                    include_display,
+                    timing,
                 );
+                true
             } else if let Some(ty) = answers.get_type_trace(range) {
                 add_type(
                     &ty,
@@ -1781,27 +2142,20 @@ impl Query {
                     type_cache,
                     transform,
                     type_shape_context,
+                    include_display,
+                    timing,
                 );
+                true
+            } else {
+                false
             }
-            x.recurse(&mut |c| {
-                f(
-                    c,
-                    Some(x),
-                    module_info,
-                    answers,
-                    bindings,
-                    res,
-                    type_cache,
-                    transform,
-                    type_shape_context,
-                )
-            });
         }
 
-        ast.visit(&mut |x| {
+        let mut res = Vec::new();
+        let mut record_expr = |x: &Expr, parent: Option<&Expr>| {
             f(
                 x,
-                None,
+                parent,
                 &module_info,
                 &answers,
                 &bindings,
@@ -1809,8 +2163,29 @@ impl Query {
                 &self.type_cache,
                 &transform,
                 &type_shape_context,
+                include_display,
+                &mut timing,
             )
-        });
+        };
+        if let Some(walker) = walker {
+            walker(&ast.body, &mut record_expr);
+        } else {
+            fn visit_expr<'a>(
+                x: &'a Expr,
+                parent: Option<&'a Expr>,
+                record_expr: &mut TypeQueryExprVisitor<'a>,
+            ) {
+                record_expr(x, parent);
+                x.recurse(&mut |c| visit_expr(c, Some(x), record_expr));
+            }
+
+            for stmt in &ast.body {
+                stmt.visit(&mut |x| visit_expr(x, None, &mut record_expr));
+            }
+        }
+        if let (Some(timing), Some(profile)) = (timing, profile) {
+            timing.shape_profiles = profile.into_inner();
+        }
         Some(res)
     }
 
@@ -1870,7 +2245,7 @@ impl Query {
                                 names.pop();
                             }
                         } else {
-                            // If we get here, either the name is undefined or it is is defined in `builtins`;
+                            // If we get here, either the name is undefined or it is defined in `builtins`;
                             // either way we can skip it.
                             break;
                         }

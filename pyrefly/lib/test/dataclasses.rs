@@ -139,6 +139,29 @@ replace(f, z=3)  # E: Unexpected keyword argument `z`
 );
 
 testcase!(
+    test_copy_replace,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import copy
+from copy import replace
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Foo:
+    x: int
+    y: str
+
+f = Foo(1, "a")
+
+assert_type(copy.replace(f, x=2), Foo)
+replace(f, y="b")
+copy.replace(f, x="wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `x` with type `int` in function `Foo.__replace__`
+replace(f, z=3)  # E: Unexpected keyword argument `z`
+    "#,
+);
+
+testcase!(
     test_replace_initvar_default,
     r#"
 from dataclasses import dataclass, field, InitVar, replace
@@ -1297,6 +1320,18 @@ class C:
     "#,
 );
 
+// `default` and `default_factory` are mutually exclusive at runtime; typeshed's
+// `dataclasses.field` overloads already reject passing both, so no extra check is needed.
+testcase!(
+    test_dataclass_field_default_and_default_factory_conflict,
+    r#"
+from dataclasses import dataclass, field
+@dataclass
+class C:
+    x: int = field(default=1, default_factory=int)  # E: not assignable to parameter `default_factory`
+    "#,
+);
+
 testcase!(
     test_default,
     r#"
@@ -1960,9 +1995,27 @@ class B:
     b: str = "default"
 
 @dataclass
-class C(A, B):
+class C(A, B):  # E: Dataclass field `a` without a default may not follow dataclass field with a default
     c: float = field(kw_only=True)  # OK - kw_only
     d: bool  # E: Dataclass field `d` without a default may not follow dataclass field with a default
+    "#,
+);
+
+testcase!(
+    test_field_ordering_inherited_conflict_not_repeated_on_subclass,
+    r#"
+from dataclasses import dataclass
+@dataclass
+class HasDefault:
+    a: int = 0
+
+@dataclass
+class Origin(HasDefault):
+    b: int  # E: Dataclass field `b` without a default may not follow dataclass field with a default
+
+@dataclass
+class Sub(Origin):
+    pass
     "#,
 );
 
@@ -2286,6 +2339,37 @@ c = C()
 );
 
 testcase!(
+    test_non_data_descriptor_returns_own_class,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+# A __get__ returning the descriptor's own class (not literal Self) is sound.
+class Dev:
+    def __get__(self, obj, cls) -> "Dev": ...
+
+class Other: ...
+class Bad:
+    def __get__(self, obj, cls) -> Other: ...
+
+@dataclass
+class Base:
+    x: Dev = Dev()
+
+@dataclass
+class Sub(Base):
+    pass
+
+@dataclass
+class C:
+    y: Bad = Bad()  # E: Cannot set field `y` to non-data descriptor `Bad`
+
+assert_type(Base().x, Dev)
+assert_type(Sub().x, Dev)
+    "#,
+);
+
+testcase!(
     test_data_descriptor_in_dataclass,
     r#"
 from dataclasses import dataclass
@@ -2443,6 +2527,28 @@ class DC2(Protocol, DC):  # E: If `Protocol` is included as a base class, all ot
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2921
+testcase!(
+    test_dataclass_protocol_fields_in_subclass,
+    r#"
+from dataclasses import dataclass
+from typing import Protocol
+
+@dataclass
+class Base(Protocol):  # E: `@dataclass` cannot be applied to Protocol
+    x: int
+
+@dataclass
+class Child(Base):
+    y: str
+
+Base(0)  # E: Cannot instantiate `Base` because it is a protocol
+Child(x=0, y="ok")
+Child(0, "ok")
+Child("bad", "ok")  # E: Argument `Literal['bad']` is not assignable to parameter `x` with type `int` in function `Child.__init__`
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/3751
 testcase!(
     test_dataclass_decorator_on_named_tuple,
@@ -2556,5 +2662,37 @@ def user_defined_field() -> None:
     @dataclass
     class C:
         x = field(default=1)  # !E: type annotation
+"#,
+);
+
+// Unlike attrs, a stdlib dataclass does NOT strip leading underscores from a private
+// field's `__init__` parameter.
+testcase!(
+    test_dataclass_private_field_keeps_underscore,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass
+class C:
+    _x: int
+
+reveal_type(C.__init__)  # E: revealed type: (self: C, _x: int) -> None
+"#,
+);
+
+// A dataclass field named 'self" must not collide with the implicit "self" parameter of the synthesized "__init__". cpython renames the instance param to "__dataclass_self__".
+testcase!(
+    test_dataclass_field_named_self,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class C:
+    self: str
+
+c = C(self="test")
+assert_type(c.self, str)
 "#,
 );

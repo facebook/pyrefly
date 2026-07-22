@@ -19,6 +19,7 @@ use crate::commands::coverage::collect::collect_module_reports;
 use crate::commands::coverage::types::SlotCounts;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::config::config::ConfigScope;
 
 /// Gate type-annotation coverage against a threshold.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -67,7 +68,8 @@ impl CheckArgs {
         }
 
         let (files_to_check, config_finder, _) =
-            self.files.resolve(self.config_override, wrapper)?;
+            self.files
+                .resolve_scoped(self.config_override, wrapper, ConfigScope::Coverage)?;
         let (module_reports, errors) = collect_module_reports(
             files_to_check,
             config_finder,

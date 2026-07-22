@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use anstream::ColorChoice;
 use anstream::eprintln;
+use anstream::stderr;
 use anstream::stdout;
 use anyhow::Context as _;
 use clap::Parser;
@@ -52,6 +54,7 @@ use pyrefly_util::fs_anyhow;
 use pyrefly_util::includes::Includes;
 use pyrefly_util::memory::MemoryUsageTrace;
 use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::unix_path::path_to_unix_string;
 use pyrefly_util::watcher::Watcher;
 use ruff_text_size::Ranged;
 use starlark_map::small_map::SmallMap;
@@ -66,6 +69,7 @@ use crate::commands::files::get_config_finder_for_snippet;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
+use crate::error::code_climate::CodeClimateIssues;
 use crate::error::error::Error;
 use crate::error::error::ErrorRenderer;
 use crate::error::error::print_error_counts;
@@ -430,9 +434,13 @@ fn write_errors_to_file(
     match format {
         OutputFormat::MinText => write_error_text_to_file(path, relative_to, errors, false),
         OutputFormat::FullText => write_error_text_to_file(path, relative_to, errors, true),
+        OutputFormat::FullTextWithGithub => {
+            write_error_full_text_with_github_to_file(path, relative_to, errors)
+        }
         OutputFormat::Json => write_error_json_to_file(path, relative_to, errors),
         OutputFormat::Github => write_error_github_to_file(path, errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_file(path, relative_to, errors),
+        OutputFormat::CodeClimate => write_error_codeclimate_to_file(path, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -445,9 +453,13 @@ pub(crate) fn write_errors_to_console(
     match format {
         OutputFormat::MinText => write_error_text_to_console(relative_to, errors, false),
         OutputFormat::FullText => write_error_text_to_console(relative_to, errors, true),
+        OutputFormat::FullTextWithGithub => {
+            write_error_full_text_with_github_to_console(relative_to, errors)
+        }
         OutputFormat::Json => write_error_json_to_console(relative_to, errors),
         OutputFormat::Github => write_error_github_to_console(errors),
         OutputFormat::JunitXml => write_error_junit_xml_to_console(relative_to, errors),
+        OutputFormat::CodeClimate => write_error_codeclimate_to_console(relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
 }
@@ -474,6 +486,22 @@ fn write_error_text_to_console(
     let stdout = stdout();
     let color_choice = stdout.current_choice();
     let mut renderer = ErrorRenderer::new(BufWriter::new(stdout.lock()), color_choice);
+    for error in errors {
+        renderer.write(error, relative_to, verbose)?;
+        renderer.flush()?;
+    }
+    renderer.flush()?;
+    Ok(())
+}
+
+pub(crate) fn write_errors_to_stderr(
+    relative_to: &Path,
+    errors: &[Error],
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let stderr = stderr();
+    let color_choice = stderr.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stderr.lock()), color_choice);
     for error in errors {
         renderer.write(error, relative_to, verbose)?;
         renderer.flush()?;
@@ -543,6 +571,42 @@ fn write_error_github_to_file(path: &Path, errors: &[Error]) -> anyhow::Result<(
 
 fn write_error_github_to_console(errors: &[Error]) -> anyhow::Result<()> {
     buffered_write_error_github(stdout(), errors)
+}
+
+fn write_error_full_text_with_github(
+    writer: impl Write,
+    color_choice: ColorChoice,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    {
+        let mut renderer = ErrorRenderer::new(&mut writer, color_choice);
+        for error in errors {
+            renderer.write(error, relative_to, true)?;
+        }
+        renderer.flush()?;
+    }
+    write_error_github(&mut writer, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_full_text_with_github_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    write_error_full_text_with_github(File::create(path)?, ColorChoice::Never, relative_to, errors)
+}
+
+fn write_error_full_text_with_github_to_console(
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    write_error_full_text_with_github(stdout.lock(), color_choice, relative_to, errors)
 }
 
 /// True for characters allowed by the XML 1.0 `Char` production. Everything else
@@ -679,7 +743,7 @@ fn severity_to_github_command(severity: Severity) -> Option<&'static str> {
 fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
-    let file = github_actions_path(error.path().as_path());
+    let file = path_to_unix_string(error.path().as_path());
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -696,20 +760,50 @@ fn github_actions_command(error: &Error) -> Option<String> {
 const WORKFLOW_DATA_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'%');
 const WORKFLOW_PROPERTY_ENCODE_SET: &AsciiSet = &WORKFLOW_DATA_ENCODE_SET.add(b':').add(b',');
 
-fn github_actions_path(path: &Path) -> String {
-    let mut path_str = path.to_string_lossy().into_owned();
-    if std::path::MAIN_SEPARATOR != '/' {
-        path_str = path_str.replace(std::path::MAIN_SEPARATOR, "/");
-    }
-    path_str
-}
-
 fn escape_workflow_data(value: &str) -> String {
     utf8_percent_encode(value, WORKFLOW_DATA_ENCODE_SET).to_string()
 }
 
 fn escape_workflow_property(value: &str) -> String {
     utf8_percent_encode(value, WORKFLOW_PROPERTY_ENCODE_SET).to_string()
+}
+
+fn write_error_codeclimate(
+    writer: &mut impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let issues = CodeClimateIssues::from_errors(relative_to, errors);
+    serde_json::to_writer_pretty(writer, &issues)?;
+    Ok(())
+}
+
+fn buffered_write_error_codeclimate(
+    writer: impl Write,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    write_error_codeclimate(&mut writer, relative_to, errors)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_error_codeclimate_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+) -> anyhow::Result<()> {
+    fn f(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+        let file = File::create(path)?;
+        buffered_write_error_codeclimate(file, relative_to, errors)
+    }
+    f(path, relative_to, errors)
+        .with_context(|| format!("while writing CodeClimate issues to `{}`", path.display()))
+}
+
+fn write_error_codeclimate_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
+    buffered_write_error_codeclimate(stdout(), relative_to, errors)
 }
 
 /// A data structure to facilitate the creation of handles for all the files we want to check.
@@ -720,7 +814,7 @@ pub struct Handles {
 }
 
 impl Handles {
-    pub fn new(files: Vec<PathBuf>) -> Self {
+    pub fn new(files: impl IntoIterator<Item = PathBuf>) -> Self {
         let mut handles = Self {
             path_data: HashSet::new(),
         };
@@ -728,6 +822,14 @@ impl Handles {
             handles.path_data.insert(ModulePath::filesystem(file));
         }
         handles
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.path_data.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.path_data.len()
     }
 
     pub fn all(
@@ -939,14 +1041,15 @@ impl CheckArgs {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>, CheckResult)> {
         let mut timings = Timings::new();
         let list_files_start = Instant::now();
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         timings.list_files = list_files_start.elapsed();
+        let handles = Handles::new(expanded_file_list);
         debug!(
             "Checking {} files (listing took {})",
-            expanded_file_list.len(),
+            handles.len(),
             Timings::show(timings.list_files),
         );
-        if expanded_file_list.is_empty() {
+        if handles.is_empty() {
             return Ok((
                 CommandExitStatus::Success,
                 Vec::new(),
@@ -958,7 +1061,6 @@ impl CheckArgs {
         }
 
         let state = Forgetter::new(State::new(config_finder, thread_count), true);
-        let handles = Handles::new(expanded_file_list);
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
             state.as_ref().new_transaction(require_levels.default, None),
@@ -1059,7 +1161,7 @@ impl CheckArgs {
     ) -> anyhow::Result<()> {
         // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
         // - Config search is stable across incremental runs.
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         let require_levels = self.get_required_levels();
         let mut handles = Handles::new(expanded_file_list);
         let state = State::new(config_finder, thread_count);
@@ -1572,6 +1674,18 @@ mod tests {
         let mut buf = Vec::new();
         write_error_github(&mut buf, &errors).unwrap();
         let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("::error file=/repo/foo.py"));
+        assert!(output.ends_with("::bad\n"));
+    }
+
+    #[test]
+    fn full_text_with_github_output_format_writes_both() {
+        let errors = vec![sample_error("bad".into())];
+        let mut buf = Vec::new();
+        write_error_full_text_with_github(&mut buf, ColorChoice::Never, Path::new("/"), &errors)
+            .unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("ERROR bad [bad-assignment]"));
         assert!(output.contains("::error file=/repo/foo.py"));
         assert!(output.ends_with("::bad\n"));
     }
