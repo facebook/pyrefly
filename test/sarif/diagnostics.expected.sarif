@@ -1,0 +1,144 @@
+{
+  "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json",
+  "runs": [
+    {
+      "columnKind": "unicodeCodePoints",
+      "results": [
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "diagnostics.py"
+                },
+                "region": {
+                  "endColumn": 11,
+                  "endLine": 3,
+                  "startColumn": 10,
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "`Literal[0]` is not assignable to `str`"
+          },
+          "ruleId": "bad-assignment",
+          "ruleIndex": 0
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "diagnostics.py"
+                },
+                "region": {
+                  "endColumn": 12,
+                  "endLine": 4,
+                  "startColumn": 7,
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Cannot divide by zero: `/` with a literal zero divisor"
+          },
+          "ruleId": "division-by-zero",
+          "ruleIndex": 1
+        },
+        {
+          "level": "note",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "diagnostics.py"
+                },
+                "region": {
+                  "endColumn": 15,
+                  "endLine": 5,
+                  "startColumn": 12,
+                  "startLine": 5
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "revealed type: str"
+          },
+          "ruleId": "reveal-type",
+          "ruleIndex": 3
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "diagnostics.py"
+                },
+                "region": {
+                  "endColumn": 29,
+                  "endLine": 15,
+                  "startColumn": 17,
+                  "startLine": 15
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Redundant cast: `int` is the same type as `int`"
+          },
+          "ruleId": "redundant-cast",
+          "ruleIndex": 2
+        }
+      ],
+      "tool": {
+        "driver": {
+          "informationUri": "https://pyrefly.org/",
+          "name": "Pyrefly",
+          "rules": [
+            {
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "helpUri": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment",
+              "id": "bad-assignment",
+              "name": "bad-assignment"
+            },
+            {
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://pyrefly.org/en/docs/error-kinds/#division-by-zero",
+              "id": "division-by-zero",
+              "name": "division-by-zero"
+            },
+            {
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "helpUri": "https://pyrefly.org/en/docs/error-kinds/#redundant-cast",
+              "id": "redundant-cast",
+              "name": "redundant-cast"
+            },
+            {
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "helpUri": "https://pyrefly.org/en/docs/error-kinds/#reveal-type",
+              "id": "reveal-type",
+              "name": "reveal-type"
+            }
+          ],
+          "semanticVersion": "0.0.0"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}
