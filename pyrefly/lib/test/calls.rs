@@ -662,3 +662,77 @@ def f() -> list[object]:
     return collect(["x"], 1 + "oops")  # E: `+` is not supported between `Literal[1]` and `Literal['oops']`
     "#,
 );
+
+testcase!(
+    test_lambda_infers_arg_types_from_outer_call,
+    r#"
+from typing import reveal_type
+
+lst: list[int] = []
+lst.sort(key=lambda e: reveal_type(e))  # E: revealed type: int
+    "#,
+);
+
+testcase!(
+    test_lambda_infers_arg_types_from_outer_call_large_union,
+    r#"
+from dataclasses import dataclass
+from typing import reveal_type
+
+@dataclass
+class Event1:
+    id: int
+
+@dataclass
+class Event2:
+    id: int
+
+@dataclass
+class Event3:
+    id: int
+
+AnyEvent = Event1 | Event2 | Event3
+lst: list[AnyEvent] = []
+lst.sort(key=lambda e: reveal_type(e).id)  # E: revealed type: Event1 | Event2 | Event3
+    "#,
+);
+
+testcase!(
+    test_overload_with_second_arg_still_infers_second_arg,
+    r#"
+from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
+from dataclasses import dataclass
+from typing import overload, reveal_type
+
+
+@overload
+def find[T](predicate: Callable[[T], bool], iterable: AsyncIterable[T], /) -> Awaitable[T | None]: ...
+
+
+@overload
+def find[T](predicate: Callable[[T], bool], iterable: Iterable[T], /) -> T | None: ...
+
+
+def find[T](
+    predicate: Callable[[T], bool], iterable: Iterable[T] | AsyncIterable[T], /
+) -> T | None | Awaitable[T | None]: ...
+
+
+@dataclass
+class WithName:
+    name: str
+
+
+@dataclass
+class PartialReaction:
+    emoticon: WithName | None
+    sticker: WithName
+
+
+emoticon: WithName = WithName("abc")
+partial_reactions: list[PartialReaction] = []
+
+reaction = find(lambda r: (r.emoticon or r.sticker).name == emoticon.name, partial_reactions)
+reveal_type(reaction)  # E: revealed type: PartialReaction | None
+    "#,
+);

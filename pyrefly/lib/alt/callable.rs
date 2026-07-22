@@ -65,11 +65,24 @@ use crate::types::types::Var;
 /// This is used to avoid re-inferring types for arguments multiple types.
 ///
 /// Implemented by keeping an `Owner` to hand out references to `Type`.
-pub struct CallWithTypes(Owner<Type>);
+pub struct CallWithTypes {
+    owner: Owner<Type>,
+    bidirectional_lambda_inferrence: bool,
+}
 
 impl CallWithTypes {
     pub fn new() -> Self {
-        Self(Owner::new())
+        Self {
+            owner: Owner::new(),
+            bidirectional_lambda_inferrence: false,
+        }
+    }
+
+    pub fn new_with_lambda(bidirectional_lambda_inferrence: bool) -> Self {
+        Self {
+            owner: Owner::new(),
+            bidirectional_lambda_inferrence,
+        }
     }
 
     pub fn type_or_expr<'a, 'b: 'a, Ans: LookupAnswer>(
@@ -85,9 +98,17 @@ impl CallWithTypes {
                 // the function's parameter types.
                 TypeOrExpr::Expr(e)
             }
+            TypeOrExpr::Expr(e @ Expr::Lambda(_)) if self.bidirectional_lambda_inferrence => {
+                // Even more of a hack: When the generic arguments going into the lambda are
+                // already solved, we can use bidirectional typechecking for the lambda, this only
+                // works if the type arguments are already solved in order, as it is not yet
+                // supported to solve type arguments in the order they are simplest in, they are
+                // always solved in order.
+                TypeOrExpr::Expr(e)
+            }
             TypeOrExpr::Expr(e) => {
                 let t = solver.expr_infer(e, errors);
-                TypeOrExpr::Type(self.0.push(t), e.range())
+                TypeOrExpr::Type(self.owner.push(t), e.range())
             }
             TypeOrExpr::Type(t, r) => TypeOrExpr::Type(t, r),
         }
