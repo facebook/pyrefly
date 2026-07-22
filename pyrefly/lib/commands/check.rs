@@ -1405,7 +1405,7 @@ impl CheckArgs {
             // TODO: Deprecate this in favor of `pyrefly suppress`
             let collected = loads.collect_errors();
             let unused_errors = loads.collect_unused_ignore_errors(&collected);
-            suppress::remove_unused_ignores(unused_errors, kind);
+            suppress::remove_unused_ignores(unused_errors, kind)?;
         }
 
         // We update the baseline file if requested, after reporting any new

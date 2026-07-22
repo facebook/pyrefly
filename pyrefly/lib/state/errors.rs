@@ -539,13 +539,16 @@ impl Errors {
                         let comment_line = supp.comment_line();
                         let line_start = module.lined_buffer().line_start(comment_line);
                         let range = TextRange::new(line_start, line_start + TextSize::new(1));
-                        unused_errors.push(Error::new(
-                            module.dupe(),
-                            range,
-                            "Unused pyre-fixme comment".to_owned(),
-                            Vec::new(),
-                            ErrorKind::UnusedIgnore,
-                        ));
+                        unused_errors.push(
+                            Error::new(
+                                module.dupe(),
+                                range,
+                                "Unused pyre-fixme comment".to_owned(),
+                                Vec::new(),
+                                ErrorKind::UnusedIgnore,
+                            )
+                            .with_quick_fix(supp.removal_edit(module.lined_buffer(), None).into()),
+                        );
                         continue;
                     }
 
@@ -557,13 +560,16 @@ impl Errors {
                         let comment_line = supp.comment_line();
                         let line_start = module.lined_buffer().line_start(comment_line);
                         let range = TextRange::new(line_start, line_start + TextSize::new(1));
-                        unused_errors.push(Error::new(
-                            module.dupe(),
-                            range,
-                            "Unused `# type: ignore` comment".to_owned(),
-                            Vec::new(),
-                            ErrorKind::UnusedTypeIgnore,
-                        ));
+                        unused_errors.push(
+                            Error::new(
+                                module.dupe(),
+                                range,
+                                "Unused `# type: ignore` comment".to_owned(),
+                                Vec::new(),
+                                ErrorKind::UnusedTypeIgnore,
+                            )
+                            .with_quick_fix(supp.removal_edit(module.lined_buffer(), None).into()),
+                        );
                         continue;
                     }
 
@@ -611,13 +617,24 @@ impl Errors {
                         )
                     };
 
-                    unused_errors.push(Error::new(
-                        module.dupe(),
-                        range,
-                        msg,
-                        Vec::new(),
-                        ErrorKind::UnusedIgnore,
-                    ));
+                    let partially_unused =
+                        !declared_codes.is_empty() && unused_codes.len() != declared_codes.len();
+                    unused_errors.push(
+                        Error::new(
+                            module.dupe(),
+                            range,
+                            msg,
+                            Vec::new(),
+                            ErrorKind::UnusedIgnore,
+                        )
+                        .with_quick_fix(
+                            supp.removal_edit(
+                                module.lined_buffer(),
+                                partially_unused.then_some(&unused_codes),
+                            )
+                            .into(),
+                        ),
+                    );
                 }
             }
         }
