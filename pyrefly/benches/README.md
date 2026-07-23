@@ -1,8 +1,9 @@
 # PyTorch benchmarks
 
-Two real-world walltime benchmarks that drive the actual Pyrefly LSP server over
-a large, pinned PyTorch checkout (15k+ Python files) across all cores. They
-measure interactive latency, not batch `check` throughput.
+Three real-world walltime benchmarks over a large, pinned PyTorch checkout (15k+
+Python files) across all cores. Two drive the actual Pyrefly LSP server and
+measure interactive latency (`cold_start`, `error_propagation`); one runs a cold
+batch `check` and measures whole-project throughput (`full_check`).
 
 For the full command reference (all flags, micro benchmarks, cargo/buck forms),
 see `.claude/skills/benchmark-pyrefly/SKILL.md`.
@@ -23,7 +24,7 @@ one place. Two providers feed the checkout:
 Set `PYREFLY_PYTORCH_BENCH_PATH` to an existing checkout to bypass both. If the
 checkout can't be obtained the bench prints a skip notice and exits cleanly.
 
-## The two benches
+## The three benches
 
 They ship in **one target** — buck `pytorch_bench`, cargo bench `pytorch` — and
 you select an individual one at runtime with a Criterion name filter rather than
@@ -31,7 +32,7 @@ picking a separate target. They live under `benches/pytorch/`, one module file
 per bench:
 
 - `pytorch/main.rs` — crate root; declares the modules and calls
-  `criterion_main!` aggregating both benchmarks' Criterion groups.
+  `criterion_main!` aggregating the benchmarks' Criterion groups.
 - `pytorch/common.rs` — shared checkout-acquisition and LSP-args harness.
 - `pytorch/cold_start.rs` — the cold-start benchmark. Fresh server per iteration;
   opens `torch/distributed/pipelining/_backward.py` and queries go-to-definition
@@ -42,6 +43,12 @@ per bench:
   resulting type error to surface in the distant dependent `_backward.py`.
   Proxy for incremental edit-propagation latency. Criterion id
   `pytorch/error_propagation`.
+- `pytorch/full_check.rs` — the full-check benchmark. Fresh `State` per iteration;
+  runs exactly what `pyrefly check` (project mode, no file args) does from inside
+  the checkout — discovers the project and checks every project file across all
+  cores. Dependencies default to `Exports` and checked files to `Errors`, matching
+  the CLI's require levels. Proxy for whole-project batch throughput (not
+  interactive latency). Criterion id `pytorch/full_check`.
 
 ## Running
 
@@ -53,19 +60,22 @@ parallel.
 
 These are heavy walltime benchmarks: budget roughly 2-4 minutes each (Criterion's
 sample floor is 10; ~3-5 s per cold-start iteration, ~2-3 s per
-error-propagation iteration after warmup). They are manual/heavy and are not run
-in CI Sandcastle by default (the `http_archive` dep is labeled `manual`).
+error-propagation iteration after warmup, ~1-1.5 s per full-check iteration).
+They are manual/heavy and are not run in CI Sandcastle by default (the
+`http_archive` dep is labeled `manual`).
 
 ```bash
-# Both benchmarks
+# All benchmarks
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench
 cargo bench --bench pytorch
 
 # Just one, selected by Criterion name filter
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench cold_start
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench error_propagation
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench full_check
 cargo bench --bench pytorch -- cold_start
 cargo bench --bench pytorch -- error_propagation
+cargo bench --bench pytorch -- full_check
 ```
 
 Useful flags — append after `--` for buck, pass directly for cargo:
