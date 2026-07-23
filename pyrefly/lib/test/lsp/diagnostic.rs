@@ -235,6 +235,172 @@ def test() -> Generator[float, float, None]:
     assert_eq!(report, "No unused variables");
 }
 
+#[test]
+fn test_method_read_of_name_shadowed_by_class_field() {
+    // Python name resolution skips enclosing class scopes: `return x` in the
+    // method reads f's `x`, not the class field `x`. So f's `x` is used.
+    let code = r#"
+def f():
+    x = 1
+    class C:
+        x = 2
+        def m(self) -> int:
+            return x
+    return C
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+#[test]
+fn test_unpacked_target_reassigned_in_loop() {
+    // Reads of `ri` are all traversed before its only registered assignment
+    // (`li, ri = 0, 100` is an unpacking, which is not registered), so this
+    // exercises the read-before-registration tracking.
+    let code = r#"
+def foo() -> int:
+    li, ri = 0, 100
+    while li <= ri:
+        mid = (li + ri) // 2
+        if mid % 2 == 0:
+            li = mid + 1
+        else:
+            ri = mid - 1
+    return li
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+#[test]
+fn test_generator_loop_reassignments() {
+    let code = r#"
+from typing import Generator
+
+def foo() -> Generator[int]:
+    li, ri = 0, 100
+    while li <= ri:
+        mid = (li + ri) // 2
+        if mid % 2 == 0:
+            li = mid + 1
+        else:
+            ri = mid - 1
+        yield li
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+#[test]
+fn test_for_loop_targets_are_not_reported_as_unused_variables() {
+    let code = r#"
+def f():
+    for _ in range(3):
+        pass
+    for i in range(3):
+        x = i + 1
+        if x % 2:
+            i = 0
+        yield x
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+#[test]
+fn test_with_targets_are_not_reported_as_unused_variables() {
+    let code = r#"
+def f():
+    with open("test") as handle:
+        x = handle.read()
+        handle = None
+    return x
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+#[test]
+fn test_comprehension_target_does_not_mark_outer_variable_used() {
+    let code = r#"
+def f():
+    i = 0
+    result = [i for i in range(3)]
+    return result
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `i` is unused");
+}
+
+#[test]
+fn test_class_scope_reads_do_not_confuse_outer_variable_usage() {
+    let code = r#"
+def class_reads_initialized_class_name():
+    unused = 0
+    class C:
+        x = 1
+        y = x
+    return C
+
+def class_reads_outer_name_before_class_assignment():
+    used = 0
+    class C:
+        y = used
+        used = 1
+    return C
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `unused` is unused");
+}
+
+#[test]
+fn test_nonlocal_read_marks_enclosing_variable_used() {
+    let code = r#"
+def outer():
+    x = 0
+    def inner():
+        nonlocal x
+        y = x + 1
+        x = 0
+        return y
+    return inner()
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+#[test]
+fn test_walrus_targets_are_not_reported_as_unused_variables() {
+    let code = r#"
+def f(xs: list[int]):
+    if (x := len(xs)) > 0:
+        y = x + 1
+        x = 0
+        return y
+    return 0
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
 // TODO: x = 7 should be highlighted as unused
 #[test]
 fn test_reassignment_false_negative() {

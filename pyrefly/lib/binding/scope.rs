@@ -1279,6 +1279,10 @@ pub struct Scope {
     has_future_annotations: bool,
     /// Tracking variables in the current scope (module, function, and method scopes)
     variables: SmallMap<Name, VariableUsage>,
+    /// Names read before any assignment registered them in `variables`.
+    /// `register_variable` treats these as already used (e.g. a loop condition
+    /// reading a name that is only assigned inside the loop body).
+    used_variables_before_registration: SmallSet<Name>,
     /// Depth of finally blocks we're in. Resets in new function scopes (PEP 765).
     finally_depth: usize,
     /// Depth of with blocks we're in. Resets in new function scopes.
@@ -1313,6 +1317,7 @@ impl Scope {
             imports: SmallMap::new(),
             has_future_annotations: false,
             variables: SmallMap::new(),
+            used_variables_before_registration: SmallSet::new(),
             finally_depth: 0,
             with_depth: 0,
             implicit_captures: SmallSet::new(),
@@ -2549,6 +2554,10 @@ impl Scopes {
                 .variables
                 .get(&name.id)
                 .is_some_and(|usage| usage.used)
+                || self
+                    .current()
+                    .used_variables_before_registration
+                    .contains(&name.id)
                 || self.is_parameter_used(&name.id);
             self.current_mut().variables.insert(
                 name.id.clone(),
@@ -2560,11 +2569,67 @@ impl Scopes {
         }
     }
 
+    /// Mark a name read as a use of the variable it resolves to, for unused-variable
+    /// tracking. The walk mirrors the scope resolution of `look_up_name_for_read`,
+    /// but is based on static scope info rather than flow: a read must count as a
+    /// use of its variable even when it is traversed before the assignment that
+    /// registers the variable (e.g. a loop condition reading a name reassigned in
+    /// the loop body). Static scope is prebuilt from the definitions pass, so it
+    /// already knows every name the scope will bind.
     pub fn mark_variable_used(&mut self, name: &Name) {
-        for scope in self.iter_rev_mut() {
+        // Class scopes are invisible to nested code blocks, except annotation
+        // scopes, which can see their enclosing class scope (see `visit_scopes`).
+        let is_current_scope_annotation_like = matches!(
+            self.current().kind,
+            ScopeKind::Annotation | ScopeKind::TypeAlias
+        );
+        for (lookup_depth, scope) in self.iter_rev_mut().enumerate() {
+            if matches!(scope.kind, ScopeKind::Class(_)) {
+                if (lookup_depth == 0 || (is_current_scope_annotation_like && lookup_depth == 1))
+                    && scope
+                        .flow
+                        .get_info(name)
+                        .is_some_and(|info| !matches!(info.initialized(), InitializedInFlow::No))
+                {
+                    // A read directly in a class body resolves to the class attribute
+                    // if one is already bound in flow (class body scopes are dynamic).
+                    // Class attributes are not tracked as variables, so there is
+                    // nothing to mark.
+                    return;
+                }
+                continue;
+            }
+
             if let Some(info) = scope.variables.get_mut(name) {
                 info.used = true;
-                break;
+                return;
+            }
+
+            if let Some(static_info) = scope.stat.0.get(name) {
+                if matches!(static_info.style, StaticStyle::MutableCapture(_)) {
+                    // `global`/`nonlocal` names resolve to (and mark) the declaring scope.
+                    continue;
+                }
+                if matches!(scope.kind, ScopeKind::Comprehension { .. })
+                    && scope.flow.get_info(name).is_none()
+                {
+                    // A walrus target is in the comprehension's static scope before the
+                    // write adds it to flow; a read before that point resolves to the
+                    // enclosing scope (mirrors `look_up_name_for_read`).
+                    continue;
+                }
+                // The name is statically local to this scope but not registered as a
+                // variable yet: remember the use so registration preserves it. Only
+                // these scope kinds track variables (see `register_variable`).
+                if matches!(
+                    scope.kind,
+                    ScopeKind::Module | ScopeKind::Function(_) | ScopeKind::Method(_)
+                ) {
+                    scope
+                        .used_variables_before_registration
+                        .insert(name.clone());
+                }
+                return;
             }
         }
     }
