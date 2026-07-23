@@ -357,6 +357,9 @@ impl<'a> BindingsBuilder<'a> {
                     };
                     narrow_ops.and_subject(Some((subject_op, x.range)));
                 }
+                // Without a star sub-pattern the sequence length is pinned exactly;
+                // with one it is only a lower bound.
+                let has_star = num_patterns != num_non_star_patterns;
                 let mut seen_star = false;
                 for (i, x) in x.patterns.into_iter().enumerate() {
                     // Process each sub-pattern in the sequence pattern
@@ -381,10 +384,15 @@ impl<'a> BindingsBuilder<'a> {
                             seen_star = true;
                         }
                         _ => {
-                            let position = if seen_star {
-                                UnpackedPosition::ReverseIndex(num_patterns - i)
+                            let position = if !has_star {
+                                UnpackedPosition::ExactIndex(i, num_non_star_patterns)
+                            } else if seen_star {
+                                UnpackedPosition::ReverseIndex(
+                                    num_patterns - i,
+                                    num_non_star_patterns,
+                                )
                             } else {
-                                UnpackedPosition::Index(i)
+                                UnpackedPosition::Index(i, num_non_star_patterns)
                             };
                             let key_for_subpattern = self.insert_binding(
                                 Key::Anon(x.range()),
@@ -439,7 +447,7 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                 }
-                let expect = if num_patterns != num_non_star_patterns {
+                let expect = if has_star {
                     SizeExpectation::Ge(num_non_star_patterns)
                 } else {
                     SizeExpectation::Eq(num_patterns)

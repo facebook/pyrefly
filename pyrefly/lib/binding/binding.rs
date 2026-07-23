@@ -1742,12 +1742,17 @@ impl DisplayWith<ModuleInfo> for KeyYieldFrom {
     }
 }
 
+/// A target position within an unpacking assignment or sequence pattern. The second
+/// `usize` of each index variant is the source length the target list requires: the
+/// exact length for `ExactIndex`, or the minimum for `Index`/`ReverseIndex`.
 #[derive(Clone, Copy, Dupe, Debug)]
 pub enum UnpackedPosition {
-    /// Zero-based index
-    Index(usize),
-    /// A negative index, counting from the back
-    ReverseIndex(usize),
+    /// Zero-based index in an unpack with no star.
+    ExactIndex(usize, usize),
+    /// Zero-based index before a star.
+    Index(usize, usize),
+    /// A negative index counting from the back (always after a star).
+    ReverseIndex(usize, usize),
     /// Slice represented as an index from the front to an index from the back.
     /// Note that even though the second index is conceptually negative, we can
     /// represent it as an usize because it is always negative.
@@ -2505,8 +2510,10 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::UnpackedValue(a, x, range, pos, receiver) => {
                 let pos = match pos {
-                    UnpackedPosition::Index(i) => i.to_string(),
-                    UnpackedPosition::ReverseIndex(i) => format!("-{i}"),
+                    UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => {
+                        i.to_string()
+                    }
+                    UnpackedPosition::ReverseIndex(i, _) => format!("-{i}"),
                     UnpackedPosition::Slice(i, j) => {
                         let end = match j {
                             0 => "".to_owned(),

@@ -988,8 +988,8 @@ from shape_extensions import Int
 def ordinary(x: tuple[str, *tuple[Int, ...]]) -> None:
     reveal_type(x[0])  # E: revealed type: str
     first, *rest = x
-    assert_type(first, str | Int[int])
-    reveal_type(rest)  # E: revealed type: list[str | Int[int]]
+    assert_type(first, str)
+    reveal_type(rest)  # E: revealed type: list[Int[int]]
     *head, last = x
     reveal_type(head)  # E: revealed type: list[str | Int[int]]
     reveal_type(last)  # E: revealed type: str | Int[int]

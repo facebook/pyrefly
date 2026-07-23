@@ -978,6 +978,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::IntTuple(int_tuple) => self.iterate_int_tuple(int_tuple),
             Type::Tuple(Tuple::Concrete(elts)) => vec![Iterable::FixedLen(elts.clone())],
             Type::Tuple(Tuple::Unbounded(elt)) => vec![Iterable::OfType((**elt).clone())],
+            // Empty ends around the unbounded middle, e.g. `tuple[*Ts]` or `tuple[*tuple[X, ...]]`:
+            // iteration collapses to the middle alone, so there are no fixed ends to keep distinct.
             Type::Tuple(Tuple::Unpacked(f)) if f.0.is_empty() && f.2.is_empty() => {
                 let (_, middle, _) = &**f;
                 if let Type::Quantified(q) = middle
@@ -987,6 +989,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     self.iterate(middle, range, errors, orig_context)
                 }
+            }
+            Type::Tuple(Tuple::Unpacked(f)) => {
+                // Keep the fixed ends distinct so a starred target captures only the middle.
+                let (prefix, middle, suffix) = &**f;
+                let middle = match middle {
+                    Type::Tuple(Tuple::Unbounded(elt)) => (**elt).clone(),
+                    Type::Quantified(q) if q.is_type_var_tuple() => {
+                        self.heap.mk_class_type(self.stdlib.object().clone())
+                    }
+                    // Unresolved alias or `Var`: reduce via the iterable protocol, which errors.
+                    _ => self.get_produced_type(self.iterate(middle, range, errors, orig_context)),
+                };
+                vec![Iterable::Unpacked {
+                    prefix: prefix.clone(),
+                    middle,
+                    suffix: suffix.clone(),
+                }]
             }
             Type::Var(v) if let Some(_guard) = self.recurse(*v) => {
                 self.iterate(&self.solver().force_var(*v), range, errors, orig_context)
@@ -2441,7 +2460,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 };
                 for iterable in iterables {
                     match iterable {
-                        Iterable::OfType(_) | Iterable::Unpacked { .. } => {}
+                        Iterable::OfType(_) => {}
+                        Iterable::Unpacked { prefix, suffix, .. } => {
+                            // A variadic tuple has at least `prefix + suffix` elements (the middle
+                            // can be empty) and no upper bound, so only an exact expectation below
+                            // that minimum is impossible; `Ge` is always satisfiable.
+                            let min_len = prefix.len() + suffix.len();
+                            if let SizeExpectation::Eq(n) = expect
+                                && *n < min_len
+                            {
+                                self.error(
+                                    errors,
+                                    *range,
+                                    ErrorKind::BadUnpacking,
+                                    format!(
+                                        "Cannot unpack {} (of size {}+) into {}",
+                                        iterable_ty,
+                                        min_len,
+                                        expect.message(),
+                                    ),
+                                );
+                            }
+                        }
                         Iterable::OfTypeVarTuple(_) => {
                             self.error(
                                 errors,
@@ -4289,6 +4329,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// A gradual dimension subsumes other int dimensions but not non-dimension types.
+    fn unions_or_gradual(&self, elements: Vec<Type>) -> Type {
+        if elements.iter().any(|ty| ty == &gradual_size()) {
+            let mut kept: Vec<Type> = elements
+                .into_iter()
+                .filter(|ty| !matches!(ty, Type::Int(_)))
+                .collect();
+            kept.push(gradual_size());
+            self.unions(kept)
+        } else {
+            self.unions(elements)
+        }
+    }
+
     /// Handle `Binding::UnpackedValue` - extract value from unpacking.
     /// The `#[inline(never)]` annotation is intentional to reduce stack frame size.
     #[inline(never)]
@@ -4306,7 +4360,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         for iterable in iterables {
             values.push(match iterable {
                 Iterable::OfType(ty) => match pos {
-                    UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => ty,
+                    UnpackedPosition::ExactIndex(..)
+                    | UnpackedPosition::Index(..)
+                    | UnpackedPosition::ReverseIndex(..) => ty,
                     UnpackedPosition::Slice(_, _) => self.heap.mk_class_type(self.stdlib.list(ty)),
                 },
                 Iterable::Unpacked {
@@ -4314,14 +4370,44 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     middle,
                     suffix,
                 } => match pos {
-                    UnpackedPosition::Index(i) => {
-                        prefix.get(*i).cloned().unwrap_or_else(|| middle.clone())
-                    }
-                    UnpackedPosition::ReverseIndex(i) => {
+                    // Exact length pins the variadic middle to `middle_len` elements, so a
+                    // position past the fixed prefix resolves to a single element: the middle
+                    // if it lands within it, otherwise a specific suffix element.
+                    UnpackedPosition::ExactIndex(i, exact_len) => match prefix.get(*i) {
+                        Some(ty) => ty.clone(),
+                        None => {
+                            let past = *i - prefix.len();
+                            let middle_len = exact_len.saturating_sub(prefix.len() + suffix.len());
+                            if past < middle_len {
+                                middle.clone()
+                            } else {
+                                suffix[past - middle_len].clone()
+                            }
+                        }
+                    },
+                    // Before a star the middle may hold as few as `min_middle` elements, so a
+                    // fixed suffix element can shift forward into this position.
+                    UnpackedPosition::Index(i, min_len) => match prefix.get(*i) {
+                        Some(ty) => ty.clone(),
+                        None => {
+                            let past = *i - prefix.len();
+                            let min_middle = min_len.saturating_sub(prefix.len() + suffix.len());
+                            let shift = (past + 1).saturating_sub(min_middle);
+                            let mut elements = vec![middle.clone()];
+                            elements.extend(suffix.iter().take(shift).cloned());
+                            self.unions_or_gradual(elements)
+                        }
+                    },
+                    // After a star; symmetric to `Index`, a fixed prefix element can shift back.
+                    UnpackedPosition::ReverseIndex(i, min_len) => {
                         if *i > 0 && *i <= suffix.len() {
                             suffix[suffix.len() - *i].clone()
                         } else {
-                            middle.clone()
+                            let min_middle = min_len.saturating_sub(prefix.len() + suffix.len());
+                            let shift = (*i - suffix.len()).saturating_sub(min_middle);
+                            let mut elements = vec![middle.clone()];
+                            elements.extend(prefix.iter().rev().take(shift).cloned());
+                            self.unions_or_gradual(elements)
                         }
                     }
                     UnpackedPosition::Slice(i, j) => {
@@ -4329,21 +4415,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         elements.push(middle.clone());
                         elements
                             .extend(suffix.iter().take(suffix.len().saturating_sub(*j)).cloned());
-                        let elem_ty = if elements.iter().any(|ty| ty == &gradual_size()) {
-                            gradual_size()
-                        } else {
-                            self.unions(elements)
-                        };
-                        self.heap.mk_class_type(self.stdlib.list(elem_ty))
+                        self.heap
+                            .mk_class_type(self.stdlib.list(self.unions_or_gradual(elements)))
                     }
                 },
                 Iterable::OfTypeVarTuple(_) => {
                     // Type var tuples can resolve to anything so we fall back to object
                     let object_type = self.heap.mk_class_type(self.stdlib.object().clone());
                     match pos {
-                        UnpackedPosition::Index(_) | UnpackedPosition::ReverseIndex(_) => {
-                            object_type
-                        }
+                        UnpackedPosition::ExactIndex(..)
+                        | UnpackedPosition::Index(..)
+                        | UnpackedPosition::ReverseIndex(..) => object_type,
                         UnpackedPosition::Slice(_, _) => {
                             self.heap.mk_class_type(self.stdlib.list(object_type))
                         }
@@ -4352,8 +4434,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Iterable::FixedLen(ts) => {
                     let has_never = ts.iter().any(Type::is_never);
                     match pos {
-                        UnpackedPosition::Index(i) | UnpackedPosition::ReverseIndex(i) => {
-                            let idx = if matches!(pos, UnpackedPosition::Index(_)) {
+                        UnpackedPosition::ExactIndex(i, _)
+                        | UnpackedPosition::Index(i, _)
+                        | UnpackedPosition::ReverseIndex(i, _) => {
+                            let idx = if matches!(
+                                pos,
+                                UnpackedPosition::ExactIndex(..) | UnpackedPosition::Index(..)
+                            ) {
                                 Some(*i)
                             } else {
                                 ts.len().checked_sub(*i)

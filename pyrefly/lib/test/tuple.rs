@@ -178,6 +178,108 @@ def test(x: tuple[int]) -> None:
 );
 
 testcase!(
+    test_unpack_variadic_tuple_star,
+    r#"
+from typing import assert_type
+def test(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, *rest, b = t
+    assert_type(a, int)
+    assert_type(rest, list[bool])
+    assert_type(b, str)
+    # A fixed suffix element that no after-star target consumes flows into the star,
+    # but the fixed prefix element does not smear in.
+    c, *carry = t
+    assert_type(c, int)
+    assert_type(carry, list[bool | str])
+    for x in t:
+        assert_type(x, int | bool | str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_empty_middle,
+    r#"
+from typing import assert_type
+# The unbounded middle can match zero elements, so a fixed target that indexes past
+# its own end may land on a fixed element from the opposite end.
+def prefix_only(x: tuple[str, *tuple[int, ...]]) -> None:
+    *head, last = x
+    assert_type(head, list[int | str])
+    assert_type(last, int | str)
+def suffix_only(x: tuple[*tuple[int, ...], str]) -> None:
+    first, *rest = x
+    assert_type(first, int | str)
+    assert_type(rest, list[int | str])
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_exact_length,
+    r#"
+from typing import assert_type
+# An unpack with no star pins the length exactly, so the variadic middle has a known
+# size and each target resolves to a single element -- no fixed-end smearing.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, b = t  # length must be 2, so the middle is empty
+    assert_type(a, int)
+    assert_type(b, str)
+    c, d, e = t  # length must be 3, so the middle has exactly one element
+    assert_type(c, int)
+    assert_type(d, bool)
+    assert_type(e, str)
+    match t:
+        case [f, g]:
+            assert_type(f, int)
+            assert_type(g, str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_too_few_targets,
+    r#"
+# The fixed prefix and suffix guarantee at least 2 elements, so an exact unpack into
+# fewer targets can never succeed.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    (a,) = t  # E: Cannot unpack tuple[int, *tuple[bool, ...], str] (of size 2+) into 1 value
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_both_ends_mandatory,
+    r#"
+from typing import assert_type
+# `b` and `c` are mandatory targets that reserve the fixed prefix `int` and suffix `str`,
+# so the empty-middle shift must not leak those into each other or into the star.
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    a, b, *rest, c = t
+    assert_type(a, int)
+    assert_type(b, bool)
+    assert_type(rest, list[bool])
+    assert_type(c, str)
+"#,
+);
+
+testcase!(
+    test_match_variadic_tuple_both_ends_mandatory,
+    r#"
+from typing import assert_type
+def f(t: tuple[int, *tuple[bool, ...], str]) -> None:
+    match t:
+        case [a, b, *rest, c]:
+            assert_type(b, bool)
+            assert_type(c, str)
+"#,
+);
+
+testcase!(
+    test_unpack_variadic_tuple_bad_star,
+    r#"
+def f(t: tuple[int, *int, str]) -> None: ...  # E: Expected a type form, got instance of `*int`
+def g(t: tuple[int, *list[int], str]) -> None: ...  # E: Expected a type form, got instance of `*list[int]`
+"#,
+);
+
+testcase!(
     test_unpack_in_literal,
     r#"
 from typing import Any, assert_type, Literal
