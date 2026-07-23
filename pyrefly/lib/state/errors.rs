@@ -559,6 +559,11 @@ impl Errors {
                     let declared_codes: SmallSet<String> =
                         supp.error_codes().iter().cloned().collect();
 
+                    // listing `unused-ignore` opts this comment out of unused-ignore and doesn't flag itself as unused
+                    if declared_codes.contains(ErrorKind::UnusedIgnore.to_name()) {
+                        continue;
+                    }
+
                     // Determine if the suppression is unused
                     let unused_codes: SmallSet<String> = if declared_codes.is_empty() {
                         // Blanket ignore - unused if no errors were suppressed
@@ -805,6 +810,62 @@ def f() -> int:
         assert_eq!(unused.len(), 1);
         assert!(unused[0].msg().contains("bad-override"));
         assert!(!unused[0].msg().contains("bad-return"));
+    }
+
+    #[test]
+    fn test_unused_ignore_listed_with_used_code() {
+        // `unused-ignore` in the list is never itself reported as unused, even when another listed code is used ("error present" version). Issue 3951
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore [bad-return, unused-ignore]
+    return "hello"
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_unused_ignore_listed_suppresses_comment() {
+        // Listing `unused-ignore` opts the comment out of unused-ignore reporting even when the other listed code didn't fire ("error absent" version).
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore [bad-return, unused-ignore]
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_unused_ignore_alone_not_flagged() {
+        // `# pyrefly: ignore[unused-ignore]` on a clean line doesn't self-flag
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore [unused-ignore]
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert!(unused.is_empty());
+    }
+
+    #[test]
+    fn test_unused_ignore_without_listing_still_flagged() {
+        // Without `unused-ignore` in the list, an unused comment is still reported, so the change only affects comments that opt in.
+        let contents = r#"
+def f() -> int:
+    # pyrefly: ignore [bad-return]
+    return 1
+"#;
+        let (errors, _tdir) = get_errors(contents);
+        let collected = errors.collect_errors();
+        let unused = errors.collect_unused_ignore_errors(&collected);
+        assert_eq!(unused.len(), 1);
     }
 
     #[test]
