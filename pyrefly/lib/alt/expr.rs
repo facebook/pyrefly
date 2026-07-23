@@ -2020,7 +2020,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             let swallower = self.error_swallower();
             match self.expr_infer(slice, &swallower) {
-                Type::Literal(ref lit) if let Lit::Str(value) = &lit.value => {
+                key_ty if let Some(value) = self.literal_typed_dict_key_name(&key_ty) => {
                     let facet = FacetKind::Key(value.to_string());
                     self.subscript_infer_for_key_facet(base, facet, slice, range, errors)
                 }
@@ -3013,9 +3013,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let key_ty = self.expr_infer(slice, errors);
                     // Don't warn on anonymous typed dicts
                     let warn_on_not_required_access = matches!(typed_dict, TypedDict::TypedDict(_));
-                    self.distribute_over_union(&key_ty, |ty| match ty {
-                        Type::Literal(lit) if let Lit::Str(field_name) = &lit.value => {
-                            let key_name = Name::new(field_name);
+                    self.distribute_over_union(&key_ty, |ty| match self.literal_typed_dict_key_name(ty) {
+                        Some(key_name) => {
                             if let Some(field) = self.typed_dict_field(&typed_dict, &key_name) {
                                 if warn_on_not_required_access && !field.required && !key_present {
                                     errors
@@ -3045,7 +3044,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                             slice.range(),
                                             typed_dict.key_error_kind(),
                                             format!(
-                                                "{} does not have key `{field_name}`",
+                                                "{} does not have key `{key_name}`",
                                                 typed_dict.label()
                                             ),
                                         );
@@ -3064,7 +3063,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 }
                             }
                         }
-                        _ => {
+                        None => {
                             if self.is_subset_eq(
                                 ty,
                                 &self.heap.mk_class_type(self.stdlib.str().clone()),

@@ -5359,10 +5359,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let assigned_ty = self.distribute_over_union(&base, |base| {
             self.distribute_over_union(&slice_ty, |key| {
                 match (base, key) {
-                    (Type::TypedDict(typed_dict), Type::Literal(lit))
-                        if let Lit::Str(field_name) = &lit.value =>
+                    (Type::TypedDict(typed_dict), key)
+                        if let Some(field_name) = self.literal_typed_dict_key_name(key) =>
                     {
-                        let field_name = Name::new(field_name);
                         self.check_assign_to_typed_dict_literal_subscript(
                             typed_dict,
                             &field_name,
@@ -6724,10 +6723,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let slice_ty = self.expr_infer(&x.slice, errors);
                 self.map_over_union(&base, |base| {
                     self.map_over_union(&slice_ty, |key| match (base, key) {
-                        (Type::TypedDict(typed_dict), Type::Literal(lit))
-                            if let Lit::Str(field_name) = &lit.value =>
+                        (Type::TypedDict(typed_dict), key)
+                            if let Some(field_name) = self.literal_typed_dict_key_name(key) =>
                         {
-                            let field_name = Name::new(field_name);
                             self.check_del_typed_dict_literal_key(
                                 typed_dict,
                                 &field_name,

@@ -229,6 +229,29 @@ def f(c: C | Any):
 );
 
 testcase!(
+    test_typed_dict_str_enum_key,
+    r#"
+from enum import StrEnum
+from typing import assert_type, TypedDict
+
+class MyEnum(StrEnum):
+    i = "i"
+    j = "j"
+
+class MyDict(TypedDict):
+    i: int
+
+my_d = MyDict(i=1)
+my_d[MyEnum.i] = 2
+my_d[MyEnum.i] = "bad"  # E: `Literal['bad']` is not assignable to TypedDict key `i` with type `int`
+my_d[MyEnum.j] = 2  # E: TypedDict `MyDict` does not have key `j`
+my_d[MyEnum.i.name] = 2
+assert_type(my_d[MyEnum.i], int)
+my_d[MyEnum.j]  # E: TypedDict `MyDict` does not have key `j`
+    "#,
+);
+
+testcase!(
     test_typed_dict_readonly_partial_update,
     r#"
 from typing import Never, NotRequired, TypedDict, ReadOnly

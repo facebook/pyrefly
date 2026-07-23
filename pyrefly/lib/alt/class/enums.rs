@@ -220,6 +220,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    pub fn literal_typed_dict_key_name(&self, ty: &Type) -> Option<Name> {
+        let Type::Literal(lit) = ty else {
+            return None;
+        };
+        match &lit.value {
+            Lit::Str(field_name) => Some(Name::new(field_name)),
+            Lit::Enum(lit_enum) => {
+                let metadata = self.get_metadata_for_class(lit_enum.class.class_object());
+                let enum_metadata = metadata.enum_metadata()?;
+                let value_ty =
+                    self.enum_value_lookup_on_member(&lit_enum.class, lit_enum, enum_metadata);
+                match value_ty {
+                    Type::Literal(value_lit) => match value_lit.value {
+                        Lit::Str(field_name) => Some(Name::new(&field_name)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Look up the `_value_` attribute for a specific enum member (e.g. `MyEnum.X._value_`).
     /// Whether `_value_` should be read-write is unspecified, but we need to allow assigning
     /// it in `__init__` so we make it read-write.
