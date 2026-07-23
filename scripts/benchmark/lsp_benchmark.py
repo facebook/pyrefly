@@ -123,6 +123,18 @@ class DefinitionResult:
     raw_result: Any
     locations: List[Location]
 
+@dataclasses.dataclass
+class CompletionResult:
+    # Mirrors DefinitionResult.
+    # "ok" implies the LSP request succeeded (no timeout or protocol error).
+    # "found" implies at least one completion item was returned.
+    ok: bool
+    found: bool
+    n_items: int
+    is_incomplete: bool
+    latency_ms: Optional[float]
+    error: Optional[str]
+    raw_result: Any
 
 @dataclasses.dataclass
 class BenchmarkCase:
@@ -132,7 +144,10 @@ class BenchmarkCase:
     token: str
     line_text: str
     kind: str = "unknown"
-
+    # optimal synthesized document test. When set, this is sent via didOpen instead of on-disk contents. None means "read from disk"
+    text: Optional[str] = None
+    # checks for completion, the member that actually exists at this position, so we can check the server offered it back. None means "no expectation".
+    expected_label: Optional[str] = None
 
 def _path_to_uri(path: Path) -> str:
     # Use file:// URI with forward slashes.
@@ -362,26 +377,98 @@ def pick_random_python_file(root: Path, *, rng: random.Random) -> Path:
 
 
 def pick_random_case(
-    root: Path, *, rng: random.Random, max_file_tries: int = 50
+    root: Path,
+    *,
+    rng: random.Random,
+    max_file_tries: int = 50,
+    mode: str = "definition",
+    prefix_len: int = 1,
 ) -> BenchmarkCase:
     """Pick a random BenchmarkCase, retrying across files if needed.
 
-    Some Python files (e.g. empty `__init__.py` stubs or files full of comments)
-    might not yield any usable symbol occurrences.
+    Some Python files (e.g. empty `__init__.py` or files full of comments) might not contain any usable symbol occurences. In "completion" mode a file must additionally contain a member access on an imported module.
     """
 
     last_err: Optional[Exception] = None
     for _ in range(max_file_tries):
         file_path = pick_random_python_file(root, rng=rng)
         try:
+            if mode == "completion":
+                case = pick_random_completion_case(
+                    file_path, rng=rng, prefix_len=prefix_len
+                )
+                if case is None:
+                    continue
+                return case
             return pick_random_identifier_case(file_path, rng=rng)
         except Exception as e:
             last_err = e
             continue
     raise RuntimeError(
-        f"Failed to pick a usable symbol after {max_file_tries} files; last error: {last_err}"
+        f"Failed to pick a usable {mode} case after {max_file_tries} files; "
+        f"last error: {last_err}"
     )
 
+# Attribute accesses whose base is an imported module (e.g. `pl.DataFrame`
+# after `import polars as pl`) — the scenario described in the issue.
+COMPLETION_ATTR_KINDS = ("imported_attr", "imported_attr_call")
+
+
+def pick_random_completion_case(
+    file_path: Path, *, rng: random.Random, prefix_len: int = 1
+) -> Optional[BenchmarkCase]:
+    """Pick a member-access site and synthesize a partially-typed buffer.
+
+    Reproduces `pl.d` scenario from issue #2296. Given `pl.DataFrame(...)` on disk, we send document with attribute truncated to `prefix_len` chars (`pl.D(...)`) and place cursor at the end of that prefix, so the server sees a partially-typed member access and filters candidates by that prefix.
+
+    This matters because the server derives its filter prefix from the whole identifier under the cursor so parking cursor inside an existing complete token would filter on the full name rather than just the prefix.
+
+    `prefix_len=0` reproduces a bare `pl.` (just-typed dot). That leaves the line syntactically incomplete, which is realistic but exercises a different path than a prefix search.
+
+    Returns None if the file has no suitable occurrence.
+    """
+    text = file_path.read_text(encoding="utf-8", errors="replace")
+    # Split on \n only to presrve original line endings
+    lines = text.split("\n")
+
+    candidates: List[Tuple[int, int, str, str]] = []
+    for o in _collect_ast_occurrences(text):
+        if o.kind not in COMPLETION_ATTR_KINDS:
+            continue
+        line0 = o.line_1b - 1
+        if not (0 <= line0 < len(lines)):
+            continue
+        line = lines[line0]
+        # col_offset points to base at (`pl`) so this finds the attribute after it
+        col0 = line.find(o.token, o.col_0b)
+        if col0 == -1 or len(o.token) < prefix_len:
+            continue
+        # confirmation that it's really `<base>.<attr>`
+        if not line[:col0].rstrip().endswith("."):
+            continue
+        candidates.append((line0, col0, o.token, o.kind))
+
+    if not candidates:
+        return None
+
+    line0, col0, token, kind = rng.choice(candidates)
+    prefix = token[:prefix_len]
+    new_lines = list(lines)
+    new_lines[line0] = (
+        lines[line0][:col0] + prefix + lines[line0][col0 + len(token) :]
+    )
+    new_text = "\n".join(new_lines)
+
+    return BenchmarkCase(
+        file_path=file_path,
+        uri=_path_to_uri(file_path),
+        position=Position(line=line0, character=col0 + prefix_len),
+        token=prefix,
+        line_text=new_lines[line0],
+        kind=kind,
+        text=new_text,
+        expected_label=token,
+    )
 
 def pick_random_identifier_case(
     file_path: Path, *, rng: random.Random
@@ -464,6 +551,24 @@ def pick_random_identifier_case(
         line_text=_safe_line(lines, line),
         kind=kind,
     )
+
+
+def _read_exactly(stream: Any, n: int) -> bytes:
+    """Read exactly n bytes from a raw stream.
+
+    Servers are spawned with bufsize=0, so stdout is a raw io.FileIO whose read(n) issues a single syscall and may return fewer than n bytes.
+    Small responses arrive whole, but a large one like a completion list with hundreds of items would come back truncated, fail to parse, and desync the stream.
+    Thus we loop until the whole body is read.
+    """
+    chunks: List[bytes] = []
+    remaining = n
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 class LspProtocolError(RuntimeError):
@@ -593,6 +698,18 @@ class LspClient:
             "capabilities": {
                 "textDocument": {
                     "definition": {"dynamicRegistration": False, "linkSupport": True},
+                    # declaring resolveSupport lets servers defer docs/detail to competionItem/resolve, so this times initial completion roundtrip instead of full resolution
+                    "completion": {
+                        "dynamicRegistration": False,
+                        "contextSupport": True,
+                        "completionItem": {
+                            "snippetSupport": False,
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "resolveSupport": {
+                                "properties": ["documentation", "detail"]
+                            },
+                        },
+                    },
                 },
                 "workspace": {
                     "workspaceFolders": True,
@@ -656,6 +773,54 @@ class LspClient:
                 error=str(e),
                 raw_result=None,
                 locations=[],
+            )
+
+    def completion(
+        self,
+        uri: str,
+        pos: Position,
+        *,
+        timeout_s: float = 60.0,
+        trigger_character: Optional[str] = None,
+    ) -> CompletionResult:
+        params: JsonObj = {
+            "textDocument": {"uri": uri},
+            "position": {"line": pos.line, "character": pos.character},
+        }
+        if trigger_character is not None:
+            # CompletionTriggerKind.TriggerCharacter
+            params["context"] = {
+                "triggerKind": 2,
+                "triggerCharacter": trigger_character,
+            }
+        else:
+            # CompletionTriggerKind.Invoked
+            params["context"] = {"triggerKind": 1}
+        t0 = time.perf_counter()
+        try:
+            resp = self.request("textDocument/completion", params, timeout_s=timeout_s)
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            result = resp.get("result")
+            items, is_incomplete = _parse_completion_result(result)
+            return CompletionResult(
+                ok=True,
+                found=len(items) > 0,
+                n_items=len(items),
+                is_incomplete=is_incomplete,
+                latency_ms=dt_ms,
+                error=None,
+                raw_result=result,
+            )
+        except Exception as e:
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            return CompletionResult(
+                ok=False,
+                found=False,
+                n_items=0,
+                is_incomplete=False,
+                latency_ms=dt_ms,
+                error=str(e),
+                raw_result=None,
             )
 
     def notify(self, method: str, params: Any) -> None:
@@ -728,8 +893,8 @@ class LspClient:
                 except ValueError:
                     continue
 
-                body = stream.read(length)
-                if not body:
+                body = _read_exactly(stream, length)
+                if len(body) < length:
                     return
 
                 try:
@@ -800,6 +965,28 @@ def _parse_definition_result(result: Any) -> List[Location]:
 
     return locs
 
+def _parse_completion_result(result: Any) -> Tuple[List[JsonObj], bool]:
+    """Parse a textDocument/completion response.
+
+    The response may be:
+      - null
+      - CompletionItem[]
+      - CompletionList { isIncomplete: bool, items: CompletionItem[] }
+
+    Returns (items, is_incomplete).
+    """
+    if result is None:
+        return [], False
+    if isinstance(result, list):
+        return [i for i in result if isinstance(i, dict)], False
+    if isinstance(result, dict):
+        items = result.get("items")
+        if isinstance(items, list):
+            return (
+                [i for i in items if isinstance(i, dict)],
+                bool(result.get("isIncomplete", False)),
+            )
+    return [], False
 
 def _looks_like_valid_location(loc: Location, repo_root: Path) -> bool:
     """Check whether a definition location looks valid.
@@ -1059,6 +1246,8 @@ def _run_benchmark_for_package(
     type_checkers: List[str],
     runs: int = 5,
     seed: Optional[int] = None,
+    mode: str = "definition",
+    prefix_len: int = 1,
 ) -> Dict[str, Dict[str, Any]]:
     """Run the LSP benchmark for a package across all type checkers.
 
@@ -1095,6 +1284,10 @@ def _run_benchmark_for_package(
         str(runs),
         "--timeout",
         "10",
+        "--mode",
+        mode,
+        "--prefix-len",
+        str(prefix_len),
     ]
 
     for checker, cmd in available:
@@ -1325,7 +1518,12 @@ def _run_multi_package(args: argparse.Namespace) -> int:
             print(f"  Running benchmarks ({runs_per_package} runs each)...")
             try:
                 metrics = _run_benchmark_for_package(
-                    package_path, type_checkers, runs=runs_per_package, seed=args.seed
+                    package_path,
+                    type_checkers,
+                    runs=runs_per_package,
+                    seed=args.seed,
+                    mode=args.mode,
+                    prefix_len=int(args.prefix_len),
                 )
                 all_results.append(
                     {
@@ -1411,8 +1609,10 @@ def run_benchmark_loop(
     rng: random.Random,
     *,
     timeout_s: float = 10.0,
+    mode: str = "definition",
+    prefix_len: int = 1,
 ) -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]:
-    """Run N definition queries against pre-initialized servers.
+    """Run N queries (definition or completion) against pre-initialized servers.
 
     Servers are queried sequentially for each case to avoid CPU/memory
     contention that would inflate and destabilize latency measurements.
@@ -1422,6 +1622,7 @@ def run_benchmark_loop(
     report: Dict[str, Any] = {
         "root": str(root),
         "runs": runs,
+        "mode": mode,
         "servers": [name for name, _ in servers],
         "cases": [],
         "summary": {},
@@ -1440,7 +1641,7 @@ def run_benchmark_loop(
     }
 
     for run_idx in range(runs):
-        case = pick_random_case(root, rng=rng)
+        case = pick_random_case(root, rng=rng, mode=mode, prefix_len=prefix_len)
 
         case_payload: Dict[str, Any] = {
             "run": run_idx,
@@ -1464,13 +1665,58 @@ def run_benchmark_loop(
         )
 
         # Open the file on each server
-        text = case.file_path.read_text(encoding="utf-8", errors="replace")
+        # In completion mode the case carries a synthesized buffer (attribute truncated to a prefix), so sends that rather than the on-disk text.
+        text = (
+            case.text
+            if case.text is not None
+            else case.file_path.read_text(encoding="utf-8", errors="replace")
+        )
         for _server_name, lsp in servers:
             lsp.open_document(case.uri, text)
 
         # Query each server sequentially to avoid contention
         for server_name, lsp in servers:
             try:
+                if mode == "completion":
+                    cres = lsp.completion(case.uri, case.position, timeout_s=timeout_s)
+                    # Re-parse outside the timed region to inspect labels
+                    items, _ = _parse_completion_result(cres.raw_result)
+                    labels = {
+                        i.get("label") for i in items if isinstance(i.get("label"), str)
+                    }
+                    # "valid" here = the member that really exists at this
+                    # position was offered back (was truncated to a prefix)
+                    expected_found = (
+                        case.expected_label is not None
+                        and case.expected_label in labels
+                    )
+
+                    case_payload["results"][server_name] = {
+                        "ok": cres.ok,
+                        "found": cres.found,
+                        "n_items": cres.n_items,
+                        "is_incomplete": cres.is_incomplete,
+                        "expected_label": case.expected_label,
+                        "expected_found": expected_found,
+                        "latency_ms": cres.latency_ms,
+                        "error": cres.error,
+                    }
+
+                    if cres.ok:
+                        agg[server_name]["ok"] += 1
+                    if cres.found:
+                        agg[server_name]["found"] += 1
+                    if expected_found:
+                        agg[server_name]["valid"] += 1
+                    if cres.ok and cres.latency_ms is not None:
+                        agg[server_name]["latencies_ms"].append(cres.latency_ms)
+
+                    if not expected_found:
+                        case_payload["unresolved"][server_name] = _unresolved_entry(
+                            case, reason="expected_label_missing"
+                        )
+                    continue
+
                 res = lsp.definition(case.uri, case.position, timeout_s=timeout_s)
                 locations_payload = [
                     {
@@ -1553,7 +1799,7 @@ def run_benchmark_loop(
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Benchmark Go to Definition latency across LSP servers",
+        description="Benchmark LSP request latency (Go to Definition or completion) across LSP servers",
     )
 
     ap.add_argument(
@@ -1689,6 +1935,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             "before starting benchmark runs (default: 120s)."
         ),
     )
+    ap.add_argument(
+        "--mode",
+        type=str,
+        choices=("definition", "completion"),
+        default="definition",
+        help=(
+            "Which LSP request to benchmark (default: definition). "
+            "'completion' picks a member access on an imported module, "
+            "truncates the member to --prefix-len characters, and measures "
+            "textDocument/completion at that point."
+        ),
+    )
+    ap.add_argument(
+        "--prefix-len",
+        type=int,
+        default=1,
+        help=(
+            "Completion mode only: how many characters of the member name to "
+            "leave typed (default: 1, i.e. `pl.d`). 0 leaves a bare `pl.`, "
+            "which is syntactically incomplete."
+        ),
+    )
     args = ap.parse_args(argv)
 
     if args.install_envs is not None:
@@ -1805,6 +2073,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             runs,
             rng,
             timeout_s=float(args.timeout_s),
+            mode=args.mode,
+            prefix_len=int(args.prefix_len),
         )
     finally:
         # Shut down all servers
