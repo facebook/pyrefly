@@ -24,6 +24,7 @@ pub mod annotation;
 pub mod callable;
 pub mod callable_residual;
 pub mod class;
+pub mod data_frame;
 pub mod dimension;
 pub mod display;
 pub mod equality;

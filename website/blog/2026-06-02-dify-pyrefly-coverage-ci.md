@@ -59,7 +59,7 @@ That number is a full-project baseline.
 
 The non-blocking coverage workflow runs `pyrefly report` twice: once on the pull request branch and once on the base branch. A helper script extracts the summary and renders a comparison table with deltas for type coverage, strict coverage, typed symbols, untyped symbols, and module count.
 
-That design matters. Large projects rarely improve through one giant typing push. They improve when contributors can see that a PR added 200 typed symbols, removed 20 untyped symbols, or accidentally moved coverage in the wrong direction.
+This matters because large projects rarely improve through one giant typing push. Instead, they improve when contributors can see that a PR added 200 typed symbols, removed 20 untyped symbols, or accidentally moved coverage in the wrong direction.
 
 The PR comment becomes a lightweight code review signal:
 

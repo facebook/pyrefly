@@ -29,6 +29,7 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
+use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -97,6 +98,7 @@ use crate::binding::scope::Scopes;
 use crate::binding::scope::UnusedImport;
 use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
+use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
@@ -353,7 +355,8 @@ impl Bindings {
             metadata: Arc::new(BindingsMetadata::new()),
             module_ranges: Arc::new(ModuleRanges {
                 multi_line: Vec::new(),
-                ignore_all: SmallMap::new(),
+                ignore_all: Vec::new(),
+                misplaced_ignore_all: Vec::new(),
             }),
             scope_trace: None,
             module_deletes: SmallSet::new(),
@@ -639,11 +642,12 @@ impl Bindings {
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
-            builder.inject_builtins(ModuleName::builtins(), false);
+            builder.check_builtin_module(ModuleName::builtins(), false);
             if module_info.name() != ModuleName::extra_builtins() {
-                builder.inject_builtins(ModuleName::extra_builtins(), true);
+                builder.check_builtin_module(ModuleName::extra_builtins(), true);
             }
         }
+        builder.inject_shadowed_implicit_builtins();
         builder.inject_globals();
         builder.stmts(x.body, &NestingContext::toplevel());
         assert_eq!(builder.scopes.loop_depth(), 0);
@@ -797,6 +801,7 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NamedExpressionInComprehensionIterable
             | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
             | SemanticSyntaxErrorKind::TypeParameterDefaultOrder(_)
+            | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
             | SemanticSyntaxErrorKind::ReturnInGenerator => false,
         }
     }
@@ -1027,6 +1032,82 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
+    fn insert_implicit_builtin_binding(&mut self, idx: Idx<Key>, module: ModuleName, name: &Name) {
+        if self.idx_to_binding(idx).is_none() {
+            self.insert_binding_idx(
+                idx,
+                Binding::Import(Box::new(ImportBinding {
+                    module,
+                    name: name.clone(),
+                    original_name_range: None,
+                    check_deprecated: None,
+                    fallback: None,
+                })),
+            );
+        }
+    }
+
+    fn suggest_builtin_name(&self, missing: &Name) -> Option<Name> {
+        // Hold the wildcard sets so `best_suggestion` can borrow their names; only the chosen
+        // suggestion is cloned, not every builtin candidate.
+        let wildcards: Vec<_> = fallback_builtin_modules(self.module_info.name())
+            .filter_map(|module| self.lookup.get_wildcard(module))
+            .collect();
+        best_suggestion(
+            missing,
+            wildcards
+                .iter()
+                .flat_map(|wildcard| wildcard.iter())
+                .map(|candidate| (candidate, 0)),
+        )
+    }
+
+    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
+        let scope_suggestion = self.scopes.suggest_similar_name(missing, position);
+        let builtin_suggestion = self.suggest_builtin_name(missing);
+        let mut candidates = Vec::new();
+        if let Some(scope_suggestion) = &scope_suggestion {
+            candidates.push((scope_suggestion, 0));
+        }
+        if let Some(builtin_suggestion) = &builtin_suggestion {
+            candidates.push((builtin_suggestion, 1));
+        }
+        best_suggestion(missing, candidates)
+    }
+
+    /// Materialize a lazily-discovered implicit builtin as an entry in the module's static
+    /// scope, returning the idx of its (import) binding.
+    ///
+    /// We deliberately do NOT cache the builtin in any flow. The module static entry is enough
+    /// to resolve later reads (via `NameReadInfo::Anywhere`), and keeping builtins out of the
+    /// flow avoids them being lifted into a fork base and merged into a degenerate Phi (which
+    /// would silently break later uses, e.g. an `isinstance` call that stops narrowing).
+    fn materialize_implicit_builtin_name(&mut self, name: &Name, module: ModuleName) -> Idx<Key> {
+        let key = self
+            .scopes
+            .add_implicit_builtin_to_module_static(Hashed::new(name), module);
+        let idx = self.idx_for_promise(key);
+        self.insert_implicit_builtin_binding(idx, module, name);
+        idx
+    }
+
+    /// Look up a name for reading, returning the `NameReadInfo` including the `ImplicitBuiltin`
+    /// fallback. Thin wrapper over `Scopes::look_up_name_for_read` that supplies the builtin
+    /// context (the `lookup` and current module) so call sites don't repeat it.
+    pub(crate) fn look_up_name_for_read(&self, name: Hashed<&Name>, usage: &Usage) -> NameReadInfo {
+        self.scopes
+            .look_up_name_for_read(name, usage, self.lookup, self.module_info.name())
+    }
+
+    fn inject_shadowed_implicit_builtins(&mut self) {
+        for (name, module) in self.scopes.module_shadowed_implicit_builtins() {
+            let range = TextRange::default();
+            let idx = self.idx_for_promise(Key::Import(Box::new((name.clone(), range))));
+            self.insert_implicit_builtin_binding(idx, module, &name);
+            self.bind_name(&name, idx, FlowStyle::Import(module, name.clone()));
+        }
+    }
+
     pub(crate) fn with_await_context<R>(
         &mut self,
         ctx: AwaitContext,
@@ -1151,34 +1232,18 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn inject_builtins(&mut self, builtins_module: ModuleName, ignore_if_missing: bool) {
+    fn check_builtin_module(&mut self, builtins_module: ModuleName, ignore_if_missing: bool) {
         match self.lookup.module_exists(builtins_module) {
             FindingOrError::Error(err @ FindError::MissingImport(..)) if !ignore_if_missing => {
                 let (_, msg) = err.display();
                 let (header, _) = msg.split_off_first();
                 self.errors.internal_error(TextRange::default(), header);
             }
-            FindingOrError::Error(_) => (),
+            FindingOrError::Error(_) => {}
             FindingOrError::Finding(_) => {
-                for name in self.lookup.get_wildcard(builtins_module).unwrap().iter() {
-                    let key = Key::Import(Box::new((name.clone(), TextRange::default())));
-                    let idx = self.table.insert(
-                        key,
-                        Binding::Import(Box::new(ImportBinding {
-                            module: builtins_module,
-                            name: name.clone(),
-                            original_name_range: None,
-                            check_deprecated: None,
-                            // Caller (inject_builtins) got this name from
-                            // `get_wildcard(builtins)`, so the name is known
-                            // to exist in builtins's exports. Implicit
-                            // builtins injection: do not emit deprecation
-                            // warnings.
-                            fallback: None,
-                        })),
-                    );
-                    self.bind_name(name, idx, FlowStyle::Import(builtins_module, name.clone()));
-                }
+                // Keep the immutable builtin wildcard set shared without inserting
+                // per-file bindings for each name.
+                let _ = self.lookup.get_wildcard(builtins_module);
             }
         }
     }
@@ -1189,6 +1254,39 @@ impl<'a> BindingsBuilder<'a> {
         let mut visited_names: SmallSet<Name> = SmallSet::new();
         let mut visited_keys: SmallSet<Idx<Key>> = SmallSet::new();
         self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
+    }
+
+    pub fn as_direct_shape_intvar(&self, e: &Expr) -> bool {
+        let shape_extensions = ModuleName::from_str("shape_extensions");
+        match e {
+            Expr::Name(name) => {
+                if name.id == "IntVar" && self.module_info.name() == shape_extensions {
+                    return true;
+                }
+                matches!(
+                    self.scopes.binding_idx_for_name(&name.id),
+                    Some((
+                        _,
+                        FlowStyle::Import(module, upstream_name)
+                    )) if module == shape_extensions && upstream_name == "IntVar"
+                )
+            }
+            Expr::Attribute(ExprAttribute {
+                value, attr: name, ..
+            }) if name == "IntVar" => {
+                let Expr::Name(base_name) = &**value else {
+                    return false;
+                };
+                matches!(
+                    self.scopes.binding_idx_for_name(&base_name.id),
+                    Some((
+                        _,
+                        FlowStyle::MergeableImport(module) | FlowStyle::ImportAs(module)
+                    )) if module == shape_extensions
+                )
+            }
+            _ => false,
+        }
     }
 
     pub fn class_object_is_generic(&self, idx: Idx<Key>) -> bool {
@@ -1339,7 +1437,13 @@ impl<'a> BindingsBuilder<'a> {
             .scopes
             .validate_mutable_capture_and_get_key(Hashed::new(&name.id), kind)
         {
-            Ok(key) => Binding::Forward(self.idx_for_promise(key)),
+            Ok((key, implicit_builtin_module)) => {
+                let idx = self.idx_for_promise(key);
+                if let Some(module) = implicit_builtin_module {
+                    self.insert_implicit_builtin_binding(idx, module, &name.id);
+                }
+                Binding::Forward(idx)
+            }
             Err(error) => {
                 let should_suppress = matches!(kind, MutableCaptureKind::Nonlocal)
                     && self.scopes.in_module_or_class_top_level()
@@ -1367,18 +1471,36 @@ impl<'a> BindingsBuilder<'a> {
         let inner_fn_range = self.scopes.current_scope_range();
         for name in captures.into_iter() {
             let hashed_name = Hashed::new(&name);
-            let name_read_info = self
-                .scopes
-                .look_up_name_for_read(hashed_name, &Usage::Narrowing(None));
-            if let NameReadInfo::Anywhere { key, .. } = name_read_info {
+            let name_read_info =
+                self.look_up_name_for_read(hashed_name, &Usage::NonPinningValue(None));
+            // We only seed captures that resolve to an enclosing static entry (`Anywhere`), which
+            // includes already-materialized builtins. A not-yet-materialized builtin
+            // (`ImplicitBuiltin`), a flow value, or a missing name are resolved when the inner
+            // function actually reads the name, so there is nothing to seed here.
+            if let NameReadInfo::Anywhere {
+                key,
+                implicit_builtin_module,
+                ..
+            } = name_read_info
+            {
                 let capture_info = self.scopes.outer_capture_info(hashed_name, inner_fn_range);
-                let idx = capture_info
-                    .value_idx
-                    .unwrap_or_else(|| self.idx_for_promise(key));
-                let style = self
-                    .scopes
-                    .flow_style_for_name(&name)
-                    .map(FlowStyle::assume_initialized)
+                let idx = match capture_info.value_idx {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = self.idx_for_promise(key);
+                        if let Some(module) = implicit_builtin_module {
+                            self.insert_implicit_builtin_binding(idx, module, &name);
+                        }
+                        idx
+                    }
+                };
+                let style = implicit_builtin_module
+                    .map(|module| FlowStyle::Import(module, name.clone()))
+                    .or_else(|| {
+                        self.scopes
+                            .flow_style_for_name(&name)
+                            .map(FlowStyle::assume_initialized)
+                    })
                     .unwrap_or(FlowStyle::Other);
                 self.scopes.define_in_current_flow(hashed_name, idx, style);
                 if let Some(narrow_idx) = capture_info.narrow_idx
@@ -1401,7 +1523,7 @@ impl<'a> BindingsBuilder<'a> {
             usage,
             Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
         );
-        let name_read_info = self.scopes.look_up_name_for_read(name, usage);
+        let name_read_info = self.look_up_name_for_read(name, usage);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
                 // Mark as used (this must happen during traversal for unused-variable detection)
@@ -1436,11 +1558,15 @@ impl<'a> BindingsBuilder<'a> {
                 key,
                 initialized,
                 is_module_scope,
+                implicit_builtin_module,
             } => {
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
                 self.scopes.mark_variable_used(name.key());
                 let idx = self.idx_for_promise(key);
+                if let Some(module) = implicit_builtin_module {
+                    self.insert_implicit_builtin_binding(idx, module, name.key());
+                }
                 // NameReadInfo::Anywhere can only be InitializedInFlow::Yes or InitializedInFlow::No
                 if may_prove_initialized && matches!(initialized, InitializedInFlow::No) {
                     // When we use a variable, we mark it as initialized
@@ -1453,6 +1579,14 @@ impl<'a> BindingsBuilder<'a> {
                     idx,
                     initialized,
                     is_module_scope,
+                }
+            }
+            NameReadInfo::ImplicitBuiltin { module } => {
+                let idx = self.materialize_implicit_builtin_name(name.key(), module);
+                NameLookupResult::Found {
+                    idx,
+                    initialized: InitializedInFlow::Yes,
+                    is_module_scope: true,
                 }
             }
             NameReadInfo::NotFound => NameLookupResult::NotFound,
@@ -1472,7 +1606,7 @@ impl<'a> BindingsBuilder<'a> {
             let idx = if let Some(idx) = self.scopes.current_fork_base_idx(name) {
                 idx
             } else if let NameLookupResult::Found { idx, .. } =
-                self.lookup_name(Hashed::new(name), &mut Usage::Narrowing(None))
+                self.lookup_name(Hashed::new(name), &mut Usage::NonPinningValue(None))
             {
                 idx
             } else {
@@ -1546,15 +1680,13 @@ impl<'a> BindingsBuilder<'a> {
             self.follow_to_partial_type(deferred.lookup_result_idx);
 
         if let Some((def_idx, first_use)) = partial_type_info {
-            let is_narrowing = matches!(deferred.usage, Usage::Narrowing(_));
-
             // Determine side effects based on usage and first_use state.
             if matches!(
                 deferred.usage,
                 Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
             ) {
                 self.mark_does_not_pin_if_first_use(def_idx);
-            } else if !is_narrowing {
+            } else if deferred.usage.may_pin_partial_type() {
                 // Normal reads: if this is the first use, mark it.
                 if matches!(first_use, FirstUse::Undetermined)
                     && let Some(current_idx) = deferred.usage.current_idx()
@@ -1562,8 +1694,8 @@ impl<'a> BindingsBuilder<'a> {
                     self.mark_first_use(def_idx, current_idx);
                 }
             }
-            // Narrowing reads leave first_use as Undetermined so that the next
-            // non-narrowing read can still become the first use for pinning.
+            // Non-pinning reads leave first_use as Undetermined so that the next
+            // semantic read can still become the first use for pinning.
             // All partial type reads forward to the NameAssign (def_idx).
             self.insert_binding_idx(deferred.bound_name_idx, Binding::ForwardToFirstUse(def_idx));
         } else {
@@ -1746,6 +1878,11 @@ impl<'a> BindingsBuilder<'a> {
         idx: Idx<Key>,
         style: FlowStyle,
     ) -> Option<Idx<KeyAnnotation>> {
+        // Empty names arise from parser error recovery on invalid syntax.
+        // The definitions phase already skips them, so they won't be in the static scope.
+        if name.is_empty() {
+            return None;
+        }
         self.check_for_type_alias_redefinition(name, idx);
         self.check_for_imported_final_reassignment(name, idx);
         let name = Hashed::new(name);
@@ -1859,14 +1996,32 @@ impl<'a> BindingsBuilder<'a> {
             };
             let kind = match x {
                 TypeParam::TypeVar(tv) => {
+                    let mut kind = QuantifiedKind::TypeVar;
                     if let Some(bound_expr) = &mut tv.bound {
                         if let Expr::Tuple(tuple) = &mut **bound_expr {
+                            let mut invalid_intvar_constraint = false;
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
-                                self.ensure_type_with_usage(constraint, &mut None, &mut usage);
-                                constraint_exprs.push(constraint.clone());
+                                if self.as_direct_shape_intvar(constraint) {
+                                    self.error(
+                                        constraint.range(),
+                                        ErrorKind::InvalidTypeVar,
+                                        "`IntVar` cannot be used as a TypeVar constraint"
+                                            .to_owned(),
+                                    );
+                                    invalid_intvar_constraint = true;
+                                    self.ensure_expr(constraint, &mut usage);
+                                } else {
+                                    self.ensure_type_with_usage(constraint, &mut None, &mut usage);
+                                    constraint_exprs.push(constraint.clone());
+                                }
                             }
-                            constraints = Some((constraint_exprs, bound_expr.range()))
+                            if !invalid_intvar_constraint {
+                                constraints = Some((constraint_exprs, bound_expr.range()))
+                            }
+                        } else if self.as_direct_shape_intvar(bound_expr) {
+                            self.ensure_expr(bound_expr, &mut usage);
+                            kind = QuantifiedKind::IntVar;
                         } else {
                             self.ensure_type_with_usage(bound_expr, &mut None, &mut usage);
                             bound = Some((**bound_expr).clone());
@@ -1876,7 +2031,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_type_with_usage(default_expr, &mut None, &mut usage);
                         default = Some((**default_expr).clone());
                     }
-                    QuantifiedKind::TypeVar
+                    kind
                 }
                 TypeParam::ParamSpec(x) => {
                     if let Some(default_expr) = &mut x.default {
@@ -1928,7 +2083,7 @@ impl<'a> BindingsBuilder<'a> {
             // Narrowing operations should not pin partial types, but they also
             // should not permanently block pinning. Leave the first-use state
             // as Undetermined so a subsequent non-narrowing read can still pin.
-            let mut narrowing_usage = Usage::narrowing_from(usage);
+            let mut narrowing_usage = Usage::non_pinning_value_from(usage);
             if let Some(initial_idx) = self.lookup_name(name, &mut narrowing_usage).found() {
                 let narrowed_idx = self.insert_binding(
                     Key::Narrow(Box::new((name.into_key().clone(), *op_range, use_location))),
@@ -2179,6 +2334,17 @@ impl<'a> BindingsBuilder<'a> {
                 ..
             } => {
                 self.mark_does_not_pin_if_first_use(original_idx);
+                // An implicit builtin is never a legacy type variable (the `builtins` module
+                // defines no `TypeVar`s), so don't intercept it as a possible tparam. Doing so
+                // would add a `PossibleLegacyTParam` entry to this scope's static that shadows
+                // the module's `ImplicitBuiltinImport`, hiding the name's builtin-ness from
+                // special-export lookups (e.g. a `bool`/`isinstance` argument).
+                if self.scopes.is_implicit_builtin_name(&name.id) {
+                    return TParamLookupResult::NotTParam {
+                        idx: original_idx,
+                        initialized,
+                    };
+                }
                 match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
                     Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
                     None => TParamLookupResult::NotTParam {

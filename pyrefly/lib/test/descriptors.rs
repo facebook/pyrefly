@@ -810,6 +810,33 @@ class B[T: A]:
 );
 
 testcase!(
+    test_overloaded_descriptor_get_preserves_specialized_owner,
+    r#"
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, overload, reveal_type
+
+Storage: TypeAlias = Literal["python", "pyarrow"]
+StorageT = TypeVar("StorageT", bound=Storage)
+_StorageT = TypeVar("_StorageT", bound=Storage | None, default=None)
+
+class _CatStorageDescriptor:
+    @overload
+    def __get__(self, instance: Cat[None], owner: type[Cat[None]]) -> Storage: ...
+    @overload
+    def __get__(
+        self, instance: Cat[StorageT], owner: type[Cat[StorageT]]
+    ) -> StorageT: ...
+
+    def __get__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class Cat(Generic[_StorageT]):
+    storage = _CatStorageDescriptor()
+
+def main(cat: Cat[Literal["pyarrow"]]) -> None:
+    reveal_type(cat.storage)  # E: revealed type: Literal['pyarrow']
+    "#,
+);
+
+testcase!(
     test_property_constructor_non_callable_arg,
     r#"
 from typing import Any, assert_type
@@ -957,6 +984,41 @@ class C:
     def __get__():
         pass
 C.__get__()  # E: Expected a callable, got `C`
+    "#,
+);
+
+testcase!(
+    // A protocol used as a decorator return type that defines both `__call__` and
+    // `__get__` is a descriptor: attribute access must go through `__get__`, not be
+    // treated as a callback protocol. See GitHub issue #3345.
+    test_callable_descriptor_protocol,
+    r#"
+from typing import Any, Callable, Concatenate, Protocol, Self, assert_type, overload
+
+
+class Method[**P, R](Protocol):
+    def __call__(self, __self__: Any, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, instance: None, owner: type[Any]) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Any, owner: type[Any] | None = None) -> Callable[P, R]: ...
+
+    def __get__(self, instance: Any | None, owner: type[Any] | None = None) -> Self | Callable[P, R]: ...
+
+
+def wrap[**P, R](method: Callable[Concatenate[Any, P], R]) -> Method[P, R]: ...
+
+
+class Foo:
+    @wrap
+    def bar(self) -> None: ...
+
+
+def f(foo: Foo) -> None:
+    assert_type(foo.bar, Callable[[], None])
+    foo.bar()
     "#,
 );
 

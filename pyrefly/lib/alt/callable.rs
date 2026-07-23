@@ -297,7 +297,9 @@ impl<'a> CallArg<'a> {
                 for x in iterables.iter() {
                     match x {
                         Iterable::FixedLen(xs) => fixed_lens.push(xs.len()),
-                        Iterable::OfType(_) | Iterable::OfTypeVarTuple(_) => {}
+                        Iterable::OfType(_)
+                        | Iterable::Unpacked { .. }
+                        | Iterable::OfTypeVarTuple(_) => {}
                     }
                 }
                 if !fixed_lens.is_empty()
@@ -405,6 +407,21 @@ impl CallArgPreEval<'_> {
                         call_context,
                     )
                 {
+                    return Some(ty);
+                }
+                if matches!(
+                    solver.canonicalize_shape_dsl_type(hint.clone()),
+                    Type::ShapedArray(_)
+                ) {
+                    let ty = solver.reproject_tuple_carrier_shape(
+                        solver.canonicalize_shape_dsl_type(solver.expr_infer(x, arg_errors)),
+                    );
+                    solver.check_type_with_options(
+                        &ty,
+                        hint,
+                        range,
+                        TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
+                    );
                     return Some(ty);
                 }
                 Some(
@@ -680,7 +697,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> ArgMap {
         let record = |bound: &mut Option<HashMap<String, Type>>, name: &Name, ty: Type| {
             if let Some(map) = bound.as_mut() {
-                map.insert(name.to_string(), self.canonicalize_shape_dsl_type(ty));
+                map.insert(
+                    name.to_string(),
+                    self.reproject_tuple_carrier_shape(self.canonicalize_shape_dsl_type(ty)),
+                );
             }
         };
         let mut argmap = ArgMap::new();
@@ -1602,7 +1622,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
         let self_arg = self_obj.as_ref().map(|ty| CallArg::ty(ty, arguments_range));
         let argmap = match callable.params {
-            Params::List(params) => self.callable_infer_params(
+            Params::List(params) | Params::Partial(params) => self.callable_infer_params(
                 callable_name,
                 &params,
                 None,
@@ -1737,7 +1757,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // The self param may not be recorded by callable_infer_params if it's
             // positional-only without a name.
             if let Some(ref obj) = self_obj {
-                let obj = self.canonicalize_shape_dsl_type(obj.clone());
+                let obj = self
+                    .reproject_tuple_carrier_shape(self.canonicalize_shape_dsl_type(obj.clone()));
                 bound.entry("self".to_owned()).or_insert(obj);
             }
             // Auto-inject module field values for DSL params not in bound_args.
@@ -1756,7 +1777,36 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             callable.ret.clone()
         };
 
-        (self.solver().for_return_boundary(ret), errors, argmap)
+        (
+            self.reproject_tuple_carrier_shape(self.solver().for_return_boundary(ret)),
+            errors,
+            argmap,
+        )
+    }
+
+    /// After a call's return type is resolved, re-project the shape of registered
+    /// shaped arrays from their (now-substituted) base-class shape argument.
+    ///
+    /// Generic returns like `Array[S, float]` are stored shapeless at annotation
+    /// time because the shape argument `S` carries no per-dimension information.
+    /// Once `S` is bound to a concrete shape by call inference, the base-class
+    /// argument projects to a real shape, so we re-read it here.
+    ///
+    /// Scoped to TypeVar-mode shape parameters; TypeVarTuple
+    /// shapes are parsed into the shape field directly and need no reprojection.
+    fn reproject_tuple_carrier_shape(&self, ty: Type) -> Type {
+        ty.transform(&mut |ty| {
+            let shaped_array = match ty {
+                Type::ClassType(cls) => self.try_reproject_class_type_to_shaped_array(cls),
+                Type::ShapedArray(shaped_array) => {
+                    self.try_reproject_class_type_to_shaped_array(&shaped_array.base_class)
+                }
+                _ => return,
+            };
+            if let Some(shaped_array) = shaped_array {
+                *ty = shaped_array.to_type();
+            }
+        })
     }
 
     /// Auto-inject module field values into `bound_args` for DSL parameters
@@ -1767,7 +1817,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// extending the DSL grammar. The DSL function declares them as regular parameters
     /// with defaults, and this method resolves them from `self`'s class fields.
     ///
-    /// For fields typed as `Dim[T]`, unwraps to `T` so the DSL's `extract_dsl_val`
+    /// For fields typed as `Int[T]`, unwraps to `T` so the DSL's `extract_dsl_val`
     /// can handle them as plain literal ints.
     fn inject_module_attrs(
         &self,
@@ -1777,7 +1827,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         // For NNModule instances, inject captured fields directly into bound_args.
         // The NNModule's fields already contain plain Type values from the constructor,
-        // so no Dim[T] unwrapping is needed.
+        // so no Int[T] unwrapping is needed.
         if let Some(Type::NNModule(module)) = bound_args.get("self") {
             let module = module.clone();
             for param_name in meta_shape_func.param_names() {
@@ -1810,23 +1860,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 None => continue,
             };
 
-            // Substitute type parameters (e.g., _Dim[S] with S=1 → Dim[1]).
+            // Substitute type parameters (e.g., _Dim[S] with S=1 → Int[1]).
             let field_ty = cls.targs().substitution().substitute_into(field.ty());
 
-            // Unwrap Dim[T] → T so the DSL can extract literal ints.
-            // After type param substitution, Dim[S] with S=0 becomes Type::Dim(Size(Literal(0))).
-            // For Optional[Dim[T]] (i.e., Dim[T] | None): if T is bound, unwrap to T;
-            // if T is unbound (Any), resolve to None — the DSL models missing values as None.
+            // For optional dimension fields, if the dimension is unbound (Any), resolve to None;
+            // the DSL models missing values as None.
+            // TODO(stroxler): It is unresolved whether returning the first `Size` member (rather
+            // than `None` for an unbound/Any dimension) still preserves the old "unbound dimension
+            // resolves to None" semantics, now that an unbound `Dim[Any]` lowers to a gradual `Size`
+            // and a union may hold both a concrete `Size` and `Any`. This feature is corpus-guided,
+            // so there is no data on the intended behavior until a real case surfaces.
             let unwrapped = match field_ty {
-                Type::Dim(inner) => *inner,
                 Type::Union(ref u) => {
-                    let dim_inner = u.members.iter().find_map(|m| match m {
-                        Type::Dim(inner) => Some(inner.as_ref().clone()),
+                    let size = u.members.iter().find_map(|m| match m {
+                        Type::Int(_) => Some(m.clone()),
                         _ => None,
                     });
-                    match dim_inner {
-                        Some(Type::Any(_)) => Type::None,
-                        Some(inner) => inner,
+                    match size {
+                        Some(size) => size,
+                        None if u.members.iter().any(Type::is_any) => Type::None,
                         None => field_ty,
                     }
                 }
@@ -1847,7 +1899,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let ret_type = self.canonicalize_shape_dsl_type(ret_type);
         match meta_shape_func.evaluate(bound_args, &ret_type) {
-            Some(Ok(ty)) => ty,
+            // The meta-shape evaluator (in `pyrefly_types`, which has no metadata
+            // knowledge) rebuilds the result `ShapedArray` with the computed shape
+            // but leaves the base-class tuple carrier stale. Re-sync each result
+            // carrier to its projected shape so tuple-carrier `.shape` stays
+            // coherent.
+            Some(Ok(ty)) => ty.transform(&mut |ty| {
+                if let Type::ShapedArray(shaped_array) = ty {
+                    *ty = self
+                        .shaped_array_with_shape(shaped_array, shaped_array.shape())
+                        .to_type();
+                }
+            }),
             Some(Err(shape_error)) => {
                 errors
                     .error_builder(

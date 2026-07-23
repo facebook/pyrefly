@@ -25,6 +25,20 @@ def baz(c: Coord) -> Mapping[str, str]:
 );
 
 testcase!(
+    test_fields_named_like_builtins,
+    r#"
+from typing import TypedDict
+
+class D(TypedDict):
+    str: str
+    object: object
+    any: object
+
+D(str="", object=object(), any=object())
+"#,
+);
+
+testcase!(
     bug = "Our handling of ClassVar and methods is fishy, and our error messages are not clear",
     test_typed_dict_with_illegal_members,
     r#"
@@ -931,6 +945,17 @@ def f(c: C):
     "#,
 );
 
+testcase!(
+    test_get_not_required_literal_default,
+    r#"
+from typing import assert_type, Literal, NotRequired, TypedDict
+class C(TypedDict):
+    x: NotRequired[Literal["a", "b"]]
+def f(c: C):
+    assert_type(c.get("x", "b"), Literal["a", "b"])
+    "#,
+);
+
 // Clearing a TypedDict is not allowed, since doing so would remove keys it's expected to have.
 testcase!(
     test_clear,
@@ -998,6 +1023,8 @@ testcase!(
 from typing import TypedDict, assert_type
 class C(TypedDict): ...
 assert_type(C.__total__, bool)
+assert_type(C.__required_keys__, frozenset[str])
+assert_type(C.__optional_keys__, frozenset[str])
     "#,
 );
 
