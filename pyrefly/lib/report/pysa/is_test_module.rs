@@ -10,18 +10,17 @@ use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::name::Name;
 
-use crate::alt::types::class_metadata::ClassMro;
 use crate::report::pysa::class::get_all_classes;
 use crate::report::pysa::class::get_class_mro;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::function::get_all_decorated_functions;
 
 fn is_unittest_module(context: &ModuleAnswersContext) -> bool {
-    get_all_classes(context).any(|class| match &*get_class_mro(&class, context) {
-        ClassMro::Resolved(mro) => mro
+    get_all_classes(context).any(|class| {
+        get_class_mro(&class, context)
+            .ancestors_no_object()
             .iter()
-            .any(|base| base.has_qname("unittest.case", "TestCase")),
-        ClassMro::Cyclic => false,
+            .any(|base| base.has_qname("unittest.case", "TestCase"))
     })
 }
 

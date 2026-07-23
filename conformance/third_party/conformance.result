@@ -54,14 +54,7 @@
   "directives_assert_type.py": [],
   "directives_cast.py": [],
   "directives_deprecated.py": [],
-  "directives_disjoint_base.py": [
-    "Line 69: Expected 1 errors",
-    "Line 73: Expected 1 errors",
-    "Line 77: Expected 1 errors",
-    "Line 118: Expected 1 errors",
-    "Line 123: Expected 1 errors",
-    "Line 60: Unexpected errors ['Named tuples do not support multiple inheritance']"
-  ],
+  "directives_disjoint_base.py": [],
   "directives_no_type_check.py": [],
   "directives_reveal_type.py": [],
   "directives_type_checking.py": [],

@@ -9,6 +9,7 @@
 
 import * as React from 'react';
 import * as stylex from '@stylexjs/stylex';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import typography from './typography';
 import { landingPageCardStyles } from './landingPageCardStyles';
 import Tooltip from './Tooltip';
@@ -34,6 +35,10 @@ interface WhyPyreflyGridItemProps {
     index: number;
     contentWithLink?: ContentWithLinkProps;
     footnote?: string;
+    linkTo?: string;
+    href?: string;
+    ctaText?: string;
+    onClick?: () => void;
 }
 
 export default function WhyPyreflyGridItem({
@@ -42,8 +47,39 @@ export default function WhyPyreflyGridItem({
     contentWithLink,
     index,
     footnote,
+    linkTo,
+    href,
+    ctaText,
+    onClick,
 }: WhyPyreflyGridItemProps): React.ReactElement {
     const delayInSeconds = getWhyPyreflyGridItemDelay(index);
+    const isClickable = linkTo != null || href != null;
+    const hasCtaLink = contentWithLink?.link != null && content == null;
+    const resolvedHref = useBaseUrl(href ?? '');
+
+    const handleClick = () => {
+        onClick?.();
+        if (linkTo != null) {
+            document
+                .querySelector(linkTo)
+                ?.scrollIntoView({ behavior: 'smooth' });
+        } else if (href != null) {
+            window.location.href = resolvedHref;
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        // Activate the card on Enter or Space, matching native link/button behavior
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick();
+        }
+    };
+
+    const handleCtaLinkClick = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        contentWithLink?.onClick?.();
+    };
 
     return (
         <DelayedComponent delayInSeconds={delayInSeconds}>
@@ -52,12 +88,16 @@ export default function WhyPyreflyGridItem({
                     {...stylex.props(
                         landingPageCardStyles.card,
                         styles.hidden,
-                        isVisible && styles.visible
+                        isVisible && styles.visible,
+                        isClickable && styles.clickable
                     )}
                     style={{
-                        // Apply dynamic delay based on index
-                        transitionDelay: `${index * 0.05}s`, // Reduced from 0.1s to 0.05s
+                        transitionDelay: `${index * 0.05}s`,
                     }}
+                    onClick={isClickable ? handleClick : undefined}
+                    onKeyDown={isClickable ? handleKeyDown : undefined}
+                    tabIndex={isClickable ? 0 : undefined}
+                    role={isClickable ? 'link' : undefined}
                 >
                     <h3 {...stylex.props(typography.h5, styles.cardTitle)}>
                         {title}
@@ -95,7 +135,7 @@ export default function WhyPyreflyGridItem({
                                 )}
                             </>
                         )}
-                        {contentWithLink && (
+                        {contentWithLink && content != null && (
                             <>
                                 {contentWithLink.beforeText}
                                 <a
@@ -109,7 +149,25 @@ export default function WhyPyreflyGridItem({
                                 {contentWithLink.afterText}
                             </>
                         )}
+                        {contentWithLink && content == null && (
+                            <>{contentWithLink.beforeText}</>
+                        )}
                     </p>
+                    {isClickable && (
+                        <span {...stylex.props(styles.cta)}>
+                            {ctaText ?? '→'}
+                        </span>
+                    )}
+                    {hasCtaLink && (
+                        <a
+                            href={contentWithLink.link.url}
+                            target="_blank"
+                            onClick={handleCtaLinkClick}
+                            {...stylex.props(styles.cta)}
+                        >
+                            {contentWithLink.link.text}
+                        </a>
+                    )}
                 </div>
             )}
         </DelayedComponent>
@@ -149,7 +207,17 @@ const styles = stylex.create({
     footnoteSupElement: {
         marginLeft: '-2px',
     },
-    // Style for links
+    clickable: {
+        cursor: 'pointer',
+    },
+    cta: {
+        color: 'var(--color-primary)',
+        fontSize: '0.95rem',
+        fontWeight: 600,
+        marginTop: '0.5rem',
+        transition: 'transform 0.2s ease, color 0.2s ease',
+        display: 'inline-block',
+    },
     link: {
         color: 'var(--color-primary)',
         ':hover': {

@@ -347,6 +347,16 @@ class C(type):
 );
 
 testcase!(
+    test_self_inside_typed_dict,
+    r#"
+from typing import Optional, Self, TypedDict
+
+class TD(TypedDict):
+    x: Optional[Self]  # E: `Self` is not allowed in a `TypedDict`
+    "#,
+);
+
+testcase!(
     test_classmethod_cls_call_returns_self,
     r#"
 from typing import Self
@@ -714,7 +724,7 @@ class TypedField(Generic[T, V]):
     def __set__(self, instance: T, value: V) -> None: ...
 
 class Base:
-    field: TypedField[Base, str] = TypedField()
+    field: TypedField["Base", str] = TypedField()
 
     def update(self) -> None:
         self.field = "hello"

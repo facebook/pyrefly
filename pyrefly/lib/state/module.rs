@@ -57,6 +57,7 @@ use crate::state::load::Load;
 use crate::state::require::AtomicRequire;
 use crate::state::require::Require;
 use crate::state::steps::Context;
+use crate::state::steps::ParsedModule;
 use crate::state::steps::Step;
 use crate::state::steps::Steps;
 use crate::state::steps::StepsMut;
@@ -145,6 +146,10 @@ impl ModuleStateMut {
     }
 
     pub fn get_ast(&self) -> Option<Arc<ModModule>> {
+        self.steps.ast.load_full().map(|parsed| parsed.module())
+    }
+
+    pub fn get_parsed_module(&self) -> Option<Arc<ParsedModule>> {
         self.steps.ast.load_full()
     }
 
@@ -464,6 +469,7 @@ impl CleanGuard<'_> {
 pub trait ModuleStateReader {
     fn get_load(&self) -> Option<Arc<Load>>;
     fn get_ast(&self) -> Option<Arc<ModModule>>;
+    fn get_parsed_module(&self) -> Option<Arc<ParsedModule>>;
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>>;
     fn get_solutions(&self) -> Option<Arc<Solutions>>;
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>>;
@@ -475,6 +481,10 @@ impl ModuleStateReader for ModuleState {
     }
 
     fn get_ast(&self) -> Option<Arc<ModModule>> {
+        self.steps.ast.as_ref().map(|parsed| parsed.module())
+    }
+
+    fn get_parsed_module(&self) -> Option<Arc<ParsedModule>> {
         self.steps.ast.dupe()
     }
 
@@ -505,6 +515,10 @@ impl ModuleStateReader for ModuleStateMut {
 
     fn get_ast(&self) -> Option<Arc<ModModule>> {
         self.get_ast()
+    }
+
+    fn get_parsed_module(&self) -> Option<Arc<ParsedModule>> {
+        self.get_parsed_module()
     }
 
     fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {

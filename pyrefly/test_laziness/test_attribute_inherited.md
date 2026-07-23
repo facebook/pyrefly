@@ -10,7 +10,7 @@ All necessary demands:
   resolving Child's MRO requires knowing Base
 - `a -> b::KeyClassMro(0)` — compute MRO to walk ancestors
 - `a -> c::KeyClassField(0, "base_attr")` — the actual attribute
-  resolution; children (`c -> builtins::*`) resolve `int`
+  resolution; children include the lazy builtin lookup for `int`
 - `a -> b::KeyClassSynthesizedFields(0)` and `a -> c::KeyClassSynthesizedFields(0)`
   — MRO walk checks synthesized fields on each ancestor
 
@@ -47,7 +47,7 @@ a: Solutions
 b: Answers
 c: Answers
 
-(171 builtin demands hidden)
+(61 builtin demands hidden)
 a -> b::Exports(is_special_export)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)

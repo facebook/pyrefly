@@ -9,11 +9,81 @@ use lsp_types::Url;
 use lsp_types::request::LinkedEditingRange;
 use lsp_types::request::PrepareRenameRequest;
 use lsp_types::request::Rename;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
+use tempfile::TempDir;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+
+#[test]
+fn test_rename_constructor_call_renames_class() {
+    let root = TempDir::new().unwrap();
+    let path = root.path().join("main.py");
+    std::fs::write(
+        &path,
+        r#"from typing import Protocol
+
+class WorkbookAction(Protocol):
+    def __call__(self, value: int) -> None: ...
+
+class FooAction(WorkbookAction):
+    def __init__(self, sheet_name: str) -> None:
+        self.sheet_name = sheet_name
+
+    def __call__(self, value: int) -> None:
+        print(f"FooAction: {value} on sheet {self.sheet_name}")
+
+FooAction("test")
+"#,
+    )
+    .unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(root.path()).unwrap(),
+            )]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking" }]))),
+            ..Default::default()
+        })
+        .unwrap();
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .send_request::<Rename>(json!({
+            "textDocument": {"uri": Url::from_file_path(&path).unwrap().to_string()},
+            "position": {"line": 12, "character": 1},
+            "newName": "BarAction"
+        }))
+        .expect_response(json!({
+            "changes": {
+                Url::from_file_path(&path).unwrap().to_string(): [
+                    {
+                        "newText": "BarAction",
+                        "range": {
+                            "start": {"line": 5, "character": 6},
+                            "end": {"line": 5, "character": 15}
+                        }
+                    },
+                    {
+                        "newText": "BarAction",
+                        "range": {
+                            "start": {"line": 12, "character": 0},
+                            "end": {"line": 12, "character": 9}
+                        }
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
 
 #[test]
 fn test_prepare_rename() {
