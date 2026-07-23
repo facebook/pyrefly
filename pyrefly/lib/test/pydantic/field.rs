@@ -494,6 +494,44 @@ P(x=42)
 );
 
 pydantic_testcase!(
+    test_annotated_before_validator,
+    r#"
+from typing import Annotated, TypeAlias, reveal_type
+from pydantic import BaseModel, BeforeValidator
+
+def join_ints(values: list[int]) -> str:
+    return ",".join(str(value) for value in values)
+
+def split_ints(value: str) -> list[int]:
+    return [int(part) for part in value.split(",")]
+
+ValidatedStr: TypeAlias = Annotated[str, BeforeValidator(join_ints)]
+ChainedStr: TypeAlias = Annotated[
+    str,
+    BeforeValidator(join_ints),
+    BeforeValidator(split_ints),
+]
+
+class Model(BaseModel):
+    direct: Annotated[str, BeforeValidator(join_ints)]
+    aliased: ValidatedStr
+    chained: ChainedStr
+    defaulted: ValidatedStr = "not validated by default"
+
+model = Model(direct=[1, 2], aliased=[3, 4], chained="5,6", defaulted=[7])
+reveal_type(model.direct)  # E: revealed type: str
+reveal_type(model.aliased)  # E: revealed type: str
+reveal_type(model.chained)  # E: revealed type: str
+reveal_type(model.defaulted)  # E: revealed type: str
+Model(direct=[1, 2], aliased=[3, 4], chained="5,6")
+Model(direct="1,2", aliased=[3, 4], chained="5,6")  # E: Argument `Literal['1,2']` is not assignable to parameter `direct` with type `list[int]` in function `Model.__init__`
+Model(direct=[1, 2], aliased="3,4", chained="5,6")  # E: Argument `Literal['3,4']` is not assignable to parameter `aliased` with type `list[int]` in function `Model.__init__`
+Model(direct=[1, 2], aliased=[3, 4], chained=[5, 6])  # E: Argument `list[int]` is not assignable to parameter `chained` with type `str` in function `Model.__init__`
+Model(direct=[1, 2], aliased=[3, 4], chained="5,6", defaulted="7")  # E: Argument `Literal['7']` is not assignable to parameter `defaulted` with type `list[int]` in function `Model.__init__`
+    "#,
+);
+
+pydantic_testcase!(
     test_field_without_annotation,
     r#"
 from pydantic import BaseModel, Field

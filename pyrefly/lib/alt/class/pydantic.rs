@@ -51,6 +51,7 @@ use crate::binding::pydantic::VALIDATE_BY_ALIAS;
 use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 
 fn int_literal_from_type(ty: &Type) -> Option<&LitInt> {
@@ -621,13 +622,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Extract Pydantic Field metadata from an annotation binding.
-    /// This handles the Pydantic-specific pattern where fields can be declared as:
-    /// `field: Annotated[some_type, Field(some_keyword=<value>)]`
+    /// Extract Pydantic field and validator metadata from an `Annotated` annotation.
     pub fn extract_pydantic_field_from_annotation(
         &self,
         annot: Idx<KeyAnnotation>,
         field_name: &Name,
+        annotated_field_ty: Option<&Type>,
         metadata: &ClassMetadata,
     ) -> Option<DataclassFieldKeywords> {
         let dm = metadata.dataclass_metadata()?;
@@ -640,17 +640,75 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 TypeFormContext::ClassVarAnnotation,
                 &self.error_swallower(),
             );
+            let mut result = None;
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
                     && let Some(keywords) =
                         self.compute_dataclass_field_initialization(call, field_name, None, dm)
                 {
-                    return Some(keywords);
+                    result = Some(keywords);
+                    break;
                 }
             }
+            let errors = self.error_swallower();
+            let annotation_ty = self.expr_infer(annotation_expr, &errors);
+            if let Some(converter_param) =
+                self.pydantic_annotated_validator_input(&annotation_ty, annotated_field_ty)
+            {
+                result
+                    .get_or_insert_with(DataclassFieldKeywords::new)
+                    .converter_param = Some(converter_param);
+            }
+            return result;
         }
         None
+    }
+
+    fn pydantic_annotated_validator_input(
+        &self,
+        ty: &Type,
+        annotated_field_ty: Option<&Type>,
+    ) -> Option<Type> {
+        match ty {
+            // Before validators run right-to-left, so the rightmost one receives the raw input.
+            Type::Annotated(_, metadata) => metadata.iter().rev().find_map(|metadata| {
+                let is_validator_name = metadata.callee_name.as_ref().is_some_and(|name| {
+                    matches!(name.as_str(), "BeforeValidator" | "PlainValidator")
+                });
+                let is_validator_type = match &metadata.ty {
+                    Type::ClassType(cls) => {
+                        cls.has_qname(
+                            ModuleName::pydantic_functional_validators().as_str(),
+                            "BeforeValidator",
+                        ) || cls.has_qname(
+                            ModuleName::pydantic_functional_validators().as_str(),
+                            "PlainValidator",
+                        )
+                    }
+                    _ => false,
+                };
+                if !is_validator_name && !is_validator_type {
+                    return None;
+                }
+                metadata
+                    .first_arg
+                    .as_deref()
+                    .map(|func| self.get_converter_param(func, annotated_field_ty))
+            }),
+            Type::TypeAlias(alias) => {
+                let alias = self.get_type_alias(alias);
+                self.pydantic_annotated_validator_input(&alias.as_type(), annotated_field_ty)
+            }
+            Type::Forall(forall) => match &forall.body {
+                Forallable::TypeAlias(alias) => {
+                    let alias = self.get_type_alias(alias);
+                    self.pydantic_annotated_validator_input(&alias.as_type(), annotated_field_ty)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     pub fn check_pydantic_argument_range_constraints(

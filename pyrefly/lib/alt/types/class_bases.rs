@@ -217,7 +217,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if let Type::Annotated(_, metadata) = alias.as_type() {
                 return metadata
                     .iter()
-                    .any(|metadata| self.is_pydantic_strict_metadata(metadata));
+                    .any(|metadata| self.is_pydantic_strict_metadata(&metadata.ty));
             }
         }
         false

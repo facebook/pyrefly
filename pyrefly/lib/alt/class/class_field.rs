@@ -1635,9 +1635,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .is_some_and(|annot| annot.has_qualifier(&Qualifier::ClassVar))
                 {
                     ClassFieldInitialization::Magic
-                } else if let Some(flags) =
-                    self.extract_pydantic_field_from_annotation(*annot, name, metadata)
-                {
+                } else if let Some(flags) = self.extract_pydantic_field_from_annotation(
+                    *annot,
+                    name,
+                    direct_annotation
+                        .as_ref()
+                        .and_then(|annotation| annotation.ty.as_ref()),
+                    metadata,
+                ) {
                     ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
                     ClassFieldInitialization::Uninitialized
@@ -1701,7 +1706,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ),
                     );
                 }
-                let initialization = if let ExprOrBinding::Expr(e) = value.as_ref()
+                let mut initialization = if let ExprOrBinding::Expr(e) = value.as_ref()
                     && let Some(dm) = metadata.dataclass_metadata()
                     && let Expr::Call(call) = e
                 {
@@ -1826,6 +1831,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 } else {
                     ClassFieldInitialization::ClassBody(None)
                 };
+                if let Some(annot) = annot
+                    && let Some(mut annotation_flags) = self.extract_pydantic_field_from_annotation(
+                        *annot,
+                        name,
+                        direct_annotation
+                            .as_ref()
+                            .and_then(|annotation| annotation.ty.as_ref()),
+                        metadata,
+                    )
+                    && let Some(converter_param) = annotation_flags.converter_param.take()
+                {
+                    match &mut initialization {
+                        ClassFieldInitialization::ClassBody(Some(flags)) => {
+                            flags.converter_param = Some(converter_param);
+                        }
+                        ClassFieldInitialization::ClassBody(None) => {
+                            annotation_flags.converter_param = Some(converter_param);
+                            annotation_flags.default = Some(self.heap.mk_any_implicit());
+                            initialization = ClassFieldInitialization::ClassBody(Some(Box::new(
+                                annotation_flags,
+                            )));
+                        }
+                        _ => unreachable!("class-body assignment has class-body initialization"),
+                    }
+                }
                 let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(
                     value,
                     class,

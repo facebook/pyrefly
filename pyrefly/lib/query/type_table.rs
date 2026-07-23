@@ -390,7 +390,7 @@ pub(super) fn type_to_indexed_shape(
             args.extend(
                 metadata
                     .iter()
-                    .map(|ty| type_to_indexed_shape(context, ty, table)),
+                    .map(|metadata| type_to_indexed_shape(context, &metadata.ty, table)),
             );
             insert_indexed_named(table, "typing.Annotated", args, None, Vec::new())
         }
