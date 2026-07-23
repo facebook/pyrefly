@@ -14,8 +14,10 @@ use dupe::Dupe;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
-use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::shaped_array::IntTupleView;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -142,6 +144,28 @@ fn handle_tuple_type(
     }
 }
 
+fn on_int(
+    dim: &Int,
+    inj: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    match dim {
+        Int::Literal(_) | Int::Int => {}
+        Int::Symbolic(ty) => {
+            on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+        }
+        Int::Add(left, right)
+        | Int::Sub(left, right)
+        | Int::Mul(left, right)
+        | Int::FloorDiv(left, right)
+        | Int::Pow(left, right) => {
+            on_int(left, inj, on_edge, on_var);
+            on_int(right, inj, on_edge, on_var);
+        }
+    }
+}
+
 fn on_type(
     variance: Variance,
     inj: bool,
@@ -202,23 +226,27 @@ fn on_type(
             let mut visit_dim = |ty: &Type| {
                 on_type(Variance::Invariant, inj, ty, on_edge, on_var);
             };
-            match tensor.shape.as_tuple() {
-                Tuple::Concrete(dims) => {
+            match tensor.shape().view() {
+                IntTupleView::Concrete(dims) => {
                     for dim in dims {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
-                Tuple::Unbounded(middle) => {
-                    visit_dim(middle);
+                IntTupleView::Gradual => {
+                    let middle = gradual_size();
+                    visit_dim(&middle);
                 }
-                Tuple::Unpacked(f) => {
-                    let (prefix, middle, suffix) = &**f;
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                } => {
                     for dim in prefix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                     visit_dim(middle);
                     for dim in suffix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
             }
@@ -229,26 +257,19 @@ fn on_type(
                 on_type(Variance::Invariant, inj, ty, on_edge, on_var);
             }
         }
+        Type::DataFrame(schema) => {
+            // Delegate to the underlying instance; column types are invariant.
+            on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
+            for (_, ty) in &schema.columns {
+                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+            }
+        }
         Type::Tuple(t) => {
             handle_tuple_type(t, variance, inj, on_edge, on_var);
         }
-        Type::Dim(inner) => {
-            // Dim wraps a dimension type - invariant
-            on_type(Variance::Invariant, inj, inner, on_edge, on_var);
-        }
-        Type::Size(dim) => {
-            // SizeExpr expressions contain types - all invariant
-            match dim {
-                SizeExpr::Literal(_) => {}
-                SizeExpr::Add(l, r)
-                | SizeExpr::Sub(l, r)
-                | SizeExpr::Mul(l, r)
-                | SizeExpr::FloorDiv(l, r)
-                | SizeExpr::Pow(l, r) => {
-                    on_type(Variance::Invariant, inj, l, on_edge, on_var);
-                    on_type(Variance::Invariant, inj, r, on_edge, on_var);
-                }
-            }
+        Type::Int(dim) => {
+            // Symbolic integer expressions contain types, all invariant.
+            on_int(dim, inj, on_edge, on_var);
         }
         _ => {}
     }
@@ -268,7 +289,7 @@ fn on_callable(
     // Walk parameters contravariantly. Receiver-bound methods skip their first parameter
     // because lookup either binds it from dynamic dispatch or requantifies it for class access.
     match &callable.params {
-        Params::List(param_list) => {
+        Params::List(param_list) | Params::Partial(param_list) => {
             for param in param_list.items().iter().skip(usize::from(skip_receiver)) {
                 on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
             }
@@ -476,7 +497,7 @@ fn check_callable_variance(
             violations,
         );
     }
-    if let Params::List(param_list) = &callable.params {
+    if let Params::List(param_list) | Params::Partial(param_list) = &callable.params {
         for param in param_list.items().iter() {
             if let Type::Quantified(q) = param.as_type() {
                 check_typevar(

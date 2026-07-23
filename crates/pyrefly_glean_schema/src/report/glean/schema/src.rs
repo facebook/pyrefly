@@ -1,0 +1,327 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+ * @generated
+ * Regenerate with glean/schema/gen/Glean/Schema/Gen/Rust.hs
+ *  buck2 run glean/schema/gen:gen-schema -- --dir glean/schema/source --rust pyrefly/crates/pyrefly_glean_schema/src/report/glean
+ */
+
+#![allow(warnings)]
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
+use serde_repr::*;
+
+use crate::report::glean::schema::*;
+use crate::report::glean::facts::GleanPredicate;
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct RangeContains {
+    pub id: u64,
+    pub key: Box<RangeContains_key>,
+}
+
+impl RangeContains {
+    pub fn new(fileLines: Range, contains: Range) -> Self {
+        RangeContains {
+            id: 0,
+            key: Box::new(RangeContains_key {
+                fileLines,
+                contains
+            }),
+        }
+    }
+}
+
+impl GleanPredicate for RangeContains {
+    fn GLEAN_name() -> String {
+        String::from("src.RangeContains.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct IndexFailure {
+    pub id: u64,
+    pub key: Box<IndexFailure_key>,
+}
+
+impl IndexFailure {
+    pub fn new(file: File, reason: IndexFailureReason, details: String) -> Self {
+        IndexFailure {
+            id: 0,
+            key: Box::new(IndexFailure_key {
+                file,
+                reason,
+                details
+            }),
+        }
+    }
+}
+
+impl GleanPredicate for IndexFailure {
+    fn GLEAN_name() -> String {
+        String::from("src.IndexFailure.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileLines {
+    pub id: u64,
+    pub key: Box<FileLines_key>,
+}
+
+impl FileLines {
+    pub fn new(file: File, lengths: Vec<u64>, endsInNewline: bool, hasUnicodeOrTabs: bool) -> Self {
+        FileLines {
+            id: 0,
+            key: Box::new(FileLines_key {
+                file,
+                lengths,
+                endsInNewline,
+                hasUnicodeOrTabs
+            }),
+        }
+    }
+}
+
+impl GleanPredicate for FileLines {
+    fn GLEAN_name() -> String {
+        String::from("src.FileLines.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileLanguage {
+    pub id: u64,
+    pub key: Box<FileLanguage_key>,
+}
+
+impl FileLanguage {
+    pub fn new(file: File, language: Language) -> Self {
+        FileLanguage {
+            id: 0,
+            key: Box::new(FileLanguage_key {
+                file,
+                language
+            }),
+        }
+    }
+}
+
+impl GleanPredicate for FileLanguage {
+    fn GLEAN_name() -> String {
+        String::from("src.FileLanguage.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileDigest {
+    pub id: u64,
+    pub key: Box<File>,
+    pub value: FileDigest_value,
+}
+
+impl FileDigest {
+    pub fn new(key: File, value: FileDigest_value) -> Self {
+        FileDigest {
+            id: 0,
+            key: Box::new(key),
+            value: value,
+        }
+    }
+}
+
+impl GleanPredicate for FileDigest {
+    fn GLEAN_name() -> String {
+        String::from("src.FileDigest.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileContent {
+    pub id: u64,
+    pub key: Box<File>,
+    pub value: FileContent_value,
+}
+
+impl FileContent {
+    pub fn new(key: File, value: FileContent_value) -> Self {
+        FileContent {
+            id: 0,
+            key: Box::new(key),
+            value: value,
+        }
+    }
+}
+
+impl GleanPredicate for FileContent {
+    fn GLEAN_name() -> String {
+        String::from("src.FileContent.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct File {
+    pub id: u64,
+    pub key: Box<String>,
+}
+
+impl File {
+    pub fn new(key: String) -> Self {
+        File {
+            id: 0,
+            key: Box::new(key),
+        }
+    }
+}
+
+impl GleanPredicate for File {
+    fn GLEAN_name() -> String {
+        String::from("src.File.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct ByteSpanContains {
+    pub id: u64,
+    pub key: Box<ByteSpanContains_key>,
+}
+
+impl ByteSpanContains {
+    pub fn new(byteSpan: ByteSpan, contains: ByteSpan) -> Self {
+        ByteSpanContains {
+            id: 0,
+            key: Box::new(ByteSpanContains_key {
+                byteSpan,
+                contains
+            }),
+        }
+    }
+}
+
+impl GleanPredicate for ByteSpanContains {
+    fn GLEAN_name() -> String {
+        String::from("src.ByteSpanContains.1")
+    }
+
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct RelByteSpan {
+    pub offset: u64,
+    pub length: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct Range {
+    pub file: File,
+    pub lineBegin: u64,
+    pub columnBegin: u64,
+    pub lineEnd: u64,
+    pub columnEnd: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct RangeContains_key {
+    pub fileLines: Range,
+    pub contains: Range,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct PackedByteSpansGroup {
+    pub length: u64,
+    pub offsets: Vec<u64>,
+}
+
+pub type PackedByteSpans = Vec<PackedByteSpansGroup>;
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct Loc {
+    pub file: File,
+    pub line: u64,
+    pub column: u64,
+}
+
+#[derive(Clone, Debug, Deserialize_repr, Eq, Hash, PartialEq, Serialize_repr)]
+#[repr(u8)]
+pub enum Language {
+    Buck,
+    C,
+    Cpp,
+    Hack,
+    Haskell,
+    ObjC,
+    ObjCpp,
+    Python,
+    Thrift,
+    Java,
+    GraphQL,
+}
+
+#[derive(Clone, Debug, Deserialize_repr, Eq, Hash, PartialEq, Serialize_repr)]
+#[repr(u8)]
+pub enum IndexFailureReason {
+    CompileError,
+    BuildSystemError,
+    Unclassified,
+    DiscoveryError,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct IndexFailure_key {
+    pub file: File,
+    pub reason: IndexFailureReason,
+    pub details: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileLines_key {
+    pub file: File,
+    pub lengths: Vec<u64>,
+    pub endsInNewline: bool,
+    pub hasUnicodeOrTabs: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileLanguage_key {
+    pub file: File,
+    pub language: Language,
+}
+
+pub type FileDigest_value = String;
+
+pub type FileContent_value = String;
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct ByteSpan {
+    pub start: u64,
+    pub length: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct ByteSpanContains_key {
+    pub byteSpan: ByteSpan,
+    pub contains: ByteSpan,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct FileLocation {
+    pub file: File,
+    pub span: ByteSpan,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct ByteRange {
+    pub begin: u64,
+    pub end: u64,
+}

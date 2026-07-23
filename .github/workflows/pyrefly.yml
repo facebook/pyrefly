@@ -71,4 +71,5 @@ jobs:
         "$TENSOR_SHAPES_PYTHON" -m pip install torch
     - name: Run torch runtime tests
       shell: bash
-      run: "$TENSOR_SHAPES_PYTHON" tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py
+      run: |
+        "$TENSOR_SHAPES_PYTHON" tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py

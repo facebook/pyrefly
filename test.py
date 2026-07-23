@@ -196,7 +196,7 @@ class CargoExecutor(Executor):
         run(["cargo", "build"])
         # The runners resolve the debug pyrefly themselves, so we don't pass `--pyrefly`.
         run([sys.executable, "tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py"])
-        run([sys.executable, "tensor-shapes/numpy/run_pyrefly.py"])
+        run([sys.executable, "tensor-shapes/pyrefly-numpy-stubs/run_pyrefly.py"])
 
     def conformance(self) -> None:
         cargo_target_dir = os.environ.get("CARGO_TARGET_DIR", "target")
@@ -269,8 +269,17 @@ class BuckExecutor(Executor):
                 "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_error_test",
                 "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_test",
                 "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_error_test",
-                "tensor-shapes/numpy:numpy_arithmetic_static_test",
-                "tensor-shapes/numpy:numpy_creation_basics_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_arithmetic_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_broadcasting_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_creation_basics_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_dtype_properties_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_examples_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_indexing_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_linalg_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_math_ufuncs_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_random_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_reductions_static_test",
+                "tensor-shapes/pyrefly-numpy-stubs:numpy_runtime_test",
                 "--",
                 "--run-disabled",
                 "--return-zero-on-skips",

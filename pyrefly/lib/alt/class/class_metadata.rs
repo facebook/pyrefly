@@ -225,10 +225,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     targ.transform_mut(&mut |ty| match ty {
                         Type::Quantified(q) => *ty = q.as_gradual_type(),
                         Type::TypeVar(t) => {
-                            *ty = Quantified::as_gradual_type_helper(
-                                QuantifiedKind::TypeVar,
-                                t.default(),
-                            )
+                            *ty = Quantified::as_gradual_type_helper(t.kind(), t.default())
                         }
                         Type::TypeVarTuple(t) => {
                             *ty = Quantified::as_gradual_type_helper(
@@ -553,24 +550,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let BindingShapedArrayMetadata { shape_name, range } = metadata?;
         let tparams = self.get_class_tparams(cls);
         match tparams.iter().find(|param| param.name() == shape_name) {
-            // A shape parameter may be either a `TypeVarTuple` (variadic shape,
-            // e.g. `Array[*Shape]`) or a regular `TypeVar` that carries the shape
-            // as a single tuple type (e.g. NumPy's `ndarray[Shape, DType]`).
-            Some(param)
-                if matches!(
-                    param.kind,
-                    QuantifiedKind::TypeVarTuple | QuantifiedKind::TypeVar
-                ) =>
-            {
-                Some(param.clone())
-            }
+            Some(param) if param.is_type_var() => Some(param.clone()),
             Some(param) => {
                 self.error(
                     errors,
                     *range,
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Shape parameter `{}` must be a `TypeVar` or `TypeVarTuple`, got `{}`",
+                        "Shape parameter `{}` must be a `TypeVar` or `IntVar`, got `{}`",
                         shape_name, param.kind
                     ),
                 );
@@ -930,14 +917,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.get_class_fields(base)
                         .is_some_and(|f| f.contains(&Name::new_static("_value_")))
                 }),
-                is_flag: bases_with_metadata.iter().any(|(base, _)| {
-                    self.is_subset_eq(
-                        &self
-                            .heap
-                            .mk_class_type(self.promote_nontypeddict_silently_to_classtype(base)),
-                        &self.heap.mk_class_type(self.stdlib.enum_flag().clone()),
-                    )
-                }),
                 is_django,
             })
         } else {
@@ -1185,6 +1164,60 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         pseudo_field_names
     }
 
+    /// Report the "`@dataclass` cannot be applied to X" diagnostics for the class
+    /// kinds dataclass rejects. Shared by the decorator path (`dataclass_metadata`)
+    /// and the call form `dataclass(C)` so both reject the same kinds with the same
+    /// messages. `Protocol` is a soft reject (diagnostic only; it still becomes a
+    /// dataclass at runtime); `Enum`/`TypedDict`/`NamedTuple` are hard rejects.
+    /// Returns `true` on a hard reject so the decorator path can abort metadata.
+    pub fn report_forbidden_dataclass_target(
+        &self,
+        name: &Name,
+        is_protocol: bool,
+        is_enum: bool,
+        is_typed_dict: bool,
+        is_named_tuple: bool,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> bool {
+        if is_protocol {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("`@dataclass` cannot be applied to Protocol `{}`", name),
+            );
+        }
+        if is_enum {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to Enum `{}`", name),
+            );
+            return true;
+        }
+        if is_typed_dict {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to TypedDict `{}`", name),
+            );
+            return true;
+        }
+        if is_named_tuple {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadClassDefinition,
+                format!("Cannot apply `@dataclass` to NamedTuple `{}`", name),
+            );
+            return true;
+        }
+        false
+    }
+
     fn dataclass_metadata(
         &self,
         cls: &Class,
@@ -1292,47 +1325,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
         }
         // @dataclass cannot be applied to Protocol, Enum, TypedDict, or NamedTuple classes.
-        // Emit the error and return no metadata so the class is not treated as a dataclass.
-        if has_dataclass_decorator {
-            if is_protocol {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!(
-                        "`@dataclass` cannot be applied to Protocol `{}`",
-                        cls.name()
-                    ),
-                );
-                return (None, false);
-            }
-            if is_enum {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to Enum `{}`", cls.name()),
-                );
-                return (None, false);
-            }
-            if is_typed_dict {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to TypedDict `{}`", cls.name()),
-                );
-                return (None, false);
-            }
-            if is_named_tuple {
-                self.error(
-                    errors,
-                    cls.range(),
-                    ErrorKind::BadClassDefinition,
-                    format!("Cannot apply `@dataclass` to NamedTuple `{}`", cls.name()),
-                );
-                return (None, false);
-            }
+        // Protocols still become dataclasses at runtime, so preserve their metadata; the
+        // hard-reject kinds have no useful dataclass runtime behavior to model, so abort.
+        if has_dataclass_decorator
+            && self.report_forbidden_dataclass_target(
+                cls.name(),
+                is_protocol,
+                is_enum,
+                is_typed_dict,
+                is_named_tuple,
+                cls.range(),
+                errors,
+            )
+        {
+            return (None, false);
         }
         if let Some(TransformDataclass {
             keywords: kws,
@@ -1425,7 +1431,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 _ => None,
                             }
                             && let Some(quantified) = quantified
-                            && quantified.kind() == QuantifiedKind::TypeVar
+                            && quantified.is_type_var()
                             && matches!(quantified.restriction(), Restriction::Unrestricted)
                             && let Some(tparam) = forall.tparams.as_vec().first()
                             && *quantified == *tparam

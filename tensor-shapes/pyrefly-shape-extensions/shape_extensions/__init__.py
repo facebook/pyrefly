@@ -16,6 +16,14 @@ import typing
 from dataclasses import dataclass
 
 
+def _return_class(cls, params):
+    return cls
+
+
+def _return_int(cls, params):
+    return int
+
+
 def _patch_torch_if_available() -> None:
     try:
         import torch  # @manual
@@ -54,13 +62,55 @@ def _patch_torch_if_available() -> None:
     ]
     for cls in subscriptable_classes:
         if not hasattr(cls, "__class_getitem__"):
-            cls.__class_getitem__ = classmethod(lambda cls, params: cls)
+            cls.__class_getitem__ = classmethod(_return_class)
 
 
 _patch_torch_if_available()
 
 
-class Dim[T]:
+class IntTuple:
+    """Tuple-valued shape annotation surface.
+
+    In type positions, Pyrefly treats `IntTuple` as the shape carrier for
+    `tuple[int, ...]`. At runtime, calling it coerces any iterable to a plain
+    tuple.
+    """
+
+    def __new__(cls, iterable=()):
+        return tuple(iterable)
+
+    def __class_getitem__(cls, params):
+        return cls
+
+
+class Elements:
+    """Inverse of ``tuple[Unpack[S]]``: extracts the element sequence from a IntTuple carrier.
+
+    In the Python typing spec, ``tuple[Unpack[Ts]]`` wraps a ``TypeVarTuple`` into a
+    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given a ``IntTuple``
+    carrier ``S``, ``*Elements[S]`` splices its element sequence into a shape position,
+    e.g. ``Array[[*Elements[S], OUT], DType]``.
+
+    This fills a gap in the current typing spec — there is no standard mechanism to
+    decompose a variadic carrier without a ``TypeVarTuple``. Pyrefly uses the ``.pyi``
+    stub for type inference; this class exists so annotations evaluate without crashing
+    at runtime.
+    """
+
+    def __init__(self, carrier):
+        self.carrier = carrier
+
+    def __class_getitem__(cls, carrier):
+        return cls(carrier)
+
+    def __iter__(self):
+        yield self
+
+    def __repr__(self):
+        return f"Elements[{self.carrier!r}]"
+
+
+class Int[T]:
     """Symbolic integer type for dimension values.
 
     At runtime this is a no-op generic class. The type checker uses the
@@ -68,6 +118,22 @@ class Dim[T]:
     """
 
     pass
+
+
+class ProxyMethod[T]:
+    """Type-checker marker for method forwarding annotations."""
+
+    pass
+
+
+def enable_torchscript_runtime_compat() -> None:
+    """Erase shape-only runtime annotations to types TorchScript understands.
+
+    This is a one-way, process-global compatibility mode for legacy TorchScript
+    paths. It intentionally has no disable API for production callers.
+    """
+
+    Int.__class_getitem__ = classmethod(_return_int)
 
 
 @dataclass(frozen=True)
@@ -191,23 +257,23 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-class TypeVar:
-    """TypeVar with arithmetic support for tensor shape dimensions.
+class IntVar:
+    """Symbolic variable with arithmetic support for tensor shape dimensions.
 
     Like typing.TypeVar but arithmetic operations (N + 1, N * 2, etc.)
     return self instead of raising TypeError. Setting
     __class__ = typing.TypeVar makes isinstance(x, typing.TypeVar)
     return True, so Generic[N] and TypedDict + Generic[N] both work.
 
-    In pyrefly, shape_extensions.TypeVar is treated identically to
-    typing.TypeVar.
+    In pyrefly, shape_extensions.IntVar marks symbolic integer dimensions.
     """
 
     __class__ = typing.TypeVar
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, *, bound=None):
         self.__name__ = name
         self.name = name
+        self.__bound__ = bound
 
     def __repr__(self):
         return self.name

@@ -352,6 +352,121 @@ token-type: method
 }
 
 #[test]
+fn type_aware_union_method_test() {
+    let code = r#"
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    def foo(self) -> None:
+        pass
+
+def f(x: A | B) -> None:
+    x.foo()
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 1, text: A
+token-type: class
+
+line: 2, column: 8, length: 3, text: foo
+token-type: method
+
+line: 2, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 5, column: 6, length: 1, text: B
+token-type: class
+
+line: 6, column: 8, length: 3, text: foo
+token-type: method
+
+line: 6, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 9, column: 4, length: 1, text: f
+token-type: function
+
+line: 9, column: 6, length: 1, text: x
+token-type: parameter
+
+line: 9, column: 9, length: 1, text: A
+token-type: class
+
+line: 9, column: 13, length: 1, text: B
+token-type: class
+
+line: 10, column: 4, length: 1, text: x
+token-type: parameter
+
+line: 10, column: 6, length: 3, text: foo
+token-type: method
+"#,
+    );
+}
+
+#[test]
+fn type_aware_union_mixed_method_attribute_test() {
+    // `foo` is a method on `A` but a plain attribute on `B`; the union members
+    // disagree, so the access should fall back to `property`, not `method`.
+    let code = r#"
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    foo: int = 0
+
+def f(x: A | B) -> None:
+    x.foo
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 1, text: A
+token-type: class
+
+line: 2, column: 8, length: 3, text: foo
+token-type: method
+
+line: 2, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 5, column: 6, length: 1, text: B
+token-type: class
+
+line: 6, column: 4, length: 3, text: foo
+token-type: variable
+
+line: 6, column: 9, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 8, column: 4, length: 1, text: f
+token-type: function
+
+line: 8, column: 6, length: 1, text: x
+token-type: parameter
+
+line: 8, column: 9, length: 1, text: A
+token-type: class
+
+line: 8, column: 13, length: 1, text: B
+token-type: class
+
+line: 9, column: 4, length: 1, text: x
+token-type: parameter
+
+line: 9, column: 6, length: 3, text: foo
+token-type: property
+"#,
+    );
+}
+
+#[test]
 fn deprecated_token_for_disabled_branch() {
     let code = r#"
 import sys

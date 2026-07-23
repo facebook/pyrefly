@@ -10,13 +10,13 @@ use lsp_types::Url;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::request::DocumentDiagnosticRequest;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 #[allow(deprecated)]

@@ -17,6 +17,7 @@ pre-release identifiers:
 Used as a CLI from the release workflows:
 
     python3 scripts/version_helpers.py to-marketplace 1.2.0-dev.4
+    python3 scripts/version_helpers.py to-pypi        1.2.0-dev.4
     python3 scripts/version_helpers.py is-prerelease  1.2.0-dev.4
 """
 
@@ -32,6 +33,28 @@ import sys
 _SEMVER_RE: re.Pattern[str] = re.compile(
     r"^(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?$",
 )
+_PYPI_VERSION_RE: re.Pattern[str] = re.compile(
+    r"^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?$",
+)
+
+
+def _check_no_leading_zero(component: str, name: str) -> None:
+    if len(component) > 1 and component[0] == "0":
+        raise ValueError(f"Leading zero in {name} {component!r} is not allowed")
+
+
+def _parse_version_match(match: re.Match[str]) -> tuple[int, int, int, int | None]:
+    for group in (match.group(1), match.group(2), match.group(3)):
+        _check_no_leading_zero(group, "version component")
+    dev_str = match.group(4)
+    if dev_str is not None:
+        _check_no_leading_zero(dev_str, "dev counter")
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+        int(dev_str) if dev_str is not None else None,
+    )
 
 
 def parse_semver(version: str) -> tuple[int, int, int, int | None]:
@@ -42,22 +65,15 @@ def parse_semver(version: str) -> tuple[int, int, int, int | None]:
     match = _SEMVER_RE.match(version)
     if not match:
         raise ValueError(f"Not a valid pyrefly semver version: {version!r}")
-    for group in (match.group(1), match.group(2), match.group(3)):
-        if len(group) > 1 and group[0] == "0":
-            raise ValueError(
-                f"Leading zero in version component {group!r} is not allowed",
-            )
-    dev_str = match.group(4)
-    if dev_str is not None and len(dev_str) > 1 and dev_str[0] == "0":
-        raise ValueError(
-            f"Leading zero in dev counter {dev_str!r} is not allowed",
-        )
-    return (
-        int(match.group(1)),
-        int(match.group(2)),
-        int(match.group(3)),
-        int(dev_str) if dev_str is not None else None,
-    )
+    return _parse_version_match(match)
+
+
+def _parse_pypi_version(version: str) -> tuple[int, int, int, int | None]:
+    """Parse a PyPI/PEP 440 version into (major, minor, patch, dev_n)."""
+    match = _PYPI_VERSION_RE.match(version)
+    if not match:
+        raise ValueError(f"Not a valid PyPI version: {version!r}")
+    return _parse_version_match(match)
 
 
 def format_semver(version: tuple[int, int, int, int | None]) -> str:
@@ -143,6 +159,34 @@ def to_marketplace(version: str) -> str:
     return f"{major}.{minor - 1}.{market_patch}"
 
 
+def to_pypi(version: str) -> str:
+    """Convert a pyrefly canonical version to its PyPI/PEP 440 form.
+
+    Stable versions pass through unchanged. Canonical dev versions use
+    `-dev.N`; PyPI expects `.devN`. Already-normalized PyPI dev versions also
+    pass through so local packaging commands can be idempotent.
+
+    >>> to_pypi("1.2.3")
+    '1.2.3'
+    >>> to_pypi("1.2.0-dev.4")
+    '1.2.0.dev4'
+    >>> to_pypi("1.2.0.dev4")
+    '1.2.0.dev4'
+    """
+    try:
+        major, minor, patch, dev_n = parse_semver(version)
+    except ValueError:
+        try:
+            major, minor, patch, dev_n = _parse_pypi_version(version)
+        except ValueError as pypi_error:
+            raise ValueError(
+                f"Not a valid pyrefly or PyPI version: {version!r}"
+            ) from pypi_error
+    if dev_n is None:
+        return f"{major}.{minor}.{patch}"
+    return f"{major}.{minor}.{patch}.dev{dev_n}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +196,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Print the M.m.p form for VS Code Marketplace and Open VSX.",
     )
     p_market.add_argument("version")
+
+    p_pypi = sub.add_parser(
+        "to-pypi",
+        help="Print the PEP 440 form for PyPI package metadata.",
+    )
+    p_pypi.add_argument("version")
 
     p_pre = sub.add_parser(
         "is-prerelease",
@@ -168,6 +218,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "to-marketplace":
             print(to_marketplace(args.version))
+            return 0
+        if args.command == "to-pypi":
+            print(to_pypi(args.version))
             return 0
         if args.command == "is-prerelease":
             result = is_prerelease(args.version)

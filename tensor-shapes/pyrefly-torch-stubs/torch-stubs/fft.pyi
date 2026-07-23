@@ -4,17 +4,17 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.fft module (Phase 6: FFT Operations)
-from shape_extensions import uses_shape_dsl
+from shape_extensions import IntTuple, uses_shape_dsl
 from torch import Tensor
 from torch._shapes import irfft_ir, rfft_ir
 
 # 1D FFT operations
-def fft[*Shape](
-    input: Tensor[*Shape], n: int = None, dim: int = -1, norm: str = None
-) -> Tensor[*Shape]: ...
-def ifft[*Shape](
-    input: Tensor[*Shape], n: int = None, dim: int = -1, norm: str = None
-) -> Tensor[*Shape]: ...
+def fft[Shape: IntTuple](
+    input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
+) -> Tensor[Shape]: ...
+def ifft[Shape: IntTuple](
+    input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
+) -> Tensor[Shape]: ...
 @uses_shape_dsl(rfft_ir)
 def rfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor: ...
 @uses_shape_dsl(irfft_ir)
@@ -25,18 +25,18 @@ def hfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor
 def ihfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor: ...
 
 # 2D FFT operations
-def fft2[*Shape](
-    input: Tensor[*Shape],
+def fft2[Shape: IntTuple](
+    input: Tensor[Shape],
     s: tuple[int, int] = None,
     dim: tuple[int, int] = (-2, -1),
     norm: str = None,
-) -> Tensor[*Shape]: ...
-def ifft2[*Shape](
-    input: Tensor[*Shape],
+) -> Tensor[Shape]: ...
+def ifft2[Shape: IntTuple](
+    input: Tensor[Shape],
     s: tuple[int, int] = None,
     dim: tuple[int, int] = (-2, -1),
     norm: str = None,
-) -> Tensor[*Shape]: ...
+) -> Tensor[Shape]: ...
 def rfft2(
     input: Tensor,
     s: tuple[int, int] = None,
@@ -51,18 +51,18 @@ def irfft2(
 ) -> Tensor: ...
 
 # ND FFT operations
-def fftn[*Shape](
-    input: Tensor[*Shape],
+def fftn[Shape: IntTuple](
+    input: Tensor[Shape],
     s: tuple[int, ...] = None,
     dim: tuple[int, ...] = None,
     norm: str = None,
-) -> Tensor[*Shape]: ...
-def ifftn[*Shape](
-    input: Tensor[*Shape],
+) -> Tensor[Shape]: ...
+def ifftn[Shape: IntTuple](
+    input: Tensor[Shape],
     s: tuple[int, ...] = None,
     dim: tuple[int, ...] = None,
     norm: str = None,
-) -> Tensor[*Shape]: ...
+) -> Tensor[Shape]: ...
 def rfftn(
     input: Tensor,
     s: tuple[int, ...] = None,
@@ -77,9 +77,9 @@ def irfftn(
 ) -> Tensor: ...
 
 # FFT shift operations
-def fftshift[*Shape](
-    input: Tensor[*Shape], dim: int | tuple[int, ...] = None
-) -> Tensor[*Shape]: ...
-def ifftshift[*Shape](
-    input: Tensor[*Shape], dim: int | tuple[int, ...] = None
-) -> Tensor[*Shape]: ...
+def fftshift[Shape: IntTuple](
+    input: Tensor[Shape], dim: int | tuple[int, ...] = None
+) -> Tensor[Shape]: ...
+def ifftshift[Shape: IntTuple](
+    input: Tensor[Shape], dim: int | tuple[int, ...] = None
+) -> Tensor[Shape]: ...

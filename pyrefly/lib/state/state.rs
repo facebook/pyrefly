@@ -186,7 +186,7 @@ pub struct ModuleChanges(pub ModuleDeps);
 
 // A single dependency, passed during lookup. Can be merged into ModuleDeps.
 //
-// The metadata-flavored lookups (`is_special_export`, `is_reexport`,
+// The metadata-flavored lookups (`is_special_export`, `reexport_source`,
 // `get_deprecated`, `is_final`, `docstring_range`,
 // `is_submodule_imported_implicitly`) all record "depends on the
 // metadata of this name" and funnel into the same `ModuleDeps` slot.
@@ -208,8 +208,8 @@ pub enum ModuleDep {
     NameMetadata(Name),
     /// `LookupExport::is_special_export`.
     IsSpecialExport(Name),
-    /// `LookupExport::is_reexport`.
-    IsReexport(Name),
+    /// `LookupExport::reexport_source`.
+    ReexportSource(Name),
     /// `LookupExport::get_deprecated`.
     GetDeprecated(Name),
     /// `LookupExport::export_origin`.
@@ -329,7 +329,7 @@ impl ModuleDeps {
             }
             ModuleDep::NameMetadata(name)
             | ModuleDep::IsSpecialExport(name)
-            | ModuleDep::IsReexport(name)
+            | ModuleDep::ReexportSource(name)
             | ModuleDep::GetDeprecated(name)
             | ModuleDep::ExportOrigin(name)
             | ModuleDep::DocstringRange(name)
@@ -426,7 +426,7 @@ impl ModuleDep {
             ModuleDep::NameExists(_) => "export_exists",
             ModuleDep::NameMetadata(_) => "name_metadata",
             ModuleDep::IsSpecialExport(_) => "is_special_export",
-            ModuleDep::IsReexport(_) => "is_reexport",
+            ModuleDep::ReexportSource(_) => "reexport_source",
             ModuleDep::GetDeprecated(_) => "get_deprecated",
             ModuleDep::ExportOrigin(_) => "export_origin",
             ModuleDep::DocstringRange(_) => "docstring_range",
@@ -657,6 +657,8 @@ pub(crate) struct TransactionData<'a> {
     pysa_reporter: Option<Box<crate::report::pysa::PysaReporter>>,
     /// When set, CinderX reporting writes per-module output during answer solving.
     cinderx_reporter: Option<Box<crate::report::cinderx::CinderxReporter>>,
+    /// When set, called per solved module while its bindings/answers are still live (before eviction).
+    solutions_hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
 }
 
 impl<'a> TransactionData<'a> {
@@ -797,6 +799,15 @@ impl<'a> Transaction<'a> {
         self.data.pysa_reporter = reporter;
     }
 
+    /// Set a hook called per solved module while its bindings/answers are still live (before
+    /// eviction), letting per-module analyses (e.g. `coverage`) read them without retaining them.
+    pub fn set_solutions_hook(
+        &mut self,
+        hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
+    ) {
+        self.data.solutions_hook = hook;
+    }
+
     /// Take the pysa reporter out of the transaction, consuming ownership.
     pub fn take_pysa_reporter(&mut self) -> Option<Box<crate::report::pysa::PysaReporter>> {
         self.data.pysa_reporter.take()
@@ -868,14 +879,24 @@ impl<'a> Transaction<'a> {
     }
 
     /// Look up the `ClassFields` for a class, which may be defined in another module.
+    /// Falls back to `Solutions` metadata when bindings are evicted (e.g. during `coverage`).
     pub fn get_class_fields(&self, source_handle: &Handle, class: &Class) -> Option<ClassFields> {
         let handle = Handle::new(
             class.module_name(),
             class.module_path().dupe(),
             source_handle.sys_info().dupe(),
         );
-        let bindings = self.get_bindings(&handle)?;
-        bindings.get_class_fields(class.index()).cloned()
+        if let Some(bindings) = self.get_bindings(&handle) {
+            bindings.get_class_fields(class.index()).cloned()
+        } else {
+            Some(
+                self.get_solutions(&handle)?
+                    .metadata()
+                    .get_class_checked(class.index())?
+                    .fields
+                    .clone(),
+            )
+        }
     }
 
     pub fn get_ast(&self, handle: &Handle) -> Option<Arc<ruff_python_ast::ModModule>> {
@@ -1343,7 +1364,7 @@ impl<'a> Transaction<'a> {
         // Clean the module if it hasn't been cleaned in this epoch.
         // If try_start_clean returns None, the module is already checked.
         // Once checked, it stays checked for the duration of the epoch.
-        // We check the the epoch optimistically before calling try_start_clean
+        // We check the epoch optimistically before calling try_start_clean
         // to avoid taking the computing mutex.
         if !module_data.state.is_checked(self.data.now)
             && let Some(guard) = module_data.state.try_start_clean(self.data.now)
@@ -1424,6 +1445,8 @@ impl<'a> Transaction<'a> {
                 tensor_shapes,
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
+                strict_partial_subtyping: config
+                    .strict_partial_subtyping(module_data.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(module_data.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
@@ -1524,6 +1547,9 @@ impl<'a> Transaction<'a> {
                 }
                 if self.data.pysa_reporter.is_some() || self.data.cinderx_reporter.is_some() {
                     post.evict_ast();
+                }
+                if let Some(hook) = &self.data.solutions_hook {
+                    hook(&module_data.handle, self);
                 }
                 if !require.keep_bindings() && !require.keep_answers() {
                     // From now on we can use the answers directly, so evict the bindings/answers.
@@ -1849,10 +1875,7 @@ impl<'a> Transaction<'a> {
             .updated_loaders
             .ensure(loader, || match self.readable.loaders.get(loader) {
                 Some(v) => v.dupe(),
-                None => Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
+                None => Arc::new(LoaderFindCache::new(loader.dupe())),
             })
             .0
             .dupe()
@@ -2239,22 +2262,10 @@ impl<'a> Transaction<'a> {
     fn invalidate_find(&mut self) {
         let new_loaders = LockedMap::new();
         for loader in self.data.updated_loaders.keys() {
-            new_loaders.insert(
-                loader.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
         }
         for loader in self.readable.loaders.keys() {
-            new_loaders.insert(
-                loader.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    loader.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(loader.dupe(), Arc::new(LoaderFindCache::new(loader.dupe())));
         }
         self.data.updated_loaders = new_loaders;
 
@@ -2314,13 +2325,7 @@ impl<'a> Transaction<'a> {
                 new_loaders.insert(c.dupe(), l.dupe());
             });
         configs.iter().for_each(|config| {
-            new_loaders.insert(
-                config.dupe(),
-                Arc::new(LoaderFindCache::new(
-                    config.dupe(),
-                    self.data.state.dir_cache_enabled,
-                )),
-            );
+            new_loaders.insert(config.dupe(), Arc::new(LoaderFindCache::new(config.dupe())));
         });
         self.data.updated_loaders = new_loaders;
 
@@ -2432,6 +2437,8 @@ impl<'a> Transaction<'a> {
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
+                strict_partial_subtyping: config
+                    .strict_partial_subtyping(m.handle.path().as_path()),
                 spec_compliant_overloads: config
                     .spec_compliant_overloads(m.handle.path().as_path()),
                 recursion_limit_config: config.recursion_limit_config(),
@@ -2861,18 +2868,16 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         )?
     }
 
-    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool {
+    fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName> {
         self.with_exports(
             module,
-            |exports, lookup| {
-                matches!(
-                    exports.exports(lookup).get(name),
-                    Some(ExportLocation::OtherModule(..))
-                )
+            |exports, lookup| match exports.exports(lookup).get(name) {
+                Some(ExportLocation::OtherModule(other_module, _)) => Some(*other_module),
+                _ => None,
             },
-            ModuleDep::IsReexport(name.clone()),
+            ModuleDep::ReexportSource(name.clone()),
         )
-        .unwrap_or(false)
+        .flatten()
     }
 
     fn is_special_export(&self, mut module: ModuleName, name: &Name) -> Option<SpecialExport> {
@@ -3222,19 +3227,10 @@ pub struct State {
     state: RwLock<StateData>,
     run_count: AtomicUsize,
     committing_transaction_lock: Mutex<()>,
-    dir_cache_enabled: bool,
 }
 
 impl State {
     pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
-        Self::new_with_options(config_finder, thread_count, false)
-    }
-
-    pub fn new_with_options(
-        config_finder: ConfigFinder,
-        thread_count: ThreadCount,
-        dir_cache_enabled: bool,
-    ) -> Self {
         Self {
             threads: ThreadPool::new(thread_count),
             uniques: UniqueFactory::new(),
@@ -3242,16 +3238,11 @@ impl State {
             state: RwLock::new(StateData::new()),
             run_count: AtomicUsize::new(0),
             committing_transaction_lock: Mutex::new(()),
-            dir_cache_enabled,
         }
     }
 
     pub fn config_finder(&self) -> &ConfigFinder {
         &self.config_finder
-    }
-
-    pub fn dir_cache_enabled(&self) -> bool {
-        self.dir_cache_enabled
     }
 
     /// Run `op` on the state's thread pool, which has an increased stack size.
@@ -3309,6 +3300,7 @@ impl State {
                 subscriber,
                 pysa_reporter: None,
                 cinderx_reporter: None,
+                solutions_hook: None,
             },
         }
     }
@@ -3382,6 +3374,7 @@ impl State {
                             subscriber: _,
                             pysa_reporter: _,
                             cinderx_reporter: _,
+                            solutions_hook: _,
                         },
                 },
             committing_transaction_guard,

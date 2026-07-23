@@ -5,11 +5,24 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+//! Solving-phase support for the `attrs`/`attr` library (the third-party precursor to and superset
+//! of `@dataclass`). attrs classes are recognized as a [`DataclassKind::Attrs`] during binding; this
+//! module implements the behaviors that diverge from plain dataclasses, including: init-parameter
+//! renaming (stripping leading underscores), the `auto_attribs` defaults per decorator flavor,
+//! `eq`/`order`/`cmp` validation, `on_setattr`/`setters.frozen` read-only detection,
+//! `converters.optional`/`converters.pipe` handling, `@x.default` decorator return-type checks, `@x.converter`
+//! decorator input types, and the `assoc`/`fields`/`fields_dict` runtime helpers.
+
 use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::typed_dict::AnonymousTypedDictInner;
+use pyrefly_types::typed_dict::TypedDict;
+use pyrefly_types::typed_dict::TypedDictField;
+use ruff_python_ast::Arguments;
+use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
@@ -26,14 +39,19 @@ use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyExport;
+use crate::binding::binding::KeyUndecoratedFunction;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::callable::FunctionKind;
+use crate::types::callable::Param;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::DataclassKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::tuple::Tuple;
 use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
@@ -72,6 +90,31 @@ pub(crate) fn is_attrs_setters_pipe(ty: &Type) -> bool {
             && matches!(id.module.name().as_str(), "attr.setters" | "attrs.setters")
     } else {
         false
+    }
+}
+
+/// Whether a resolved `on_setattr` type freezes the attribute: the `frozen` hook, or any element of
+/// a tuple/list/union of hooks.
+fn attrs_type_is_frozen_setter(ty: &Type) -> bool {
+    if is_attrs_setters_frozen(ty) {
+        return true;
+    }
+    match ty {
+        Type::Tuple(Tuple::Concrete(elts)) => elts.iter().any(attrs_type_is_frozen_setter),
+        Type::Tuple(Tuple::Unbounded(elt)) => attrs_type_is_frozen_setter(elt),
+        Type::Tuple(Tuple::Unpacked(unpacked)) => {
+            let (prefix, middle, suffix) = &**unpacked;
+            prefix.iter().any(attrs_type_is_frozen_setter)
+                || attrs_type_is_frozen_setter(middle)
+                || suffix.iter().any(attrs_type_is_frozen_setter)
+        }
+        Type::ClassType(ct) if ct.is_builtin("list") => ct
+            .targs()
+            .as_slice()
+            .first()
+            .is_some_and(attrs_type_is_frozen_setter),
+        Type::Union(u) => u.members.iter().any(attrs_type_is_frozen_setter),
+        _ => false,
     }
 }
 
@@ -218,6 +261,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// The `__init__` input type from a `@<field>.converter` method. attrs invokes it as
+    /// `converter(self, field, value)`, so the `value` (third positional) parameter's type is the
+    /// converter's input; falls back to `Any` when that parameter is absent or unannotated.
+    pub(crate) fn attrs_converter_decorator_param(&self, method_range: TextRange) -> Type {
+        let func = self.get(&KeyUndecoratedFunction(ShortIdentifier::from_text_range(
+            method_range,
+        )));
+        func.params
+            .iter()
+            .filter_map(|p| match p {
+                Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => Some(ty.clone()),
+                _ => None,
+            })
+            .nth(2)
+            .unwrap_or_else(|| self.heap.mk_any_implicit())
+    }
+
     /// attrs rejects two `eq`/`order`/`cmp` combinations at runtime (`ValueError`), on both the
     /// class decorator and the field specifier: `cmp` mixed with `eq`/`order`, and `order=True`
     /// with `eq=False` (ordering requires equality). A non-bool `eq` (e.g. a key callable) is
@@ -301,5 +361,197 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             hint,
             errors,
         )
+    }
+
+    /// `attr.fields(C)` / `attr.fields_dict(C)`: return a field-aware type and reject a non-attrs
+    /// class argument (matching attrs' runtime `NotAnAttrsClassError`). `fields_dict` returns an
+    /// anonymous `TypedDict {name: Attribute[t]}`; `fields` keeps the stub's declared return for now.
+    pub(crate) fn call_attrs_fields(
+        &self,
+        func_name: &Name,
+        fields_ty: &Type,
+        args: &[CallArg],
+        kws: &[CallKeyword],
+        callee_range: TextRange,
+        arg_range: TextRange,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if let [CallArg::Arg(obj_arg)] = args
+            && kws.is_empty()
+        {
+            // Keep the `ClassType` when present so a generic `type[C[int]]` substitutes its targs.
+            let (cls, class_type) = match obj_arg.infer(self, errors) {
+                Type::ClassDef(cls) => (Some(cls), None),
+                Type::Type(inner) => match *inner {
+                    Type::ClassType(c) => (Some(c.class_object().clone()), Some(c)),
+                    _ => (None, None),
+                },
+                _ => (None, None),
+            };
+            if let Some(cls) = cls {
+                let metadata = self.get_metadata_for_class(&cls);
+                let dataclass = metadata.dataclass_metadata();
+                if let Some(dataclass) = dataclass
+                    && matches!(dataclass.kind, DataclassKind::Attrs { .. })
+                {
+                    if func_name.as_str() == "fields_dict"
+                        && let Some(td) =
+                            self.attrs_fields_dict_type(&cls, dataclass, class_type.as_ref())
+                    {
+                        return td;
+                    }
+                } else if !metadata.is_protocol() {
+                    // `type[AttrsInstance]` (a Protocol) is the canonical "any attrs class"
+                    // annotation, so accept Protocols; non-class arguments are left to the stub.
+                    self.error(
+                        errors,
+                        arg_range,
+                        ErrorKind::BadArgumentType,
+                        format!("Argument to `{func_name}()` is not an attrs class"),
+                    );
+                    return self.heap.mk_any_explicit();
+                }
+            }
+        }
+        self.freeform_call_infer(
+            fields_ty.clone(),
+            args,
+            kws,
+            callee_range,
+            arg_range,
+            hint,
+            errors,
+        )
+    }
+
+    /// `attr.fields_dict(C)` maps each field name to its `Attribute[T]`, modeled as an anonymous
+    /// `TypedDict`. Over 100 fields, returns `None` to fall back to the stub's `dict`.
+    fn attrs_fields_dict_type(
+        &self,
+        cls: &Class,
+        dataclass: &DataclassMetadata,
+        class_type: Option<&ClassType>,
+    ) -> Option<Type> {
+        const MAX_FIELDS: usize = 100;
+        let attribute_class = self.attrs_attribute_class()?;
+        let kw_only = self.compute_kw_only_fields_by_class(cls);
+        let raw_fields = self.iter_fields(cls, dataclass, false, &kw_only);
+        if raw_fields.len() > MAX_FIELDS {
+            return None;
+        }
+        let sub = class_type.map(|c| c.targs().substitution());
+        let swallow = self.error_swallower();
+        let fields = raw_fields
+            .into_iter()
+            .map(|(name, field, _)| {
+                let ty = match &sub {
+                    Some(sub) => sub.substitute_into(field.ty()),
+                    None => field.ty(),
+                };
+                let attr_ty =
+                    self.specialize(&attribute_class, vec![ty], TextRange::default(), &swallow);
+                (
+                    name,
+                    TypedDictField {
+                        ty: attr_ty,
+                        required: true,
+                        read_only_reason: None,
+                    },
+                )
+            })
+            .collect();
+        Some(
+            self.heap
+                .mk_typed_dict(TypedDict::Anonymous(Box::new(AnonymousTypedDictInner {
+                    fields,
+                }))),
+        )
+    }
+
+    /// Resolve the `attr.Attribute` / `attrs.Attribute` class from the stubs, if available.
+    fn attrs_attribute_class(&self) -> Option<Class> {
+        let name = Name::new_static("Attribute");
+        for module in [ModuleName::attr(), ModuleName::attrs()] {
+            if self.exports.export_exists(module, &name)
+                && let Type::ClassDef(cls) = self
+                    .get_from_export(module, None, &KeyExport(name.clone()))
+                    .as_ref()
+            {
+                return Some(cls.clone());
+            }
+        }
+        None
+    }
+
+    /// Whether an attrs `on_setattr` argument makes the attribute read-only. Possible forms:
+    /// - a single hook like `setters.frozen`
+    /// - a list or tuple of hooks
+    /// - multiple hooks passed to `setters.pipe`
+    pub(crate) fn on_setattr_is_frozen(&self, expr: &Expr) -> bool {
+        // `pipe(...)`'s return type doesn't record which hooks it composed, so it must be inspected
+        // by expression; every other form is decided from the inferred type.
+        if let Expr::Call(call) = expr
+            && is_attrs_setters_pipe(&self.expr_infer(&call.func, &self.error_swallower()))
+        {
+            return call
+                .arguments
+                .args
+                .iter()
+                .any(|e| self.on_setattr_is_frozen(e));
+        }
+        attrs_type_is_frozen_setter(&self.expr_infer(expr, &self.error_swallower()))
+    }
+
+    /// The `__init__` input for an `attr.converters`/`attrs.converters` combinator `converter=`:
+    /// `optional(c)` adds `None` to `c`'s input; `pipe(c1, ...)` uses `c1`'s (it runs first);
+    /// `default_if_none(...)` passes non-`None` values through, so it is `annotated_field_ty | None`.
+    /// `None` for any other `converter=`.
+    ///
+    /// `annotated_field_ty` is the field's declared type annotation, if the field has one.
+    pub(crate) fn attrs_converters_combinator_param(
+        &self,
+        args: &Arguments,
+        annotated_field_ty: Option<&Type>,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let kw = args.keywords.iter().find(|kw| {
+            kw.arg
+                .as_ref()
+                .is_some_and(|n| n.id == DataclassFieldKeywords::CONVERTER)
+        })?;
+        let Expr::Call(call) = &kw.value else {
+            return None;
+        };
+        // These converters are overloaded, so match on the resolved definition identity via
+        // `callee_kind` (which looks through overloads) rather than a bare `Type::Function`.
+        let Some(CalleeKind::Function(FunctionKind::Def(id))) =
+            self.expr_infer(&call.func, errors).callee_kind()
+        else {
+            return None;
+        };
+        if !matches!(
+            id.module.name().as_str(),
+            "attr.converters" | "attrs.converters"
+        ) {
+            return None;
+        }
+        let first_input =
+            |hint| {
+                Some(self.get_converter_param(
+                    &self.expr_infer(call.arguments.args.first()?, errors),
+                    hint,
+                ))
+            };
+        match id.name.as_str() {
+            // `optional(c)` feeds `c`'s output straight to the field, so its type parameters solve
+            // against the annotation.
+            "optional" => Some(self.union(first_input(annotated_field_ty)?, self.heap.mk_none())),
+            // In `pipe(c1, ...)`, `c1`'s output feeds the next converter, not the field, so the
+            // annotation must not solve `c1`'s type parameters (only the last output must match it).
+            "pipe" => first_input(None),
+            "default_if_none" => Some(self.union(annotated_field_ty?.clone(), self.heap.mk_none())),
+            _ => None,
+        }
     }
 }

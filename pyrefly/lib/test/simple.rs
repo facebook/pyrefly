@@ -1133,6 +1133,30 @@ def f(x: int | str) -> None:
 );
 
 testcase!(
+    test_kw_call_transparent_for_subtyping,
+    r#"
+from dataclasses import dataclass
+from typing import Any
+
+class Foo:
+    x: int = 0
+
+def takes_type_foo(cls: type[Foo]) -> None: ...
+
+def returns_type_foo() -> type[Foo]:
+    return dataclass(Foo)
+
+foo_cls: type[Foo] = dataclass(Foo)
+any_cls: type[Any] = dataclass(Foo)
+wrong_cls: type[int] = dataclass(Foo)  # E: `type[Foo]` is not assignable to `type[int]`
+takes_type_foo(dataclass(Foo))
+
+def make_dynamic_dataclass(base: type) -> type:
+    return dataclass(type(f"Dynamic{base.__name__}", (), {"__annotations__": {"x": int}}))
+"#,
+);
+
+testcase!(
     test_assert_nonetype,
     r#"
 from types import NoneType

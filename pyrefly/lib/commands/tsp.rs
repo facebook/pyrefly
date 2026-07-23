@@ -24,6 +24,7 @@ use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::Server;
 use crate::lsp::non_wasm::server::initialize_finish;
 use crate::lsp::non_wasm::server::initialize_start;
+use crate::lsp::non_wasm::workspace::ServerMode;
 use crate::tsp::server::tsp_capabilities;
 use crate::tsp::server::tsp_loop;
 
@@ -68,6 +69,7 @@ pub fn run_tsp(
             args.indexing_mode,
             args.workspace_indexing_limit,
             false,
+            ServerMode::TypeServer,
             surface,
             agent_session_id,
             agent_invocation_id,

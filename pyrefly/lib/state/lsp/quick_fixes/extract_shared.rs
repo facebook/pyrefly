@@ -144,29 +144,8 @@ pub(crate) fn selection_anchor(source: &str, selection: TextRange) -> TextSize {
     }
 }
 
-pub(crate) fn expr_needs_parens(expr: &Expr) -> bool {
-    !matches!(
-        expr,
-        Expr::Name(_)
-            | Expr::NumberLiteral(_)
-            | Expr::StringLiteral(_)
-            | Expr::BytesLiteral(_)
-            | Expr::BooleanLiteral(_)
-            | Expr::NoneLiteral(_)
-            | Expr::EllipsisLiteral(_)
-            | Expr::Subscript(_)
-            | Expr::Attribute(_)
-            | Expr::Call(_)
-            | Expr::List(_)
-            | Expr::Dict(_)
-            | Expr::Set(_)
-            | Expr::Tuple(_)
-            | Expr::FString(_)
-    )
-}
-
-pub(crate) fn wrap_if_needed(expr: &Expr, text: &str) -> String {
-    if expr_needs_parens(expr) {
+pub(crate) fn wrap_if_needed(parent: Option<AnyNodeRef>, expr: &Expr, text: &str) -> String {
+    if Ast::needs_brackets(parent, expr) {
         format!("({text})")
     } else {
         text.to_owned()

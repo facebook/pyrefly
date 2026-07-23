@@ -8,13 +8,11 @@
 use std::sync::Arc;
 
 use pyrefly_python::dunder;
-use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::typed_dict::TypedDictField;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Arguments;
-use ruff_python_ast::Expr;
 use ruff_python_ast::Expr::EllipsisLiteral;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -29,8 +27,6 @@ use crate::alt::call::TargetWithTParams;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::class::attrs::AttrsInitName;
-use crate::alt::class::attrs::is_attrs_setters_frozen;
-use crate::alt::class::attrs::is_attrs_setters_pipe;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::class_field::DataclassMember;
 use crate::alt::types::class_metadata::ClassMetadata;
@@ -40,7 +36,6 @@ use crate::alt::types::class_metadata::DataclassKind;
 use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::unwrap::HintRef;
-use crate::binding::binding::KeyExport;
 use crate::binding::pydantic::GE;
 use crate::binding::pydantic::GT;
 use crate::binding::pydantic::LE;
@@ -53,7 +48,6 @@ use crate::error::context::TypeCheckKind;
 use crate::types::callable::Callable;
 use crate::types::callable::FuncMetadata;
 use crate::types::callable::Function;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -65,8 +59,26 @@ use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
-use crate::types::types::CalleeKind;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
+
+/// Which constructor-copy builtin `call_dataclasses_replace` is serving. Chosen by the caller so the
+/// method itself doesn't re-derive dispatch from boolean flags.
+#[derive(Clone, Copy)]
+pub enum ReplaceKind {
+    /// `dataclasses.replace` / `copy.replace`: accepts any dataclass.
+    Replace,
+    /// `attrs.evolve`: requires an attrs class; keys by constructor alias, init-only.
+    Evolve,
+    /// `attrs.assoc`: requires an attrs class; keys by attribute name, includes `init=False`.
+    Assoc,
+}
+
+impl ReplaceKind {
+    fn requires_attrs(self) -> bool {
+        matches!(self, ReplaceKind::Evolve | ReplaceKind::Assoc)
+    }
+}
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
@@ -426,6 +438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn call_dataclasses_replace(
         &self,
+        kind: ReplaceKind,
         replace_ty: &Type,
         args: &[CallArg],
         kws: &[CallKeyword],
@@ -448,19 +461,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let obj_ty = obj_arg.infer(self, errors);
 
         // `evolve`/`assoc` require an attrs class; `replace` accepts any dataclass.
-        let callee_kind = replace_ty.callee_kind();
-        let is_assoc = matches!(
-            callee_kind,
-            Some(CalleeKind::Function(FunctionKind::AttrsAssoc))
-        );
-        let requires_attrs = is_assoc
-            || matches!(
-                callee_kind,
-                Some(CalleeKind::Function(FunctionKind::AttrsEvolve))
-            );
         let is_valid_target = |cls: &ClassType| {
             let metadata = self.get_metadata_for_class(cls.class_object());
-            if requires_attrs {
+            if kind.requires_attrs() {
                 metadata
                     .dataclass_metadata()
                     .is_some_and(|dm| matches!(dm.kind, DataclassKind::Attrs { .. }))
@@ -477,8 +480,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.map_over_union(&obj_ty, |ty| match ty {
             Type::ClassType(cls) if is_valid_target(cls) => dataclasses.push(ty.clone()),
             _ => {
-                has_non_attrs_class =
-                    has_non_attrs_class || (requires_attrs && matches!(ty, Type::ClassType(_)));
+                has_non_attrs_class = has_non_attrs_class
+                    || (kind.requires_attrs() && matches!(ty, Type::ClassType(_)));
                 non_dataclasses.push(ty.clone());
             }
         });
@@ -496,7 +499,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // as the member type to avoid rejecting `A | B` as not assignable to `A`.
         let rest_args = args.iter().skip(1).cloned().collect::<Vec<_>>();
         let mut rets = dataclasses.map(|ty| {
-            if is_assoc {
+            if matches!(kind, ReplaceKind::Assoc) {
                 let Type::ClassType(cls) = ty else {
                     unreachable!("assoc targets are validated attrs ClassTypes")
                 };
@@ -609,128 +612,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             hint,
             errors,
         )
-    }
-
-    /// `attr.fields(C)` / `attr.fields_dict(C)`: return a field-aware type and reject a non-attrs
-    /// class argument (matching attrs' runtime `NotAnAttrsClassError`). `fields_dict` returns an
-    /// anonymous `TypedDict {name: Attribute[t]}`; `fields` keeps the stub's declared return for now.
-    pub fn call_attrs_fields(
-        &self,
-        func_name: &Name,
-        fields_ty: &Type,
-        args: &[CallArg],
-        kws: &[CallKeyword],
-        callee_range: TextRange,
-        arg_range: TextRange,
-        hint: Option<HintRef>,
-        errors: &ErrorCollector,
-    ) -> Type {
-        if let [CallArg::Arg(obj_arg)] = args
-            && kws.is_empty()
-        {
-            // Keep the `ClassType` when present so a generic `type[C[int]]` substitutes its targs.
-            let (cls, class_type) = match obj_arg.infer(self, errors) {
-                Type::ClassDef(cls) => (Some(cls), None),
-                Type::Type(inner) => match *inner {
-                    Type::ClassType(c) => (Some(c.class_object().clone()), Some(c)),
-                    _ => (None, None),
-                },
-                _ => (None, None),
-            };
-            if let Some(cls) = cls {
-                let metadata = self.get_metadata_for_class(&cls);
-                let dataclass = metadata.dataclass_metadata();
-                if let Some(dataclass) = dataclass
-                    && matches!(dataclass.kind, DataclassKind::Attrs { .. })
-                {
-                    if func_name.as_str() == "fields_dict"
-                        && let Some(td) =
-                            self.attrs_fields_dict_type(&cls, dataclass, class_type.as_ref())
-                    {
-                        return td;
-                    }
-                } else if !metadata.is_protocol() {
-                    // `type[AttrsInstance]` (a Protocol) is the canonical "any attrs class"
-                    // annotation, so accept Protocols; non-class arguments are left to the stub.
-                    self.error(
-                        errors,
-                        arg_range,
-                        ErrorKind::BadArgumentType,
-                        format!("Argument to `{func_name}()` is not an attrs class"),
-                    );
-                    return self.heap.mk_any_explicit();
-                }
-            }
-        }
-        self.freeform_call_infer(
-            fields_ty.clone(),
-            args,
-            kws,
-            callee_range,
-            arg_range,
-            hint,
-            errors,
-        )
-    }
-
-    /// `attr.fields_dict(C)` returns an ordered mapping of field name to its `Attribute[T]`. Model it
-    /// as an anonymous `TypedDict` (one entry per field), bailing to the stub's `dict` for very wide
-    /// classes. Returns `None` if the `Attribute` class is unavailable from the stubs.
-    fn attrs_fields_dict_type(
-        &self,
-        cls: &Class,
-        dataclass: &DataclassMetadata,
-        class_type: Option<&ClassType>,
-    ) -> Option<Type> {
-        const MAX_FIELDS: usize = 20;
-        let attribute_class = self.attrs_attribute_class()?;
-        let kw_only = self.compute_kw_only_fields_by_class(cls);
-        let raw_fields = self.iter_fields(cls, dataclass, false, &kw_only);
-        if raw_fields.len() > MAX_FIELDS {
-            return None;
-        }
-        let sub = class_type.map(|c| c.targs().substitution());
-        let swallow = self.error_swallower();
-        let fields = raw_fields
-            .into_iter()
-            .map(|(name, field, _)| {
-                let ty = match &sub {
-                    Some(sub) => sub.substitute_into(field.ty()),
-                    None => field.ty(),
-                };
-                let attr_ty =
-                    self.specialize(&attribute_class, vec![ty], TextRange::default(), &swallow);
-                (
-                    name,
-                    TypedDictField {
-                        ty: attr_ty,
-                        required: true,
-                        read_only_reason: None,
-                    },
-                )
-            })
-            .collect();
-        Some(
-            self.heap
-                .mk_typed_dict(TypedDict::Anonymous(Box::new(AnonymousTypedDictInner {
-                    fields,
-                }))),
-        )
-    }
-
-    /// Resolve the `attr.Attribute` / `attrs.Attribute` class from the stubs, if available.
-    fn attrs_attribute_class(&self) -> Option<Class> {
-        let name = Name::new_static("Attribute");
-        for module in [ModuleName::attr(), ModuleName::attrs()] {
-            if self.exports.export_exists(module, &name)
-                && let Type::ClassDef(cls) = self
-                    .get_from_export(module, None, &KeyExport(name.clone()))
-                    .as_ref()
-            {
-                return Some(cls.clone());
-            }
-        }
-        None
     }
 
     fn get_dataclass_replace(
@@ -884,30 +765,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
     }
 
-    /// Whether an attrs `on_setattr` argument makes the attribute read-only. Possible forms:
-    /// - a single hook like `setters.frozen`
-    /// - a list or tuple of hooks
-    /// - multiple hooks passed to `setters.pipe`
-    fn on_setattr_is_frozen(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::List(list) => list.elts.iter().any(|e| self.on_setattr_is_frozen(e)),
-            Expr::Tuple(tuple) => tuple.elts.iter().any(|e| self.on_setattr_is_frozen(e)),
-            Expr::Call(call)
-                if is_attrs_setters_pipe(&self.expr_infer(&call.func, &self.error_swallower())) =>
-            {
-                call.arguments
-                    .args
-                    .iter()
-                    .any(|e| self.on_setattr_is_frozen(e))
-            }
-            _ => is_attrs_setters_frozen(&self.expr_infer(expr, &self.error_swallower())),
-        }
-    }
-
     pub fn dataclass_field_keywords(
         &self,
         func: &Type,
         args: &Arguments,
+        annotated_field_ty: Option<&Type>,
         dataclass_metadata: &DataclassMetadata,
         errors: &ErrorCollector,
     ) -> DataclassFieldKeywords {
@@ -963,11 +825,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Read the converter from an explicit `converter=` argument only, not the specifier
         // signature (which always declares one) — else every plain field's param goes Unknown.
         let converter_param = self
-            .attrs_converters_optional_param(args, errors)
+            .attrs_converters_combinator_param(args, annotated_field_ty, errors)
             .or_else(|| {
                 map.0
                     .get(&DataclassFieldKeywords::CONVERTER)
-                    .map(|converter| self.get_converter_param(converter))
+                    .map(|converter| self.get_converter_param(converter, annotated_field_ty))
             });
         // Note that we intentionally don't try to fill in `default`, since we can't distinguish
         // between a real default and something like `dataclasses.MISSING`.
@@ -1121,34 +983,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
-    /// `attr.converters.optional(c)` wraps an inner converter so the field also accepts `None`.
-    /// Returns `<c's input> | None` when `converter=` is such a call, else `None` so the caller
-    /// falls back to plain converter handling.
-    fn attrs_converters_optional_param(
+    pub(crate) fn get_converter_param(
         &self,
-        args: &Arguments,
-        errors: &ErrorCollector,
-    ) -> Option<Type> {
-        let kw = args.keywords.iter().find(|kw| {
-            kw.arg
-                .as_ref()
-                .is_some_and(|n| n.id == DataclassFieldKeywords::CONVERTER)
-        })?;
-        let Expr::Call(call) = &kw.value else {
-            return None;
+        converter: &Type,
+        annotated_field_ty: Option<&Type>,
+    ) -> Type {
+        let solved = match (converter, annotated_field_ty) {
+            (Type::ClassDef(cls), Some(hint)) => self.solve_generic_class_converter(cls, hint),
+            (Type::Forall(_), Some(hint)) => self.solve_generic_function_converter(converter, hint),
+            _ => None,
         };
-        if !matches!(
-            self.expr_infer(&call.func, errors).callee_kind(),
-            Some(CalleeKind::Function(FunctionKind::AttrsConvertersOptional))
-        ) {
-            return None;
-        }
-        let inner = call.arguments.args.first()?;
-        let inner_ty = self.expr_infer(inner, errors);
-        Some(self.union(self.get_converter_param(&inner_ty), self.heap.mk_none()))
-    }
-
-    fn get_converter_param(&self, converter: &Type) -> Type {
+        let converter = solved.as_ref().unwrap_or(converter);
         let constructor_callable = self.constructor_to_callable_distributed(converter);
         let converter = constructor_callable.as_ref().unwrap_or(converter);
         self.distribute_over_union(converter, |ty| {
@@ -1166,6 +1011,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.unions(inputs)
             }
         })
+    }
+
+    /// A generic class converter is type-preserving, so solve its type parameters against the
+    /// declared field `hint` (e.g. `tuple` against `Sequence[int]` becomes `tuple[int, ...]`).
+    /// `None` for a non-generic class or an output incompatible with `hint`.
+    fn solve_generic_class_converter(&self, cls: &Class, hint: &Type) -> Option<Type> {
+        let mut class_type = self.as_class_type_unchecked(cls);
+        if class_type.targs().is_empty() {
+            return None;
+        }
+        let vs = self
+            .solver()
+            .freshen_class_targs(class_type.targs_mut(), self.uniques);
+        let matched = self.is_subset_eq(&self.heap.mk_class_type(class_type.clone()), hint);
+        self.solver()
+            .generalize_class_targs(class_type.targs_mut(), &SmallSet::new());
+        self.solver()
+            .finish_class_targs(class_type.targs_mut(), self.uniques);
+        // Finalizing the fresh vars is required; its specialization errors are dropped because this
+        // is best-effort param inference with no call site to report them against.
+        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        matched.then(|| self.heap.mk_type(self.heap.mk_class_type(class_type)))
+    }
+
+    /// A generic function converter is solved by constraining its return type against the declared
+    /// field `hint`, so the `__init__` param is the solved input, not a leaked type variable.
+    fn solve_generic_function_converter(&self, converter: &Type, hint: &Type) -> Option<Type> {
+        let Type::Forall(forall) = converter else {
+            return None;
+        };
+        if !matches!(forall.body, Forallable::Function(_)) {
+            return None;
+        }
+        let (vs, instantiated) = self.solver().fresh_quantified(
+            &forall.tparams,
+            forall.body.clone().as_type(),
+            self.uniques,
+        );
+        if let Some(ret) = instantiated.callable_return_type(self.heap) {
+            self.is_subset_eq(&ret, hint);
+        }
+        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        Some(self.solver().expand(instantiated))
     }
 
     fn get_default(&self, map: &TypeMap) -> Option<Type> {
