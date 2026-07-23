@@ -85,7 +85,7 @@ xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
 yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { package = "codspeed-criterion-compat", version = "2" }
 pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 pyrefly_lsp_test = { path = "../crates/pyrefly_lsp_test" }
 

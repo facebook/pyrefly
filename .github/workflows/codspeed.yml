@@ -1,0 +1,68 @@
+name: CodSpeed
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  # workflow_dispatch lets CodSpeed trigger backtest runs to seed baseline data.
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write # OpenID Connect auth with CodSpeed (no token secret required)
+jobs:
+  # Instruction-count (Valgrind) measurement of the small, deterministic
+  # microbenchmarks. They are single-threaded and fast, so callgrind's overhead
+  # is bounded and the instruction counts are stable run-to-run.
+  simulation:
+    name: Microbenchmarks (simulation)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+    - name: set up rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: pyrefly-codspeed
+    - name: install cargo-codspeed
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-codspeed
+    - name: build benchmarks
+      run: cargo codspeed build -p pyrefly --bench micro
+    - name: run benchmarks
+      uses: CodSpeedHQ/action@v4
+      with:
+        mode: simulation
+        run: cargo codspeed run -p pyrefly --bench micro
+  # Wall-clock measurement of the heavy, real-world PyTorch benchmarks. They drive
+  # the full LSP server over all cores against the pinned PyTorch checkout, so they
+  # must not run under Valgrind (which serializes threads and inflates the ~GB cold
+  # start past any reasonable timeout). Walltime mode tolerates threads, I/O, and
+  # long cold starts. CodSpeed's dedicated `codspeed-macro` runners give the lowest
+  # variance for walltime; `ubuntu-latest` also works if they aren't provisioned.
+  walltime:
+    name: PyTorch benchmarks (walltime)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    # No submodule checkout: in OSS the benchmark clones the pinned PyTorch itself
+    # (rev from benches/pytorch_pin.bzl) on first run. The runner has github egress.
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+    - name: set up rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: pyrefly-codspeed-walltime
+    - name: install cargo-codspeed
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-codspeed
+    - name: build benchmarks
+      run: cargo codspeed build -p pyrefly --bench pytorch
+    - name: run benchmarks
+      uses: CodSpeedHQ/action@v4
+      with:
+        mode: walltime
+        run: cargo codspeed run -p pyrefly --bench pytorch

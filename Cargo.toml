@@ -10,6 +10,15 @@ strip = "debuginfo"
 [profile.dev]
 debug = 1
 
+# Benchmarks don't need release's whole-program LTO with a single codegen unit.
+# Disabling LTO and using multiple codegen units keeps the CodSpeed build within
+# the memory budget of standard CI runners (and builds much faster) without
+# affecting CodSpeed's deterministic instruction-count measurements.
+[profile.bench]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 [profile.dbg]
 debug = true
 inherits = "dev"
