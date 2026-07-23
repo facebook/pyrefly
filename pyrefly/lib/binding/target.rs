@@ -564,6 +564,13 @@ impl<'a> BindingsBuilder<'a> {
             },
             None => FlowStyle::Other,
         };
+        // Register unpacking / multi-target / `for` / `with` names for
+        // unused-variable tracking, but exempt from reporting (only single-name
+        // assignments are reported)
+        if matches!(style, FlowStyle::Other) {
+            self.scopes
+                .register_variable(&Identifier::new(name.id.clone(), name.range), true);
+        }
         let ann = self.bind_current(&name.id, &user, style);
         if was_uninitialized && let Some(ann_idx) = ann {
             self.insert_subsequently_initialized(ann_idx);
@@ -711,7 +718,7 @@ impl<'a> BindingsBuilder<'a> {
                 pristine: false,
             }
         } else {
-            self.scopes.register_variable(name);
+            self.scopes.register_variable(name, false);
             FlowStyle::Other
         };
         // Must check before bind_name updates the flow.

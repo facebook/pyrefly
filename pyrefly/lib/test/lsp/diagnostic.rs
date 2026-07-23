@@ -427,3 +427,158 @@ from math import tau as my_tau
     let report = get_unused_import_diagnostics(&state, handle);
     assert_eq!(report, "Import `my_tau` may be unused");
 }
+
+#[test]
+fn test_unused_variable_unpacked_reassigned_in_loop() {
+    let code = r#"
+from typing import Generator
+
+def foo() -> Generator[int]:
+    li, ri = 0, 100
+    while li <= ri:
+        mid = (li + ri) // 2
+        if mid % 2 == 0:
+            li = mid + 1
+        else:
+            ri = mid - 1
+        yield li
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// With no trailing read of either var, both were flagged before the fix.
+#[test]
+fn test_unused_variable_unpacked_reassigned_in_loop_no_trailing_read() {
+    let code = r#"
+def foo() -> None:
+    li, ri = 0, 100
+    while li <= ri:
+        mid = (li + ri) // 2
+        if mid % 2 == 0:
+            li = mid + 1
+        else:
+            ri = mid - 1
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// Policy preserved: a genuinely-unused tuple-unpacking target is not reported.
+#[test]
+fn test_unused_variable_unpacking_target_not_reported() {
+    let code = r#"
+def f():
+    a, b = 1, 2
+    print(a)
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// An exempt unpacking registration must not erase the report from a prior
+// single-name dead store: `x` here is still unused.
+#[test]
+fn test_unused_variable_single_then_unpack_still_reported() {
+    let code = r#"
+def f():
+    x = 1
+    x, y = (2, 3)
+    print(y)
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `x` is unused");
+}
+
+// Policy preserved: an unused `for` target is not reported.
+#[test]
+fn test_unused_variable_for_loop_target_not_reported() {
+    let code = r#"
+def f():
+    for i in range(3):
+        pass
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// Policy preserved: a multi-target assignment name is not reported.
+#[test]
+fn test_unused_variable_multi_target_not_reported() {
+    let code = r#"
+def f():
+    a = b = 5
+    print(a)
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// Policy preserved: a `with ... as` target is not reported.
+#[test]
+fn test_unused_variable_with_target_not_reported() {
+    let code = r#"
+def f(cm):
+    with cm as x:
+        pass
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// A walrus target routes through `bind_target_name`, so it is tracked but never
+// reported (same policy as unpacking/`for`/`with`).
+#[test]
+fn test_unused_variable_walrus_target_not_reported() {
+    let code = r#"
+def f():
+    (x := 5)
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// A comprehension target lives in its own scope, which the tracker does not
+// cover, so it is never reported.
+#[test]
+fn test_unused_variable_comprehension_target_not_reported() {
+    let code = r#"
+def f(items):
+    return [1 for x in items]
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
+
+// PEP 572: a walrus inside a comprehension binds to the enclosing scope. Even
+// when unused there, it is not reported.
+#[test]
+fn test_unused_variable_comprehension_walrus_not_reported() {
+    let code = r#"
+def f(items, h):
+    result = [x for x in items if (y := h(x))]
+    return result
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "No unused variables");
+}
